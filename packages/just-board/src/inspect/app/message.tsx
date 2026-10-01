@@ -1,14 +1,13 @@
 import { Ellipsis, MessageSquare, SmilePlus, Tag } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { MessageView } from '../../api/routes.ts'
-import { ago, authorName } from '../../cli/format.ts'
+import { ago, authorName, who } from '../../cli/format.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
 import * as board from './board.ts'
-import type { Pending } from './store.ts'
+import { continues, type Groupable, type Pending } from './store.ts'
 import { ContextMenuArea, EmojiPicker, LabelEditor, LabelPopover, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
 const MENU_EMOJI = ['thumbs_up', 'heart', 'laugh', 'party', 'eyes', 'check']
-const GROUP_MS = 5 * 60_000
 
 export type RowOptions = {
   me: string
@@ -68,18 +67,6 @@ function dayLabel(iso: string, now: number): string {
 
 export function DayDivider({ iso, now }: { iso: string; now: number }) {
   return <div className="divider">{dayLabel(iso, now)}</div>
-}
-
-/** Whether `m` continues `previous`: same author, same day, close in time, nothing in between. */
-export function continues(previous: MessageView | undefined, m: MessageView, hasReplies = false): boolean {
-  return (
-    !!previous &&
-    !hasReplies &&
-    !previous.deleted &&
-    previous.by.actor === m.by.actor &&
-    day(previous.createdAt) === day(m.createdAt) &&
-    Date.parse(m.createdAt) - Date.parse(previous.createdAt) < GROUP_MS
-  )
 }
 
 /**
@@ -288,18 +275,46 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
   )
 }
 
-/** A post on its way, or one that didn't make it. */
-export function PendingRow({ post, me }: { post: Pending; me: { name: string; avatar: string | null } }) {
+type Me = { actor: string; name: string; handle: string; profile: string | null; avatar: string | null }
+
+/**
+ * Posts on their way, after `after` (the last message shown). Each is grouped
+ * exactly as its message will be, so nothing moves when the board confirms it.
+ */
+export function Pendings(props: { posts: Pending[]; me: Me; after?: MessageView; afterHasReplies?: boolean }) {
+  const seen = (post: Pending): Groupable => ({ by: { actor: props.me.actor } as MessageView['by'], createdAt: post.createdAt, deleted: false, channel: post.channel, re: post.re })
   return (
-    <div className={`message pending${post.error ? ' failed' : ''}`}>
+    <>
+      {props.posts.map((post, i) => {
+        const previous = i === 0 ? props.after : seen(props.posts[i - 1]!)
+        const continued = continues(previous, seen(post), i === 0 ? (props.afterHasReplies ?? false) : false)
+        return <PendingRow key={post.key} post={post} me={props.me} continued={continued} />
+      })}
+    </>
+  )
+}
+
+/** A post on its way, or one that didn't make it. */
+export function PendingRow({ post, me, continued = false }: { post: Pending; me: Me; continued?: boolean }) {
+  const status = post.error ? "didn't send" : 'sending…'
+  return (
+    <div className={`message pending${continued ? ' continued' : ''}${post.error ? ' failed' : ''}`}>
       <div className="gutter">
-        <Avatar name={me.name} url={me.avatar} />
+        {continued ? (
+          <span className="gutter-time shown" title={status}>
+            …
+          </span>
+        ) : (
+          <Avatar name={who(me)} url={me.avatar} />
+        )}
       </div>
       <div className="body">
-        <div className="meta-line">
-          <span className="author">{me.name}</span>
-          <span className="time">{post.error ? "didn't send" : 'sending…'}</span>
-        </div>
+        {!continued && (
+          <div className="meta-line">
+            <span className="author">{who(me)}</span>
+            <span className="time">{status}</span>
+          </div>
+        )}
         <Text text={post.text} />
         {post.error && (
           <div className="undelivered">

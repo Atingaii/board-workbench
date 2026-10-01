@@ -30,10 +30,26 @@ export function useBoard(): store.State {
 
 export const getState = () => state
 
+// --- who you post as: the CLI's identity, or a profile picked here ----------------------
+
+const PROFILE_KEY = 'just-board.profile'
+
+/** `undefined`: as `jb inspect` started. `null`: yourself. A string: that profile. */
+let profile: string | null | undefined = (() => {
+  try {
+    const stored = localStorage.getItem(PROFILE_KEY)
+    return stored === null ? undefined : (JSON.parse(stored) as string | null)
+  } catch {
+    return undefined
+  }
+})()
+
+export const getProfile = () => profile
+
 const client = createBoardClient({
   url: `${location.origin}/board`,
   token: '',
-  headers: { 'x-inspect-token': token },
+  headers: () => ({ 'x-inspect-token': token, ...(profile !== undefined ? { 'x-inspect-profile': profile ?? '' } : {}) }),
   fetch: async (input, init) => {
     const stream = String(input).includes('/board/events')
     try {
@@ -46,6 +62,23 @@ const client = createBoardClient({
     }
   },
 })
+
+/** Switches who you post as, then learns the identity that is. */
+export async function setProfile(next: string | null | undefined) {
+  const previous = profile
+  profile = next
+  try {
+    if (next === undefined) localStorage.removeItem(PROFILE_KEY)
+    else localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
+  } catch {}
+  try {
+    const me = await client.me()
+    set((s) => ({ ...s, me }))
+  } catch (error) {
+    profile = previous
+    toast(`couldn't switch: ${message(error)}`)
+  }
+}
 
 // --- which message you're editing ---------------------------------------------------
 

@@ -75,6 +75,18 @@ describe('inspect', () => {
     expect((await ui.messages({ channel: 'ops' })).messages.map((m) => m.id)).toContain(root.id)
   })
 
+  it('acts as the profile the page picks', async () => {
+    const as = (profile: string) =>
+      createBoardClient({
+        url: `${inspector.url}/board`,
+        token: '',
+        headers: { 'x-inspect-token': token, origin: inspector.url, 'x-inspect-profile': profile },
+      })
+    expect((await as('codex').me()).actor).toBe('vercel:user:u_julian+codex')
+    expect((await as('').me()).actor).toBe('vercel:user:u_julian') // yourself
+    expect((await as('codex').post('ops', 'from codex')).by).toMatchObject({ actor: 'vercel:user:u_julian+codex', profile: 'codex' })
+  })
+
   it("passes the board's errors through", async () => {
     await expect(page().thread(9999)).rejects.toMatchObject({ status: 404 })
   })

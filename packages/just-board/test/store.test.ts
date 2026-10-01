@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardEventView, MessageView } from '../src/api/routes.ts'
 import * as store from '../src/inspect/app/store.ts'
+import { continues } from '../src/inspect/app/store.ts'
 
 const ME = 'vercel:user:u_julian'
 
@@ -94,6 +95,16 @@ describe('the inspector store', () => {
       message: message(18, { text: 'five', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null, session: null } }),
     })
     expect(state.pending.map((p) => p.key)).toEqual(['k2'])
+  })
+
+  it('groups messages by author, place, and time', () => {
+    const at = (minutes: number) => new Date(Date.UTC(2026, 9, 1, 12, minutes)).toISOString()
+    const first = message(1, { createdAt: at(0) })
+    expect(continues(first, message(2, { createdAt: at(4) }))).toBe(true)
+    expect(continues(first, message(2, { createdAt: at(6) }))).toBe(false) // too late
+    expect(continues(first, message(2, { createdAt: at(1), channel: 'other' }))).toBe(false) // elsewhere
+    expect(continues(first, message(2, { createdAt: at(1), re: 9 }))).toBe(false) // another thread
+    expect(continues(first, message(2, { createdAt: at(1) }), true)).toBe(false) // the first has replies
   })
 
   it('groups a channel into threads, with pending posts', () => {

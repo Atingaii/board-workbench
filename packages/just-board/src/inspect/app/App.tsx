@@ -1,14 +1,14 @@
-import { PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
+import { Check, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { ChannelView, InboxEntry, MessageView } from '../../api/routes.ts'
+import type { ChannelView, InboxEntry, Me, MessageView } from '../../api/routes.ts'
 import { ago, who } from '../../cli/format.ts'
 import * as board from './board.ts'
 import { Composer } from './composer.tsx'
 import { Feed, Toasts } from './feed.tsx'
-import { Messages, PendingRow, type RowOptions } from './message.tsx'
+import { Messages, Pendings, type RowOptions } from './message.tsx'
 import { Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
 import { channelThreads, knownLabels, recent, thread as threadOf, type State } from './store.ts'
-import { ContextMenuArea, MenuItem, ResizeHandle, type KnownLabels } from './ui.tsx'
+import { ContextMenuArea, Menu, MenuItem, MenuSeparator, ResizeHandle, type KnownLabels } from './ui.tsx'
 
 type Route = { view: 'activity' } | { view: 'channel'; channel: string } | { view: 'inbox'; key: string } | { view: 'missing' }
 
@@ -301,10 +301,70 @@ function Sidebar({ state, current, onCollapse }: { state: State; current: Route;
           ))}
         </section>
       )}
-      <div className="whoami" title={`${state.me!.actor}\n${state.discovery?.url ?? ''}`}>
-        <div>as {who(state.me!)}</div>
-        <div className="faint url">{state.discovery?.url.replace(/^https?:\/\//, '')}</div>
-      </div>
+      <ProfileMenu me={state.me!} board={state.discovery?.url ?? ''} />
+    </div>
+  )
+}
+
+const AGENTS = ['claude', 'codex', 'grok']
+
+/** Who you post as: yourself, one of your agents' profiles, or any profile you name. */
+function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
+  const [naming, setNaming] = useState(false)
+  const person = me.handle.split('/')[0]
+  const choose = (profile: string | null) => void board.setProfile(profile)
+  if (naming)
+    return (
+      <form
+        className="whoami naming"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const name = new FormData(event.currentTarget).get('profile')?.toString().trim()
+          if (name) choose(name)
+          setNaming(false)
+        }}
+      >
+        <input
+          name="profile"
+          autoFocus
+          placeholder="profile name, e.g. reviewer"
+          pattern="[A-Za-z0-9-]+"
+          title="letters, numbers, and hyphens"
+          onKeyDown={(event) => event.key === 'Escape' && setNaming(false)}
+          onBlur={() => setNaming(false)}
+        />
+      </form>
+    )
+  const item = (label: string, profile: string | null) => (
+    <MenuItem onClick={() => choose(profile)}>
+      <span className="choice">
+        {label}
+        {me.profile === profile && <Check size={13} />}
+      </span>
+    </MenuItem>
+  )
+  return (
+    <div className="whoami-wrap" title={`${me.actor}\n${url}`}>
+      <Menu
+        className="whoami"
+        title="post as"
+        trigger={
+          <>
+            <span className="grow">
+              <span className="as">as {who(me)}</span>
+              <span className="faint url">{url.replace(/^https?:\/\//, '')}</span>
+            </span>
+            <ChevronsUpDown size={13} />
+          </>
+        }
+      >
+        {item(`${person} (you)`, null)}
+        {AGENTS.map((agent) => item(agent, agent))}
+        {me.profile !== null && !AGENTS.includes(me.profile) && item(me.profile, me.profile)}
+        <MenuSeparator />
+        <MenuItem onClick={() => setNaming(true)}>another profile…</MenuItem>
+        {board.getProfile() !== undefined && <MenuItem onClick={() => void board.setProfile(undefined)}>as jb inspect started</MenuItem>}
+      </Menu>
     </div>
   )
 }
@@ -336,9 +396,7 @@ function Activity({ state, options, known, lead }: { state: State; options: RowO
             ),
           }}
         />
-        {pending.map((post) => (
-          <PendingRow key={post.key} post={post} me={state.me!} />
-        ))}
+        <Pendings posts={pending} me={state.me!} after={messages.at(-1)} />
       </Feed>
       <Composer
         scope="activity"
@@ -379,9 +437,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
       <Feed scope={channel} first={roots[0]?.id ?? 0} last={lastId + pending.length} older={() => board.loadOlder(channel)}>
         {roots.length === 0 && pending.length === 0 && <p className="empty">{loading ? 'loading…' : 'no messages yet: say something'}</p>}
         <Messages messages={roots} now={options.now} options={{ ...options, replies: (m) => replies.get(m.id) ?? [] }} />
-        {pending.map((post) => (
-          <PendingRow key={post.key} post={post} me={state.me!} />
-        ))}
+        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(replies.get(roots.at(-1)?.id ?? 0)?.length ?? 0) > 0} />
       </Feed>
       <Composer
         scope={`channel:${channel}`}
@@ -421,9 +477,7 @@ function ThreadPane(props: { id: number; state: State; path: string; now: number
             <Messages messages={[t.root]} now={props.now} options={options} />
             <div className="divider">{t.replies.length === 1 ? '1 reply' : `${t.replies.length} replies`}</div>
             <Messages messages={t.replies} now={props.now} options={options} after={t.root} />
-            {t.pending.map((post) => (
-              <PendingRow key={post.key} post={post} me={state.me!} />
-            ))}
+            <Pendings posts={t.pending} me={state.me!} after={t.replies.at(-1)} />
           </>
         )}
       </Feed>

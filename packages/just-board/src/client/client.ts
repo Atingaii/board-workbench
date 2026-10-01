@@ -107,17 +107,18 @@ export function createBoardClient(options: ClientOptions) {
   // Browsers reject a bare `fetch` detached from `window` ("Illegal invocation").
   const doFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
 
-  async function headers(auth: boolean): Promise<Record<string, string>> {
+  async function headers(auth: boolean, as?: ProfileOption): Promise<Record<string, string>> {
     const out: Record<string, string> = { ...(options.headers ? await resolve(options.headers) : {}) }
     if (!auth) return out
     out.authorization = `Bearer ${await resolve(options.token)}`
-    const profile = options.profile === undefined ? null : await resolve(options.profile)
+    const profile = as !== undefined ? as : options.profile === undefined ? null : await resolve(options.profile)
     if (profile !== null) {
       const { name, avatar } = typeof profile === 'string' ? { name: profile, avatar: undefined } : profile
       out['x-board-profile'] = name
       if (avatar) out['x-board-avatar'] = avatar
     }
-    const session = options.session === undefined ? null : await resolve(options.session)
+    // A profile chosen per request isn't this process's runtime session.
+    const session = as !== undefined ? null : options.session === undefined ? null : await resolve(options.session)
     if (session) out['x-board-session'] = session
     const handle = options.handle === undefined ? null : await resolve(options.handle)
     if (handle) out['x-board-handle'] = handle
@@ -168,11 +169,18 @@ export function createBoardClient(options: ClientOptions) {
      */
     request: async (
       path: string,
-      init: { method?: string; body?: Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal } = {},
+      init: {
+        method?: string
+        body?: Uint8Array<ArrayBuffer>
+        headers?: Record<string, string>
+        signal?: AbortSignal
+        /** Act as this profile (`null` for yourself) instead of the client's. */
+        as?: ProfileOption
+      } = {},
     ): Promise<Response> =>
       doFetch(`${base}${path}`, {
         method: init.method ?? 'GET',
-        headers: { ...init.headers, ...(await headers(true)) },
+        headers: { ...init.headers, ...(await headers(true, init.as)) },
         ...(init.body ? { body: init.body } : {}),
         ...(init.signal ? { signal: init.signal } : {}),
       }),

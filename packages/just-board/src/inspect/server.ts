@@ -85,7 +85,11 @@ export async function startInspector(options: { client: BoardClient; port?: numb
     response.on('close', () => controller.abort())
     try {
       const body = reading ? undefined : await read(request)
+      // The page may pick who you act as: one of your profiles, or yourself (an empty name).
+      const chosen = request.headers['x-inspect-profile']
+      const as = typeof chosen === 'string' ? (chosen === '' ? null : chosen) : undefined
       const upstream = await client.request(`${path}${url.search}`, {
+        ...(as !== undefined ? { as } : {}),
         method: request.method ?? 'GET',
         headers: {
           ...(request.headers['content-type'] ? { 'content-type': String(request.headers['content-type']) } : {}),

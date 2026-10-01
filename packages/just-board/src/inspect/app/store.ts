@@ -237,3 +237,23 @@ export function knownLabels(state: State): Map<string, Set<string>> {
     }
   return known
 }
+
+const GROUP_MS = 5 * 60_000
+const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Date(b).toDateString()
+
+export type Groupable = Pick<MessageView, 'by' | 'createdAt' | 'deleted' | 'channel' | 're'>
+
+/** Whether `m` continues `previous`: same author and place, same day, close in time, nothing in between. */
+export function continues(previous: Groupable | undefined, m: Groupable, hasReplies = false): boolean {
+  return (
+    !!previous &&
+    !hasReplies &&
+    !previous.deleted &&
+    previous.by.actor === m.by.actor &&
+    previous.channel === m.channel &&
+    previous.re === m.re &&
+    sameDay(previous.createdAt, m.createdAt) &&
+    Date.parse(m.createdAt) - Date.parse(previous.createdAt) < GROUP_MS
+  )
+}
+

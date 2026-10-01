@@ -91,8 +91,15 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .sidebar .item.unread { color: var(--bright); font-weight: 600; }
 .sidebar .count { color: var(--faint); font-size: 11px; font-weight: 400; }
 .sidebar .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-.whoami { margin-top: auto; padding: 16px 8px 0; color: var(--muted); font-size: 11px; }
-.whoami .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whoami-wrap { margin-top: auto; padding-top: 16px; }
+.whoami { width: 100%; display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: var(--muted); font-size: 11px; text-align: left; }
+.whoami:hover, .whoami[data-popup-open] { background: var(--shade); color: var(--bright); }
+.whoami .grow { display: grid; }
+.whoami .as, .whoami .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whoami.naming { margin-top: auto; }
+.whoami.naming input { width: 100%; height: 28px; padding: 0 8px; border: 0; outline: 1px solid var(--muted); background: var(--shade); font-size: 12px; }
+.choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.choice svg { color: var(--accent); }
 
 /* --- resize handles: a hairline that lights up --- */
 .resize { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 5; cursor: col-resize; display: flex; justify-content: center; outline: none; }
@@ -156,7 +163,7 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .message.failed { opacity: 1; }
 .gutter { display: flex; justify-content: center; }
 .gutter-time { visibility: hidden; color: var(--faint); font-size: 10px; line-height: 21px; }
-.message.active .gutter-time { visibility: visible; }
+.message.active .gutter-time, .gutter-time.shown { visibility: visible; }
 .avatar {
   flex-shrink: 0;
   display: inline-grid;
