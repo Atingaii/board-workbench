@@ -30,6 +30,14 @@
       "types": "./dist/server.d.mts",
       "default": "./dist/server.mjs"
     },
+    "./slack": {
+      "types": "./dist/slack.d.mts",
+      "default": "./dist/slack.mjs"
+    },
+    "./github": {
+      "types": "./dist/github.d.mts",
+      "default": "./dist/github.mjs"
+    },
     "./contract": {
       "types": "./dist/contract.d.mts",
       "default": "./dist/contract.mjs"
@@ -48,13 +56,23 @@
     "zod": "^4.6.5"
   },
   "peerDependencies": {
-    "experimental-a2": "^0.16.1"
+    "experimental-a2": "^0.16.1",
+    "chat": "^4.41.1"
   },
   "devDependencies": {
+    "@chat-adapter/github": "^4.41.1",
+    "@chat-adapter/slack": "^4.41.1",
+    "@chat-adapter/tests": "^4.41.1",
     "@types/node": "^26.6.3",
+    "chat": "^4.41.1",
+    "experimental-a2": "0.16.1",
     "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3",
-    "experimental-a2": "0.16.1"
+    "vitest": "^5.0.3"
+  },
+  "peerDependenciesMeta": {
+    "chat": {
+      "optional": true
+    }
   }
 }

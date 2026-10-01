@@ -1,5 +1,5 @@
 import type { ActorKind, Author, Labels } from './schemas.ts'
-import { boardContract, type BoardEvent } from './contract.ts'
+import { boardContract, type BoardEvent, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
 // in place: an event costs O(1) instead of a copy of every message.
@@ -10,11 +10,17 @@ export type Message = {
   text: string
   re: number | null
   replyTo: number | null
+  /** The thread key: the root's event ID. */
+  thread: string
   labels: Labels
   reactions: Record<string, string[]>
   mentions: string[]
   by: Author
   noSync: boolean
+  /** Where it came from on a platform, if it did. */
+  origin: Origin | null
+  /** The sync key it came from, or null when written on the board. */
+  from: string | null
   createdAt: string
   editedAt: string | null
   deleted: boolean
@@ -42,11 +48,14 @@ export function foldMessages(
         text: payload.text,
         re: payload.re,
         replyTo: payload.replyTo,
+        thread: payload.thread,
         labels: { ...payload.labels },
         reactions: {},
         mentions: payload.mentions,
         by: payload.by,
         noSync: payload.noSync,
+        origin: payload.origin,
+        from: payload.from,
         createdAt: iso(event.createdAt),
         editedAt: null,
         deleted: false,
@@ -172,3 +181,87 @@ export const actorsReducer = boardContract
     initialState: { byId: {}, byHandle: {} } as ActorsState,
   })
   .fold(foldActors)
+
+/** A copy of a board message on a platform. */
+export type ExternalCopy = { thread: string; message: string }
+
+export type SyncedThread = {
+  root: number
+  channel: string
+  /** External channels (start a thread there) and threads (joined), in sync order. */
+  targets: string[]
+  /** Target → the external thread it resolved to. A thread target resolves to itself. */
+  external: Record<string, string>
+}
+
+export type SyncState = {
+  /** Thread key → its sync. */
+  threads: Record<string, SyncedThread>
+  /** External thread (grouped) → thread key. */
+  byExternalThread: Record<string, string>
+  /** Board message → target → its copy there. Includes the copy it came from. */
+  copies: Record<string, Record<string, ExternalCopy>>
+  /** `${external thread}|${platform message ID}` → board message. */
+  byExternalMessage: Record<string, number>
+}
+
+/** `slack:C0123ABC:1727.1234` is a thread; `slack:C0123ABC` and `github:owner/repo` are channels. */
+export const isThreadTarget = (target: string) => target.slice(target.indexOf(':') + 1).includes(':')
+
+export const externalMessageKey = (thread: string, message: string) => `${thread}|${message}`
+
+const addTarget = (thread: SyncedThread, target: string) => {
+  if (!thread.targets.includes(target)) thread.targets.push(target)
+}
+
+export function foldSync(state: SyncState, event: BoardEvent): SyncState {
+  switch (event.type) {
+    case 'message.posted': {
+      const { payload } = event
+      if (payload.re === null)
+        state.threads[payload.thread] = { root: event.index, channel: payload.channel, targets: [], external: {} }
+      const origin = payload.origin
+      if (!origin) return state
+      const thread = state.threads[payload.thread]
+      if (thread && payload.re === null) {
+        addTarget(thread, origin.thread)
+        thread.external[origin.thread] = origin.thread
+        state.byExternalThread[origin.thread] = payload.thread
+      }
+      const precise = origin.subthread ?? origin.thread
+      ;(state.copies[event.index] ??= {})[origin.thread] = { thread: precise, message: origin.message }
+      state.byExternalMessage[externalMessageKey(precise, origin.message)] = event.index
+      return state
+    }
+    case 'thread.synced': {
+      const thread = state.threads[event.payload.thread]
+      if (!thread) return state
+      addTarget(thread, event.payload.target)
+      if (isThreadTarget(event.payload.target)) {
+        thread.external[event.payload.target] = event.payload.target
+        state.byExternalThread[event.payload.target] = event.payload.thread
+      }
+      return state
+    }
+    case 'message.synced': {
+      const { id, target, external } = event.payload
+      ;(state.copies[id] ??= {})[target] = external
+      state.byExternalMessage[externalMessageKey(external.thread, external.message)] = id
+      const thread = state.threads[event.payload.thread]
+      if (thread && thread.root === id && !isThreadTarget(target)) {
+        thread.external[target] = external.thread
+        state.byExternalThread[external.thread] = event.payload.thread
+      }
+      return state
+    }
+    default:
+      return state
+  }
+}
+
+export const syncReducer = boardContract
+  .reducer({
+    name: 'just-board.sync.v1',
+    initialState: { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} } as SyncState,
+  })
+  .fold(foldSync)

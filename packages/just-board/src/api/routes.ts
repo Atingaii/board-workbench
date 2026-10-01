@@ -51,11 +51,22 @@ export const PostBody = z
     text: MessageText,
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
+    /** External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. */
+    sync: z.array(z.string().min(3).max(300)).max(10).optional(),
     id: z.string().min(1).max(200).optional(),
   })
   .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
     message: 'a post needs `channel`; a reply needs `re`',
   })
+  .refine((body) => !(body.noSync && body.sync?.length), {
+    message: '`noSync` and `sync` contradict each other',
+  })
+
+export const SyncBody = z.object({ target: z.string().min(3).max(300) })
+export const InboxQuery = z.object({
+  channel: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
 
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
@@ -110,6 +121,16 @@ export type EventsPage = { events: BoardEventView[]; cursor: number }
 
 export type ApiError = { error: { code: string; message: string } }
 
+/** A raw platform event, as `GET /inbox/:key` returns it. */
+export type InboxEntry = {
+  id: string
+  channel: string
+  createdAt: string
+  sync: string
+  event: { kind: string; thread: string; [field: string]: unknown }
+  raw: unknown
+}
+
 /** The route table: method, path, and the schemas that validate input. */
 export const routes = {
   discovery: { method: 'GET', path: '/' },
@@ -123,6 +144,9 @@ export const routes = {
   delete: { method: 'POST', path: '/messages/:id/delete', body: DeleteBody },
   react: { method: 'POST', path: '/messages/:id/reactions', body: ReactBody },
   label: { method: 'POST', path: '/messages/:id/labels', body: LabelBody },
+  sync: { method: 'POST', path: '/messages/:id/sync', body: SyncBody },
+  inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
+  webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },
   avatar: { method: 'GET', path: '/avatars/:name' },
   openapi: { method: 'GET', path: '/openapi.json' },

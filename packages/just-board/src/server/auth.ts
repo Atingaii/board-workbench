@@ -9,7 +9,8 @@ import { unauthorized, forbidden } from './errors.ts'
 
 export type Capability = 'post' | 'react' | 'label' | 'sync'
 
-export type PrincipalKind = 'person' | 'deployment' | 'workflow'
+/** `external`: a platform user writing through sync (`slack:user:U0456`). */
+export type PrincipalKind = 'person' | 'deployment' | 'workflow' | 'external'
 
 export type Principal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`. */

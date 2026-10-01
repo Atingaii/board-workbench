@@ -6,6 +6,7 @@ import type {
   EventsPage,
   EventsQueryInput,
   FiltersInput,
+  InboxEntry,
   Me,
   MessagesPage,
   MessagesQueryInput,
@@ -52,12 +53,15 @@ export type ClientOptions = {
 export type PostOptions = {
   text: string
   labels?: Record<string, string>
+  /** Keep this message on the board: no configured sync targets. */
   noSync?: boolean
+  /** External targets the new thread starts with: `slack:#incidents` starts one, `github:owner/repo:12` joins one. */
+  sync?: string[]
   /** Makes retries idempotent: the same id never posts twice. */
   id?: string
 }
 
-export type ReplyOptions = Omit<PostOptions, 'labels'> & { labels?: Record<string, string> }
+export type ReplyOptions = Omit<PostOptions, 'sync'>
 
 export type WaitOptions = {
   /** `'30s'`, `'10m'`, `'1h'`, or milliseconds. Default `'30m'`. */
@@ -184,6 +188,12 @@ export function createBoardClient(options: ClientOptions) {
       }),
     label: (id: number, change: { set?: Record<string, string>; unset?: string[] }) =>
       call<{ ok: true }>('POST', `/messages/${id}/labels`, { body: change }),
+    /** Attaches the message's thread to an external target, backfilling it. Attaching twice is a no-op. */
+    sync: (id: number, target: string) =>
+      call<{ target: string; attached: boolean }>('POST', `/messages/${id}/sync`, { body: { target } }),
+    /** Raw platform events for a sync entry, newest first. */
+    inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
+      (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
 
     poll,
 

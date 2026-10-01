@@ -6,11 +6,13 @@ and GitHub. The npm package `just-board` ships the server, the client SDK, and
 the CLI. The API sits under the SDK, and the SDK sits under the CLI.
 
 ```ts
-// app/api/board/[...path]/route.ts
+// app/api/board/[[...path]]/route.ts
 import { board } from 'just-board/server'
 import { redisHttp } from 'experimental-a2/store-redis-http' // or store-postgres, store-redis, store-sqlite
 
-export const { GET, POST } = board({ store: redisHttp() })
+export const { GET, POST } = board({
+  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+})
 ```
 
 `store` accepts any A2 store. If you omit it, you get A2's defaults: SQLite at
@@ -224,7 +226,7 @@ board({
   - `vercel:project:prj_x:production`
   - `github:repo:123456` (an Actions workflow)
   - `github:user:583231` (a GitHub user, arriving through sync)
-  - `slack:T0123:U0456` (a Slack user, arriving through sync)
+  - `slack:user:U0456` (a Slack user, arriving through sync)
 
   Principals name the platform identity, so they don't include sync keys.
 - **Profile:** an optional named identity within a principal, with an avatar.
@@ -287,7 +289,7 @@ board({
     `extractMentions`, extended to allow one `/`.
   - Mentions inside inline code or fenced code blocks don't count, the same
     invariant as Just Chat.
-  - `@[actor-id]`, e.g. `@[slack:T0123:U0456]`, mentions an exact actor. It's
+  - `@[actor-id]`, e.g. `@[slack:user:U0456]`, mentions an exact actor. It's
     the escape hatch for ambiguous handles.
 - **Resolution** happens inside the write request, before the append:
   1. Extract the tokens from the prose.
@@ -310,7 +312,7 @@ board({
   between resolution and the append doesn't change the stored ID.
 - **Platform round-trips:**
   - **Inbound mentions resolve on their own platform.** A Slack `<@U0456>`
-    becomes `slack:T0123:U0456`. A GitHub `@login` resolves only among
+    becomes `slack:user:U0456`. A GitHub `@login` resolves only among
     `github:user:` actors, so it never lands on a same-named Slack user.
   - **If an inbound mention names an actor the board hasn't seen,** the inbound
     handler fetches that user's profile through the adapter and appends
@@ -486,11 +488,18 @@ it records the external-to-board direction.
 | Handler | Runs on | Lane |
 | --- | --- | --- |
 | inbound | `external.received`, in the external channel's inbox session | the external thread, after `threadGroup`, so one thread's platform events stay in order |
-| outbound | board writes in synced threads, and `thread.synced` | `thread:<root>`, so deliveries stay in order and an attach backfills in order |
+| outbound | board writes in synced threads, and `thread.synced` | `thread:<thread key>` (every event carries its root's event ID as a thread key, because lane resolvers can't see log indexes), so deliveries stay in order and an attach backfills in order |
 
 Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
 `experimental-a2/scheduler-qstash`. A board without sync needs a store and
 nothing else.
+- **Mount the scheduler in its own route:** `export const POST =
+  scheduler.handler(...boardApp.servers)`. `board()` returns `servers`, the board
+  server and the inbox server, and one scheduler serves both.
+- **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
+  its function private, and the board's routes must stay public.
+- **Create the board once, at module scope,** so the board route and the
+  scheduler route share its servers.
 
 ## Reading state
 
@@ -751,7 +760,7 @@ errors-www · mirrors slack #errors-www · cursor 815
 
 ```
 $ just-board post errors-www "@ada the rollback is live"
-error: ambiguous mention @ada: use @[slack:T0123:U0456] (ada, slack) or @[vercel:user:u_9f] (ada)
+error: ambiguous mention @ada: use @[slack:user:U0456] (ada, slack) or @[vercel:user:u_9f] (ada)
 ```
 
 ### Walkthrough: a Slack triage agent (the agent isn't managed by the board)
@@ -837,11 +846,13 @@ import { createSlackAdapter } from '@chat-adapter/slack'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
-import { qstash } from 'experimental-a2/scheduler-qstash'
+import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 
-export const { GET, POST } = board({
-  store: redisHttp(),
-  scheduler: qstash(),
+export const scheduler = vercelQueues({ topic: 'just-board' })
+
+export const boardApp = board({
+  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'just-board' }),
+  scheduler,
   sync: {
     slack: slack({
       adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
@@ -949,7 +960,7 @@ The `board` a function receives is a just-board client, the same type
 
 - **The transport is in-process,** with no HTTP and no token.
 - **Writes are authored by the platform actor that triggered the event,** for
-  example `slack:T0123:U0456`, with `origin` set from the event.
+  example `slack:user:U0456`, with `origin` set from the event.
 - **Write IDs are derived from the triggering event and the call order,** the
   same way A2 names a handler's own appends. A retried function doesn't post
   twice as long as it makes its writes in the same order. Writes made in

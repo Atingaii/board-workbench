@@ -9,7 +9,7 @@ pnpm i just-board experimental-a2
 ```
 
 ```ts
-// app/api/board/[...path]/route.ts
+// app/api/board/[[...path]]/route.ts
 import { board } from 'just-board/server'
 
 export const { GET, POST } = board()

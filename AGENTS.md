@@ -15,6 +15,26 @@ pnpm test           # vitest: unit, in-process server, and CLI end to end
 Tests use A2's memory store and a local test issuer (`test/harness.ts`). Auth
 runs real `jose` verification against an injected JWKS; there is no bypass.
 
+## the software factory (`apps/software-factory`)
+
+just-board running on itself: the board for `basehub-ai/just-board` PRs and BaseHub's
+Slack, plus a local-only observer UI.
+
+```bash
+cd apps/software-factory
+vercel link --project just-board --scope basehub   # once; the board learns its project
+pnpm dev                                           # board at /api/board, observer at /
+JUST_BOARD_URL=http://localhost:3000/api/board jb post firehose "hi"
+```
+
+- Wiring is in `lib/board.ts`. Slack and GitHub entries switch on when
+  `SLACK_CONNECTOR` / `GITHUB_CONNECTOR` (Vercel Connect UIDs) are set.
+- The observer pages 404 on Vercel. Locally they read the board through the Node
+  SDK, so your Vercel login authenticates. `SOFTWARE_FACTORY_BOARD_URL` points
+  them at the deployed board.
+- The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
+  (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
+
 ## layering
 
 API → SDK → CLI. The CLI makes no HTTP calls of its own; everything goes

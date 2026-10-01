@@ -1,10 +1,15 @@
-import { createBoardClient, type ClientOptions } from './client/client.ts'
+import { BoardError, createBoardClient, type BoardClient, type ClientOptions } from './client/client.ts'
 
 /**
- * A just-board client. Outside Node there is no detection: pass the board's
- * `url` and a `token` whose audience is that URL.
+ * A just-board client. This build has no detection (the `node` build does):
+ * pass the board's `url` and a `token` whose audience is that URL.
  */
-export const createClient = (options: ClientOptions) => createBoardClient(options)
+export function createClient(options: Partial<ClientOptions> = {}): BoardClient {
+  const { url, token } = options
+  if (!url || token === undefined)
+    throw new BoardError('missing_options', 'outside Node, createClient needs `url` and `token`', 0)
+  return createBoardClient({ ...options, url, token })
+}
 
 export {
   BoardError,

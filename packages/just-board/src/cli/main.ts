@@ -22,12 +22,14 @@ usage: just-board <command> [options]      (also installed as \`jb\`)
   read <channel> [filters] [--limit N]     threads in a channel, newest last
   read <id>                                one thread
 
-  post <channel> "<text>" [--label k=v]... [--id <key>] [--no-sync]
+  post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
   reply <id> "<text>" [--id <key>] [--no-sync]
   edit <id> "<text>"
   delete <id>
   react <id> <emoji> [--remove]
   label <id> k=v... [--unset k]...
+  sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
+  inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
   wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
@@ -219,12 +221,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'post': {
       const [channel, body] = args
       if (!channel) throw new UsageError('usage: just-board post <channel> "<text>"')
-      if (flags.sync?.length) throw new BoardError('not_supported', 'this board has no sync configured yet', 0)
+      if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const message = await client().post(channel, {
         text: await text(body),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags.id ? { id: flags.id } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
+        ...(flags.sync?.length ? { sync: flags.sync } : {}),
       })
       printMessage(message)
       return 0
@@ -271,6 +274,32 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw new UsageError('usage: just-board label <id> k=v... [--unset k]...')
       await client().label(id, { set, unset })
+      return 0
+    }
+
+    case 'sync': {
+      const id = messageId(args[0])
+      if (!args[1]) throw new UsageError('usage: just-board sync <id> <target>   (e.g. slack:#incidents)')
+      const result = await client().sync(id, args[1])
+      if (flags.json) printJson(result)
+      else out(result.attached ? `synced with ${result.target}` : `already synced with ${result.target}`)
+      return 0
+    }
+
+    case 'inbox': {
+      const key = args[0]
+      if (!key) throw new UsageError('usage: just-board inbox <key> [channel] [--limit N]')
+      const events = await client().inbox(key, {
+        ...(args[1] ? { channel: args[1] } : {}),
+        ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+      })
+      if (flags.json) return events.forEach(printJson), 0
+      if (events.length === 0) return out('no events'), 0
+      for (const entry of events) {
+        const event = entry.event as { kind: string; thread: string; text?: string; type?: string; emoji?: string; author?: { handle: string } }
+        const detail = event.text ?? event.type ?? event.emoji ?? ''
+        out(`${entry.createdAt}  ${entry.channel}  ${event.kind}  ${event.author?.handle ?? ''}  ${detail.split('\n')[0]}`)
+      }
       return 0
     }
 

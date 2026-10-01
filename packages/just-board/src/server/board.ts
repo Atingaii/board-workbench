@@ -1,30 +1,25 @@
 import { z } from 'zod'
+import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Store, type A2Scheduler } from 'experimental-a2/server'
-import {
-  boardContract,
-  BOARD_SESSION,
-  type BoardEvent,
-} from '../contract/contract.ts'
-import {
-  actorsReducer,
-  channelsReducer,
-  foldMessages,
-  messagesReducer,
-  type Message,
-} from '../contract/reducers.ts'
+import { boardContract, BOARD_SESSION } from '../contract/contract.ts'
+import { actorsReducer, channelsReducer, messagesReducer } from '../contract/reducers.ts'
 import {
   EditBody,
   EventsQuery,
-  Filters,
+  InboxQuery,
   LabelBody,
   MessagesQuery,
   PostBody,
   ReactBody,
   routes,
+  SyncBody,
   type Discovery,
   type Me,
   type RouteName,
 } from '../api/routes.ts'
+import { createBoardClient, type BoardClient } from '../client/client.ts'
+import { createSyncEngine } from '../sync/engine.ts'
+import type { SyncPlatform } from '../sync/types.ts'
 import { VERSION } from '../version.ts'
 import {
   allows,
@@ -34,25 +29,31 @@ import {
   type Principal,
   type TrustedSource,
 } from './auth.ts'
-import { actorSeen, KNOWN_AGENTS, resolveActor, resolveMentions } from './actors.ts'
+import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
-import {
-  badRequest,
-  forbidden,
-  json,
-  notFound,
-  toErrorResponse,
-  unauthorized,
-} from './errors.ts'
+import { badRequest, forbidden, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId } from './identity.ts'
+import {
+  writeAttach,
+  writeDelete,
+  writeEdit,
+  writeLabels,
+  writePost,
+  writeReaction,
+  type Identity,
+  type WriteContext,
+} from './writes.ts'
 
 export type BoardOptions = {
   /** Any A2 store. Omitted: SQLite in development, memory in tests, an error in production. */
   store?: A2Store
+  /** Required for sync in production; mount `scheduler.handler(...board.servers)` in its own route. */
   scheduler?: A2Scheduler
   /** Machines outside this project that may call the board. */
   trustedSources?: readonly TrustedSource[]
+  /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
+  sync?: Record<string, SyncPlatform>
   /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */
   project?: { id: string; teamId?: string }
   /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
@@ -82,6 +83,7 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'POST', name: 'delete', pattern: /\/messages\/(\d+)\/delete$/ },
   { method: 'POST', name: 'react', pattern: /\/messages\/(\d+)\/reactions$/ },
   { method: 'POST', name: 'label', pattern: /\/messages\/(\d+)\/labels$/ },
+  { method: 'POST', name: 'sync', pattern: /\/messages\/(\d+)\/sync$/ },
   { method: 'GET', name: 'message', pattern: /\/messages\/(\d+)$/ },
   { method: 'GET', name: 'messages', pattern: /\/messages$/ },
   { method: 'POST', name: 'post', pattern: /\/messages$/ },
@@ -89,9 +91,13 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'actors', pattern: /\/actors$/ },
   { method: 'GET', name: 'events', pattern: /\/events$/ },
   { method: 'GET', name: 'me', pattern: /\/me$/ },
+  { method: 'GET', name: 'inbox', pattern: /\/inbox\/([A-Za-z0-9_-]+)$/ },
+  { method: 'POST', name: 'webhook', pattern: /\/webhooks\/([A-Za-z0-9_-]+)$/ },
   { method: 'GET', name: 'avatar', pattern: /\/avatars\/([a-z0-9-]+)$/ },
   { method: 'GET', name: 'openapi', pattern: /\/openapi\.json$/ },
 ]
+
+const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'message'])
 
 function route(method: string, pathname: string, basePath?: string): Match | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
@@ -115,11 +121,7 @@ function route(method: string, pathname: string, basePath?: string): Match | nul
 }
 
 const withParam = (name: RouteName, base: string, param: string | undefined): Match =>
-  param === undefined
-    ? { name, base }
-    : /^\d+$/.test(param)
-      ? { name, base, id: Number(param) }
-      : { name, base, param }
+  param === undefined ? { name, base } : NUMERIC.has(name) ? { name, base, id: Number(param) } : { name, base, param }
 
 function queryObject(url: URL): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {}
@@ -140,10 +142,28 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-/** Mounts a board: one log in one route. */
+/** Mounts a board: one log in one route. Create it once, at module scope. */
 export function board(options: BoardOptions = {}) {
-  const server = boardServer(options)
+  const engine =
+    options.sync && Object.keys(options.sync).length > 0
+      ? createSyncEngine({ entries: options.sync, store: options.store, scheduler: options.scheduler })
+      : null
+  const server = createServer({
+    contract: boardContract,
+    ...(options.store ? { store: options.store } : {}),
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+    ...(engine ? { handlers: engine.outboundHandlers } : {}),
+  })
   const session = server.session(BOARD_SESSION)
+  const writes: WriteContext = {
+    session,
+    configTargets: engine ? engine.configTargets : async () => [],
+    normalizeTarget: engine
+      ? engine.normalizeTarget
+      : async () => {
+          throw badRequest('this board has no sync configured')
+        },
+  }
   const verify = createVerifier({
     projectId: () => ownProjectId(options.project),
     trustedSources: options.trustedSources ?? [],
@@ -159,18 +179,30 @@ export function board(options: BoardOptions = {}) {
   }
 
   const require = (principal: Principal, capability: Capability) => {
-    if (!allows(principal, capability))
-      throw forbidden(`this source may not ${capability === 'post' ? 'post' : capability}`)
+    if (!allows(principal, capability)) throw forbidden(`this source may not ${capability}`)
   }
 
-  async function messageOr404(id: number): Promise<Message> {
-    const { state } = await session.state(messagesReducer)
-    const message = state.byId[id]
-    if (!message) throw notFound(`message not found: #${id}`, 'message_not_found')
-    return message
+  /** A client for inbound functions: in-process, writing as `identity`, idempotent per trigger. */
+  function clientAs(identity: Identity, trigger: string): BoardClient {
+    let writesMade = 0
+    return createBoardClient({
+      url: 'http://in-process.board',
+      token: 'in-process',
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        let request = new Request(input, init)
+        if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/messages')) {
+          const body = ((await request.json()) ?? {}) as Record<string, unknown>
+          body.id ??= await idempotentId('just-board-inbound', trigger, 'client', String(writesMade++))
+          request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
+        }
+        return dispatch(request, identity)
+      }) as typeof fetch,
+    })
   }
 
-  async function handle(request: Request): Promise<Response> {
+  engine?.bind({ session, writes, clientAs })
+
+  async function dispatch(request: Request, injected: Identity | null): Promise<Response> {
     try {
       const url = new URL(request.url)
       const match = route(request.method, url.pathname, options.basePath)
@@ -193,18 +225,20 @@ export function board(options: BoardOptions = {}) {
           const name = match.param ?? ''
           if (!(KNOWN_AGENTS as readonly string[]).includes(name)) throw notFound(`no avatar: ${name}`)
           return new Response(avatarSvg(name), {
-            headers: {
-              'content-type': 'image/svg+xml',
-              'cache-control': 'public, max-age=86400',
-            },
+            headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=86400' },
           })
         }
         case 'openapi':
           return json(openapi())
+        case 'webhook':
+          // Platforms can't send a board token: the adapter verifies the request.
+          if (!engine) throw notFound('this board has no sync configured')
+          return await engine.handleWebhook(match.param!, request)
       }
 
-      const principal = await authenticate(request, boardUrl)
-      const { author, actor } = resolveActor(principal, request.headers, boardUrl)
+      const principal = injected?.principal ?? (await authenticate(request, boardUrl))
+      const { author, actor } = injected ?? resolveActor(principal, request.headers, boardUrl)
+      const identity: Identity = { principal, author, actor }
 
       switch (match.name) {
         case 'me': {
@@ -237,9 +271,9 @@ export function board(options: BoardOptions = {}) {
             session.state(messagesReducer),
             session.state(actorsReducer),
           ])
-          const match = compileFilter(query, { me: actor.id, actors })
+          const matches = compileFilter(query, { me: actor.id, actors })
           let found = Object.values(state.byId)
-            .filter((message) => match(message) || !hasAnyFilter(query))
+            .filter(matches)
             .sort((a, b) => a.id - b.id)
           if (query.before !== undefined) found = found.filter((m) => m.id < query.before!)
           const limit = query.limit ?? 50
@@ -263,95 +297,53 @@ export function board(options: BoardOptions = {}) {
         case 'post': {
           require(principal, 'post')
           const body = PostBody.parse(await readJson(request))
-          const [{ state: messages }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
-            session.state(actorsReducer),
-          ])
-          let channel = body.channel
-          let re: number | null = null
-          let replyTo: number | null = null
-          if (body.re !== undefined) {
-            const target = messages.byId[body.re]
-            if (!target) throw notFound(`message not found: #${body.re}`, 'message_not_found')
-            re = target.re ?? target.id
-            replyTo = target.id === re ? null : target.id
-            channel = target.channel
-          }
-          const seen = actorSeen(actor, actors)
-          const mentions = resolveMentions(body.text, actors, seen ? actor : undefined)
-          const rows = await session.append(
-            ...(seen ? [seen] : []),
-            {
-              type: 'message.posted',
-              ...(body.id ? { id: body.id } : {}),
-              payload: {
-                channel: channel!,
-                text: body.text,
-                re,
-                replyTo,
-                labels: body.labels ?? {},
-                noSync: body.noSync ?? false,
-                mentions,
-                by: author,
-              },
-            },
-          )
-          const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
-          const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
-          const known = seen ? { ...actors, byId: { ...actors.byId, [actor.id]: actor } } : actors
-          return json({ message: view(message, known) }, 201)
+          if (body.sync?.length) require(principal, 'sync')
+          const message = await writePost(writes, {
+            identity,
+            channel: body.channel,
+            re: body.re,
+            text: body.text,
+            labels: body.labels,
+            noSync: body.noSync,
+            id: body.id,
+            sync: body.sync,
+          })
+          return json({ message }, 201)
         }
         case 'edit': {
           require(principal, 'post')
           const body = EditBody.parse(await readJson(request))
-          const message = await messageOr404(match.id!)
-          if (message.by.principal !== principal.id)
-            throw forbidden('only the author can edit a message')
-          if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
-          const { state: actors } = await session.state(actorsReducer)
-          const seen = actorSeen(actor, actors)
-          const mentions = resolveMentions(body.text, actors, seen ? actor : undefined)
-          await session.append(...(seen ? [seen] : []), {
-            type: 'message.edited',
-            payload: { id: message.id, text: body.text, mentions, by: author },
-          })
+          await writeEdit(writes, { identity, id: match.id!, text: body.text })
           return json({ ok: true })
         }
         case 'delete': {
           require(principal, 'post')
-          const message = await messageOr404(match.id!)
-          if (message.by.principal !== principal.id)
-            throw forbidden('only the author can delete a message')
-          if (!message.deleted)
-            await session.append({
-              type: 'message.deleted',
-              payload: { id: message.id, by: author },
-            })
+          await writeDelete(writes, { identity, id: match.id! })
           return json({ ok: true })
         }
         case 'react': {
           require(principal, 'react')
           const body = ReactBody.parse(await readJson(request))
-          const message = await messageOr404(match.id!)
-          if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
-          const { state: actors } = await session.state(actorsReducer)
-          const seen = actorSeen(actor, actors)
-          await session.append(...(seen ? [seen] : []), {
-            type: body.remove ? 'reaction.removed' : 'reaction.added',
-            payload: { id: message.id, emoji: body.emoji, by: author },
-          })
+          await writeReaction(writes, { identity, id: match.id!, emoji: body.emoji, remove: body.remove })
           return json({ ok: true })
         }
         case 'label': {
           require(principal, 'label')
           const body = LabelBody.parse(await readJson(request))
-          const message = await messageOr404(match.id!)
-          if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
-          await session.append({
-            type: 'labels.changed',
-            payload: { id: message.id, set: body.set ?? {}, unset: body.unset ?? [], by: author },
-          })
+          await writeLabels(writes, { identity, id: match.id!, set: body.set, unset: body.unset })
           return json({ ok: true })
+        }
+        case 'sync': {
+          require(principal, 'sync')
+          const body = SyncBody.parse(await readJson(request))
+          return json(await writeAttach(writes, { identity, id: match.id!, target: body.target }))
+        }
+        case 'inbox': {
+          // Raw platform payloads: full access only.
+          if (principal.can !== 'all') throw forbidden('reading the inbox needs full access')
+          if (!engine) throw notFound('this board has no sync configured')
+          const query = InboxQuery.parse(queryObject(url))
+          return json({ events: await engine.readInbox(match.param!, query.channel, query.limit ?? 50) })
         }
         case 'events': {
           const query = EventsQuery.parse(queryObject(url))
@@ -359,18 +351,10 @@ export function board(options: BoardOptions = {}) {
           const after =
             query.after ?? (Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : undefined)
           const { state: actors } = await session.state(actorsReducer)
-          const feedOptions = {
-            session,
-            after,
-            filters: query,
-            all: query.all ?? false,
-            me: actor.id,
-            actors,
-          }
+          const feedOptions = { session, after, filters: query, all: query.all ?? false, me: actor.id, actors }
           if ((request.headers.get('accept') ?? '').includes('text/event-stream'))
             return sse(feedOptions, request.signal, streamMaxMs)
-          const page = await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal)
-          return json(page)
+          return json(await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal))
         }
       }
       throw notFound(`no route: ${request.method} ${url.pathname}`)
@@ -379,22 +363,21 @@ export function board(options: BoardOptions = {}) {
     }
   }
 
-  return { GET: handle, POST: handle, fetch: handle, server }
+  const handle = (request: Request) => dispatch(request, null)
+  return {
+    GET: handle,
+    POST: handle,
+    fetch: handle,
+    /** The A2 servers behind this board, for `scheduler.handler(...board.servers)`. */
+    servers: engine ? ([server, engine.inboxServer] as const) : ([server] as const),
+    /** For tests and tools. */
+    engine,
+    session,
+  }
 }
 
-const hasAnyFilter = (query: z.output<typeof Filters>) =>
-  query.channel !== undefined ||
-  query.re !== undefined ||
-  query.by !== undefined ||
-  query.mentions !== undefined ||
-  (query.label?.length ?? 0) > 0
-
 /** Server-sent events: `id` is the log index, so `Last-Event-ID` resumes exactly. */
-function sse(
-  options: Parameters<typeof liveFeed>[0],
-  requestSignal: AbortSignal,
-  maxMs: number,
-): Response {
+function sse(options: Parameters<typeof liveFeed>[0], requestSignal: AbortSignal, maxMs: number): Response {
   const encoder = new TextEncoder()
   const controller = new AbortController()
   const signal = AbortSignal.any([requestSignal, controller.signal, AbortSignal.timeout(maxMs)])
@@ -444,8 +427,7 @@ function openapi() {
   for (const [name, definition] of Object.entries(routes)) {
     const path = definition.path.replace(/:(\w+)/g, '{$1}')
     const operation: Record<string, unknown> = { operationId: name }
-    if ('query' in definition)
-      operation['x-query-schema'] = z.toJSONSchema(definition.query, { io: 'input' })
+    if ('query' in definition) operation['x-query-schema'] = z.toJSONSchema(definition.query, { io: 'input' })
     if ('body' in definition)
       operation.requestBody = {
         content: { 'application/json': { schema: z.toJSONSchema(definition.body, { io: 'input' }) } },
