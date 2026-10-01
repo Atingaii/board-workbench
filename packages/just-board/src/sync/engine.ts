@@ -1,3 +1,4 @@
+import { canonicalEmoji } from '../contract/emoji.ts'
 import type { Chat, Message as ChatMessage, ReactionEvent } from 'chat'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
@@ -518,8 +519,8 @@ export function createSyncEngine(options: {
         const chatThread = toChat(copy.thread)
         if (event.type === 'message.edited' && message) await adapter.editMessage(chatThread, copy.message, render(message, state.actors))
         else if (event.type === 'message.deleted') await adapter.deleteMessage(chatThread, copy.message)
-        else if (event.type === 'reaction.added') await adapter.addReaction(chatThread, copy.message, event.payload.emoji)
-        else if (event.type === 'reaction.removed') await adapter.removeReaction(chatThread, copy.message, event.payload.emoji)
+        else if (event.type === 'reaction.added') await adapter.addReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
+        else if (event.type === 'reaction.removed') await adapter.removeReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
       } catch (error) {
         console.warn(`[just-board] skipped ${event.type} on ${target}:`, (error as Error).message)
       }

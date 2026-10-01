@@ -26,7 +26,7 @@ export const LabelKey = z
 export const LabelValue = z.string().max(256)
 export const Labels = z.record(LabelKey, LabelValue)
 
-/** Normalized short names: `eyes`, `white_check_mark`, `+1`. */
+/** Normalized short names, as Chat SDK names them: `eyes`, `check`, `thumbs_up`. */
 export const Emoji = z
   .string()
   .max(64)

@@ -1,3 +1,4 @@
+import { canonicalEmoji } from './emoji.ts'
 import type { ActorKind, Author, Labels } from './schemas.ts'
 import { boardContract, type BoardEvent, type Origin } from './contract.ts'
 
@@ -86,14 +87,16 @@ export function foldMessages(
     case 'reaction.added': {
       const message = state.byId[event.payload.id]
       if (!message || message.deleted) return state
-      const actors = (message.reactions[event.payload.emoji] ??= [])
+      // Older events may use Slack's names (`+1`); they group with Chat SDK's (`thumbs_up`).
+      const actors = (message.reactions[canonicalEmoji(event.payload.emoji)] ??= [])
       if (!actors.includes(event.payload.by.actor)) actors.push(event.payload.by.actor)
       return state
     }
     case 'reaction.removed': {
       const message = state.byId[event.payload.id]
       if (!message || message.deleted) return state
-      const { emoji, by } = event.payload
+      const { by } = event.payload
+      const emoji = canonicalEmoji(event.payload.emoji)
       const actors = (message.reactions[emoji] ?? []).filter((a) => a !== by.actor)
       if (actors.length > 0) message.reactions[emoji] = actors
       else delete message.reactions[emoji]
@@ -123,7 +126,7 @@ export function foldMessages(
 
 export const messagesReducer = boardContract
   .reducer({
-    name: 'just-board.messages.v2',
+    name: 'just-board.messages.v3',
     initialState: { byId: {}, replies: {} } as MessagesState,
   })
   .fold(foldMessages)

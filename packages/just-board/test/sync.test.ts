@@ -209,7 +209,7 @@ describe('sync', () => {
     await webhook('slack', { type: 'reaction', threadId: 'slack:C1:200', messageId: '200', emoji: 'white_check_mark', added: true, user: 'U_ADA' })
     await vi.waitFor(async () => {
       const [after] = await read(julian, 'firehose')
-      expect(after!.reactions).toMatchObject({ eyes: ['vercel:user:u_julian'], white_check_mark: ['slack:user:U_ADA'] })
+      expect(after!.reactions).toMatchObject({ eyes: ['vercel:user:u_julian'], check: ['slack:user:U_ADA'] })
     })
     expect(s.reactions).toHaveLength(1) // the Slack reaction isn't echoed back
   })
