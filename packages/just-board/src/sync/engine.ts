@@ -163,7 +163,9 @@ export function createSyncEngine(options: {
     const precise = toExternal(key, chatThread)
     const platformThread = precise.slice(key.length + 1)
     const grouped = `${key}:${platform.groupThread(platformThread)}`
-    const channel = toExternal(key, platform.adapter.channelIdFromThreadId(chatThread))
+    const channel = platform.channelOf
+      ? `${key}:${platform.channelOf(platformThread)}`
+      : toExternal(key, platform.adapter.channelIdFromThreadId(chatThread))
     return { channel, thread: grouped, subthread: grouped === precise ? null : precise, platformThread }
   }
 
@@ -413,6 +415,34 @@ export function createSyncEngine(options: {
     })
   }
 
+  /**
+   * A2 dead-letters a handler after 10 failures, and a dead letter stops its lane,
+   * which is the thread's: nothing after it would sync. So a delivery retries a
+   * few times, then records `message.sync_failed` and lets the thread move on.
+   */
+  const DELIVERY_ATTEMPTS = 5
+
+  type Failure = { id: number; target: string; error: unknown }
+
+  /** A platform error's code (`not_in_channel`) when it has one, else its message. */
+  const describe = (error: unknown): string => {
+    const code = (error as { data?: { error?: unknown } } | null)?.data?.error
+    const text = typeof code === 'string' ? code : error instanceof Error ? error.message : String(error)
+    return text.slice(0, 500) || 'unknown error'
+  }
+
+  async function settle(ctx: Ctx<'thread.synced' | 'message.posted'>, thread: string, failures: Failure[]) {
+    if (failures.length === 0) return
+    if (ctx.attempt < DELIVERY_ATTEMPTS) throw failures[0]!.error
+    for (const { id, target, error } of failures) {
+      console.error(`[just-board] gave up delivering #${id} to ${target}:`, describe(error))
+      await ctx.session.append(`failed:${id}:${target}`, {
+        type: 'message.sync_failed',
+        payload: { id, thread, target, error: describe(error) },
+      })
+    }
+  }
+
   async function deliverThread(ctx: Ctx<'thread.synced'>) {
     const { thread, target } = ctx.event.payload
     if (isThreadTarget(target)) return // joining: only messages written after the join are delivered
@@ -422,20 +452,30 @@ export function createSyncEngine(options: {
     if (!synced || !root || root.deleted) return
     let externalThread = synced.external[target]
     if (!externalThread) {
-      const chat = await chatFor(keyOf(target))
-      const sent = await chat.channel(toChat(target)).post(render(root, state.actors))
-      externalThread = toExternal(keyOf(target), sent.threadId)
-      await ctx.session.append(`receipt:${root.id}:${target}`, {
-        type: 'message.synced',
-        payload: { id: root.id, thread, target, external: { thread: externalThread, message: sent.id } },
-      })
+      try {
+        const chat = await chatFor(keyOf(target))
+        const sent = await chat.channel(toChat(target)).post(render(root, state.actors))
+        externalThread = toExternal(keyOf(target), sent.threadId)
+        await ctx.session.append(`receipt:${root.id}:${target}`, {
+          type: 'message.synced',
+          payload: { id: root.id, thread, target, external: { thread: externalThread, message: sent.id } },
+        })
+      } catch (error) {
+        return settle(ctx, thread, [{ id: root.id, target, error }])
+      }
     }
+    const failures: Failure[] = []
     for (const replyId of state.messages.replies[root.id] ?? []) {
       const reply = state.messages.byId[replyId]
       if (!reply || reply.deleted || reply.noSync || cameFrom(reply, target)) continue
       if (state.sync.copies[replyId]?.[target]) continue
-      await postReply(ctx, state, reply, target, externalThread)
+      try {
+        await postReply(ctx, state, reply, target, externalThread)
+      } catch (error) {
+        failures.push({ id: replyId, target, error })
+      }
     }
+    await settle(ctx, thread, failures)
   }
 
   /** Never deliver a message back to the platform it came from. */
@@ -449,12 +489,18 @@ export function createSyncEngine(options: {
     const synced = state.sync.threads[payload.thread]
     const message = state.messages.byId[ctx.event.index]
     if (!synced || !message || synced.targets.length === 0) return
+    const failures: Failure[] = []
     for (const target of synced.targets) {
       const externalThread = synced.external[target]
       if (!externalThread) continue // the root isn't there yet; its thread.synced handler backfills
       if (cameFrom(message, target) || state.sync.copies[message.id]?.[target]) continue
-      await postReply(ctx, state, message, target, externalThread)
+      try {
+        await postReply(ctx, state, message, target, externalThread)
+      } catch (error) {
+        failures.push({ id: message.id, target, error })
+      }
     }
+    await settle(ctx, payload.thread, failures)
   }
 
   /** Edits, deletes, and reactions are best-effort: a platform that can't do one skips it. */

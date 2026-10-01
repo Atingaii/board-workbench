@@ -9,7 +9,7 @@ const textOf = (message: AdapterPostableMessage) =>
   typeof message === 'string' ? message : JSON.stringify(message)
 
 type WebhookPayload =
-  | { type: 'message'; threadId: string; id: string; text: string; user: string }
+  | { type: 'message'; threadId: string; id: string; text: string; user: string; name?: string }
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
@@ -19,7 +19,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
   const posts: { threadId: string; text: string; id: string }[] = []
   const channelPosts: { channelId: string; text: string; id: string }[] = []
   const reactions: { threadId: string; messageId: string; emoji: string; added: boolean }[] = []
-  const author = (user: string) => ({ userId: user, userName: user, fullName: user, isBot: false, isMe: false })
+  const author = (user: string, name = user) => ({ userId: user, userName: name, fullName: name, isBot: false, isMe: false })
   const adapter: Adapter = createMockAdapter(name, {
     name,
     userName: 'just-board',
@@ -34,7 +34,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
         await chat.processMessage(
           adapter,
           body.threadId,
-          createTestMessage(body.id, body.text, { threadId: body.threadId, author: author(body.user) }),
+          createTestMessage(body.id, body.text, { threadId: body.threadId, author: author(body.user, body.name) }),
           options,
         )
       else
@@ -102,7 +102,13 @@ function withSlackClient(client: unknown, asyncToken: boolean) {
 }
 
 function setup(
-  options: { alerts?: SlackChannels[string]; channels?: SlackChannels; slackClient?: unknown; asyncToken?: boolean } = {},
+  options: {
+    alerts?: SlackChannels[string]
+    channels?: SlackChannels
+    slackClient?: unknown
+    asyncToken?: boolean
+    repos?: Parameters<typeof github>[0]['repos']
+  } = {},
 ) {
   const s = fakePlatform('slack', options.slackClient ? withSlackClient(options.slackClient, !!options.asyncToken) : undefined)
   const g = fakePlatform('github')
@@ -112,7 +118,7 @@ function setup(
         adapter: s.adapter,
         channels: { C1: 'firehose', C2: 'prs', ...(options.alerts ? { C3: options.alerts } : {}), ...options.channels },
       }),
-      github: github({ adapter: g.adapter, repos: { 'basehub-ai/just-board': 'prs' } }),
+      github: github({ adapter: g.adapter, repos: options.repos ?? { 'basehub-ai/just-board': 'prs' } }),
     },
   })
   const webhook = (key: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -265,6 +271,55 @@ describe('sync', () => {
     expect(g.posts).toHaveLength(0) // GitHub's own reply never goes back to GitHub
   })
 
+  it("keeps a GitHub author's avatar when a comment arrives without one", async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const avatar = 'https://avatars.githubusercontent.com/u/42?v=4'
+    await webhook(
+      'github',
+      {
+        action: 'opened',
+        repository: { full_name: 'basehub-ai/just-board' },
+        sender: { login: 'julianbenegas', id: 42, avatar_url: avatar },
+        pull_request: { number: 8, title: 'Avatars', html_url: 'https://github.com/basehub-ai/just-board/pull/8', draft: false, merged: false },
+      },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 'a1' },
+    )
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    // Chat SDK's GitHub messages carry no avatar.
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/just-board:8', id: 'c1', text: 'nice', user: '42', name: 'julianbenegas' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
+
+    const { body } = await julian('GET', '/actors')
+    expect(body.actors.find((a: { id: string }) => a.id === 'github:user:42')).toMatchObject({ avatar })
+    const events = (await julian('GET', '/events?after=0&all=true')).body.events as { type: string }[]
+    expect(events.filter((e) => e.type === 'actor.seen')).toHaveLength(1) // the comment didn't rewrite the author
+  })
+
+  it("sends a repo's PRs and issues to different channels", async () => {
+    const { board, webhook } = setup({ repos: { 'basehub-ai/just-board': { pulls: 'prs', issues: 'issues' } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/just-board' }
+    const sender = { login: 'julianbenegas', id: 42 }
+    await webhook(
+      'github',
+      { action: 'opened', repository, sender, pull_request: { number: 9, title: 'A PR', html_url: 'https://github.com/x/pull/9', draft: false, merged: false } },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 's1' },
+    )
+    await webhook(
+      'github',
+      { action: 'opened', repository, sender, issue: { number: 10, title: 'An issue', html_url: 'https://github.com/x/issues/10' } },
+      { 'x-github-event': 'issues', 'x-github-delivery': 's2' },
+    )
+    await vi.waitFor(async () => expect((await read(julian, 'issues')).map((m) => m.text)).toEqual([expect.stringContaining('Issue #10')]))
+    expect((await read(julian, 'prs')).map((m) => m.text)).toEqual([expect.stringContaining('PR #9')])
+
+    // A comment on the issue follows it there.
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/just-board:issue:10', id: 'c2', text: 'on it', user: '42' })
+    await vi.waitFor(async () => expect(await read(julian, 'issues')).toHaveLength(2))
+    expect(await read(julian, 'prs')).toHaveLength(1)
+  })
+
   it('attaches an existing thread to a new target and backfills it', async () => {
     const { board, s } = setup()
     const julian = caller(board.fetch, await personToken())
@@ -353,6 +408,36 @@ describe('sync', () => {
     expect(inbox.status).toBe(400)
     expect(inbox.body.error.message).toContain('groups:read')
     warn.mockRestore()
+  })
+
+  it('records a delivery it gives up on, and keeps syncing the thread', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { board, s } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const { body } = await julian('POST', '/messages', { channel: 'firehose', text: 'deploy failed' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+
+    const post = s.adapter.postMessage
+    let attempts = 0
+    s.adapter.postMessage = async () => {
+      attempts++
+      throw Object.assign(new Error('An API error occurred: not_in_channel'), { data: { error: 'not_in_channel' } })
+    }
+    const { body: failed } = await julian('POST', '/messages', { re: body.message.id, text: 'rolled back' })
+    // Without a scheduler nothing retries on its own; each drain is the next attempt.
+    await vi.waitFor(async () => {
+      await board.servers[0]!.drain('board')
+      const { body: thread } = await julian('GET', `/messages/${body.message.id}`)
+      expect(thread.replies[0].undelivered).toEqual({ 'slack:C1': 'not_in_channel' })
+    })
+    expect(attempts).toBe(5)
+
+    s.adapter.postMessage = post
+    await julian('POST', '/messages', { re: body.message.id, text: 'fixed forward' })
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('fixed forward')]))
+    const events = (await julian('GET', '/events?after=0')).body.events as { type: string; payload: { id?: number } }[]
+    expect(events.find((e) => e.type === 'message.sync_failed')?.payload.id).toBe(failed.message.id)
+    error.mockRestore()
   })
 
   it('shows raw platform events in the inbox', async () => {

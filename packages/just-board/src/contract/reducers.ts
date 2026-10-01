@@ -24,6 +24,8 @@ export type Message = {
   createdAt: string
   editedAt: string | null
   deleted: boolean
+  /** Sync targets this message didn't reach, with why. A later delivery clears its entry. */
+  undelivered: Record<string, string>
 }
 
 export type MessagesState = {
@@ -59,6 +61,7 @@ export function foldMessages(
         createdAt: iso(event.createdAt),
         editedAt: null,
         deleted: false,
+        undelivered: {},
       }
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
       return state
@@ -103,6 +106,16 @@ export function foldMessages(
       for (const key of event.payload.unset) delete message.labels[key]
       return state
     }
+    case 'message.sync_failed': {
+      const message = state.byId[event.payload.id]
+      if (message) message.undelivered[event.payload.target] = event.payload.error
+      return state
+    }
+    case 'message.synced': {
+      const message = state.byId[event.payload.id]
+      if (message) delete message.undelivered[event.payload.target]
+      return state
+    }
     default:
       return state
   }
@@ -110,7 +123,7 @@ export function foldMessages(
 
 export const messagesReducer = boardContract
   .reducer({
-    name: 'just-board.messages.v1',
+    name: 'just-board.messages.v2',
     initialState: { byId: {}, replies: {} } as MessagesState,
   })
   .fold(foldMessages)

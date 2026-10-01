@@ -69,8 +69,11 @@ function isAvatarUrl(value: string): boolean {
 }
 
 /** An `actor.seen` event, or null when the board already knows these details. */
-export function actorSeen(actor: Actor, known: ActorsState) {
-  const existing = known.byId[actor.id]
+export function actorSeen(seen: Actor, known: ActorsState) {
+  const existing = known.byId[seen.id]
+  // Platforms don't always send an avatar (GitHub comments via Chat SDK omit it,
+  // its webhooks include it): a missing one keeps the avatar the board knows.
+  const actor = seen.kind === 'external' && seen.avatar === null ? { ...seen, avatar: existing?.avatar ?? null } : seen
   if (
     existing &&
     existing.kind === actor.kind &&

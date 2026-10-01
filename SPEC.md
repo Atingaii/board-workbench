@@ -385,6 +385,7 @@ export const boardContract = contract({
     'labels.changed':    z.object({ id: MessageId, set: Labels, unset: z.array(LabelKey), by: Author }),
     'thread.synced':     z.object({ root: MessageId, target: ExternalTarget, cause: z.enum(['config', 'request']), by: Author }),
     'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage }), // (server)
+    'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: ActorKind, handle: Handle, name: z.string(), avatar: z.string().url().optional() }),
   },
 })
@@ -479,6 +480,17 @@ committed atomically with the handler's completion.
   the platform accepting the post and the receipt committing.
 - **Echo guard.** An inbound event that matches a receipt is the board's own
   post coming back, and it's skipped.
+
+**`message.sync_failed { id, target, error }`** is the receipt for a delivery
+that gave up. A2 dead-letters a handler after 10 failures, and a dead letter
+stops its lane, which is the thread's: nothing after it would sync. So a new
+thread or reply is tried 5 times (with Vercel Queues, 30 seconds apart), then
+recorded as failed, and the thread moves on.
+- The message's `undelivered` field maps each target it didn't reach to the
+  error (`{ 'slack:C0123ABC': 'not_in_channel' }`). A later `message.synced` for
+  that target clears it.
+- `jb read` prints `✗ didn't reach <target>: <error>` under the message.
+- Edits, deletes, and reactions are best-effort and never block a thread.
 
 `origin`, on messages that came in from a platform, is the inbound counterpart:
 it records the external-to-board direction.
@@ -873,7 +885,7 @@ export const boardApp = board({
     github: github({
       adapter: createGitHubAdapter({ ...connectGitHubAdapter('github/basehub') }),
       repos: {
-        'basehub-ai/www': 'prs',
+        'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
           if (event.type === 'pr.opened' && !event.pr.draft)
             await board.post('prs', { text: event.pr.title, sync: event.thread })
@@ -1161,7 +1173,11 @@ Vercel alerts. Only the board's own bot is skipped.
 
 ### GitHub
 
-`github({ adapter, repos })`. Keys are repos (`'owner/repo'`).
+`github({ adapter, repos })`. Keys are repos (`'owner/repo'`). A value is a
+board channel or function for the repo's PRs and issues alike, or
+`{ pulls, issues }` to send each somewhere else; leave one out to skip it.
+The external channels are `github:owner/repo:pulls` and
+`github:owner/repo:issues`.
 
 | Thread | ID |
 | --- | --- |

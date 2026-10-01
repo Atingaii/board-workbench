@@ -22,6 +22,8 @@ export type SyncPlatform = {
   resolveChannel(key: string): Promise<string>
   /** Folds sub-threads into the thread a board thread maps to. */
   groupThread(thread: string): string
+  /** The channel a thread is in, when it isn't Chat SDK's: GitHub splits a repo into its PRs and its issues. */
+  channelOf?(thread: string): string
   /** Whether a message is its thread's first message. */
   isRoot(thread: string, messageId: string): boolean
   /** Short context for a message, e.g. the file and line of a review comment. */

@@ -55,6 +55,11 @@ export function Message({ message, reply = false }: { message: MessageView; repl
             ))}
           </div>
         )}
+        {Object.entries(message.undelivered ?? {}).map(([target, error]) => (
+          <div key={target} className="undelivered">
+            ✗ didn&apos;t reach {target}: {error}
+          </div>
+        ))}
       </div>
     </div>
   )

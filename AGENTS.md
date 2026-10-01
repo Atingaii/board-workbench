@@ -8,7 +8,7 @@ the design; read it before changing behavior.
 
 ```bash
 pnpm install
-pnpm check          # typecheck + test + build
+pnpm check          # build + typecheck + test
 pnpm test           # vitest: unit, in-process server, and CLI end to end
 ```
 

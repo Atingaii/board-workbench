@@ -10,7 +10,7 @@ export type GitHubEvent = {
   type: string
   /** `github:owner/repo:12`. Pass it as `sync` to join this PR or issue. */
   thread: string
-  /** `github:owner/repo`. */
+  /** `github:owner/repo:pulls` or `github:owner/repo:issues`. */
   channel: string
   title: string
   url: string | null
@@ -20,6 +20,15 @@ export type GitHubEvent = {
 }
 
 export type GitHubHandler = (args: { event: GitHubEvent; board: BoardClient }) => unknown
+
+/** A repo's PRs and issues: one board channel (or function) for both, or one for each. Leave one out to skip it. */
+export type GitHubRepo = string | GitHubHandler | { pulls?: string | GitHubHandler; issues?: string | GitHubHandler }
+
+/** `owner/repo:12` (and its review threads) → `owner/repo:pulls`; `owner/repo:issue:3` → `owner/repo:issues`. */
+function channelOf(thread: string): string {
+  const match = /^([^:]+):(issue:)?\d+/.exec(thread)
+  return match ? `${match[1]}:${match[2] ? 'issues' : 'pulls'}` : thread
+}
 
 type User = { login?: string; id?: number; type?: string; avatar_url?: string }
 
@@ -113,22 +122,30 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
 
 /**
  * Syncs GitHub repos with board channels. Keys are repos (`'owner/repo'`);
- * values are a board channel (PRs and issues become threads there) or a
- * function. Roots never flow into GitHub: a board thread doesn't open an issue.
+ * values are a board channel (PRs and issues become threads there), a
+ * function, or `{ pulls, issues }` to send each somewhere else. Roots never
+ * flow into GitHub: a board thread doesn't open an issue.
  */
 export function github(options: {
   adapter: Adapter
-  repos: Record<string, string | GitHubHandler>
+  repos: Record<string, GitHubRepo>
 }): SyncPlatform {
+  const mappings: Record<string, string | GitHubHandler> = {}
+  for (const [repo, value] of Object.entries(options.repos)) {
+    const { pulls, issues } = typeof value === 'object' ? value : { pulls: value, issues: value }
+    if (pulls) mappings[`${repo}:pulls`] = pulls
+    if (issues) mappings[`${repo}:issues`] = issues
+  }
   return {
     platform: 'github',
     adapter: options.adapter,
     createChat: () => createChat(options.adapter),
     canStartThreads: false,
-    mappings: options.repos,
+    mappings,
     resolveChannel: (key) => Promise.resolve(key),
     // Inline review threads (`owner/repo:12:rc:345`) belong to their PR (`owner/repo:12`).
     groupThread: (thread) => thread.replace(/:rc:[^:]+$/, ''),
+    channelOf,
     isRoot: () => false,
     context(message: ChatMessage) {
       const raw = message.raw as { path?: string; line?: number; comment?: { path?: string; line?: number } } | null
@@ -152,7 +169,7 @@ export function github(options: {
       const delivery = headers.get('x-github-delivery') ?? `${name}:${found.lifecycle.type}:${found.number}`
       return [
         {
-          event: { kind: 'lifecycle', channel: `${key}:${repo}`, thread, author: author(found.user), ...found.lifecycle },
+          event: { kind: 'lifecycle', channel: `${key}:${repo}:${name === 'issues' ? 'issues' : 'pulls'}`, thread, author: author(found.user), ...found.lifecycle },
           raw: parsed,
           dedupe: `lifecycle:${delivery}`,
         },

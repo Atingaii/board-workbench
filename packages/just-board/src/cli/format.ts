@@ -46,7 +46,8 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   }${labels(message)}`
   const body = message.deleted ? `${pad}(message removed)` : indent(message.text, pad)
   const reacted = reactions(message, options.names ?? new Map())
-  return [head, body, ...(reacted ? [`${pad}${reacted}`] : [])].join('\n')
+  const undelivered = Object.entries(message.undelivered ?? {}).map(([target, error]) => `${pad}✗ didn't reach ${target}: ${error}`)
+  return [head, body, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
 }
 
 /** Threads in order, each root followed by its replies. */
@@ -75,7 +76,14 @@ export function formatEvent(event: BoardEventView): string {
   if (!message) return `#${event.index}  ${event.type}`
   const where = message.re === null ? message.channel : `${message.channel} ↳ #${message.re}`
   const who = authorName(message)
-  const payload = event.payload as { emoji?: string; by?: { actor: string }; set?: Record<string, string>; unset?: string[] }
+  const payload = event.payload as {
+    emoji?: string
+    by?: { actor: string }
+    set?: Record<string, string>
+    unset?: string[]
+    target?: string
+    error?: string
+  }
   switch (event.type) {
     case 'message.posted':
       return `#${message.id}  ${where}  ${who}: ${message.text}`
@@ -93,6 +101,8 @@ export function formatEvent(event: BoardEventView): string {
       const unset = (payload.unset ?? []).map((k) => `-${k}`)
       return `#${message.id}  ${where}  labels ${[...set, ...unset].join(' ')}`
     }
+    case 'message.sync_failed':
+      return `#${message.id}  ${where}  ✗ didn't reach ${payload.target}: ${payload.error}`
     default:
       return `#${event.index}  ${event.type}`
   }

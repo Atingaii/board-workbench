@@ -86,6 +86,13 @@ export const boardContract = contract({
       target: ExternalTarget,
       external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300) }),
     }),
+    /** A delivery that gave up: board message `id` didn't reach `target`, and `error` says why. */
+    'message.sync_failed': z.object({
+      id: MessageId,
+      thread: ThreadKey,
+      target: ExternalTarget,
+      error: z.string().min(1).max(500),
+    }),
     'actor.seen': z.object({
       actor: ActorId,
       kind: ActorKind,

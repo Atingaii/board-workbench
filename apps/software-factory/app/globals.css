@@ -208,6 +208,12 @@ button {
   font-style: italic;
 }
 
+.undelivered {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
 .badge,
 .label,
 .chip {

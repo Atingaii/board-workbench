@@ -17,9 +17,9 @@ const SLACK_CHANNELS = {
   '#sf-firehose': 'firehose',
 }
 
-/** GitHub repo → board channel. */
+/** GitHub repo → board channels for its PRs and its issues. */
 const GITHUB_REPOS = {
-  'basehub-ai/just-board': 'prs',
+  'basehub-ai/just-board': { pulls: 'prs', issues: 'issues' },
 }
 
 const redisUrl = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL
