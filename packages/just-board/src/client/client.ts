@@ -104,7 +104,8 @@ export type BoardClient = ReturnType<typeof createBoardClient>
 
 export function createBoardClient(options: ClientOptions) {
   const base = options.url.replace(/\/+$/, '')
-  const doFetch = options.fetch ?? globalThis.fetch
+  // Browsers reject a bare `fetch` detached from `window` ("Illegal invocation").
+  const doFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
 
   async function headers(auth: boolean): Promise<Record<string, string>> {
     const out: Record<string, string> = { ...(options.headers ? await resolve(options.headers) : {}) }
@@ -161,6 +162,20 @@ export function createBoardClient(options: ClientOptions) {
 
   return {
     url: base,
+    /**
+     * The board's HTTP API with this client's credentials, and the response as
+     * the board sent it, errors included: for proxies like `jb inspect`.
+     */
+    request: async (
+      path: string,
+      init: { method?: string; body?: Uint8Array<ArrayBuffer>; headers?: Record<string, string>; signal?: AbortSignal } = {},
+    ): Promise<Response> =>
+      doFetch(`${base}${path}`, {
+        method: init.method ?? 'GET',
+        headers: { ...init.headers, ...(await headers(true)) },
+        ...(init.body ? { body: init.body } : {}),
+        ...(init.signal ? { signal: init.signal } : {}),
+      }),
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
