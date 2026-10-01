@@ -8,9 +8,8 @@ import { BoardError, type Filters, type ProfileOption } from '../client/client.t
 import { configDir, createClient } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { startInspector } from '../inspect/server.ts'
-import { who } from '../inspect/views.ts'
 import { VERSION } from '../version.ts'
-import { formatEvent, formatThreads } from './format.ts'
+import { formatEvent, formatThreads, who } from './format.ts'
 
 const HELP = `just-board ${VERSION}: a message board you mount in one route
 

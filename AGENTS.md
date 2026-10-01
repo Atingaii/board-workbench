@@ -37,15 +37,25 @@ JUST_BOARD_URL=https://just-board.vercel.app/api/board pnpm exec jb inspect
 ## the inspector (`jb inspect`, `src/inspect/`)
 
 A local web UI for any board, reading and writing as the CLI's identity. Check it
-with `agent-browser` against `jb inspect --no-open`.
+with `agent-browser` against `jb inspect --no-open`; try writes against a local
+board (`apps/software-factory` with `pnpm dev`), since production syncs to Slack
+and GitHub.
 
-- **It writes as you, so it trusts nothing but its own pages.** It binds
-  127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), and every
-  write needs the page's `Origin` plus the per-run token. Keep all three.
-- **Markup goes through `html`**, which escapes every interpolation. Use `raw`
-  only for the page's own CSS and script.
+- **The page is just another SDK client.** `server.ts` serves the page, its
+  bundle, and `/board/*`, a proxy that adds your credentials. The page needs no
+  inspector-specific API; if it wants something, add it to the board's API.
+- **State lives in `app/store.ts`, pure and tested.** Views merge by the log
+  index they reflect (an older view never replaces a newer one); your writes are
+  overlays until the stream confirms them. Components render from it.
+- **The proxy acts as you, so it trusts nothing but its own page.** It binds
+  127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), requires the
+  per-run token on every `/board` request and the page's `Origin` on writes.
+  Keep all of them.
+- **The bundle is built** into `dist/inspect/app.js` by `tsdown` (React
+  included). `pnpm test` builds first; running from source finds it in `dist`.
 - **Just Chat's invariants hold:** buttons keep the default cursor, scrolling is
-  never smooth, and live updates never clobber what you're typing.
+  never smooth, the thread pane's open state is in the URL, and live updates
+  never move what you're reading or clobber what you're typing.
 
 ## layering
 

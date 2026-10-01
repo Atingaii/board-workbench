@@ -1,9 +1,10 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Me } from '../api/routes.ts'
-import { BoardError, type BoardClient } from '../client/client.ts'
-import * as views from './views.ts'
+import type { BoardClient } from '../client/client.ts'
+import { CSS } from './style.ts'
 
 /** A browser UI for one board, on this machine, reading and writing as the client's identity. */
 export type Inspector = {
@@ -15,164 +16,113 @@ export type Inspector = {
 
 export const DEFAULT_PORT = 4747
 
-class InputError extends Error {}
+/** The prebuilt UI: next to the CLI in `dist`, or in `dist` when running from source. */
+const BUNDLES = [new URL('./inspect/app.js', import.meta.url), new URL('../../dist/inspect/app.js', import.meta.url)]
+
+async function bundle(): Promise<string | null> {
+  for (const candidate of BUNDLES)
+    try {
+      return await readFile(candidate, 'utf8')
+    } catch {}
+  return null
+}
+
+const shell = (token: string) => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="inspect-token" content="${token}">
+<title>just-board</title>
+<style>${CSS}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>`
+
+const CSP = [
+  "default-src 'none'",
+  'img-src https: http://localhost:* http://127.0.0.1:* data:',
+  "style-src 'unsafe-inline'",
+  "script-src 'self'",
+  "connect-src 'self'",
+  "form-action 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join('; ')
 
 /**
- * Serves the inspector on 127.0.0.1. It writes as you, so every request must
- * name this server's own host (no DNS rebinding), and every write must come
- * from its own pages: same `Origin`, plus a token only those pages carry.
+ * Serves the UI, and a proxy for the board's API that adds your credentials, on
+ * 127.0.0.1. Because the proxy acts as you, it answers only its own page: every
+ * request must name this server's host (no DNS rebinding) and carry the per-run
+ * token that only the page has, and writes must also come from its origin. Your
+ * board token never leaves this process.
  */
 export async function startInspector(options: { client: BoardClient; port?: number }): Promise<Inspector> {
   const { client } = options
   const me = await client.me()
-  const sync = (await client.discovery().catch(() => null))?.sync ?? []
+  const app = await bundle()
   const token = randomBytes(24).toString('base64url')
   let origins = new Set<string>()
   const streams = new Set<AbortController>()
 
-  const actions: Record<string, (body: Record<string, unknown>) => Promise<Record<string, unknown> | void>> = {
-    post: async (body) => {
-      const channel = text(body.channel, 'channel').trim().replace(/^#/, '')
-      return { id: (await client.post(channel, { text: text(body.text, 'text'), ...(yes(body.noSync) ? { noSync: true } : {}) })).id }
-    },
-    reply: async (body) => ({
-      id: (await client.reply(messageId(body.id), { text: text(body.text, 'text'), ...(yes(body.noSync) ? { noSync: true } : {}) })).id,
-    }),
-    react: async (body) => void (await client.react(messageId(body.id), text(body.emoji, 'emoji'), { remove: yes(body.remove) })),
-    edit: async (body) => void (await client.edit(messageId(body.id), text(body.text, 'text'))),
-    delete: async (body) => void (await client.delete(messageId(body.id))),
-    label: async (body) => {
-      const value = text(body.label, 'label').trim()
-      if (value.startsWith('-')) return void (await client.label(messageId(body.id), { unset: [value.slice(1)] }))
-      const at = value.indexOf('=')
-      if (at <= 0) throw new InputError('labels look like key=value, or -key to remove one')
-      await client.label(messageId(body.id), { set: { [value.slice(0, at)]: value.slice(at + 1) } })
-    },
-  }
-
-  async function view(path: string, viewer: views.Viewer): Promise<views.View> {
-    if (path === '/') {
-      const { messages, cursor } = await client.messages({ limit: 100 })
-      return { title: 'activity', meta: `latest 100 · cursor ${cursor}`, feed: views.threads(messages, viewer), composer: views.newThread() }
-    }
-    if (path.startsWith('/c/')) {
-      const channel = path.slice(3)
-      const { messages, cursor } = await client.messages({ channel, limit: 200 })
-      return {
-        title: `#${channel}`,
-        meta: `cursor ${cursor}`,
-        live: channel,
-        feed: views.threads(messages, viewer),
-        composer: views.newThread(channel),
-      }
-    }
-    const thread = /^\/t\/(\d+)$/.exec(path)
-    if (thread) {
-      const { message, replies } = await client.thread(Number(thread[1]))
-      return {
-        title: `#${message.channel} · thread #${message.id}`,
-        live: message.channel,
-        feed: views.threads([message, ...replies], viewer),
-        composer: views.replyTo(message.id),
-      }
-    }
-    if (path.startsWith('/inbox/')) {
-      const key = path.slice(7)
-      return {
-        title: `inbox · ${key}`,
-        meta: 'raw platform events, newest first',
-        live: 'off',
-        feed: views.inbox(await client.inbox(key, { limit: 100 })),
-      }
-    }
-    throw new BoardError('not_found', `nothing at ${path}`, 404)
-  }
-
-  async function page(request: IncomingMessage, response: ServerResponse, url: URL) {
-    let path: string
+  async function proxy(request: IncomingMessage, response: ServerResponse, url: URL) {
+    const reading = request.method === 'GET' || request.method === 'HEAD'
+    if (!sameSecret(String(request.headers['x-inspect-token'] ?? ''), token) || (!reading && !origins.has(String(request.headers.origin))))
+      return json(response, 403, { error: { code: 'forbidden', message: "the board is reachable only from the inspector's own page" } })
+    const path = url.pathname.slice('/board'.length) || '/'
+    let decoded: string
     try {
-      path = decodeURIComponent(url.pathname)
+      decoded = decodeURIComponent(path)
     } catch {
-      return send(response, 400, 'text/plain; charset=utf-8', 'bad path')
+      decoded = '..'
     }
-    const viewer = { me, path }
-    let status = 200
-    let shown: views.View
-    try {
-      shown = await view(path, viewer)
-    } catch (error) {
-      status = error instanceof BoardError && error.status >= 400 ? error.status : 502
-      shown = { title: 'error', live: 'off', feed: views.failure((error as Error).message) }
-    }
-    if (request.headers['x-inspect-fragment'] === '1') return send(response, status, 'text/html; charset=utf-8', shown.feed.value)
-    const nonce = randomBytes(16).toString('base64')
-    const channels = await client.channels().catch(() => [])
-    const body = views.page({ ...viewer, board: client.url, sync, channels, token, nonce }, shown)
-    send(response, status, 'text/html; charset=utf-8', body, {
-      'content-security-policy': [
-        "default-src 'none'",
-        'img-src https: http://localhost:* http://127.0.0.1:* data:',
-        "style-src 'unsafe-inline'",
-        `script-src 'nonce-${nonce}'`,
-        "connect-src 'self'",
-        "form-action 'none'",
-        "base-uri 'none'",
-        "frame-ancestors 'none'",
-      ].join('; '),
-    })
-  }
-
-  /** Board events, relayed so the page knows when to re-render. */
-  async function relay(request: IncomingMessage, response: ServerResponse, url: URL) {
+    if (/(^|\/)\.\.?(\/|$)|\\/.test(decoded)) return json(response, 400, { error: { code: 'bad_path', message: 'no relative paths' } })
     const controller = new AbortController()
     streams.add(controller)
-    request.on('close', () => controller.abort())
-    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
-    response.write(': live\n\n')
-    const channel = url.searchParams.get('channel')
+    response.on('close', () => controller.abort())
     try {
-      for await (const event of client.events(channel ? { channel } : {}, { signal: controller.signal }))
-        response.write(`data: ${JSON.stringify({ index: event.index, type: event.type })}\n\n`)
-    } catch {
-      // The board refused the stream; the page shows it as reconnecting.
+      const body = reading ? undefined : await read(request)
+      const upstream = await client.request(`${path}${url.search}`, {
+        method: request.method ?? 'GET',
+        headers: {
+          ...(request.headers['content-type'] ? { 'content-type': String(request.headers['content-type']) } : {}),
+          ...(request.headers.accept ? { accept: String(request.headers.accept) } : {}),
+        },
+        ...(body ? { body } : {}),
+        signal: controller.signal,
+      })
+      response.writeHead(upstream.status, {
+        'content-type': upstream.headers.get('content-type') ?? 'application/json',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      })
+      if (upstream.body) for await (const chunk of upstream.body) response.write(chunk)
+      response.end()
+    } catch (error) {
+      if (controller.signal.aborted || response.headersSent) return void response.end()
+      json(response, 502, { error: { code: 'unreachable', message: `the board didn't answer: ${(error as Error).message}` } })
     } finally {
       streams.delete(controller)
-      response.end()
-    }
-  }
-
-  async function act(request: IncomingMessage, response: ServerResponse, action: string) {
-    const given = String(request.headers['x-inspect-token'] ?? '')
-    if (!origins.has(String(request.headers.origin)) || !sameSecret(given, token))
-      return json(response, 403, { error: { code: 'forbidden', message: "writes come only from the inspector's own pages" } })
-    const run = actions[action]
-    if (!run) return json(response, 404, { error: { code: 'not_found', message: `no action: ${action}` } })
-    try {
-      const body = JSON.parse(await read(request)) as unknown
-      if (!body || typeof body !== 'object') throw new InputError('expected a JSON object')
-      json(response, 200, { ok: true, ...(await run(body as Record<string, unknown>)) })
-    } catch (error) {
-      const status =
-        error instanceof BoardError && error.status >= 400 ? error.status : error instanceof InputError || error instanceof SyntaxError ? 400 : 500
-      json(response, status, { error: { code: error instanceof BoardError ? error.code : 'error', message: (error as Error).message } })
     }
   }
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://inspector')
-    const handled = !origins.has(`http://${request.headers.host}`)
-      ? send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
-      : request.method === 'POST' && url.pathname.startsWith('/do/')
-        ? act(request, response, url.pathname.slice(4))
-        : request.method !== 'GET'
-          ? send(response, 405, 'text/plain; charset=utf-8', 'method not allowed')
-          : url.pathname === '/events'
-            ? relay(request, response, url)
-            : page(request, response, url)
-    Promise.resolve(handled).catch((error: unknown) => {
-      if (response.headersSent) response.end()
-      else send(response, 500, 'text/plain; charset=utf-8', `error: ${(error as Error).message}`)
-    })
+    if (!origins.has(`http://${request.headers.host}`)) return send(response, 421, 'text/plain; charset=utf-8', 'wrong host')
+    if (url.pathname === '/board' || url.pathname.startsWith('/board/'))
+      return void proxy(request, response, url).catch(() =>
+        response.headersSent ? response.end() : send(response, 500, 'text/plain; charset=utf-8', 'error'),
+      )
+    if (request.method !== 'GET') return send(response, 405, 'text/plain; charset=utf-8', 'method not allowed')
+    if (url.pathname === '/app.js')
+      return app
+        ? send(response, 200, 'text/javascript; charset=utf-8', app)
+        : send(response, 503, 'text/plain; charset=utf-8', "the inspector's UI isn't built: run `pnpm --filter just-board build`")
+    // Every other path is a route inside the page.
+    send(response, 200, 'text/html; charset=utf-8', shell(token), { 'content-security-policy': CSP })
   })
 
   const port = await listen(server, options.port ?? DEFAULT_PORT, options.port === undefined)
@@ -190,37 +140,24 @@ export async function startInspector(options: { client: BoardClient; port?: numb
   }
 }
 
-function text(value: unknown, name: string): string {
-  if (typeof value !== 'string' || value.trim() === '') throw new InputError(`missing ${name}`)
-  return value
-}
-
-function messageId(value: unknown): number {
-  const id = Number(value)
-  if (!Number.isInteger(id) || id <= 0) throw new InputError('missing message id')
-  return id
-}
-
-const yes = (value: unknown) => value === true || value === 'on' || value === 'true' || value === '1'
-
 function sameSecret(given: string, expected: string): boolean {
   const a = Buffer.from(given)
   const b = Buffer.from(expected)
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
-function read(request: IncomingMessage, limit = 256 * 1024): Promise<string> {
+function read(request: IncomingMessage, limit = 1024 * 1024): Promise<Uint8Array<ArrayBuffer>> {
   return new Promise((resolve, reject) => {
     let size = 0
     const chunks: Buffer[] = []
     request.on('data', (chunk: Buffer) => {
       size += chunk.length
       if (size > limit) {
-        reject(new InputError('request too large'))
+        reject(new Error('request too large'))
         request.destroy()
       } else chunks.push(chunk)
     })
-    request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    request.on('end', () => resolve(new Uint8Array(Buffer.concat(chunks))))
     request.on('error', reject)
   })
 }

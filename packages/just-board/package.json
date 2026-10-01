@@ -48,7 +48,8 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepack": "tsdown"
+    "prepack": "tsdown",
+    "pretest": "tsdown --log-level warn"
   },
   "dependencies": {
     "@vercel/oidc": "^3.8.9",
@@ -56,16 +57,20 @@
     "zod": "^4.6.5"
   },
   "peerDependencies": {
-    "experimental-a2": "^0.16.1",
-    "chat": "^4.41.1"
+    "chat": "^4.41.1",
+    "experimental-a2": "^0.16.1"
   },
   "devDependencies": {
     "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@chat-adapter/tests": "^4.41.1",
     "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "chat": "^4.41.1",
     "experimental-a2": "0.16.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"

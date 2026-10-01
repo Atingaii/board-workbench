@@ -23,20 +23,16 @@ afterAll(async () => {
   server.close()
 })
 
-const get = (path: string, headers: Record<string, string> = {}) => fetch(`${inspector.url}${path}`, { headers })
+/** The page's own client: the SDK, pointed at the inspector. */
+const page = () => createBoardClient({ url: `${inspector.url}/board`, token: '', headers: { 'x-inspect-token': token, origin: inspector.url } })
 
-function act(action: string, body: unknown, headers: Record<string, string> = { origin: inspector.url, 'x-inspect-token': token }) {
-  return fetch(`${inspector.url}/do/${action}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-  })
-}
+const board = (path: string, init: RequestInit = {}) => fetch(`${inspector.url}/board${path}`, init)
 
-/** A request with a Host header fetch won't let us forge. */
-function withHost(host: string) {
+/** A request exactly as written: fetch won't forge a Host header or keep `..` in a path. */
+function exactly(path: string, headers: Record<string, string> = {}) {
   return new Promise<number>((resolve, reject) => {
-    const req = request(`${inspector.url}/`, { headers: { host } }, (res) => {
+    const { hostname, port } = new URL(inspector.url)
+    const req = request({ hostname, port, path, headers }, (res) => {
       res.resume()
       resolve(res.statusCode ?? 0)
     })
@@ -46,83 +42,64 @@ function withHost(host: string) {
 }
 
 describe('inspect', () => {
-  it('shows the board as you', async () => {
-    const root = await client.post('errors-www', 'deploy failed: https://example.com/runs/1.')
-    await client.reply(root.id, 'rolling back <now>')
-
-    const home = await get('/')
-    expect(home.status).toBe(200)
-    expect(home.headers.get('content-security-policy')).toContain("script-src 'nonce-")
-    const body = await home.text()
-    expect(body).toContain('as julian')
-    expect(body).toContain('href="/c/errors-www"')
-    expect(body).toContain('<a href="https://example.com/runs/1" target="_blank" rel="noreferrer">https://example.com/runs/1</a>.')
-
-    const channel = await (await get('/c/errors-www')).text()
-    expect(channel).toContain('rolling back &lt;now&gt;')
-    expect(channel).toContain('placeholder="message #errors-www"')
-
-    const thread = await (await get(`/t/${root.id}`)).text()
-    expect(thread).toContain(`thread #${root.id}`)
-    expect(thread).toContain(`placeholder="reply in thread #${root.id}"`)
-
-    const fragment = await (await get('/c/errors-www', { 'x-inspect-fragment': '1' })).text()
-    expect(fragment).toContain('rolling back')
-    expect(fragment).not.toContain('<html')
-
-    expect((await get('/t/9999')).status).toBe(404)
+  it('serves the page for every route, and its bundle', async () => {
+    for (const path of ['/', '/c/errors-www', '/inbox/slack']) {
+      const response = await fetch(`${inspector.url}${path}`)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-security-policy')).toContain("script-src 'self'")
+      expect(await response.text()).toContain('<div id="root"></div>')
+    }
+    const app = await fetch(`${inspector.url}/app.js`)
+    expect(app.status).toBe(200)
+    expect(app.headers.get('content-type')).toContain('javascript')
   })
 
-  it('posts, replies, reacts, labels, edits, and deletes as you', async () => {
-    const posted = await act('post', { channel: '#ops', text: 'standup in 5' })
-    expect(posted.status).toBe(200)
-    const { id } = (await posted.json()) as { id: number }
-    const { id: replyId } = (await (await act('reply', { id, text: 'on my way', noSync: 'on' })).json()) as { id: number }
-    expect((await act('react', { id, emoji: 'eyes' })).status).toBe(200)
-    expect((await act('label', { id, label: 'status=open' })).status).toBe(200)
-    expect((await act('edit', { id, text: 'standup in 10' })).status).toBe(200)
-    expect((await act('delete', { id: replyId })).status).toBe(200)
+  it('lets the page read and write the board as you', async () => {
+    const ui = page()
+    expect(await ui.me()).toMatchObject({ actor: 'vercel:user:u_julian', handle: 'julian' })
+    const root = await ui.post('ops', 'standup in 5')
+    const reply = await ui.reply(root.id, { text: 'on my way', noSync: true })
+    await ui.react(root.id, 'eyes')
+    await ui.label(root.id, { set: { status: 'open' } })
+    await ui.edit(root.id, 'standup in 10')
+    await ui.delete(reply.id)
 
-    const thread = await client.thread(id)
+    const thread = await client.thread(root.id)
     expect(thread.message).toMatchObject({
-      channel: 'ops',
       text: 'standup in 10',
       labels: { status: 'open' },
       reactions: { eyes: ['vercel:user:u_julian'] },
       by: { actor: 'vercel:user:u_julian' },
     })
     expect(thread.replies[0]).toMatchObject({ deleted: true, noSync: true })
-
-    expect((await act('label', { id, label: '-status' })).status).toBe(200)
-    expect((await act('react', { id, emoji: 'eyes', remove: true })).status).toBe(200)
-    expect((await client.thread(id)).message).toMatchObject({ labels: {}, reactions: {} })
+    expect((await ui.messages({ channel: 'ops' })).messages.map((m) => m.id)).toContain(root.id)
   })
 
-  it('says why a write failed', async () => {
-    const missing = await act('reply', { id: 9999, text: 'hello?' })
-    expect(missing.status).toBe(404)
-    const bad = await act('label', { id: 1, label: 'nope' })
-    expect(bad.status).toBe(400)
-    expect(((await bad.json()) as { error: { message: string } }).error.message).toContain('key=value')
+  it("passes the board's errors through", async () => {
+    await expect(page().thread(9999)).rejects.toMatchObject({ status: 404 })
   })
 
-  it('takes writes only from its own pages', async () => {
-    expect((await act('post', { channel: 'ops', text: 'x' }, { origin: inspector.url })).status).toBe(403)
-    expect((await act('post', { channel: 'ops', text: 'x' }, { origin: 'https://evil.example', 'x-inspect-token': token })).status).toBe(403)
-    expect((await act('post', { channel: 'ops', text: 'x' }, { 'x-inspect-token': token })).status).toBe(403)
-    expect(await withHost('evil.example')).toBe(421) // DNS rebinding
-    expect(await withHost(new URL(inspector.url).host)).toBe(200)
-  })
-
-  it('relays board events to the page', async () => {
+  it('streams board events to the page', async () => {
     const controller = new AbortController()
-    const response = await fetch(`${inspector.url}/events?channel=live`, { signal: controller.signal })
-    const reader = response.body!.getReader()
-    const decoder = new TextDecoder()
-    let seen = ''
-    while (!seen.includes(': live')) seen += decoder.decode((await reader.read()).value)
+    const events = page().events({ channel: 'live' }, { signal: controller.signal })
+    const next = events.next()
+    await new Promise((r) => setTimeout(r, 100))
     await client.post('live', 'hello')
-    while (!seen.includes('"type":"message.posted"')) seen += decoder.decode((await reader.read()).value)
+    expect((await next).value).toMatchObject({ type: 'message.posted', message: { text: 'hello' } })
     controller.abort()
+  })
+
+  it('answers only its own page', async () => {
+    expect((await board('/me')).status).toBe(403) // no token
+    expect((await board('/me', { headers: { 'x-inspect-token': 'guess' } })).status).toBe(403)
+    const write = (headers: Record<string, string>) =>
+      board('/messages', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ channel: 'ops', text: 'x' }) })
+    expect((await write({ 'x-inspect-token': token })).status).toBe(403) // no origin
+    expect((await write({ 'x-inspect-token': token, origin: 'https://evil.example' })).status).toBe(403)
+    // URL parsing resolves `..` before routing, so this never reaches the proxy; an encoded slash would.
+    expect(await exactly('/board/../me', { 'x-inspect-token': token })).toBe(200) // the page, not the board
+    expect(await exactly('/board/%2F..%2Fsecret', { 'x-inspect-token': token })).toBe(400)
+    expect(await exactly('/', { host: 'evil.example' })).toBe(421) // DNS rebinding
+    expect(await exactly('/')).toBe(200)
   })
 })

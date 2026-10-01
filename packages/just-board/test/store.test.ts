@@ -1,0 +1,92 @@
+import { describe, expect, it } from 'vitest'
+import type { BoardEventView, MessageView } from '../src/api/routes.ts'
+import * as store from '../src/inspect/app/store.ts'
+
+const ME = 'vercel:user:u_julian'
+
+function message(id: number, overrides: Partial<MessageView> = {}): MessageView {
+  return {
+    id,
+    channel: 'ops',
+    text: `message ${id}`,
+    re: null,
+    replyTo: null,
+    thread: `t${id}`,
+    labels: {},
+    reactions: {},
+    mentions: [],
+    by: { actor: ME, principal: 'vercel:user:u_julian', profile: null, session: null },
+    noSync: false,
+    origin: null,
+    from: null,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    editedAt: null,
+    deleted: false,
+    undelivered: {},
+    author: { handle: 'julian', name: 'julian', avatar: null },
+    ...overrides,
+  }
+}
+
+const start: store.State = { ...store.initialState, me: { actor: ME } as store.State['me'] }
+
+describe('the inspector store', () => {
+  it('keeps the newest view of a message, whatever order views arrive in', () => {
+    let state = store.merge(start, [message(1, { text: 'new' })], 10)
+    state = store.merge(state, [message(1, { text: 'old' })], 5)
+    expect(state.messages[1]!.text).toBe('new')
+    state = store.merge(state, [message(1, { text: 'newer' })], 11)
+    expect(state.messages[1]!.text).toBe('newer')
+  })
+
+  it('folds live events in, and counts new threads', () => {
+    const posted: BoardEventView = { index: 3, type: 'message.posted', createdAt: '', payload: {}, message: message(3, { channel: 'new' }) }
+    let state = store.applyEvent(start, posted)
+    expect(state.channels.new).toMatchObject({ threads: 1, messages: 1, lastIndex: 3 })
+    expect(state.cursor).toBe(3)
+    state = store.applyEvent(state, posted) // a repeat counts once
+    expect(state.channels.new!.messages).toBe(1)
+    state = store.applyEvent(state, {
+      index: 4,
+      type: 'actor.seen',
+      createdAt: '',
+      payload: { actor: ME, handle: 'julian', name: 'Julian', avatar: 'https://example.com/a.png' },
+    })
+    expect(store.shown(state, 3)!.author).toMatchObject({ name: 'Julian', avatar: 'https://example.com/a.png' })
+  })
+
+  it('shows your changes at once, until the board confirms them', () => {
+    let state = store.merge(start, [message(1)], 1)
+    state = store.addOp(state, 1, 'a', { kind: 'react', emoji: '+1', remove: false })
+    state = store.addOp(state, 1, 'b', { kind: 'label', set: { status: 'open' }, unset: [] })
+    expect(store.shown(state, 1)).toMatchObject({ reactions: { thumbs_up: [ME] }, labels: { status: 'open' } })
+
+    // The board confirms the reaction; the label is still on its way.
+    state = store.merge(state, [message(1, { reactions: { thumbs_up: [ME] } })], 2)
+    expect(state.ops[1]!.map((entry) => entry.id)).toEqual(['b'])
+    expect(store.shown(state, 1)).toMatchObject({ reactions: { thumbs_up: [ME] }, labels: { status: 'open' } })
+
+    state = store.dropOp(state, 1, 'b') // the write failed
+    expect(store.shown(state, 1)!.labels).toEqual({})
+  })
+
+  it('removes a reaction you take back, and tombstones a delete', () => {
+    let state = store.merge(start, [message(1, { reactions: { eyes: [ME, 'slack:user:U1'] } })], 1)
+    state = store.addOp(state, 1, 'a', { kind: 'react', emoji: 'eyes', remove: true })
+    expect(store.shown(state, 1)!.reactions).toEqual({ eyes: ['slack:user:U1'] })
+    state = store.addOp(state, 1, 'b', { kind: 'delete' })
+    expect(store.shown(state, 1)).toMatchObject({ deleted: true, text: '', reactions: {} })
+  })
+
+  it('groups a channel into threads, with pending posts', () => {
+    let state = store.merge(start, [message(1), message(2, { re: 1 }), message(3), message(4, { channel: 'other' })], 4)
+    state = { ...state, pending: [{ key: 'k', channel: 'ops', re: 3, text: 'soon', noSync: false, createdAt: '', error: null }] }
+    const { threads } = store.channelThreads(state, 'ops')
+    expect(threads.map((t) => [t.root.id, t.replies.map((r) => r.id), t.pending.length])).toEqual([
+      [1, [2], 0],
+      [3, [], 1],
+    ])
+    expect(store.thread(state, 1)!.replies.map((r) => r.id)).toEqual([2])
+    expect(store.recent(state, 2).map((m) => m.id)).toEqual([3, 4])
+  })
+})

@@ -2,6 +2,10 @@ import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 
 /** "claude via julian" for a profile, the name otherwise. */
+/** "claude via julian" for a profile, the name otherwise. */
+export const who = (me: { name: string; handle: string; profile: string | null }): string =>
+  me.profile !== null && me.handle.includes('/') ? `${me.name} via ${me.handle.slice(0, me.handle.indexOf('/'))}` : me.name
+
 export function authorName(message: Pick<MessageView, 'author' | 'by'>): string {
   const author = message.author
   if (!author) return message.by.actor

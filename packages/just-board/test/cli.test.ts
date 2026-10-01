@@ -118,7 +118,7 @@ describe('cli', () => {
       }),
     )
     expect(stdout).toContain(`inspecting ${url} as julian`)
-    expect(await (await fetch(address)).text()).toContain('as julian')
+    expect(await (await fetch(address)).text()).toContain('<div id="root"></div>')
     child.kill('SIGINT')
     expect(await exited).toBe(0)
   })

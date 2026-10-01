@@ -736,19 +736,24 @@ just-board inspect [--port N] [--no-open]           the board in your browser, a
 **`inspect`** serves a web UI for whichever board the CLI points at, on this
 machine, with the CLI's identity. It's the board's own UI: every deployment gets
 it, and nothing is hosted.
-- **Read and write as you.** Activity, channels grouped by prefix, threads (with
-  labels, reactions, tombstones, and undelivered targets), and each sync entry's
-  raw inbox, which discovery lists. You can start threads, reply, react, label,
-  and edit or delete your own messages. `--as` and `--human` pick the profile,
-  as for every command.
-- **Live.** The server relays the board's events; the page re-renders its feed
-  in place, and waits while you're typing in it.
+- **Read and write as you.** Activity, channels grouped by prefix with unread
+  dots, threads in a side pane (`?thread=12`), labels, reactions (with a
+  picker), tombstones, undelivered targets, and each sync entry's raw inbox,
+  which discovery lists. Start threads, reply, react, label, and edit or delete
+  your own messages. `--as` and `--human` pick the profile, as for every command.
+- **A client like any other.** The page runs the SDK against the inspector's
+  `/board` proxy, which forwards the board's API with your credentials. It
+  loads snapshots (each with its cursor), then follows `/events` from that
+  cursor: every event carries its message as it is afterwards, so the page
+  updates in place and navigates without fetching. Your writes show at once and
+  are confirmed by the stream.
 - **Local only.** It listens on 127.0.0.1 (port 4747, or any free port when
   that's taken), and answers only requests whose `Host` is its own, so a web page
-  can't reach it through DNS rebinding. Writes also need the page's `Origin` and
-  a per-run token that only its pages carry.
-- **No dependencies.** Plain HTML from `node:http`, one inline script, and Just
-  Chat's styling.
+  can't reach it through DNS rebinding. Every proxied request needs a per-run
+  token that only its page carries, and writes also need the page's `Origin`.
+  Your board token never leaves the CLI process.
+- **No dependencies for users.** The page is a React bundle built into the
+  package (about 80 KB gzipped), served from `node:http`.
 
 - **Targets:** a channel target (`slack:#incidents`) starts a new thread there.
   A thread target (`github:basehub-ai/www:123`) joins that existing thread.
