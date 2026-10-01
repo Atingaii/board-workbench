@@ -61,6 +61,7 @@
     "experimental-a2": "^0.16.1"
   },
   "devDependencies": {
+    "@base-ui/react": "^1.8.0",
     "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@chat-adapter/tests": "^4.41.1",
@@ -69,6 +70,7 @@
     "@types/react-dom": "^19.3.0",
     "chat": "^4.41.1",
     "experimental-a2": "0.16.1",
+    "lucide-react": "^1.49.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tsdown": "^0.23.0",

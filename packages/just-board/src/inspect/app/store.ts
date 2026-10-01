@@ -19,6 +19,7 @@ export type Pending = {
   re: number | null
   text: string
   noSync: boolean
+  labels: Record<string, string>
   createdAt: string
   error: string | null
 }
@@ -223,4 +224,16 @@ export function recent(state: State, limit = 200): MessageView[] {
     .slice(0, limit)
     .reverse()
     .map((message) => shown(state, message.id)!)
+}
+
+/** Every label key on the loaded messages, with the values each has taken: suggestions for pickers. */
+export function knownLabels(state: State): Map<string, Set<string>> {
+  const known = new Map<string, Set<string>>()
+  for (const message of Object.values(state.messages))
+    for (const [key, value] of Object.entries(message.labels)) {
+      let values = known.get(key)
+      if (!values) known.set(key, (values = new Set()))
+      values.add(value)
+    }
+  return known
 }

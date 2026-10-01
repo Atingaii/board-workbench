@@ -47,6 +47,26 @@ const client = createBoardClient({
   },
 })
 
+// --- which message you're editing ---------------------------------------------------
+
+let editing: number | null = null
+const editingListeners = new Set<() => void>()
+
+export function setEditing(id: number | null) {
+  editing = id
+  editingListeners.forEach((listener) => listener())
+}
+
+export function useEditing(): number | null {
+  return useSyncExternalStore(
+    (listener) => {
+      editingListeners.add(listener)
+      return () => editingListeners.delete(listener)
+    },
+    () => editing,
+  )
+}
+
 // --- errors ------------------------------------------------------------------
 
 export type Toast = { id: number; text: string }
@@ -176,11 +196,19 @@ export const loadInbox = (key: string): Promise<InboxEntry[]> => client.inbox(ke
 // --- writes --------------------------------------------------------------------
 
 /** Shows a post at once; the board's answer replaces it. */
-export async function send(post: { channel: string; re: number | null; text: string; noSync: boolean }, key: string = crypto.randomUUID()) {
+export async function send(
+  post: { channel: string; re: number | null; text: string; noSync: boolean; labels: Record<string, string> },
+  key: string = crypto.randomUUID(),
+) {
   const pending: store.Pending = { ...post, key, createdAt: new Date().toISOString(), error: null }
   set((s) => ({ ...s, pending: [...s.pending.filter((p) => p.key !== key), pending] }))
   try {
-    const options = { text: post.text, id: key, ...(post.noSync ? { noSync: true } : {}) }
+    const options = {
+      text: post.text,
+      id: key,
+      ...(post.noSync ? { noSync: true } : {}),
+      ...(Object.keys(post.labels).length > 0 ? { labels: post.labels } : {}),
+    }
     const sent = post.re === null ? await client.post(post.channel, options) : await client.reply(post.re, options)
     set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent], sent.id))
   } catch (error) {

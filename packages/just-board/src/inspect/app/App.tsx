@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { ChannelView, InboxEntry } from '../../api/routes.ts'
+import { PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { ChannelView, InboxEntry, MessageView } from '../../api/routes.ts'
 import { ago, who } from '../../cli/format.ts'
 import * as board from './board.ts'
-import { Composer, Feed, Link, MessageRow, PendingRow, Toasts, navigate, useLocation, useNow, type RowOptions } from './parts.tsx'
-import { channelThreads, recent, thread as threadOf, type State } from './store.ts'
+import { Composer } from './composer.tsx'
+import { Feed, Toasts } from './feed.tsx'
+import { Messages, PendingRow, type RowOptions } from './message.tsx'
+import { Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
+import { channelThreads, knownLabels, recent, thread as threadOf, type State } from './store.ts'
+import { ContextMenuArea, MenuItem, ResizeHandle, type KnownLabels } from './ui.tsx'
 
 type Route = { view: 'activity' } | { view: 'channel'; channel: string } | { view: 'inbox'; key: string } | { view: 'missing' }
 
@@ -21,14 +26,103 @@ function route(path: string): Route {
 }
 
 const withThread = (path: string, id: number | null) => (id === null ? path : `${path}?thread=${id}`)
-
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
+
+// --- sizes you drag, remembered -------------------------------------------------------
+
+function stored(key: string, fallback: number): number {
+  try {
+    const value = Number(localStorage.getItem(key))
+    return Number.isFinite(value) && value > 0 ? value : fallback
+  } catch {
+    return fallback
+  }
+}
+function remember(key: string, value: number | string) {
+  try {
+    localStorage.setItem(key, String(value))
+  } catch {}
+}
+
+const SIDEBAR = { min: 180, max: 400, collapse: 150, key: 'just-board.sidebar-width', collapsedKey: 'just-board.sidebar-collapsed' }
+const PANE = { min: 320, key: 'just-board.pane-width' }
+
+function useSidebar() {
+  const [width, setWidth] = useState(() => Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, stored(SIDEBAR.key, 224))))
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR.collapsedKey) === '1'
+    } catch {
+      return false
+    }
+  })
+  // The release reads the latest position, which may not have rendered yet.
+  const [dragging, setDragging] = useState<number | null>(null)
+  const latest = useRef<number | null>(null)
+  const collapse = (value: boolean) => {
+    setCollapsed(value)
+    remember(SIDEBAR.collapsedKey, value ? '1' : '0')
+  }
+  const commit = (next: number) => {
+    setWidth(next)
+    remember(SIDEBAR.key, next)
+  }
+  return {
+    width: dragging ?? width,
+    collapsed,
+    collapse,
+    /** Dragged under the minimum it fades; let go below the threshold and it collapses. */
+    fade: dragging !== null && dragging < SIDEBAR.min ? Math.max(0.25, (dragging - 60) / (SIDEBAR.min - 60)) : 1,
+    drag: (x: number) => {
+      latest.current = Math.min(SIDEBAR.max, Math.max(60, x))
+      setDragging(latest.current)
+    },
+    done: () => {
+      const at = latest.current
+      latest.current = null
+      setDragging(null)
+      if (at === null) return
+      if (at < SIDEBAR.collapse) collapse(true)
+      else commit(Math.max(SIDEBAR.min, at))
+    },
+    step: (delta: number) => commit(Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, width + delta))),
+  }
+}
+
+function usePane() {
+  const clamp = (value: number) => Math.min(Math.max(PANE.min, innerWidth * 0.7), Math.max(PANE.min, value))
+  const [width, setWidth] = useState(() => stored(PANE.key, 440))
+  const [dragging, setDragging] = useState<number | null>(null)
+  const latest = useRef<number | null>(null)
+  const commit = (next: number) => {
+    setWidth(next)
+    remember(PANE.key, next)
+  }
+  return {
+    width: clamp(dragging ?? width),
+    drag: (x: number) => {
+      latest.current = clamp(innerWidth - x)
+      setDragging(latest.current)
+    },
+    done: () => {
+      const at = latest.current
+      latest.current = null
+      setDragging(null)
+      if (at !== null) commit(at)
+    },
+    step: (delta: number) => commit(clamp(width - delta)),
+  }
+}
+
+// --- the app -----------------------------------------------------------------------
 
 export function App() {
   const state = board.useBoard()
   const where = useLocation()
   const now = useNow()
   const [failed, setFailed] = useState<string | null>(null)
+  const sidebar = useSidebar()
+  const pane = usePane()
 
   useEffect(() => {
     board.boot().catch((error: Error) => setFailed(error.message))
@@ -43,7 +137,7 @@ export function App() {
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || where.thread === null) return
-      if ((event.target as HTMLElement).closest('textarea, input, .picker')) return
+      if ((event.target as HTMLElement).closest('textarea, input, [role="menu"], [role="dialog"]')) return
       navigate(where.path)
     }
     addEventListener('keydown', close)
@@ -55,28 +149,53 @@ export function App() {
     document.title = `${current.view === 'channel' ? `#${current.channel}` : current.view === 'inbox' ? `inbox · ${current.key}` : 'activity'} · just-board`
   }, [where.path])
 
+  const known = useMemo(() => knownLabels(state), [state.messages])
+
   if (failed) return <div className="boot error">error: {failed}</div>
   if (!state.me) return <div className="boot">connecting…</div>
 
-  const options: RowOptions = { me: state.me.actor, now, openThread: (id) => navigate(withThread(where.path, id)) }
+  const options: RowOptions = { me: state.me.actor, now, known, openThread: (id) => navigate(withThread(where.path, id)) }
+  const expand = sidebar.collapsed ? (
+    <button className="tool" title="show the sidebar" onClick={() => sidebar.collapse(false)}>
+      <PanelLeftOpen size={15} strokeWidth={1.75} />
+    </button>
+  ) : null
   return (
     <div className="shell">
-      <Sidebar state={state} current={current} />
+      {!sidebar.collapsed && (
+        <nav className="sidebar" style={{ width: sidebar.width, opacity: sidebar.fade }}>
+          <Sidebar state={state} current={current} onCollapse={() => sidebar.collapse(true)} />
+          <ResizeHandle side="right" label="resize the sidebar" onDrag={sidebar.drag} onDone={sidebar.done} onStep={sidebar.step} />
+        </nav>
+      )}
       <main className="main">
-        {current.view === 'activity' && <Activity state={state} options={options} />}
-        {current.view === 'channel' && <Channel key={current.channel} channel={current.channel} state={state} options={options} />}
-        {current.view === 'inbox' && <Inbox key={current.key} entry={current.key} now={now} />}
-        {current.view === 'missing' && <p className="empty">nothing here</p>}
+        {current.view === 'activity' && <Activity state={state} options={options} known={known} lead={expand} />}
+        {current.view === 'channel' && (
+          <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} />
+        )}
+        {current.view === 'inbox' && <Inbox key={current.key} entry={current.key} now={now} lead={expand} />}
+        {current.view === 'missing' && (
+          <>
+            <Header title="nothing here" lead={expand} />
+            <p className="empty">no such page</p>
+          </>
+        )}
       </main>
-      {where.thread !== null && <ThreadPane key={where.thread} id={where.thread} state={state} path={where.path} now={now} />}
+      {where.thread !== null && (
+        <aside className="pane" style={{ width: pane.width }}>
+          <ResizeHandle side="left" label="resize the thread" onDrag={pane.drag} onDone={pane.done} onStep={pane.step} />
+          <ThreadPane key={where.thread} id={where.thread} state={state} path={where.path} now={now} known={known} />
+        </aside>
+      )}
       <Toasts />
     </div>
   )
 }
 
-function Header(props: { title: string; meta?: string; live?: State['live']; children?: ReactNode }) {
+function Header(props: { title: string; meta?: string; live?: State['live']; lead?: ReactNode; children?: ReactNode }) {
   return (
     <header className="header">
+      {props.lead}
       <span className="title">{props.title}</span>
       {props.meta && <span className="meta">{props.meta}</span>}
       <span className="spacer" />
@@ -122,7 +241,7 @@ function useSeen(state: State, current: Route): Record<string, number> {
   return seen
 }
 
-function Sidebar({ state, current }: { state: State; current: Route }) {
+function Sidebar({ state, current, onCollapse }: { state: State; current: Route; onCollapse: () => void }) {
   const seen = useSeen(state, current)
   const groups = useMemo(() => {
     const out = new Map<string, ChannelView[]>()
@@ -134,9 +253,15 @@ function Sidebar({ state, current }: { state: State; current: Route }) {
     return [...out]
   }, [state.channels])
   const sync = state.discovery?.sync ?? []
+  const copy = (text: string) => void navigator.clipboard.writeText(text).then(() => board.toast(`copied ${text}`))
   return (
-    <nav className="sidebar">
-      <div className="brand">just-board</div>
+    <div className="sidebar-scroll">
+      <div className="brand">
+        <span>just-board</span>
+        <button className="tool" title="hide the sidebar" onClick={onCollapse}>
+          <PanelLeftClose size={15} strokeWidth={1.75} />
+        </button>
+      </div>
       <Link to="/" className="item" current={current.view === 'activity'}>
         <span>activity</span>
       </Link>
@@ -147,10 +272,20 @@ function Sidebar({ state, current }: { state: State; current: Route }) {
             const active = current.view === 'channel' && current.channel === channel.path
             const unread = !active && channel.lastIndex > (seen[channel.path] ?? Number.POSITIVE_INFINITY)
             return (
-              <Link key={channel.path} to={`/c/${channel.path}`} className={`item${unread ? ' unread' : ''}`} current={active} title={channel.path}>
-                <span>#{channel.path.slice(channel.path.lastIndexOf('/') + 1)}</span>
-                {unread ? <i className="dot" /> : <span className="count">{channel.threads}</span>}
-              </Link>
+              <ContextMenuArea
+                key={channel.path}
+                menu={
+                  <>
+                    <MenuItem onClick={() => copy(channel.path)}>copy name</MenuItem>
+                    <MenuItem onClick={() => copy(`jb read ${channel.path}`)}>copy jb read command</MenuItem>
+                  </>
+                }
+              >
+                <Link to={`/c/${channel.path}`} className={`item${unread ? ' unread' : ''}`} current={active} title={channel.path}>
+                  <span className="name">#{channel.path.slice(channel.path.lastIndexOf('/') + 1)}</span>
+                  {unread ? <i className="dot" /> : <span className="count">{channel.threads}</span>}
+                </Link>
+              </ContextMenuArea>
             )
           })}
         </section>
@@ -160,7 +295,7 @@ function Sidebar({ state, current }: { state: State; current: Route }) {
           <h2>inbox</h2>
           {sync.map((entry) => (
             <Link key={entry.key} to={`/inbox/${entry.key}`} className="item" current={current.view === 'inbox' && current.key === entry.key}>
-              <span>{entry.key}</span>
+              <span className="name">{entry.key}</span>
               <span className="count">{entry.platform}</span>
             </Link>
           ))}
@@ -170,136 +305,147 @@ function Sidebar({ state, current }: { state: State; current: Route }) {
         <div>as {who(state.me!)}</div>
         <div className="faint url">{state.discovery?.url.replace(/^https?:\/\//, '')}</div>
       </div>
-      <datalist id="channels">
-        {Object.keys(state.channels).map((path) => (
-          <option key={path} value={path} />
-        ))}
-      </datalist>
-    </nav>
+    </div>
   )
 }
 
 // --- views ---------------------------------------------------------------------------
 
-function Activity({ state, options }: { state: State; options: RowOptions }) {
+/** Your newest message among `messages`, for ↑ to edit. */
+const lastOwn = (messages: MessageView[], me: string) => [...messages].reverse().find((m) => m.by.actor === me && !m.deleted)
+
+function Activity({ state, options, known, lead }: { state: State; options: RowOptions; known: KnownLabels; lead: ReactNode }) {
+  useTypeToFocus('main')
   const messages = useMemo(() => recent(state), [state.messages, state.ops, state.actors])
   const pending = state.pending.filter((post) => post.re === null)
   return (
     <>
-      <Header title="activity" meta="the latest across every channel" live={state.live} />
+      <Header title="activity" meta="the latest across every channel" live={state.live} lead={lead} />
       <Feed scope="activity" first={messages[0]?.id ?? 0} last={(messages.at(-1)?.id ?? 0) + pending.length}>
-        {messages.length === 0 && pending.length === 0 && <p className="empty">nothing here yet</p>}
-        {messages.map((m) => (
-          <div key={m.id} className="thread">
-            <MessageRow
-              m={m}
-              options={{
-                ...options,
-                context: (
-                  <Link to={`/c/${m.channel}${m.re === null ? '' : `?thread=${m.re}`}`} className="where">
-                    #{m.channel}
-                    {m.re !== null && ` ↳ #${m.re}`}
-                  </Link>
-                ),
-              }}
-            />
-          </div>
-        ))}
+        {messages.length === 0 && pending.length === 0 && <p className="empty">nothing here yet: start a thread below</p>}
+        <Messages
+          messages={messages}
+          now={options.now}
+          options={{
+            ...options,
+            context: (m) => (
+              <Link to={`/c/${m.channel}${m.re === null ? '' : `?thread=${m.re}`}`} className="where">
+                #{m.channel}
+                {m.re !== null && ` ↳ #${m.re}`}
+              </Link>
+            ),
+          }}
+        />
         {pending.map((post) => (
-          <div key={post.key} className="thread">
-            <PendingRow post={post} me={state.me!} />
-          </div>
+          <PendingRow key={post.key} post={post} me={state.me!} />
         ))}
       </Feed>
       <Composer
         scope="activity"
-        placeholder="start a thread"
-        pickChannel
-        onSend={(text, { noSync, channel }) => void board.send({ channel, re: null, text, noSync })}
+        role="main"
+        placeholder="start a thread…"
+        known={known}
+        channels={Object.keys(state.channels).sort()}
+        onSend={({ text, noSync, channel, labels }) => void board.send({ channel, re: null, text, noSync, labels })}
+        onEditLast={() => {
+          const mine = lastOwn(messages, state.me!.actor)
+          if (mine) board.setEditing(mine.id)
+        }}
       />
     </>
   )
 }
 
-function Channel({ channel, state, options }: { channel: string; state: State; options: RowOptions }) {
+function Channel(props: { channel: string; state: State; options: RowOptions; known: KnownLabels; lead: ReactNode }) {
+  const { channel, state, options } = props
+  useTypeToFocus('main')
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     void board.loadChannel(channel).finally(() => setLoading(false))
   }, [channel])
   const { threads, pending } = useMemo(() => channelThreads(state, channel), [state.messages, state.ops, state.pending, state.actors, channel])
-  const known = state.channels[channel]
-  const lastId = Math.max(threads.at(-1)?.root.id ?? 0, ...threads.map((t) => t.replies.at(-1)?.id ?? 0))
+  const roots = threads.map((t) => t.root)
+  const replies = new Map(threads.map((t) => [t.root.id, t.replies]))
+  const info = state.channels[channel]
+  const lastId = Math.max(roots.at(-1)?.id ?? 0, ...threads.map((t) => t.replies.at(-1)?.id ?? 0))
   return (
     <>
-      <Header title={`#${channel}`} meta={known ? `${count(known.threads, 'thread')} · ${count(known.messages, 'message')}` : undefined} live={state.live} />
-      <Feed scope={channel} first={threads[0]?.root.id ?? 0} last={lastId + pending.length} older={() => board.loadOlder(channel)}>
-        {threads.length === 0 && pending.length === 0 && <p className="empty">{loading ? 'loading…' : 'nothing here yet'}</p>}
-        {threads.map((t) => (
-          <div key={t.root.id} className="thread">
-            <MessageRow m={t.root} options={{ ...options, replies: t.replies }} />
-            {t.pending.map((post) => (
-              <PendingRow key={post.key} post={post} me={state.me!} reply />
-            ))}
-          </div>
-        ))}
+      <Header
+        title={`#${channel}`}
+        meta={info ? `${count(info.threads, 'thread')} · ${count(info.messages, 'message')}` : undefined}
+        live={state.live}
+        lead={props.lead}
+      />
+      <Feed scope={channel} first={roots[0]?.id ?? 0} last={lastId + pending.length} older={() => board.loadOlder(channel)}>
+        {roots.length === 0 && pending.length === 0 && <p className="empty">{loading ? 'loading…' : 'no messages yet: say something'}</p>}
+        <Messages messages={roots} now={options.now} options={{ ...options, replies: (m) => replies.get(m.id) ?? [] }} />
         {pending.map((post) => (
-          <div key={post.key} className="thread">
-            <PendingRow post={post} me={state.me!} />
-          </div>
+          <PendingRow key={post.key} post={post} me={state.me!} />
         ))}
       </Feed>
       <Composer
         scope={`channel:${channel}`}
-        placeholder={`message #${channel}`}
-        onSend={(text, { noSync }) => void board.send({ channel, re: null, text, noSync })}
+        role="main"
+        placeholder={`message #${channel}…`}
+        known={props.known}
+        onSend={({ text, noSync, labels }) => void board.send({ channel, re: null, text, noSync, labels })}
+        onEditLast={() => {
+          const mine = lastOwn(roots, state.me!.actor)
+          if (mine) board.setEditing(mine.id)
+        }}
       />
     </>
   )
 }
 
-function ThreadPane({ id, state, path, now }: { id: number; state: State; path: string; now: number }) {
+function ThreadPane(props: { id: number; state: State; path: string; now: number; known: KnownLabels }) {
+  const { id, state } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
     void board.loadThread(id).then(() => setMissing(!board.getState().messages[id]))
   }, [id])
   const t = useMemo(() => threadOf(state, id), [state.messages, state.ops, state.pending, state.actors, id])
-  const options: RowOptions = { me: state.me!.actor, now }
+  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known }
   return (
-    <aside className="pane">
+    <>
       <Header title="thread" meta={t ? `#${t.root.channel} · #${id}` : `#${id}`}>
-        <button className="close" title="close (esc)" onClick={() => navigate(path)}>
-          ✕
+        <button className="tool" title="close (esc)" onClick={() => navigate(props.path)}>
+          <X size={15} strokeWidth={1.75} />
         </button>
       </Header>
       <Feed scope={`thread:${id}`} first={id} last={(t?.replies.at(-1)?.id ?? id) + (t?.pending.length ?? 0)}>
         {!t ? (
           <p className="empty">{missing ? 'no such thread' : 'loading…'}</p>
         ) : (
-          <div className="thread open">
-            <MessageRow m={t.root} options={options} />
+          <>
+            <Messages messages={[t.root]} now={props.now} options={options} />
             <div className="divider">{t.replies.length === 1 ? '1 reply' : `${t.replies.length} replies`}</div>
-            {t.replies.map((reply) => (
-              <MessageRow key={reply.id} m={reply} options={options} />
-            ))}
+            <Messages messages={t.replies} now={props.now} options={options} after={t.root} />
             {t.pending.map((post) => (
               <PendingRow key={post.key} post={post} me={state.me!} />
             ))}
-          </div>
+          </>
         )}
       </Feed>
       {t && (
         <Composer
           scope={`thread:${id}`}
-          placeholder="reply in thread"
-          onSend={(text, { noSync }) => void board.send({ channel: t.root.channel, re: id, text, noSync })}
+          role="thread"
+          placeholder="reply to thread…"
+          known={props.known}
+          onSend={({ text, noSync, labels }) => void board.send({ channel: t.root.channel, re: id, text, noSync, labels })}
+          onEditLast={() => {
+            const mine = lastOwn([t.root, ...t.replies], state.me!.actor)
+            if (mine) board.setEditing(mine.id)
+          }}
         />
       )}
-    </aside>
+    </>
   )
 }
 
 /** Raw platform events: "did Slack even send it?" Not on the board's log, so not live. */
-function Inbox({ entry, now }: { entry: string; now: number }) {
+function Inbox({ entry, now, lead }: { entry: string; now: number; lead: ReactNode }) {
   const [events, setEvents] = useState<InboxEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const load = () => {
@@ -309,37 +455,39 @@ function Inbox({ entry, now }: { entry: string; now: number }) {
   useEffect(load, [entry])
   return (
     <>
-      <Header title={`inbox · ${entry}`} meta="raw platform events, newest first">
-        <button className="send" onClick={load}>
-          refresh
+      <Header title={`inbox · ${entry}`} meta="raw platform events, newest first" lead={lead}>
+        <button className="tool" title="refresh" onClick={load}>
+          <RefreshCw size={14} strokeWidth={1.75} />
         </button>
       </Header>
       <div className="feed-wrap">
         <div className="feed">
-          {error && <p className="error">error: {error}</p>}
-          {!error && events === null && <p className="empty">loading…</p>}
-          {events?.length === 0 && <p className="empty">no events yet</p>}
-          {events?.map((row) => {
-            const event = row.event as { kind: string; text?: string; type?: string; emoji?: string; author?: { handle?: string } }
-            return (
-              <div key={row.id} className="inbox-row">
-                <span className="time" title={row.createdAt}>
-                  {ago(row.createdAt, now)}
-                </span>
-                <span>
-                  <span className="badge">{event.kind}</span>
-                </span>
-                <div>
+          <div>
+            {error && <p className="error">error: {error}</p>}
+            {!error && events === null && <p className="empty">loading…</p>}
+            {events?.length === 0 && <p className="empty">no events yet</p>}
+            {events?.map((row) => {
+              const event = row.event as { kind: string; text?: string; type?: string; emoji?: string; author?: { handle?: string } }
+              return (
+                <div key={row.id} className="inbox-row">
+                  <span className="time" title={row.createdAt}>
+                    {ago(row.createdAt, now)}
+                  </span>
+                  <span>
+                    <span className="badge">{event.kind}</span>
+                  </span>
                   <div>
-                    <span className="author">{event.author?.handle ?? '—'}</span> {event.text ?? event.type ?? event.emoji ?? ''}
+                    <div>
+                      <span className="author">{event.author?.handle ?? '—'}</span> {event.text ?? event.type ?? event.emoji ?? ''}
+                    </div>
+                    <pre>
+                      {row.channel} · {row.event.thread}
+                    </pre>
                   </div>
-                  <pre>
-                    {row.channel} · {row.event.thread}
-                  </pre>
                 </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
       </div>
     </>

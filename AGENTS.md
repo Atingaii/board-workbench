@@ -53,9 +53,15 @@ and GitHub.
   Keep all of them.
 - **The bundle is built** into `dist/inspect/app.js` by `tsdown` (React
   included). `pnpm test` builds first; running from source finds it in `dist`.
-- **Just Chat's invariants hold:** buttons keep the default cursor, scrolling is
-  never smooth, the thread pane's open state is in the URL, and live updates
-  never move what you're reading or clobber what you're typing.
+- **It's Just Chat's UI, ported.** Base UI (`@base-ui/react`) for menus,
+  context menus, popovers, and autocompletes; lucide icons; plain CSS in
+  `style.ts` with Just Chat's tokens. Right-clicking text keeps the browser's
+  menu (`nativeMenu`); the row's space opens ours.
+- **Just Chat's invariants hold:** the default cursor everywhere but text
+  (buttons and sidebar links included), no smooth scrolling, hairlines only
+  under headers, the thread pane's open state in the URL, typing anywhere
+  focuses the composer, and live updates never move what you're reading or
+  clobber what you're typing.
 
 ## layering
 

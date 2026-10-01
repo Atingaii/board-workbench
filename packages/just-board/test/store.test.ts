@@ -79,7 +79,7 @@ describe('the inspector store', () => {
   })
 
   it('never shows a post twice when the stream beats the board\'s answer', () => {
-    const post: store.Pending = { key: 'k', channel: 'ops', re: null, text: 'four', noSync: false, createdAt: '', error: null }
+    const post: store.Pending = { key: 'k', channel: 'ops', re: null, text: 'four', noSync: false, labels: {}, createdAt: '', error: null }
     const other: store.Pending = { ...post, key: 'k2', text: 'five' }
     let state: store.State = { ...start, pending: [post, other] }
     state = store.applyEvent(state, { index: 17, type: 'message.posted', createdAt: '', payload: {}, message: message(17, { text: 'four' }) })
@@ -98,7 +98,7 @@ describe('the inspector store', () => {
 
   it('groups a channel into threads, with pending posts', () => {
     let state = store.merge(start, [message(1), message(2, { re: 1 }), message(3), message(4, { channel: 'other' })], 4)
-    state = { ...state, pending: [{ key: 'k', channel: 'ops', re: 3, text: 'soon', noSync: false, createdAt: '', error: null }] }
+    state = { ...state, pending: [{ key: 'k', channel: 'ops', re: 3, text: 'soon', noSync: false, labels: {}, createdAt: '', error: null }] }
     const { threads } = store.channelThreads(state, 'ops')
     expect(threads.map((t) => [t.root.id, t.replies.map((r) => r.id), t.pending.length])).toEqual([
       [1, [2], 0],
