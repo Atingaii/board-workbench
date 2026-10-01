@@ -14,12 +14,13 @@ import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 /** Slack channel → board channel. */
 const SLACK_CHANNELS = {
   '#sf-prs': 'prs',
-  '#sf-firehose': 'firehose',
+  // #sf-firehose is private, and the app can't look up private channels by name.
+  C0C5WV6FZGD: 'firehose',
 }
 
 /** GitHub repo → board channels for its PRs and its issues. */
 const GITHUB_REPOS = {
-  'basehub-ai/just-board': { pulls: 'prs', issues: 'issues' },
+  'basehub-ai/just-board': { pulls: 'prs', issues: 'firehose' },
 }
 
 const redisUrl = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL
