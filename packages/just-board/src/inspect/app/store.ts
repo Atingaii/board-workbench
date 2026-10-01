@@ -120,10 +120,24 @@ export function merge(state: State, views: MessageView[], asOf: number): State {
   return messages === state.messages && ops === state.ops ? state : { ...state, messages, asOf: marks, ops }
 }
 
+/**
+ * The post on its way that a message you wrote stands for. The stream can bring
+ * the message before the board answers the post; whichever comes first replaces
+ * it, so the two never show at once.
+ */
+function landed(state: State, message: MessageView): Pending | undefined {
+  if (message.by.actor !== state.me?.actor) return undefined
+  return state.pending.find(
+    (post) => post.error === null && post.channel === message.channel && post.re === message.re && post.text === message.text,
+  )
+}
+
 /** Folds one live event in: the message it concerns, channel counts, and actor details. */
 export function applyEvent(state: State, event: BoardEventView): State {
   let next = event.message ? merge(state, [event.message], event.index) : state
   if (event.type === 'message.posted' && event.message) {
+    const post = landed(next, event.message)
+    if (post) next = { ...next, pending: next.pending.filter((p) => p !== post) }
     const { channel, re } = event.message
     const known = next.channels[channel]
     if (!known || known.lastIndex < event.index)

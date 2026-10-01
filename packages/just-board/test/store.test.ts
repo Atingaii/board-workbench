@@ -78,6 +78,24 @@ describe('the inspector store', () => {
     expect(store.shown(state, 1)).toMatchObject({ deleted: true, text: '', reactions: {} })
   })
 
+  it('never shows a post twice when the stream beats the board\'s answer', () => {
+    const post: store.Pending = { key: 'k', channel: 'ops', re: null, text: 'four', noSync: false, createdAt: '', error: null }
+    const other: store.Pending = { ...post, key: 'k2', text: 'five' }
+    let state: store.State = { ...start, pending: [post, other] }
+    state = store.applyEvent(state, { index: 17, type: 'message.posted', createdAt: '', payload: {}, message: message(17, { text: 'four' }) })
+    expect(state.pending.map((p) => p.key)).toEqual(['k2'])
+    expect(store.channelThreads(state, 'ops').threads.map((t) => t.root.text)).toEqual(['four'])
+    // Someone else's identical message isn't yours.
+    state = store.applyEvent(state, {
+      index: 18,
+      type: 'message.posted',
+      createdAt: '',
+      payload: {},
+      message: message(18, { text: 'five', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null, session: null } }),
+    })
+    expect(state.pending.map((p) => p.key)).toEqual(['k2'])
+  })
+
   it('groups a channel into threads, with pending posts', () => {
     let state = store.merge(start, [message(1), message(2, { re: 1 }), message(3), message(4, { channel: 'other' })], 4)
     state = { ...state, pending: [{ key: 'k', channel: 'ops', re: 3, text: 'soon', noSync: false, createdAt: '', error: null }] }
