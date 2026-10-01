@@ -178,8 +178,9 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .body { min-width: 0; }
 .meta-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .author { color: var(--bright); font-weight: 600; }
-.where { color: var(--accent); font-size: 11px; cursor: default; }
-.where:hover { text-decoration: underline; }
+.where { color: var(--faint); font-size: 12px; }
+.where a { color: var(--accent); cursor: default; }
+.where a:hover { text-decoration: underline; }
 .time, .id { color: var(--faint); font-size: 11px; }
 /* Message text is markdown. Blocks stay compact; a short message reads as one line. */
 .text { overflow-wrap: anywhere; color: var(--dim); font-size: 14px; cursor: text; }
@@ -187,16 +188,17 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .text > :last-child { margin-bottom: 0; }
 .text > p:last-child, .text > p:has(+ .edited) { display: inline; }
 .text p { margin: 0 0 6px; }
-.text a { color: var(--bright); text-decoration: underline; text-decoration-color: var(--hairline); }
-.text a:hover { text-decoration-color: var(--accent); }
+.text a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.text a:hover { text-decoration: underline; }
 .text strong { color: var(--bright); font-weight: 600; }
 .text h1, .text h2, .text h3, .text h4 { margin: 8px 0 4px; color: var(--bright); font-size: 14px; font-weight: 600; }
 .text ul, .text ol { margin: 2px 0 6px; padding-left: 20px; }
 .text li + li { margin-top: 1px; }
 .text blockquote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--hairline); color: var(--muted); }
-.text code { padding: 0 3px; background: var(--shade-hover); font-size: 13px; }
-.text pre { margin: 4px 0 6px; padding: 8px 10px; overflow-x: auto; background: var(--shade); font-size: 12px; line-height: 1.45; }
-.text pre code { padding: 0; background: none; }
+.text code { padding: 1px 4px; border-radius: 3px; background: var(--shade); color: var(--bright); font-size: 0.92em; }
+.message.active .text code { background: var(--shade-hover); }
+.text pre { margin: 4px 0 6px; padding: 10px; overflow-x: auto; border: 1px solid var(--hairline); border-radius: 4px; background: var(--shade); line-height: 1.5; }
+.text pre code, .message.active .text pre code { padding: 0; border-radius: 0; background: none; font-size: 13px; }
 .text table { margin: 4px 0 6px; border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; max-width: 100%; }
 .text th, .text td { padding: 3px 10px; border: 1px solid var(--hairline); text-align: left; white-space: nowrap; }
 .text th { color: var(--bright); font-weight: 600; background: var(--shade); }
@@ -209,8 +211,8 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
   position: absolute;
   right: -5px;
   bottom: -5px;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   padding: 2px;
   border-radius: 4px;
   background: var(--bg);

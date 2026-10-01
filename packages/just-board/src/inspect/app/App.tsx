@@ -1,12 +1,12 @@
 import { Check, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RefreshCw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ChannelView, InboxEntry, Me, MessageView } from '../../api/routes.ts'
-import { ago, who } from '../../cli/format.ts'
+import { who } from '../../cli/format.ts'
 import * as board from './board.ts'
 import { Composer } from './composer.tsx'
 import { Feed, Toasts } from './feed.tsx'
 import { Messages, Pendings, type RowOptions } from './message.tsx'
-import { Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
+import { Ago, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
 import { channelThreads, knownLabels, recent, thread as threadOf, type State } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator, ResizeHandle, type KnownLabels } from './ui.tsx'
 
@@ -390,10 +390,10 @@ function Activity({ state, options, known, lead }: { state: State; options: RowO
           options={{
             ...options,
             context: (m) => (
-              <Link to={`/c/${m.channel}${m.re === null ? '' : `?thread=${m.re}`}`} className="where">
-                #{m.channel}
-                {m.re !== null && ` ↳ #${m.re}`}
-              </Link>
+              <span className="where">
+                {m.re === null ? 'in ' : 'replied in '}
+                <Link to={`/c/${m.channel}${m.re === null ? '' : `?thread=${m.re}`}`}>#{m.channel}</Link>
+              </span>
             ),
           }}
         />
@@ -466,7 +466,7 @@ function ThreadPane(props: { id: number; state: State; path: string; now: number
   const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms }
   return (
     <>
-      <Header title="thread" meta={t ? `#${t.root.channel} · #${id}` : `#${id}`}>
+      <Header title="thread" meta={t ? `in #${t.root.channel}` : undefined}>
         <button className="tool" title="close (esc)" onClick={() => navigate(props.path)}>
           <X size={15} strokeWidth={1.75} />
         </button>
@@ -526,9 +526,7 @@ function Inbox({ entry, now, lead }: { entry: string; now: number; lead: ReactNo
               const event = row.event as { kind: string; text?: string; type?: string; emoji?: string; author?: { handle?: string } }
               return (
                 <div key={row.id} className="inbox-row">
-                  <span className="time" title={row.createdAt}>
-                    {ago(row.createdAt, now)}
-                  </span>
+                  <Ago iso={row.createdAt} />
                   <span>
                     <span className="badge">{event.kind}</span>
                   </span>

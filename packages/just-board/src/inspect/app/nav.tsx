@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import { ago } from '../../cli/format.ts'
 
 // Navigation with the History API: no reloads. Links act on mouse down, like
 // native lists, and keep the browser's own behavior for new tabs.
@@ -74,4 +75,33 @@ export function useTypeToFocus(composer: string) {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [composer])
+}
+
+/**
+ * "now", "12s", "4m": a relative time that changes exactly when its label
+ * would. Each one schedules its own next update: every second in the first
+ * minute, then on the minute, the hour, the day.
+ */
+export function Ago({ iso, prefix = '' }: { iso: string; prefix?: string }) {
+  const [, tick] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      const age = Math.max(0, Date.now() - Date.parse(iso))
+      const unit = age < 60_000 ? 1_000 : age < 3_600_000 ? 60_000 : age < 86_400_000 ? 3_600_000 : 86_400_000
+      timer = setTimeout(() => {
+        tick()
+        schedule()
+      }, unit - (age % unit) + 20)
+    }
+    schedule()
+    return () => clearTimeout(timer)
+  }, [iso])
+  const age = Date.now() - Date.parse(iso)
+  return (
+    <span className="time" title={new Date(iso).toLocaleString()}>
+      {prefix}
+      {age < 5_000 ? 'now' : ago(iso)}
+    </span>
+  )
 }

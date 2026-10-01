@@ -5,9 +5,10 @@ import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { LOGOS } from '../../contract/logos.ts'
 import type { MessageView } from '../../api/routes.ts'
-import { ago, authorName, who } from '../../cli/format.ts'
+import { authorName, who } from '../../cli/format.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
 import * as board from './board.ts'
+import { Ago } from './nav.tsx'
 import { continues, type Groupable, type Pending } from './store.ts'
 import { ContextMenuArea, EmojiPicker, LabelEditor, LabelPopover, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
@@ -19,7 +20,7 @@ export type RowOptions = {
   known: KnownLabels
   /** Opens a message's thread; unset inside the thread itself. */
   openThread?: (id: number) => void
-  /** Shown before the author, e.g. the channel in the activity view. */
+  /** Shown after the author, e.g. "in #prs" in the activity view. */
   context?: (m: MessageView) => ReactNode
   /** A root's replies, summarized under it. */
   replies?: (m: MessageView) => MessageView[]
@@ -78,9 +79,14 @@ export const Text = memo(function Text({ text, edited = false }: { text: string;
   )
 })
 
-const SOURCES: Record<string, { logo: keyof typeof LOGOS; name: string; color: string }> = {
-  slack: { logo: 'slack', name: 'Slack', color: '#E01E5A' },
-  github: { logo: 'github', name: 'GitHub', color: 'currentColor' },
+// Slack's mark is four dot-and-bar pairs, one color each: bottom-left, top-left,
+// top-right, bottom-right, in the order Simple Icons draws them.
+const SLACK_COLORS = ['#E01E5A', '#36C5F0', '#2EB67D', '#ECB22E']
+const slackParts = (LOGOS.slack.match(/M[^M]+/g) ?? []).map((d, i) => ({ d, fill: SLACK_COLORS[Math.floor(i / 2)]! }))
+
+const SOURCES: Record<string, { name: string; paths: { d: string; fill: string }[] }> = {
+  slack: { name: 'Slack', paths: slackParts },
+  github: { name: 'GitHub', paths: [{ d: LOGOS.github, fill: 'currentColor' }] },
 }
 
 /** Where a message came from, as that platform's mark. */
@@ -90,7 +96,9 @@ export function SourceLogo({ platform }: { platform: string }) {
   return (
     <span className="source" title={`from ${source.name}`}>
       <svg viewBox="0 0 24 24" aria-label={source.name}>
-        <path d={LOGOS[source.logo]} fill={source.color} />
+        {source.paths.map((path, i) => (
+          <path key={i} d={path.d} fill={path.fill} />
+        ))}
       </svg>
     </span>
   )
@@ -239,14 +247,11 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
         <div className="body">
           {!continued && (
             <div className="meta-line">
-              {options.context?.(m)}
               <span className="author" {...nativeMenu}>
                 {name}
               </span>
-              <span className="time" title={new Date(m.createdAt).toLocaleString()} {...nativeMenu}>
-                {ago(m.createdAt, options.now)}
-              </span>
-              <span className="id">#{m.id}</span>
+              {options.context?.(m)}
+              <Ago iso={m.createdAt} />
               {m.noSync && <span className="badge">board only</span>}
             </div>
           )}
@@ -286,7 +291,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
                 ))}
               </span>
               {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
-              <span className="time"> · last {ago(replies.at(-1)!.createdAt, options.now)}</span>
+              <Ago iso={replies.at(-1)!.createdAt} prefix=" · last " />
             </button>
           )}
         </div>
