@@ -41,6 +41,11 @@ export function detectAgent(env: NodeJS.ProcessEnv = process.env): DetectedAgent
   if (env.CODEX_THREAD_ID || env.CODEX_SESSION_ID)
     found.push({ profile: 'codex', session: env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || null })
   if (env.GROK_SESSION_ID) found.push({ profile: 'grok', session: env.GROK_SESSION_ID })
+  if (env.PI_CODING_AGENT === 'true' || env.AI_AGENT === 'pi') found.push({ profile: 'pi', session: env.PI_SESSION_ID || null })
+  // AI_AGENT is a generic marker: any agent that sets it gets its own profile.
+  const named = env.AI_AGENT?.trim().toLowerCase()
+  if (named && /^[a-z][a-z0-9-]{0,31}$/.test(named) && !found.some((agent) => agent.profile === named))
+    found.push({ profile: named, session: null })
   if (found.length > 1)
     throw new BoardError(
       'ambiguous_agent',
@@ -59,7 +64,7 @@ const expiry = (token: string): number => {
   }
 }
 
-type Cached = { token: string; expiresAt: number; handle?: string | null }
+type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
 
 const cacheFile = (audience: string) =>
   join(configDir(), 'tokens', `${createHash('sha256').update(audience).digest('hex').slice(0, 32)}.json`)
@@ -85,6 +90,15 @@ async function writeCache(audience: string, cached: Cached) {
  */
 async function personToken(discovery: Discovery): Promise<Cached> {
   const cached = await readCache(discovery.audience)
+  // Tokens cached before names and avatars were kept get them once.
+  if (cached && cached.name === undefined) {
+    const user = await getVercelToken()
+      .then(vercelUser)
+      .catch(() => null)
+    const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
+    await writeCache(discovery.audience, filled).catch(() => {})
+    return filled
+  }
   if (cached) return cached
   if (!discovery.project_id)
     throw new BoardError('no_project', `the board at ${discovery.url} doesn't know its Vercel project`, 0)
@@ -113,8 +127,8 @@ async function personToken(discovery: Discovery): Promise<Cached> {
   }
 
   const token = await exchangeVercelOidcToken({ token: development, audience: discovery.audience })
-  const handle = authToken ? await vercelUsername(authToken) : null
-  const fresh: Cached = { token, expiresAt: expiry(token), handle }
+  const user = authToken ? await vercelUser(authToken) : null
+  const fresh: Cached = { token, expiresAt: expiry(token), handle: user?.handle ?? null, name: user?.name ?? null, avatar: user?.avatar ?? null }
   await writeCache(discovery.audience, fresh).catch(() => {})
   return fresh
 }
@@ -131,14 +145,19 @@ async function tokenFromVercelCli(discovery: Discovery): Promise<string> {
   }
 }
 
-async function vercelUsername(authToken: string): Promise<string | null> {
+/** Your Vercel username, display name, and avatar (Vercel serves avatars publicly). */
+async function vercelUser(authToken: string): Promise<{ handle: string | null; name: string | null; avatar: string | null } | null> {
   try {
     const response = await fetch('https://api.vercel.com/v2/user', {
       headers: { authorization: `Bearer ${authToken}` },
     })
     if (!response.ok) return null
-    const { user } = (await response.json()) as { user?: { username?: string } }
-    return user?.username?.toLowerCase() ?? null
+    const { user } = (await response.json()) as { user?: { username?: string; name?: string | null; avatar?: string | null } }
+    return {
+      handle: user?.username?.toLowerCase() ?? null,
+      name: user?.name?.trim() || null,
+      avatar: user?.avatar && /^[0-9a-f]+$/i.test(user.avatar) ? `https://vercel.com/api/www/avatar/${user.avatar}?s=128` : null,
+    }
   } catch {
     return null
   }
@@ -231,6 +250,14 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
             if (options.token !== undefined) return null
             await token()
             return cached?.handle ?? null
+          },
+    person:
+      options.person !== undefined
+        ? options.person
+        : async () => {
+            if (options.token !== undefined) return null
+            await token()
+            return cached ? { name: cached.name ?? null, avatar: cached.avatar ?? null } : null
           },
     headers: async () => ({
       ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET

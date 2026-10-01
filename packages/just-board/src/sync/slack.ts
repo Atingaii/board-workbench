@@ -1,7 +1,7 @@
-import type { Adapter } from 'chat'
+import type { Adapter, Message as ChatMessage } from 'chat'
 import type { BoardClient } from '../client/client.ts'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
-import { createChat } from './chat.ts'
+import { createChat, markdownOf } from './chat.ts'
 import type { SyncPlatform } from './types.ts'
 
 /** What a Slack inbound function receives for each message in a thread the board hasn't synced yet. */
@@ -29,6 +29,7 @@ type SlackClient = {
     info(args: { channel: string }): Promise<{ channel?: SlackChannel }>
     join(args: { channel: string }): Promise<unknown>
   }
+  users?: { info(args: { user: string }): Promise<{ user?: { profile?: { image_72?: string; image_48?: string } } }> }
 }
 
 /** A Slack API error's code (`missing_scope`), with the scope it needed. */
@@ -145,6 +146,22 @@ export function slack(options: {
     return promise
   }
 
+  // Slack's events carry user IDs only; their pictures come from users.info, once each.
+  const avatars = new Map<string, Promise<string | null>>()
+  function avatarOf(user: string): Promise<string | null> {
+    let promise = avatars.get(user)
+    if (!promise) {
+      promise = client()
+        .then(async (web) => {
+          const profile = (await web?.users?.info({ user }))?.user?.profile
+          return profile?.image_72 ?? profile?.image_48 ?? null
+        })
+        .catch(() => null)
+      avatars.set(user, promise)
+    }
+    return promise
+  }
+
   return {
     platform: 'slack',
     adapter: options.adapter,
@@ -164,6 +181,8 @@ export function slack(options: {
       await join(web, channel.id, channel)
       return channel.id
     },
+    markdown: markdownOf,
+    avatar: (message: ChatMessage) => (message.author.userId ? avatarOf(message.author.userId) : Promise.resolve(null)),
     groupThread: (thread) => thread,
     // A Slack thread is named by its root message's ts.
     isRoot: (thread, messageId) => thread.slice(thread.lastIndexOf(':') + 1) === messageId,

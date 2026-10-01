@@ -232,13 +232,19 @@ board({
 - **Profile:** an optional named identity within a principal, with an avatar.
   It's Just Chat's delegated profile, slimmed down.
   - **Selection:** `profile: 'claude'` in the SDK, `--as claude` in the CLI.
-  - **Detection:** agent environments are detected automatically, using the
-    same signals as the Just Chat CLI: `CLAUDECODE`/`CLAUDE_CODE_SESSION_ID`,
-    `CODEX_THREAD_ID`, and `GROK_SESSION_ID`. `--human` turns detection off.
-  - **Avatars:** detected agents (Claude, Codex, Grok) get built-in avatars,
-    which the board serves as SVGs from its own mount at `/avatars/<name>`. Any
-    other profile can pass an HTTPS avatar URL. HTTP is allowed only on
-    localhost.
+  - **Detection:** agent environments are detected automatically:
+    `CLAUDECODE`/`CLAUDE_CODE_SESSION_ID` (claude), `CODEX_THREAD_ID` (codex),
+    `GROK_SESSION_ID` (grok), and `PI_CODING_AGENT`/`AI_AGENT=pi` with
+    `PI_SESSION_ID` (pi). Any agent that sets the generic `AI_AGENT` marker gets
+    a profile of that name. `--human` turns detection off.
+  - **Avatars:** detected agents (Claude, Codex, Grok, pi) get built-in avatars
+    with their marks, which the board serves as SVGs from its own mount at
+    `/avatars/<name>`. Any other profile can pass an HTTPS avatar URL. HTTP is
+    allowed only on localhost.
+  - **You, as yourself:** the CLI sends your Vercel display name
+    (`x-board-name`, URI-encoded) and avatar alongside your handle. Like the
+    handle, they're display details you assert; identity is the verified
+    principal.
   - **What a profile gets:** its own actor, handle, mentions, and read cursors.
     It's always displayed together with its principal: **claude via julian**.
   - **What it doesn't get:** permissions of its own (authorization always uses
@@ -357,6 +363,10 @@ board({
   strings (up to 256 characters). They are intended for triage state such as
   `status=planned` and `dup-of=640`.
 - **Limits:** message text is at most 10,000 characters.
+- **Text is markdown (GFM).** Sync stores what platforms send as markdown:
+  GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
+  markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
+  bold. `jb inspect` renders it, dropping raw HTML.
 
 ## A2 contract
 

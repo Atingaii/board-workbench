@@ -1,5 +1,9 @@
 import { Ellipsis, MessageSquare, SmilePlus, Tag } from 'lucide-react'
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import Markdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
+import remarkGfm from 'remark-gfm'
+import { LOGOS } from '../../contract/logos.ts'
 import type { MessageView } from '../../api/routes.ts'
 import { ago, authorName, who } from '../../cli/format.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
@@ -19,30 +23,76 @@ export type RowOptions = {
   context?: (m: MessageView) => ReactNode
   /** A root's replies, summarized under it. */
   replies?: (m: MessageView) => MessageView[]
+  /** Sync key → platform, for each message's source mark. */
+  platforms?: Record<string, string>
 }
 
-const URLS_AND_MENTIONS = /(https?:\/\/[^\s<>"]+|(?<![\w@])@[a-z0-9][\w./-]*)/gi
+const MENTIONS = /((?<![\w@])@[a-z0-9][\w./-]*)/gi
+const MENTION = /^@[a-z0-9][\w./-]*$/i
 
-/** Text with links and @mentions picked out. Right-clicking it gives the browser's menu. */
-export function Text({ text, edited = false }: { text: string; edited?: boolean }) {
+type MdNode = { type: string; value?: string; children?: MdNode[]; data?: unknown }
+
+/** Picks out @mentions in text, but not inside code or links. */
+function remarkMentions() {
+  const walk = (node: MdNode) => {
+    if (!node.children || node.type === 'link' || node.type === 'inlineCode' || node.type === 'code') return
+    node.children = node.children.flatMap((child): MdNode[] => {
+      if (child.type !== 'text') {
+        walk(child)
+        return [child]
+      }
+      return (child.value ?? '')
+        .split(MENTIONS)
+        .filter(Boolean)
+        .map((part) =>
+          MENTION.test(part)
+            ? { type: 'mention', value: part, data: { hName: 'span', hProperties: { className: ['mention'] }, hChildren: [{ type: 'text', value: part }] } }
+            : { type: 'text', value: part },
+        )
+    })
+  }
+  return (tree: MdNode) => walk(tree)
+}
+
+const PLUGINS = [remarkGfm, remarkBreaks, remarkMentions]
+const COMPONENTS = {
+  a: ({ href, children }: { href?: string; children?: ReactNode }) => (
+    <a href={href} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  ),
+}
+
+/**
+ * Markdown, as GitHub and Slack (through Chat SDK) write it: tables, lists,
+ * code, links. Raw HTML is dropped. Right-clicking it gives the browser's menu.
+ */
+export const Text = memo(function Text({ text, edited = false }: { text: string; edited?: boolean }) {
   return (
     <div className="text" {...nativeMenu}>
-      {text.split(URLS_AND_MENTIONS).map((part, i) => {
-        if (i % 2 === 0) return part
-        if (part.startsWith('@')) return <span key={i} className="mention">{part}</span>
-        const trail = /[.,;:!?)\]]+$/.exec(part)?.[0] ?? ''
-        const url = part.slice(0, part.length - trail.length)
-        return (
-          <span key={i}>
-            <a href={url} target="_blank" rel="noreferrer">
-              {url}
-            </a>
-            {trail}
-          </span>
-        )
-      })}
+      <Markdown remarkPlugins={PLUGINS} components={COMPONENTS} skipHtml>
+        {text}
+      </Markdown>
       {edited && <span className="edited"> (edited)</span>}
     </div>
+  )
+})
+
+const SOURCES: Record<string, { logo: keyof typeof LOGOS; name: string; color: string }> = {
+  slack: { logo: 'slack', name: 'Slack', color: '#E01E5A' },
+  github: { logo: 'github', name: 'GitHub', color: 'currentColor' },
+}
+
+/** Where a message came from, as that platform's mark. */
+export function SourceLogo({ platform }: { platform: string }) {
+  const source = SOURCES[platform]
+  if (!source) return <span className="source text">{platform.slice(0, 1)}</span>
+  return (
+    <span className="source" title={`from ${source.name}`}>
+      <svg viewBox="0 0 24 24" aria-label={source.name}>
+        <path d={LOGOS[source.logo]} fill={source.color} />
+      </svg>
+    </span>
   )
 }
 
@@ -180,7 +230,10 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               {new Date(m.createdAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '')}
             </span>
           ) : (
-            <Avatar name={name} url={m.author?.avatar} />
+            <span className="avatar-wrap">
+              <Avatar name={name} url={m.author?.avatar} />
+              {m.from && <SourceLogo platform={options.platforms?.[m.from] ?? m.from} />}
+            </span>
           )}
         </div>
         <div className="body">
@@ -190,7 +243,6 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
               <span className="author" {...nativeMenu}>
                 {name}
               </span>
-              {m.from && <span className={`badge ${m.from}`}>{m.from}</span>}
               <span className="time" title={new Date(m.createdAt).toLocaleString()} {...nativeMenu}>
                 {ago(m.createdAt, options.now)}
               </span>

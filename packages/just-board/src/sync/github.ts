@@ -1,7 +1,7 @@
 import type { Adapter, Message as ChatMessage } from 'chat'
 import type { BoardClient } from '../client/client.ts'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
-import { createChat } from './chat.ts'
+import { createChat, markdownOf } from './chat.ts'
 import type { InterceptedEvent, SyncPlatform } from './types.ts'
 
 /** What a GitHub inbound function receives. */
@@ -147,6 +147,17 @@ export function github(options: {
     groupThread: (thread) => thread.replace(/:rc:[^:]+$/, ''),
     channelOf,
     isRoot: () => false,
+    // GitHub's own markdown, tables and all; Chat SDK's text flattens it.
+    markdown(message: ChatMessage) {
+      const raw = message.raw as { body?: unknown; comment?: { body?: unknown } } | null
+      const body = raw?.comment?.body ?? raw?.body
+      return typeof body === 'string' && body.trim() ? body.trim() : markdownOf(message)
+    },
+    async avatar(message: ChatMessage) {
+      const raw = message.raw as { user?: { avatar_url?: unknown }; comment?: { user?: { avatar_url?: unknown } } } | null
+      const url = raw?.comment?.user?.avatar_url ?? raw?.user?.avatar_url
+      return typeof url === 'string' ? url : null
+    },
     context(message: ChatMessage) {
       const raw = message.raw as { path?: string; line?: number; comment?: { path?: string; line?: number } } | null
       const path = raw?.path ?? raw?.comment?.path

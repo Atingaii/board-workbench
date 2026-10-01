@@ -5,7 +5,7 @@ import type { Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
 
 /** Agents whose avatars the board serves itself. */
-export const KNOWN_AGENTS = ['claude', 'codex', 'grok'] as const
+export const KNOWN_AGENTS = ['claude', 'codex', 'grok', 'pi'] as const
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 const HANDLE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
@@ -32,11 +32,21 @@ export function resolveActor(
   const session = headers.get('x-board-session')?.trim().slice(0, 200) || null
 
   let baseHandle = principal.handle
+  let personName: string | null = null
   if (principal.kind === 'person') {
     const sent = headers.get('x-board-handle')?.trim().toLowerCase()
     if (sent) {
       if (!HANDLE.test(sent)) throw badRequest(`invalid handle: ${sent}`)
       baseHandle = sent
+    }
+    // A display name, URI-encoded so any language fits in a header.
+    const name = headers.get('x-board-name')
+    if (name) {
+      try {
+        personName = decodeURIComponent(name).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 128) || null
+      } catch {
+        throw badRequest('x-board-name must be URI-encoded')
+      }
     }
   }
 
@@ -47,7 +57,7 @@ export function resolveActor(
     id,
     kind: profile === null ? principal.kind : 'profile',
     handle: profile === null ? baseHandle : `${baseHandle}/${profile}`,
-    name: profileName ?? baseHandle,
+    name: profileName ?? personName ?? baseHandle,
     avatar: avatarHeader ?? (known ? `${boardUrl}/avatars/${profile}` : null),
   }
   return {

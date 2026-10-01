@@ -28,6 +28,10 @@ export type SyncPlatform = {
   isRoot(thread: string, messageId: string): boolean
   /** Short context for a message, e.g. the file and line of a review comment. */
   context(message: ChatMessage): string | null
+  /** A message's text as markdown, the board's format. */
+  markdown(message: ChatMessage): string
+  /** Its author's avatar, when the platform can tell. Best effort: null otherwise. */
+  avatar?(message: ChatMessage): Promise<string | null>
   /** Lifecycle events Chat SDK doesn't model, read from a verified raw webhook. */
   intercept?(key: string, headers: Headers, body: string): InterceptedEvent[]
   /** The argument an inbound function receives. */

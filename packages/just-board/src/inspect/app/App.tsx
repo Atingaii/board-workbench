@@ -154,7 +154,8 @@ export function App() {
   if (failed) return <div className="boot error">error: {failed}</div>
   if (!state.me) return <div className="boot">connecting…</div>
 
-  const options: RowOptions = { me: state.me.actor, now, known, openThread: (id) => navigate(withThread(where.path, id)) }
+  const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
+  const options: RowOptions = { me: state.me.actor, now, known, platforms, openThread: (id) => navigate(withThread(where.path, id)) }
   const expand = sidebar.collapsed ? (
     <button className="tool" title="show the sidebar" onClick={() => sidebar.collapse(false)}>
       <PanelLeftOpen size={15} strokeWidth={1.75} />
@@ -461,7 +462,8 @@ function ThreadPane(props: { id: number; state: State; path: string; now: number
     void board.loadThread(id).then(() => setMissing(!board.getState().messages[id]))
   }, [id])
   const t = useMemo(() => threadOf(state, id), [state.messages, state.ops, state.pending, state.actors, id])
-  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known }
+  const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
+  const options: RowOptions = { me: state.me!.actor, now: props.now, known: props.known, platforms }
   return (
     <>
       <Header title="thread" meta={t ? `#${t.root.channel} · #${id}` : `#${id}`}>

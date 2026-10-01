@@ -161,7 +161,7 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .message.active { background: var(--shade); }
 .message.pending { opacity: 0.5; }
 .message.failed { opacity: 1; }
-.gutter { display: flex; justify-content: center; }
+.gutter { display: flex; justify-content: center; align-items: flex-start; }
 .gutter-time { visibility: hidden; color: var(--faint); font-size: 10px; line-height: 21px; }
 .message.active .gutter-time, .gutter-time.shown { visibility: visible; }
 .avatar {
@@ -181,9 +181,43 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .where { color: var(--accent); font-size: 11px; cursor: default; }
 .where:hover { text-decoration: underline; }
 .time, .id { color: var(--faint); font-size: 11px; }
-.text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); font-size: 14px; cursor: text; }
+/* Message text is markdown. Blocks stay compact; a short message reads as one line. */
+.text { overflow-wrap: anywhere; color: var(--dim); font-size: 14px; cursor: text; }
+.text > :first-child { margin-top: 0; }
+.text > :last-child { margin-bottom: 0; }
+.text > p:last-child, .text > p:has(+ .edited) { display: inline; }
+.text p { margin: 0 0 6px; }
 .text a { color: var(--bright); text-decoration: underline; text-decoration-color: var(--hairline); }
 .text a:hover { text-decoration-color: var(--accent); }
+.text strong { color: var(--bright); font-weight: 600; }
+.text h1, .text h2, .text h3, .text h4 { margin: 8px 0 4px; color: var(--bright); font-size: 14px; font-weight: 600; }
+.text ul, .text ol { margin: 2px 0 6px; padding-left: 20px; }
+.text li + li { margin-top: 1px; }
+.text blockquote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--hairline); color: var(--muted); }
+.text code { padding: 0 3px; background: var(--shade-hover); font-size: 13px; }
+.text pre { margin: 4px 0 6px; padding: 8px 10px; overflow-x: auto; background: var(--shade); font-size: 12px; line-height: 1.45; }
+.text pre code { padding: 0; background: none; }
+.text table { margin: 4px 0 6px; border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; max-width: 100%; }
+.text th, .text td { padding: 3px 10px; border: 1px solid var(--hairline); text-align: left; white-space: nowrap; }
+.text th { color: var(--bright); font-weight: 600; background: var(--shade); }
+.text img { max-width: 100%; max-height: 260px; vertical-align: middle; }
+.text hr { border: 0; height: 1px; margin: 8px 0; background: var(--hairline); }
+.text input[type='checkbox'] { margin: 0 6px 0 0; vertical-align: middle; }
+.text ul.contains-task-list { list-style: none; padding-left: 2px; }
+.avatar-wrap { position: relative; display: inline-flex; }
+.source {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 15px;
+  height: 15px;
+  padding: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--bright);
+}
+.source svg { display: block; width: 100%; height: 100%; }
+.source.text { display: grid; place-items: center; font-size: 9px; font-weight: 600; }
 .mention { color: var(--accent); font-weight: 600; }
 .removed { color: var(--faint); font-style: italic; }
 .edited { color: var(--faint); font-size: 11px; }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BoardError, createClient } from '../src/index.ts'
 import { BOARD_URL, personToken, testBoard } from './harness.ts'
+import { detectAgent } from '../src/client/node.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
   const board = testBoard()
@@ -65,5 +66,16 @@ describe('client', () => {
     await client.post('x', 'three')
     await reading
     expect(seen).toEqual(['one', 'two', 'three'])
+  })
+})
+
+describe('agent detection', () => {
+  it('knows Claude Code, Codex, Grok, and pi, and any agent that sets AI_AGENT', () => {
+    expect(detectAgent({ CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's1' })).toEqual({ profile: 'claude', session: 's1' })
+    expect(detectAgent({ CODEX_THREAD_ID: 't1' })).toEqual({ profile: 'codex', session: 't1' })
+    expect(detectAgent({ PI_CODING_AGENT: 'true', AI_AGENT: 'pi', PI_SESSION_ID: 'p1' })).toEqual({ profile: 'pi', session: 'p1' })
+    expect(detectAgent({ AI_AGENT: 'OpenCode' })).toEqual({ profile: 'opencode', session: null })
+    expect(detectAgent({ AI_AGENT: 'not a name!' })).toBeNull()
+    expect(detectAgent({})).toBeNull()
   })
 })

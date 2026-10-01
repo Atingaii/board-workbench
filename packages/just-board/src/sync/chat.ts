@@ -1,4 +1,4 @@
-import { Chat, type Adapter } from 'chat'
+import { Chat, stringifyMarkdown, type Adapter, type Message } from 'chat'
 import { ephemeralState } from './state.ts'
 
 /**
@@ -14,3 +14,12 @@ export const createChat = (adapter: Adapter): Chat =>
     concurrency: 'concurrent',
     logger: 'warn',
   })
+
+/** A message as markdown, the board's text format: Chat SDK parses every platform's own. */
+export function markdownOf(message: Message): string {
+  try {
+    return stringifyMarkdown(message.formatted).trim() || message.text
+  } catch {
+    return message.text
+  }
+}

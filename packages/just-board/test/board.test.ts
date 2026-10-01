@@ -64,6 +64,26 @@ describe('auth', () => {
     })
   })
 
+  it("shows a person's own name and avatar, and an agent's mark", async () => {
+    const { fetch } = testBoard()
+    const julian = caller(fetch, await personToken(), {
+      'x-board-handle': 'julian',
+      'x-board-name': encodeURIComponent('Julián Benegas'),
+      'x-board-avatar': 'https://vercel.com/api/www/avatar/abc123?s=128',
+    })
+    expect((await julian('GET', '/me')).body).toMatchObject({
+      kind: 'person',
+      handle: 'julian',
+      name: 'Julián Benegas',
+      avatar: 'https://vercel.com/api/www/avatar/abc123?s=128',
+    })
+    const pi = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'pi' })
+    expect((await pi('GET', '/me')).body).toMatchObject({ handle: 'julian/pi', avatar: `${BOARD_URL}/avatars/pi` })
+    const claude = await fetch(new Request(`${BOARD_URL}/avatars/claude`))
+    expect(claude.headers.get('content-type')).toContain('svg')
+    expect(await claude.text()).toContain('<path') // the mark, not a letter
+  })
+
   it('rejects other projects unless trusted', async () => {
     const call = caller(testBoard().fetch, await deploymentToken())
     expect((await call('GET', '/me')).status).toBe(403)

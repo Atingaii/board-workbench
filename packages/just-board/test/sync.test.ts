@@ -9,7 +9,7 @@ const textOf = (message: AdapterPostableMessage) =>
   typeof message === 'string' ? message : JSON.stringify(message)
 
 type WebhookPayload =
-  | { type: 'message'; threadId: string; id: string; text: string; user: string; name?: string }
+  | { type: 'message'; threadId: string; id: string; text: string; user: string; name?: string; raw?: unknown }
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
@@ -34,7 +34,11 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
         await chat.processMessage(
           adapter,
           body.threadId,
-          createTestMessage(body.id, body.text, { threadId: body.threadId, author: author(body.user, body.name) }),
+          createTestMessage(body.id, body.text, {
+            threadId: body.threadId,
+            author: author(body.user, body.name),
+            ...(body.raw ? { raw: body.raw } : {}),
+          }),
           options,
         )
       else
@@ -318,6 +322,33 @@ describe('sync', () => {
     await webhook('github', { type: 'message', threadId: 'github:basehub-ai/just-board:issue:10', id: 'c2', text: 'on it', user: '42' })
     await vi.waitFor(async () => expect(await read(julian, 'issues')).toHaveLength(2))
     expect(await read(julian, 'prs')).toHaveLength(1)
+  })
+
+  it("keeps GitHub's markdown and avatars, and posts markdown to platforms", async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const table = '| Project | Status |\n| --- | --- |\n| www | Ready |'
+    await webhook('github', {
+      type: 'message',
+      threadId: 'github:basehub-ai/just-board:3',
+      id: 'c9',
+      text: 'Project Status www Ready', // Chat SDK's flattened text
+      user: '35613825',
+      name: 'vercel[bot]',
+      raw: { comment: { body: table, user: { avatar_url: 'https://avatars.githubusercontent.com/in/8329?v=4' } } },
+    })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    expect((await read(julian, 'prs'))[0]!.text).toBe(table)
+    const { body } = await julian('GET', '/actors')
+    expect(body.actors.find((a: { id: string }) => a.id === 'github:user:35613825')).toMatchObject({
+      avatar: 'https://avatars.githubusercontent.com/in/8329?v=4',
+    })
+
+    const { body: posted } = await julian('POST', '/messages', { channel: 'firehose', text: '**ship it**' })
+    // The GitHub thread mirrored to Slack too: each starts a thread in its channel.
+    await vi.waitFor(() => expect(s.channelPosts.map((p) => p.channelId).sort()).toEqual(['slack:C1', 'slack:C2']))
+    expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(JSON.stringify({ markdown: '**julian**: **ship it**' }))
+    expect(posted.message.id).toBeGreaterThan(0)
   })
 
   it('attaches an existing thread to a new target and backfills it', async () => {

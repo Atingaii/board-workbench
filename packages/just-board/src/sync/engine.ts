@@ -172,6 +172,11 @@ export function createSyncEngine(options: {
 
   for (const [key, platform] of Object.entries(entries)) {
     const chat = platform.createChat()
+    const authorOf = async (message: ChatMessage) => {
+      const author = externalAuthor(platform.platform, message.author)
+      const avatar = await platform.avatar?.(message).catch(() => null)
+      return avatar ? { ...author, avatar } : author
+    }
     const onMessage = async (_thread: unknown, message: ChatMessage) => {
       const where = located(key, platform, message.threadId)
       await intake(
@@ -181,9 +186,9 @@ export function createSyncEngine(options: {
           ...where,
           message: message.id,
           isRoot: platform.isRoot(where.platformThread, message.id),
-          text: message.text,
+          text: platform.markdown(message),
           context: platform.context(message),
-          author: externalAuthor(platform.platform, message.author),
+          author: await authorOf(message),
         },
         message.raw,
         `message:${where.subthread ?? where.thread}|${message.id}`,
@@ -201,8 +206,8 @@ export function createSyncEngine(options: {
           thread: where.thread,
           subthread: where.subthread,
           message: message.id,
-          text: message.text,
-          author: externalAuthor(platform.platform, message.author),
+          text: platform.markdown(message),
+          author: await authorOf(message),
         },
         message.raw,
         `edited:${where.subthread ?? where.thread}|${message.id}|${message.text}`,
@@ -374,15 +379,16 @@ export function createSyncEngine(options: {
     return chat
   }
 
-  function render(message: Message, actors: ActorsState, quote?: Message): string {
+  /** A board message as markdown for a platform, which converts it to its own format. */
+  function render(message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
     if (message.from) name = `${name} (${platformOf(message.from).platform})`
     const quoted = quote
-      ? `↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: "${quote.text.slice(0, 140)}"\n`
+      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${quote.text.slice(0, 140).replace(/\n/g, ' ')}\n\n`
       : ''
-    return `${quoted}*${name}*: ${message.text}`
+    return { markdown: `${quoted}**${name}**: ${message.text}` }
   }
 
   type Ctx<K extends keyof BoardEvents> = HandlerContext<BoardEvents, K>

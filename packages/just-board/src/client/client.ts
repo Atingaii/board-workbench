@@ -45,6 +45,8 @@ export type ClientOptions = {
   session?: Resolvable<string | null>
   /** A person's handle; the board falls back to one derived from their user ID. */
   handle?: Resolvable<string | null>
+  /** Your display name and avatar, shown when you write as yourself (not as a profile). */
+  person?: Resolvable<{ name?: string | null; avatar?: string | null } | null>
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
@@ -116,6 +118,10 @@ export function createBoardClient(options: ClientOptions) {
       const { name, avatar } = typeof profile === 'string' ? { name: profile, avatar: undefined } : profile
       out['x-board-profile'] = name
       if (avatar) out['x-board-avatar'] = avatar
+    } else {
+      const person = options.person === undefined ? null : await resolve(options.person)
+      if (person?.name) out['x-board-name'] = encodeURIComponent(person.name)
+      if (person?.avatar) out['x-board-avatar'] = person.avatar
     }
     // A profile chosen per request isn't this process's runtime session.
     const session = as !== undefined ? null : options.session === undefined ? null : await resolve(options.session)
