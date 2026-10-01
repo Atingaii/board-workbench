@@ -44,8 +44,12 @@ if (process.env.GITHUB_CONNECTOR)
     repos: GITHUB_REPOS,
   })
 
+// One Redis serves every environment, so each gets its own keys: a preview never
+// touches production's log.
+const keyPrefix = process.env.VERCEL_ENV === 'production' ? 'just-board' : `just-board:${process.env.VERCEL_ENV ?? 'local'}`
+
 export const boardApp = board({
-  ...(redisUrl && redisToken ? { store: redisHttp({ url: redisUrl, token: redisToken, keyPrefix: 'just-board' }) } : {}),
+  ...(redisUrl && redisToken ? { store: redisHttp({ url: redisUrl, token: redisToken, keyPrefix }) } : {}),
   ...(scheduler ? { scheduler } : {}),
   sync,
 })

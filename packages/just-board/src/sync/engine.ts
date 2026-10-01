@@ -106,11 +106,16 @@ export function createSyncEngine(options: {
     return promise
   }
 
+  /** One entry whose mappings can't resolve (say, a Slack channel name) must not block the others. */
   async function configTargets(channel: string): Promise<string[]> {
     const targets: string[] = []
     for (const [key, platform] of Object.entries(entries)) {
       if (!platform.canStartThreads) continue
-      for (const [external, target] of await mappings(key)) if (target === channel) targets.push(external)
+      try {
+        for (const [external, target] of await mappings(key)) if (target === channel) targets.push(external)
+      } catch (error) {
+        console.warn(`[just-board] sync entry ${key} can't resolve its channels:`, (error as Error).message)
+      }
     }
     return targets
   }
