@@ -134,7 +134,12 @@ export function createSyncEngine(options: {
     const platform = entries[key]
     if (!platform) throw badRequest(`no sync entry named ${key}`)
     const rest = target.slice(at + 1)
-    if (rest.startsWith('#')) return `${key}:${await platform.resolveChannel(rest)}`
+    if (rest.startsWith('#'))
+      try {
+        return `${key}:${await platform.resolveChannel(rest)}`
+      } catch (error) {
+        throw badRequest(`can't sync to ${target}: ${(error as Error).message}`)
+      }
     return target
   }
 

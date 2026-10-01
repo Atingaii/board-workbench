@@ -349,6 +349,9 @@ describe('sync', () => {
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     expect(s.channelPosts[0]!.channelId).toBe('slack:C9')
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('no public Slack channel named #sf-secret'))
+    const inbox = await julian('GET', `/inbox/slack?channel=${encodeURIComponent('#sf-secret')}`)
+    expect(inbox.status).toBe(400)
+    expect(inbox.body.error.message).toContain('groups:read')
     warn.mockRestore()
   })
 
