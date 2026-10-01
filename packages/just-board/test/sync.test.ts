@@ -323,6 +323,35 @@ describe('sync', () => {
     warn.mockRestore()
   })
 
+  it('finds public channels by name when the app may not list private ones', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const missingScope = Object.assign(new Error('An API error occurred: missing_scope'), {
+      data: { error: 'missing_scope', needed: 'groups:read' },
+    })
+    const conversations = {
+      list: vi.fn(async ({ types }: { types: string }) => {
+        if (types.includes('private_channel')) throw missingScope
+        return { channels: [{ id: 'C9', name: 'sf-prs', is_member: true }] }
+      }),
+      info: vi.fn(async () => {
+        throw missingScope
+      }),
+      join: vi.fn(),
+    }
+    const { board, s } = setup({
+      channels: { '#sf-prs': 'deploys', '#sf-secret': 'secret' },
+      slackClient: { conversations },
+      asyncToken: true,
+    })
+    const julian = caller(board.fetch, await personToken())
+
+    await julian('POST', '/messages', { channel: 'deploys', text: 'shipped' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(s.channelPosts[0]!.channelId).toBe('slack:C9')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('no public Slack channel named #sf-secret'))
+    warn.mockRestore()
+  })
+
   it('shows raw platform events in the inbox', async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken())

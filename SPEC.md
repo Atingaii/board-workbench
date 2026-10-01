@@ -1140,7 +1140,8 @@ vercel connect attach … --triggers --trigger-path /api/board/webhooks/slack
 Slack only sends a channel's events to apps in it. When a mapped channel
 resolves, the app joins it if it's public (`channels:join`). Private channels
 need someone to `/invite` the app; the log names each one. Name lookups need
-`channels:read` (and `groups:read` for private channels).
+`channels:read`. Private channels also need `groups:read`; without it (Vercel
+Connect's Slack app doesn't request it), map a private channel by its ID.
 
 **Rendering profiles.** With the `chat:write.customize` scope, the outbound
 handler calls `chat.postMessage` with `username` and `icon_url`, through the

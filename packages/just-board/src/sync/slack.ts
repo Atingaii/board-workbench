@@ -63,14 +63,16 @@ export function slack(options: {
   }
 
   // One listing resolves every name. A miss lists again, since the channel may be
-  // new (the sync engine throttles retries).
+  // new (the sync engine throttles retries). Without `groups:read`, Slack refuses
+  // to list private channels at all, so the listing falls back to public ones.
   let listing: Promise<SlackChannel[]> | undefined
-  async function list(client: SlackClient): Promise<SlackChannel[]> {
+  let publicOnly = false
+  async function list(client: SlackClient, types: string): Promise<SlackChannel[]> {
     const channels: SlackChannel[] = []
     let cursor: string | undefined
     do {
       const page = await client.conversations.list({
-        types: 'public_channel,private_channel',
+        types,
         exclude_archived: true,
         limit: 1000,
         ...(cursor ? { cursor } : {}),
@@ -80,9 +82,19 @@ export function slack(options: {
     } while (cursor)
     return channels
   }
+  async function listAll(client: SlackClient): Promise<SlackChannel[]> {
+    if (!publicOnly)
+      try {
+        return await list(client, 'public_channel,private_channel')
+      } catch (error) {
+        if (!slackError(error).startsWith('missing_scope')) throw error
+        publicOnly = true
+      }
+    return list(client, 'public_channel')
+  }
   function channels(client: SlackClient, fresh: boolean) {
     if (fresh || !listing) {
-      const promise = list(client)
+      const promise = listAll(client)
       promise.catch(() => {
         if (listing === promise) listing = undefined
       })
@@ -100,7 +112,12 @@ export function slack(options: {
     } catch (error) {
       throw new Error(`can't list Slack channels to find #${name} (${slackError(error)}); use its ID instead`)
     }
-    if (!found) throw new Error(`no Slack channel named #${name} (a private channel shows up once the app is invited)`)
+    if (!found)
+      throw new Error(
+        publicOnly
+          ? `no public Slack channel named #${name} (the app lacks groups:read, so a private channel needs its ID)`
+          : `no Slack channel named #${name} (a private channel shows up once the app is invited)`,
+      )
     return found
   }
 
