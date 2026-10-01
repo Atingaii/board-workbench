@@ -13,7 +13,7 @@ type WebhookPayload =
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
-function fakePlatform(name: 'slack' | 'github', extra: Record<string, unknown> = {}) {
+function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => void = () => {}) {
   let chat!: ChatInstance
   let next = 0
   const posts: { threadId: string; text: string; id: string }[] = []
@@ -69,15 +69,42 @@ function fakePlatform(name: 'slack' | 'github', extra: Record<string, unknown> =
     removeReaction: async (threadId: string, messageId: string, emoji: unknown) => {
       reactions.push({ threadId, messageId, emoji: String(emoji), added: false })
     },
-    ...extra,
   } as Partial<Adapter>)
+  extend(adapter)
   return { adapter, posts, channelPosts, reactions }
 }
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
 
-function setup(options: { alerts?: SlackChannels[string]; channels?: SlackChannels; slackClient?: unknown } = {}) {
-  const s = fakePlatform('slack', options.slackClient ? { webClient: options.slackClient } : {})
+/** Gives the fake Slack adapter a Web API client, optionally behind an async bot token as with Vercel Connect. */
+function withSlackClient(client: unknown, asyncToken: boolean) {
+  return (adapter: Adapter) => {
+    if (!asyncToken) return void Object.assign(adapter, { webClient: client })
+    let token: string | undefined
+    Object.defineProperty(adapter, 'webClient', {
+      get: () => {
+        if (!token) throw new Error('botToken is configured as an async resolver')
+        return client
+      },
+    })
+    Object.assign(adapter, {
+      getToken: async () => 'xoxb-test',
+      withBotToken: (bound: string, fn: () => unknown) => {
+        token = bound
+        try {
+          return fn()
+        } finally {
+          token = undefined
+        }
+      },
+    })
+  }
+}
+
+function setup(
+  options: { alerts?: SlackChannels[string]; channels?: SlackChannels; slackClient?: unknown; asyncToken?: boolean } = {},
+) {
+  const s = fakePlatform('slack', options.slackClient ? withSlackClient(options.slackClient, !!options.asyncToken) : undefined)
   const g = fakePlatform('github')
   const board = testBoard({
     sync: {
@@ -267,6 +294,7 @@ describe('sync', () => {
   })
 
   it('joins mapped Slack channels by name, and says which private ones need an invite', async () => {
+    // The Vercel Connect shape: the bot token resolves asynchronously.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const conversations = {
       list: vi.fn(async () => ({
@@ -278,7 +306,11 @@ describe('sync', () => {
       info: vi.fn(async ({ channel }: { channel: string }) => ({ channel: { id: channel, is_member: true } })),
       join: vi.fn(async () => ({ ok: true })),
     }
-    const { board, s } = setup({ channels: { '#sf-prs': 'deploys', '#sf-secret': 'secret' }, slackClient: { conversations } })
+    const { board, s } = setup({
+      channels: { '#sf-prs': 'deploys', '#sf-secret': 'secret' },
+      slackClient: { conversations },
+      asyncToken: true,
+    })
     const julian = caller(board.fetch, await personToken())
 
     await julian('POST', '/messages', { channel: 'deploys', text: 'shipped' })

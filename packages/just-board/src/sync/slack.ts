@@ -48,7 +48,19 @@ export function slack(options: {
   adapter: Adapter
   channels: Record<string, string | SlackHandler>
 }): SyncPlatform {
-  const client = () => (options.adapter as unknown as { webClient?: SlackClient }).webClient
+  // With an async bot token (Vercel Connect), `.webClient` only works inside
+  // `withBotToken`; the client it returns is bound to that token.
+  async function client(): Promise<SlackClient | undefined> {
+    const adapter = options.adapter as unknown as {
+      webClient?: SlackClient
+      getToken?: () => Promise<string>
+      withBotToken?: <T>(token: string, fn: () => T) => T
+    }
+    if (!('webClient' in adapter)) return undefined
+    if (!adapter.getToken || !adapter.withBotToken) return adapter.webClient
+    const token = await adapter.getToken()
+    return adapter.withBotToken(token, () => adapter.webClient)
+  }
 
   // One listing resolves every name. A miss lists again, since the channel may be
   // new (the sync engine throttles retries).
@@ -124,11 +136,12 @@ export function slack(options: {
     mappings: options.channels,
     // `#name` is looked up by name; anything else is a channel ID.
     async resolveChannel(key) {
-      const web = client()
       if (!key.startsWith('#')) {
+        const web = await client().catch(() => undefined)
         if (web) await join(web, key)
         return key
       }
+      const web = await client()
       if (!web) throw new Error(`can't look up Slack channel ${key}: use its ID instead`)
       const channel = await find(web, key.slice(1))
       await join(web, channel.id, channel)
