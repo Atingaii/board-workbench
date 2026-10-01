@@ -904,10 +904,14 @@ adapter decides the platform. The key appears in external IDs
 (`acme:C0999XYZ:…`), in `--sync` targets, and in the webhook path
 (`/webhooks/<key>`).
 
-**Mapping keys** can be names (`'#prs'`) or IDs (`'C0123ABC'`).
-- Names read well, but they need a cached lookup, because Slack events carry
-  IDs.
-- A name stops matching if the channel is renamed. IDs survive renames.
+**Mapping keys** can be names (`'#prs'`) or IDs (`'C0123ABC'`). Names are the
+default.
+- Slack events carry IDs, so names resolve through one cached channel listing.
+- Each key resolves on its own. One that can't (a channel that doesn't exist
+  yet, a missing scope) is logged and skipped, and retried at most once a
+  minute; the rest sync.
+- A name stops matching after a rename, on the next cold start. IDs survive
+  renames.
 - Each external channel or repo appears at most once per entry; this is checked
   at boot.
 
@@ -1133,8 +1137,10 @@ vercel connect create slack --triggers
 vercel connect attach … --triggers --trigger-path /api/board/webhooks/slack
 ```
 
-Then invite the bot to each mapped channel. The bot can only read and post in
-channels it has been invited to, unless you grant `chat:write.public`.
+Slack only sends a channel's events to apps in it. When a mapped channel
+resolves, the app joins it if it's public (`channels:join`). Private channels
+need someone to `/invite` the app; the log names each one. Name lookups need
+`channels:read` (and `groups:read` for private channels).
 
 **Rendering profiles.** With the `chat:write.customize` scope, the outbound
 handler calls `chat.postMessage` with `username` and `icon_url`, through the

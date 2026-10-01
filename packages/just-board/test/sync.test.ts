@@ -13,7 +13,7 @@ type WebhookPayload =
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
-function fakePlatform(name: 'slack' | 'github') {
+function fakePlatform(name: 'slack' | 'github', extra: Record<string, unknown> = {}) {
   let chat!: ChatInstance
   let next = 0
   const posts: { threadId: string; text: string; id: string }[] = []
@@ -69,18 +69,21 @@ function fakePlatform(name: 'slack' | 'github') {
     removeReaction: async (threadId: string, messageId: string, emoji: unknown) => {
       reactions.push({ threadId, messageId, emoji: String(emoji), added: false })
     },
+    ...extra,
   } as Partial<Adapter>)
   return { adapter, posts, channelPosts, reactions }
 }
 
-function setup(options: { alerts?: Parameters<typeof slack>[0]['channels'][string] } = {}) {
-  const s = fakePlatform('slack')
+type SlackChannels = Parameters<typeof slack>[0]['channels']
+
+function setup(options: { alerts?: SlackChannels[string]; channels?: SlackChannels; slackClient?: unknown } = {}) {
+  const s = fakePlatform('slack', options.slackClient ? { webClient: options.slackClient } : {})
   const g = fakePlatform('github')
   const board = testBoard({
     sync: {
       slack: slack({
         adapter: s.adapter,
-        channels: { C1: 'firehose', C2: 'prs', ...(options.alerts ? { C3: options.alerts } : {}) },
+        channels: { C1: 'firehose', C2: 'prs', ...(options.alerts ? { C3: options.alerts } : {}), ...options.channels },
       }),
       github: github({ adapter: g.adapter, repos: { 'basehub-ai/just-board': 'prs' } }),
     },
@@ -247,6 +250,45 @@ describe('sync', () => {
     expect(s.posts[0]!.text).toContain('db restored')
     const again = await julian('POST', `/messages/${body.message.id}/sync`, { target: 'slack:C9' })
     expect(again.body.attached).toBe(false)
+  })
+
+  it('skips a Slack channel name that does not resolve, and syncs the rest', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const conversations = { list: vi.fn(async () => ({ channels: [] })), info: vi.fn(async () => ({})), join: vi.fn() }
+    const { board, s, webhook } = setup({ channels: { '#missing': 'alerts' }, slackClient: { conversations } })
+    const julian = caller(board.fetch, await personToken())
+
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:500', id: '500', text: 'still syncing', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    await julian('POST', '/messages', { channel: 'prs', text: 'and outbound too' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('skipping #missing: no Slack channel named #missing'))
+    warn.mockRestore()
+  })
+
+  it('joins mapped Slack channels by name, and says which private ones need an invite', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const conversations = {
+      list: vi.fn(async () => ({
+        channels: [
+          { id: 'C9', name: 'sf-prs', is_member: false, is_private: false },
+          { id: 'C8', name: 'sf-secret', is_member: false, is_private: true },
+        ],
+      })),
+      info: vi.fn(async ({ channel }: { channel: string }) => ({ channel: { id: channel, is_member: true } })),
+      join: vi.fn(async () => ({ ok: true })),
+    }
+    const { board, s } = setup({ channels: { '#sf-prs': 'deploys', '#sf-secret': 'secret' }, slackClient: { conversations } })
+    const julian = caller(board.fetch, await personToken())
+
+    await julian('POST', '/messages', { channel: 'deploys', text: 'shipped' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(s.channelPosts[0]!.channelId).toBe('slack:C9')
+    expect(conversations.join).toHaveBeenCalledTimes(1)
+    expect(conversations.join).toHaveBeenCalledWith({ channel: 'C9' })
+    expect(conversations.list).toHaveBeenCalledTimes(1) // one listing resolves every name
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('invite the app to #sf-secret'))
+    warn.mockRestore()
   })
 
   it('shows raw platform events in the inbox', async () => {

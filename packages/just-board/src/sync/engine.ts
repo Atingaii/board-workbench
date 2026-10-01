@@ -88,34 +88,41 @@ export function createSyncEngine(options: {
 
   // --- mappings ---------------------------------------------------------------
 
-  const resolved = new Map<string, Promise<Map<string, string | ((args: never) => unknown)>>>()
-  /** External channel → board channel or inbound function, for one entry. */
+  type Mapping = string | ((args: never) => unknown)
+  /** How long a key that didn't resolve (say, a Slack channel that doesn't exist yet) waits before another try. */
+  const RETRY_MS = 60_000
+  const resolved = new Map<string, { map: Promise<Map<string, Mapping>>; complete: boolean; at: number }>()
+  /**
+   * External channel → board channel or inbound function, for one entry. Each key
+   * resolves on its own: one that can't is logged and skipped, and the rest sync.
+   */
   const mappings = (key: string) => {
-    let promise = resolved.get(key)
-    if (!promise) {
-      promise = (async () => {
-        const platform = platformOf(key)
-        const map = new Map<string, string | ((args: never) => unknown)>()
-        for (const [raw, target] of Object.entries(platform.mappings))
-          map.set(`${key}:${await platform.resolveChannel(raw)}`, target)
-        return map
-      })()
-      promise.catch(() => resolved.delete(key))
-      resolved.set(key, promise)
-    }
-    return promise
+    const cached = resolved.get(key)
+    if (cached && (cached.complete || Date.now() - cached.at < RETRY_MS)) return cached.map
+    const platform = platformOf(key)
+    const pairs = Object.entries(platform.mappings)
+    const entry = { complete: true, at: Date.now(), map: Promise.resolve(new Map<string, Mapping>()) }
+    entry.map = Promise.allSettled(pairs.map(([raw]) => platform.resolveChannel(raw))).then((results) => {
+      const map = new Map<string, Mapping>()
+      results.forEach((result, i) => {
+        const [raw, target] = pairs[i]!
+        if (result.status === 'fulfilled') map.set(`${key}:${result.value}`, target)
+        else {
+          entry.complete = false
+          console.warn(`[just-board] sync ${key}: skipping ${raw}: ${(result.reason as Error).message}`)
+        }
+      })
+      return map
+    })
+    resolved.set(key, entry)
+    return entry.map
   }
 
-  /** One entry whose mappings can't resolve (say, a Slack channel name) must not block the others. */
   async function configTargets(channel: string): Promise<string[]> {
     const targets: string[] = []
     for (const [key, platform] of Object.entries(entries)) {
       if (!platform.canStartThreads) continue
-      try {
-        for (const [external, target] of await mappings(key)) if (target === channel) targets.push(external)
-      } catch (error) {
-        console.warn(`[just-board] sync entry ${key} can't resolve its channels:`, (error as Error).message)
-      }
+      for (const [external, target] of await mappings(key)) if (target === channel) targets.push(external)
     }
     return targets
   }

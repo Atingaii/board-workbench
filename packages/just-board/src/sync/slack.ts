@@ -19,29 +19,42 @@ export type SlackMessage = {
 
 export type SlackHandler = (args: { message: SlackMessage; board: BoardClient }) => unknown
 
+type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean }
 type SlackClient = {
   conversations: {
     list(args: Record<string, unknown>): Promise<{
-      channels?: { id?: string; name?: string }[]
+      channels?: SlackChannel[]
       response_metadata?: { next_cursor?: string }
     }>
+    info(args: { channel: string }): Promise<{ channel?: SlackChannel }>
+    join(args: { channel: string }): Promise<unknown>
   }
+}
+
+/** A Slack API error's code (`missing_scope`), with the scope it needed. */
+function slackError(error: unknown): string {
+  const data = (error as { data?: { error?: string; needed?: string } }).data
+  if (!data?.error) return (error as Error).message
+  return data.needed ? `${data.error}, needs ${data.needed}` : data.error
 }
 
 /**
  * Syncs Slack channels with board channels. Keys are channels by name
  * (`'#prs'`) or ID (`'C0123ABC'`); values are a board channel (a two-way
- * mirror) or a function that handles new threads itself.
+ * mirror) or a function that handles new threads itself. The app joins public
+ * channels it isn't in; private ones need an invite.
  */
 export function slack(options: {
   adapter: Adapter
   channels: Record<string, string | SlackHandler>
 }): SyncPlatform {
-  const names = new Map<string, Promise<string>>()
+  const client = () => (options.adapter as unknown as { webClient?: SlackClient }).webClient
 
-  async function lookup(name: string): Promise<string> {
-    const client = (options.adapter as unknown as { webClient?: SlackClient }).webClient
-    if (!client) throw new Error(`can't resolve Slack channel #${name}: use its ID instead`)
+  // One listing resolves every name. A miss lists again, since the channel may be
+  // new (the sync engine throttles retries).
+  let listing: Promise<SlackChannel[]> | undefined
+  async function list(client: SlackClient): Promise<SlackChannel[]> {
+    const channels: SlackChannel[] = []
     let cursor: string | undefined
     do {
       const page = await client.conversations.list({
@@ -50,11 +63,57 @@ export function slack(options: {
         limit: 1000,
         ...(cursor ? { cursor } : {}),
       })
-      const found = page.channels?.find((channel) => channel.name === name)
-      if (found?.id) return found.id
+      channels.push(...(page.channels ?? []))
       cursor = page.response_metadata?.next_cursor || undefined
     } while (cursor)
-    throw new Error(`no Slack channel named #${name}, or the bot isn't in it`)
+    return channels
+  }
+  function channels(client: SlackClient, fresh: boolean) {
+    if (fresh || !listing) {
+      const promise = list(client)
+      promise.catch(() => {
+        if (listing === promise) listing = undefined
+      })
+      listing = promise
+    }
+    return listing
+  }
+
+  async function find(client: SlackClient, name: string): Promise<SlackChannel & { id: string }> {
+    const match = (all: SlackChannel[]) =>
+      all.find((channel): channel is SlackChannel & { id: string } => channel.name === name && !!channel.id)
+    let found
+    try {
+      found = match(await channels(client, false)) ?? match(await channels(client, true))
+    } catch (error) {
+      throw new Error(`can't list Slack channels to find #${name} (${slackError(error)}); use its ID instead`)
+    }
+    if (!found) throw new Error(`no Slack channel named #${name} (a private channel shows up once the app is invited)`)
+    return found
+  }
+
+  // Slack only sends a channel's events to apps in it. Never throws: a channel the
+  // app can't join still resolves, and the log says who to invite.
+  const joined = new Map<string, Promise<void>>()
+  function join(client: SlackClient, id: string, known?: SlackChannel) {
+    let promise = joined.get(id)
+    if (!promise) {
+      promise = (async () => {
+        const channel = known ?? (await client.conversations.info({ channel: id }).then((r) => r.channel, () => undefined))
+        if (!channel || channel.is_member) return
+        const label = channel.name ? `#${channel.name}` : id
+        if (channel.is_private)
+          return console.warn(`[just-board] slack: invite the app to ${label}; it can't join private channels itself`)
+        try {
+          await client.conversations.join({ channel: id })
+        } catch (error) {
+          joined.delete(id)
+          console.warn(`[just-board] slack: couldn't join ${label} (${slackError(error)}); invite the app to it`)
+        }
+      })()
+      joined.set(id, promise)
+    }
+    return promise
   }
 
   return {
@@ -64,16 +123,16 @@ export function slack(options: {
     canStartThreads: true,
     mappings: options.channels,
     // `#name` is looked up by name; anything else is a channel ID.
-    resolveChannel(key) {
-      if (!key.startsWith('#')) return Promise.resolve(key)
-      const value = key.slice(1)
-      let promise = names.get(value)
-      if (!promise) {
-        promise = lookup(value)
-        promise.catch(() => names.delete(value))
-        names.set(value, promise)
+    async resolveChannel(key) {
+      const web = client()
+      if (!key.startsWith('#')) {
+        if (web) await join(web, key)
+        return key
       }
-      return promise
+      if (!web) throw new Error(`can't look up Slack channel ${key}: use its ID instead`)
+      const channel = await find(web, key.slice(1))
+      await join(web, channel.id, channel)
+      return channel.id
     },
     groupThread: (thread) => thread,
     // A Slack thread is named by its root message's ts.
