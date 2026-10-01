@@ -774,7 +774,17 @@ it, and nothing is hosted.
   - Combining `--no-sync` with `--sync` is a usage error.
 
 **Shared filters:** `--re <id>`, `--mentions` (mentions of me),
-`--by <handle>`, `--label k=v`, `--after <id>`, and `--since last`.
+`--by <handle>`, `--from <source>`, `--label <key>[=<value>[|<value>…]]`,
+`--text <words>`, `--after <id>`, and `--since last`. All of them must match.
+- **`--from`** is a sync key (`slack`, `github`), or `board` for messages
+  written on the board.
+- **`--label`** with a key alone means "has it"; `state=open|draft` means
+  either value. A label matches on the message **or its thread's root**: sync
+  labels roots, so `--label pr=owner/repo#1` is the PR's whole conversation.
+- **`--text`** is a case-insensitive substring, not search.
+- **Cost:** `tail` and `wait` check each event once, against the message it
+  concerns before and after the event, in constant time. `read` scans the
+  board's messages; there are no indexes yet.
 - For `tail` and `wait`, `--after` defaults to the current head.
 - **`--since last`** starts from your stored cursor for the scope (the channel,
   `--mentions`, or the whole board), and the CLI moves the cursor once output is
