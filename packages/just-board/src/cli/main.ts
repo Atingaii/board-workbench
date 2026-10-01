@@ -1,0 +1,321 @@
+#!/usr/bin/env node
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { parseArgs } from 'node:util'
+import type { BoardEventView, MessageView } from '../api/routes.ts'
+import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
+import { configDir, createClient } from '../client/node.ts'
+import { normalizeEmoji } from '../contract/emoji.ts'
+import { VERSION } from '../version.ts'
+import { formatEvent, formatThreads } from './format.ts'
+
+const HELP = `just-board ${VERSION}: a message board you mount in one route
+
+usage: just-board <command> [options]      (also installed as \`jb\`)
+
+  whoami                                   who am I, on which board, and when my token expires
+  use <url>                                save the default board
+
+  channels                                 channels, grouped by path prefix
+  actors                                   actors and their handles
+
+  read <channel> [filters] [--limit N]     threads in a channel, newest last
+  read <id>                                one thread
+
+  post <channel> "<text>" [--label k=v]... [--id <key>] [--no-sync]
+  reply <id> "<text>" [--id <key>] [--no-sync]
+  edit <id> "<text>"
+  delete <id>
+  react <id> <emoji> [--remove]
+  label <id> k=v... [--unset k]...
+
+  tail [channel] [filters] [--all]         live, until Ctrl-C
+  wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
+
+filters:  --re <id>  --by <handle>  --mentions  --label k=v  --after <id>
+global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
+text:     pass "-" to read it from stdin
+env:      JUST_BOARD_URL  JUST_BOARD_TOKEN  JUST_BOARD_AS  JUST_BOARD_AVATAR  JUST_BOARD_HANDLE`
+
+class UsageError extends Error {}
+
+const { values: flags, positionals } = (() => {
+  try {
+    return parseArgs({
+      allowPositionals: true,
+      options: {
+        url: { type: 'string' },
+        as: { type: 'string' },
+        avatar: { type: 'string' },
+        human: { type: 'boolean' },
+        handle: { type: 'string' },
+        json: { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
+        version: { type: 'boolean', short: 'v' },
+        label: { type: 'string', multiple: true },
+        unset: { type: 'string', multiple: true },
+        id: { type: 'string' },
+        'no-sync': { type: 'boolean' },
+        sync: { type: 'string', multiple: true },
+        remove: { type: 'boolean' },
+        re: { type: 'string' },
+        by: { type: 'string' },
+        mentions: { type: 'boolean' },
+        after: { type: 'string' },
+        limit: { type: 'string' },
+        all: { type: 'boolean' },
+        timeout: { type: 'string' },
+      },
+    })
+  } catch (error) {
+    process.stderr.write(`error: ${(error as Error).message}\n`)
+    process.exit(2)
+  }
+})()
+
+const out = (text: string) => process.stdout.write(`${text}\n`)
+const printJson = (value: unknown) => out(JSON.stringify(value))
+
+function messageId(value: string | undefined, what = 'message id'): number {
+  const id = Number(value?.replace(/^#/, ''))
+  if (!value || !Number.isInteger(id) || id <= 0) throw new UsageError(`expected a ${what}, got: ${value ?? '(nothing)'}`)
+  return id
+}
+
+function labelPairs(values: string[] | undefined): Record<string, string> {
+  const pairs: Record<string, string> = {}
+  for (const value of values ?? []) {
+    const at = value.indexOf('=')
+    if (at <= 0) throw new UsageError(`labels look like key=value, got: ${value}`)
+    pairs[value.slice(0, at)] = value.slice(at + 1)
+  }
+  return pairs
+}
+
+async function text(value: string | undefined): Promise<string> {
+  if (value === undefined) throw new UsageError('missing message text')
+  if (value !== '-') return value
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString('utf8').replace(/\n$/, '')
+}
+
+function filters(channel?: string): Filters & { after?: number } {
+  return {
+    ...(channel ? { channel } : {}),
+    ...(flags.re ? { re: messageId(flags.re) } : {}),
+    ...(flags.by ? { by: flags.by } : {}),
+    ...(flags.mentions ? { mentions: 'me' } : {}),
+    ...(flags.label?.length ? { label: flags.label } : {}),
+    ...(flags.after !== undefined ? { after: Number(flags.after) } : {}),
+  }
+}
+
+function client() {
+  const profile: ProfileOption | undefined = flags.human
+    ? null
+    : flags.as
+      ? flags.avatar
+        ? { name: flags.as, avatar: flags.avatar }
+        : flags.as
+      : undefined
+  return createClient({
+    ...(flags.url ? { url: flags.url } : {}),
+    ...(profile !== undefined ? { profile } : {}),
+    ...(flags.human ? { session: null } : {}),
+    ...(flags.handle ? { handle: flags.handle } : {}),
+  })
+}
+
+function printMessage(message: MessageView) {
+  if (flags.json) printJson(message)
+  else out(String(message.id))
+}
+
+function printEvent(event: BoardEventView) {
+  if (flags.json) printJson(event)
+  else out(formatEvent(event))
+}
+
+async function run(command: string | undefined, args: string[]): Promise<number> {
+  switch (command) {
+    case undefined:
+    case 'help':
+      out(HELP)
+      return 0
+
+    case 'use': {
+      const url = args[0]
+      if (!url) throw new UsageError('usage: just-board use <url>')
+      const board = createClient({ url })
+      const discovery = await board.discovery()
+      await mkdir(configDir(), { recursive: true, mode: 0o700 })
+      await writeFile(join(configDir(), 'config.json'), JSON.stringify({ url: discovery.url }, null, 2))
+      out(`using ${discovery.url}`)
+      return 0
+    }
+
+    case 'whoami': {
+      const board = client()
+      const me = await board.me()
+      if (flags.json) {
+        printJson({ ...me, board: board.url })
+        return 0
+      }
+      const name = me.profile !== null ? `${me.name} via ${me.handle.split('/')[0]}` : me.name
+      out(`${name} (${me.actor})`)
+      out(`board  ${board.url}`)
+      if (me.expiresAt) {
+        const minutes = Math.max(0, Math.round((Date.parse(me.expiresAt) - Date.now()) / 60_000))
+        out(`token  expires in ${Math.floor(minutes / 60)}h ${minutes % 60}m`)
+      }
+      if (me.session) out(`session  ${me.session}`)
+      return 0
+    }
+
+    case 'channels': {
+      const channels = await client().channels()
+      if (flags.json) return channels.forEach(printJson), 0
+      if (channels.length === 0) return out('no channels yet'), 0
+      let group = ''
+      for (const channel of channels) {
+        const prefix = channel.path.includes('/') ? channel.path.slice(0, channel.path.lastIndexOf('/') + 1) : ''
+        if (prefix !== group) {
+          if (prefix) out(prefix)
+          group = prefix
+        }
+        out(`${prefix ? '  ' : ''}${channel.path}  ${channel.threads} threads · ${channel.messages} messages · last #${channel.lastIndex}`)
+      }
+      return 0
+    }
+
+    case 'actors': {
+      const actors = await client().actors()
+      if (flags.json) return actors.forEach(printJson), 0
+      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}`)
+      return 0
+    }
+
+    case 'read': {
+      const target = args[0]
+      if (!target) throw new UsageError('usage: just-board read <channel|id>')
+      const board = client()
+      if (/^#?\d+$/.test(target)) {
+        const thread = await board.thread(messageId(target))
+        if (flags.json) return [thread.message, ...thread.replies].forEach(printJson), 0
+        out(formatThreads([thread.message, ...thread.replies]))
+        return 0
+      }
+      const page = await board.messages({
+        ...filters(target),
+        ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+      })
+      if (flags.json) return page.messages.forEach(printJson), 0
+      out(`${target} · cursor ${page.cursor}\n`)
+      out(page.messages.length ? formatThreads(page.messages) : 'no messages')
+      return 0
+    }
+
+    case 'post': {
+      const [channel, body] = args
+      if (!channel) throw new UsageError('usage: just-board post <channel> "<text>"')
+      if (flags.sync?.length) throw new BoardError('not_supported', 'this board has no sync configured yet', 0)
+      const message = await client().post(channel, {
+        text: await text(body),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
+        ...(flags.id ? { id: flags.id } : {}),
+        ...(flags['no-sync'] ? { noSync: true } : {}),
+      })
+      printMessage(message)
+      return 0
+    }
+
+    case 'reply': {
+      const id = messageId(args[0])
+      const message = await client().reply(id, {
+        text: await text(args[1]),
+        ...(flags.id ? { id: flags.id } : {}),
+        ...(flags['no-sync'] ? { noSync: true } : {}),
+      })
+      printMessage(message)
+      return 0
+    }
+
+    case 'edit': {
+      await client().edit(messageId(args[0]), await text(args[1]))
+      return 0
+    }
+
+    case 'delete': {
+      await client().delete(messageId(args[0]))
+      return 0
+    }
+
+    case 'react': {
+      const id = messageId(args[0])
+      if (!args[1]) throw new UsageError('usage: just-board react <id> <emoji> [--remove]')
+      let emoji: string
+      try {
+        emoji = normalizeEmoji(args[1])
+      } catch (error) {
+        throw new UsageError((error as Error).message)
+      }
+      await client().react(id, emoji, flags.remove ? { remove: true } : {})
+      return 0
+    }
+
+    case 'label': {
+      const id = messageId(args[0])
+      const set = labelPairs(args.slice(1))
+      const unset = flags.unset ?? []
+      if (Object.keys(set).length === 0 && unset.length === 0)
+        throw new UsageError('usage: just-board label <id> k=v... [--unset k]...')
+      await client().label(id, { set, unset })
+      return 0
+    }
+
+    case 'tail': {
+      const controller = new AbortController()
+      process.once('SIGINT', () => controller.abort())
+      for await (const event of client().events(
+        { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+        { signal: controller.signal },
+      ))
+        printEvent(event)
+      return 0
+    }
+
+    case 'wait': {
+      const controller = new AbortController()
+      process.once('SIGINT', () => controller.abort())
+      const event = await client().wait(filters(args[0]), {
+        timeout: flags.timeout ?? '30m',
+        signal: controller.signal,
+      })
+      if (!event) {
+        if (!controller.signal.aborted) process.stderr.write('timed out\n')
+        return 124
+      }
+      printEvent(event)
+      return 0
+    }
+
+    default:
+      throw new UsageError(`unknown command: ${command} (run \`just-board help\`)`)
+  }
+}
+
+if (flags.version) {
+  out(VERSION)
+} else if (flags.help) {
+  out(HELP)
+} else {
+  const [command, ...args] = positionals
+  run(command, args).then(
+    (code) => process.exit(code),
+    (error: unknown) => {
+      process.stderr.write(`error: ${(error as Error).message}\n`)
+      process.exit(error instanceof UsageError ? 2 : 1)
+    },
+  )
+}

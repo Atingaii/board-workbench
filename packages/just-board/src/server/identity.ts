@@ -1,0 +1,53 @@
+import { decodeJwt } from 'jose'
+
+export type ProjectIdentity = { projectId: string | null; teamId: string | null }
+
+let fromDisk: Promise<ProjectIdentity> | undefined
+
+/** `vercel link` writes `.vercel/project.json`; local development reads it. */
+function readLinkedProject(): Promise<ProjectIdentity> {
+  fromDisk ??= (async () => {
+    try {
+      const { readFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const raw = await readFile(join(process.cwd(), '.vercel', 'project.json'), 'utf8')
+      const { projectId, orgId } = JSON.parse(raw) as { projectId?: string; orgId?: string }
+      return { projectId: projectId ?? null, teamId: orgId ?? null }
+    } catch {
+      return { projectId: null, teamId: null }
+    }
+  })()
+  return fromDisk
+}
+
+/**
+ * The board's own Vercel project. Verification only trusts the project ID,
+ * from config, the platform's `VERCEL_PROJECT_ID`, or the linked project.
+ */
+export async function ownProjectId(configured?: { id: string }): Promise<string | null> {
+  if (configured) return configured.id
+  if (process.env.VERCEL_PROJECT_ID) return process.env.VERCEL_PROJECT_ID
+  return (await readLinkedProject()).projectId
+}
+
+/**
+ * The team, for discovery only: clients need it to mint tokens. The platform's
+ * request token is decoded without trust, since a spoofed header can only
+ * mislead the response it's attached to.
+ */
+export async function discoveryIdentity(
+  request: Request,
+  configured?: { id: string; teamId?: string },
+): Promise<ProjectIdentity> {
+  const projectId = await ownProjectId(configured)
+  if (configured?.teamId) return { projectId, teamId: configured.teamId }
+  const header = request.headers.get('x-vercel-oidc-token')
+  if (header) {
+    try {
+      const claims = decodeJwt(header)
+      if (typeof claims.owner_id === 'string') return { projectId, teamId: claims.owner_id }
+    } catch {}
+  }
+  if (process.env.VERCEL_ORG_ID) return { projectId, teamId: process.env.VERCEL_ORG_ID }
+  return { projectId, teamId: (await readLinkedProject()).teamId }
+}

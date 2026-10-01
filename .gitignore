@@ -1,0 +1,6 @@
+node_modules
+dist
+.a2
+*.tsbuildinfo
+.env*.local
+*.tgz
