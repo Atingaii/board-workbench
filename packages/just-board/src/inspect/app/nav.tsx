@@ -10,12 +10,24 @@ export function navigate(to: string, replace = false) {
   dispatchEvent(new PopStateEvent('popstate'))
 }
 
-export type Where = { path: string; thread: number | null }
+import type { Filter } from './store.ts'
+
+/** Where you are: the view's path, an open thread, and the view's filters, all in the URL. */
+export type Where = { path: string; thread: number | null; filter: Filter }
 
 export function useLocation(): Where {
   const read = (): Where => {
-    const thread = Number(new URLSearchParams(location.search).get('thread'))
-    return { path: location.pathname, thread: Number.isInteger(thread) && thread > 0 ? thread : null }
+    const params = new URLSearchParams(location.search)
+    const thread = Number(params.get('thread'))
+    return {
+      path: location.pathname,
+      thread: Number.isInteger(thread) && thread > 0 ? thread : null,
+      filter: {
+        ...(params.get('from') ? { from: params.get('from')! } : {}),
+        label: params.getAll('label').filter(Boolean),
+        ...(params.get('text') ? { text: params.get('text')! } : {}),
+      },
+    }
   }
   const [where, setWhere] = useState(read)
   useEffect(() => {
@@ -24,6 +36,23 @@ export function useLocation(): Where {
     return () => removeEventListener('popstate', update)
   }, [])
   return where
+}
+
+/** This view's URL with a thread opened or closed, or other filters; the rest stays. */
+export function here(changes: { thread?: number | null; filter?: Filter }): string {
+  const params = new URLSearchParams(location.search)
+  if (changes.thread !== undefined) {
+    if (changes.thread === null) params.delete('thread')
+    else params.set('thread', String(changes.thread))
+  }
+  if (changes.filter) {
+    for (const key of ['from', 'label', 'text']) params.delete(key)
+    if (changes.filter.from) params.set('from', changes.filter.from)
+    for (const label of changes.filter.label) params.append('label', label)
+    if (changes.filter.text) params.set('text', changes.filter.text)
+  }
+  const query = params.toString()
+  return `${location.pathname}${query ? `?${query}` : ''}`
 }
 
 export function Link(props: { to: string; className?: string; current?: boolean; title?: string; children: ReactNode }) {

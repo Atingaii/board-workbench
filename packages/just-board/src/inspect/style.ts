@@ -242,9 +242,10 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .label:hover, .chip:hover { color: var(--bright); background: var(--shade-hover); }
 .label button { color: var(--faint); display: inline-flex; }
 .label button:hover { color: var(--bright); }
-.chip.mine { border-color: var(--accent); color: var(--accent); }
-.replies { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--accent); font-size: 12px; font-weight: 600; }
-.replies:hover { text-decoration: underline; }
+/* Your own reaction: a little brighter, not louder. */
+.chip.mine { border-color: var(--muted); background: var(--shade-hover); color: var(--bright); }
+.replies { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0 -4px; padding: 2px 6px 2px 4px; color: var(--dim); font-size: 12px; font-weight: 600; }
+.replies:hover { background: var(--shade-hover); color: var(--bright); }
 .replies .time { font-weight: 400; }
 .replies .faces { display: inline-flex; }
 .replies .faces .avatar + .avatar { margin-left: -4px; }
@@ -330,6 +331,20 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .suggest:focus-within { outline: 1px solid var(--muted); }
 .suggest .prefix { color: var(--faint); }
 .label-add > .suggest { width: 38%; }
+
+/* --- filters --- */
+.filter-bar { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 20px 0; }
+.clear { color: var(--faint); font-size: 11px; }
+.clear:hover { color: var(--bright); }
+.filter-form { display: grid; gap: 12px; }
+.filter-form > .clear { justify-self: start; }
+.filter-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: start; gap: 10px; }
+.filter-name { color: var(--faint); font-size: 11px; line-height: 28px; }
+.filter-row .grow { display: grid; gap: 6px; }
+.segments { display: flex; flex-wrap: wrap; gap: 2px; }
+.segment { height: 28px; padding: 0 10px; background: var(--shade); color: var(--muted); }
+.segment:hover { color: var(--bright); }
+.segment.on { background: var(--bright); color: var(--bg); }
 
 /* --- the composer: an outline, not a border --- */
 .composer { flex-shrink: 0; padding: 0 20px 20px; }

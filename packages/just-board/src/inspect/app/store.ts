@@ -217,13 +217,34 @@ export function thread(state: State, root: number): Thread | null {
   return { root: view, replies, pending: state.pending.filter((post) => post.re === root) }
 }
 
-/** The newest messages across every channel, oldest first. */
-export function recent(state: State, limit = 200): MessageView[] {
+/** The newest messages across every channel (that `keep` keeps), oldest first. */
+export function recent(state: State, limit = 200, keep: (m: MessageView) => boolean = () => true): MessageView[] {
   return Object.values(state.messages)
+    .filter(keep)
     .sort((a, b) => b.id - a.id)
     .slice(0, limit)
     .reverse()
     .map((message) => shown(state, message.id)!)
+}
+
+/** A view's filters, as the board's API takes them: `label` is `key`, `key=value`, or `key=a|b`. */
+export type Filter = { from?: string; label: string[]; text?: string }
+
+export const filtering = (filter: Filter) => !!(filter.from || filter.text || filter.label.length)
+
+function hasLabel(labels: Record<string, string>, filter: string): boolean {
+  const at = filter.indexOf('=')
+  if (at === -1) return filter in labels
+  const key = filter.slice(0, at)
+  return key in labels && filter.slice(at + 1).split('|').includes(labels[key]!)
+}
+
+/** The board's filter rules, for messages already here: labels match on the message or its thread's root. */
+export function matches(state: State, message: MessageView, filter: Filter): boolean {
+  if (filter.from && (message.from ?? 'board') !== filter.from) return false
+  if (filter.text && !message.text.toLowerCase().includes(filter.text.toLowerCase())) return false
+  const root = message.re === null ? undefined : state.messages[message.re]
+  return filter.label.every((label) => hasLabel(message.labels, label) || (root !== undefined && hasLabel(root.labels, label)))
 }
 
 /** Every label key on the loaded messages, with the values each has taken: suggestions for pickers. */

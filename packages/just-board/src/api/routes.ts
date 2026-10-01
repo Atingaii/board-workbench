@@ -14,13 +14,16 @@ const repeated = z
   .union([z.string(), z.array(z.string())])
   .transform((value) => (Array.isArray(value) ? value : [value]))
 
-/** `status=open` → `['status', 'open']`. */
+/**
+ * `pr` → `['pr', null]` (has the label), `status=open` → `['status', ['open']]`,
+ * `state=open|draft` → either value.
+ */
 const LabelFilter = z
   .string()
-  .regex(/^[a-z0-9][a-z0-9_.-]*=.*$/, 'label filters look like key=value')
+  .regex(/^[a-z0-9][a-z0-9_.-]*(=.*)?$/, 'label filters look like key, key=value, or key=a|b')
   .transform((value) => {
     const at = value.indexOf('=')
-    return [value.slice(0, at), value.slice(at + 1)] as const
+    return at === -1 ? ([value, null] as const) : ([value.slice(0, at), value.slice(at + 1).split('|')] as const)
   })
 
 /** Shared by `/messages` and `/events`. */
@@ -30,6 +33,10 @@ export const Filters = z.object({
   by: z.string().optional(),
   mentions: z.string().optional(),
   label: repeated.pipe(z.array(LabelFilter)).optional(),
+  /** Where messages came from: a sync key such as `slack`, or `board` for the board itself. */
+  from: z.string().min(1).max(64).optional(),
+  /** Case-insensitive words the text contains. */
+  text: z.string().min(1).max(200).optional(),
 })
 
 export const MessagesQuery = Filters.extend({
@@ -92,6 +99,8 @@ export type BoardEventView = {
   payload: unknown
   /** The message the event concerns, as it is after the event. */
   message?: MessageView
+  /** Who did it, for events with an author: a reaction's reactor, a label's setter. */
+  actor?: ActorView & { id: string }
 }
 
 export type Discovery = {

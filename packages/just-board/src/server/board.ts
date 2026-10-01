@@ -272,7 +272,7 @@ export function board(options: BoardOptions = {}) {
             session.state(messagesReducer),
             session.state(actorsReducer),
           ])
-          const matches = compileFilter(query, { me: actor.id, actors })
+          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
           let found = Object.values(state.byId)
             .filter(matches)
             .sort((a, b) => a.id - b.id)

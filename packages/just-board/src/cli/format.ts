@@ -99,11 +99,11 @@ export function formatEvent(event: BoardEventView): string {
     case 'reaction.removed':
       return `#${message.id}  ${where}  ${displayEmoji(payload.emoji ?? '')} ${
         event.type === 'reaction.added' ? 'added' : 'removed'
-      } by ${payload.by?.actor ?? '?'}`
+      } by ${event.actor?.name ?? payload.by?.actor ?? '?'}`
     case 'labels.changed': {
       const set = Object.entries(payload.set ?? {}).map(([k, v]) => `${k}=${v}`)
       const unset = (payload.unset ?? []).map((k) => `-${k}`)
-      return `#${message.id}  ${where}  labels ${[...set, ...unset].join(' ')}`
+      return `#${message.id}  ${where}  labels ${[...set, ...unset].join(' ')}${event.actor ? ` by ${event.actor.name}` : ''}`
     }
     case 'message.sync_failed':
       return `#${message.id}  ${where}  ✗ didn't reach ${payload.target}: ${payload.error}`

@@ -10,7 +10,7 @@ import { displayEmoji } from '../../contract/emoji.ts'
 import * as board from './board.ts'
 import { Ago } from './nav.tsx'
 import { continues, type Groupable, type Pending } from './store.ts'
-import { ContextMenuArea, EmojiPicker, LabelEditor, LabelPopover, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
+import { ContextMenuArea, EmojiPicker, LabelEditor, Panel, Menu, MenuEmojiRow, MenuItem, MenuSeparator, nativeMenu, type KnownLabels } from './ui.tsx'
 
 const MENU_EMOJI = ['thumbs_up', 'heart', 'laugh', 'party', 'eyes', 'check']
 
@@ -314,14 +314,14 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             </Menu>
           </div>
         )}
-        <LabelPopover open={labelsOpen} onOpenChange={setLabelsOpen} anchor={row}>
+        <Panel title="labels" open={labelsOpen} onOpenChange={setLabelsOpen} anchor={row}>
           <LabelEditor
             labels={m.labels}
             known={options.known}
             onSet={(key, value) => void board.label(m.id, { [key]: value }, [])}
             onUnset={(key) => void board.label(m.id, {}, [key])}
           />
-        </LabelPopover>
+        </Panel>
       </div>
   )
   if (m.deleted) return element

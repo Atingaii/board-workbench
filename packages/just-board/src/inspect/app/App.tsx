@@ -6,8 +6,9 @@ import * as board from './board.ts'
 import { Composer } from './composer.tsx'
 import { Feed, Toasts } from './feed.tsx'
 import { Messages, Pendings, type RowOptions } from './message.tsx'
-import { Ago, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
-import { channelThreads, knownLabels, recent, thread as threadOf, type State } from './store.ts'
+import { Ago, here, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
+import { FilterButton, FilterChips } from './filters.tsx'
+import { channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator, ResizeHandle, type KnownLabels } from './ui.tsx'
 
 type Route = { view: 'activity' } | { view: 'channel'; channel: string } | { view: 'inbox'; key: string } | { view: 'missing' }
@@ -25,7 +26,6 @@ function route(path: string): Route {
   return { view: 'missing' }
 }
 
-const withThread = (path: string, id: number | null) => (id === null ? path : `${path}?thread=${id}`)
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`
 
 // --- sizes you drag, remembered -------------------------------------------------------
@@ -138,7 +138,7 @@ export function App() {
     const close = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || where.thread === null) return
       if ((event.target as HTMLElement).closest('textarea, input, [role="menu"], [role="dialog"]')) return
-      navigate(where.path)
+      navigate(here({ thread: null }))
     }
     addEventListener('keydown', close)
     return () => removeEventListener('keydown', close)
@@ -155,7 +155,11 @@ export function App() {
   if (!state.me) return <div className="boot">connecting…</div>
 
   const platforms = Object.fromEntries((state.discovery?.sync ?? []).map((entry) => [entry.key, entry.platform]))
-  const options: RowOptions = { me: state.me.actor, now, known, platforms, openThread: (id) => navigate(withThread(where.path, id)) }
+  const options: RowOptions = { me: state.me.actor, now, known, platforms, openThread: (id) => navigate(here({ thread: id })) }
+  const filter = where.filter
+  const setFilter = (next: Filter) => navigate(here({ filter: next }), true)
+  const sources = (state.discovery?.sync ?? []).map((entry) => entry.key)
+  const filters = { filter, setFilter, sources, known }
   const expand = sidebar.collapsed ? (
     <button className="tool" title="show the sidebar" onClick={() => sidebar.collapse(false)}>
       <PanelLeftOpen size={15} strokeWidth={1.75} />
@@ -170,9 +174,9 @@ export function App() {
         </nav>
       )}
       <main className="main">
-        {current.view === 'activity' && <Activity state={state} options={options} known={known} lead={expand} />}
+        {current.view === 'activity' && <Activity state={state} options={options} known={known} lead={expand} filters={filters} />}
         {current.view === 'channel' && (
-          <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} />
+          <Channel key={current.channel} channel={current.channel} state={state} options={options} known={known} lead={expand} filters={filters} />
         )}
         {current.view === 'inbox' && <Inbox key={current.key} entry={current.key} now={now} lead={expand} />}
         {current.view === 'missing' && (
@@ -185,7 +189,7 @@ export function App() {
       {where.thread !== null && (
         <aside className="pane" style={{ width: pane.width }}>
           <ResizeHandle side="left" label="resize the thread" onDrag={pane.drag} onDone={pane.done} onStep={pane.step} />
-          <ThreadPane key={where.thread} id={where.thread} state={state} path={where.path} now={now} known={known} />
+          <ThreadPane key={where.thread} id={where.thread} state={state} now={now} known={known} />
         </aside>
       )}
       <Toasts />
@@ -375,15 +379,35 @@ function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
 /** Your newest message among `messages`, for ↑ to edit. */
 const lastOwn = (messages: MessageView[], me: string) => [...messages].reverse().find((m) => m.by.actor === me && !m.deleted)
 
-function Activity({ state, options, known, lead }: { state: State; options: RowOptions; known: KnownLabels; lead: ReactNode }) {
+type Filters = { filter: Filter; setFilter: (filter: Filter) => void; sources: string[]; known: KnownLabels }
+
+function FilterControls({ filters }: { filters: Filters }) {
+  return <FilterButton filter={filters.filter} onChange={filters.setFilter} sources={filters.sources} known={filters.known} />
+}
+
+function Activity(props: { state: State; options: RowOptions; known: KnownLabels; lead: ReactNode; filters: Filters }) {
+  const { state, options, known, lead } = props
+  const { filter } = props.filters
   useTypeToFocus('main')
-  const messages = useMemo(() => recent(state), [state.messages, state.ops, state.actors])
-  const pending = state.pending.filter((post) => post.re === null)
+  const key = JSON.stringify(filter)
+  useEffect(() => {
+    if (filtering(filter)) void board.loadFiltered(undefined, filter)
+  }, [key])
+  const messages = useMemo(
+    () => recent(state, 200, filtering(filter) ? (m) => matches(state, m, filter) : undefined),
+    [state.messages, state.ops, state.actors, key],
+  )
+  const pending = filtering(filter) ? [] : state.pending.filter((post) => post.re === null)
   return (
     <>
-      <Header title="activity" meta="the latest across every channel" live={state.live} lead={lead} />
+      <Header title="activity" meta="the latest across every channel" live={state.live} lead={lead}>
+        <FilterControls filters={props.filters} />
+      </Header>
+      <FilterChips filter={filter} onChange={props.filters.setFilter} />
       <Feed scope="activity" first={messages[0]?.id ?? 0} last={(messages.at(-1)?.id ?? 0) + pending.length}>
-        {messages.length === 0 && pending.length === 0 && <p className="empty">nothing here yet: start a thread below</p>}
+        {messages.length === 0 && pending.length === 0 && (
+          <p className="empty">{filtering(filter) ? 'nothing matches these filters' : 'nothing here yet: start a thread below'}</p>
+        )}
         <Messages
           messages={messages}
           now={options.now}
@@ -415,14 +439,22 @@ function Activity({ state, options, known, lead }: { state: State; options: RowO
   )
 }
 
-function Channel(props: { channel: string; state: State; options: RowOptions; known: KnownLabels; lead: ReactNode }) {
+function Channel(props: { channel: string; state: State; options: RowOptions; known: KnownLabels; lead: ReactNode; filters: Filters }) {
   const { channel, state, options } = props
+  const { filter } = props.filters
   useTypeToFocus('main')
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     void board.loadChannel(channel).finally(() => setLoading(false))
   }, [channel])
-  const { threads, pending } = useMemo(() => channelThreads(state, channel), [state.messages, state.ops, state.pending, state.actors, channel])
+  const key = JSON.stringify(filter)
+  useEffect(() => {
+    if (filtering(filter)) void board.loadFiltered(channel, filter)
+  }, [channel, key])
+  const { threads: all, pending: posts } = useMemo(() => channelThreads(state, channel), [state.messages, state.ops, state.pending, state.actors, channel])
+  // A filtered channel shows the threads where anything matches.
+  const threads = filtering(filter) ? all.filter((t) => matches(state, t.root, filter) || t.replies.some((r) => matches(state, r, filter))) : all
+  const pending = filtering(filter) ? [] : posts
   const roots = threads.map((t) => t.root)
   const replies = new Map(threads.map((t) => [t.root.id, t.replies]))
   const info = state.channels[channel]
@@ -434,9 +466,14 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
         meta={info ? `${count(info.threads, 'thread')} · ${count(info.messages, 'message')}` : undefined}
         live={state.live}
         lead={props.lead}
-      />
+      >
+        <FilterControls filters={props.filters} />
+      </Header>
+      <FilterChips filter={filter} onChange={props.filters.setFilter} />
       <Feed scope={channel} first={roots[0]?.id ?? 0} last={lastId + pending.length} older={() => board.loadOlder(channel)}>
-        {roots.length === 0 && pending.length === 0 && <p className="empty">{loading ? 'loading…' : 'no messages yet: say something'}</p>}
+        {roots.length === 0 && pending.length === 0 && (
+          <p className="empty">{loading ? 'loading…' : filtering(filter) ? 'nothing matches these filters' : 'no messages yet: say something'}</p>
+        )}
         <Messages messages={roots} now={options.now} options={{ ...options, replies: (m) => replies.get(m.id) ?? [] }} />
         <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(replies.get(roots.at(-1)?.id ?? 0)?.length ?? 0) > 0} />
       </Feed>
@@ -455,7 +492,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   )
 }
 
-function ThreadPane(props: { id: number; state: State; path: string; now: number; known: KnownLabels }) {
+function ThreadPane(props: { id: number; state: State; now: number; known: KnownLabels }) {
   const { id, state } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
@@ -467,7 +504,7 @@ function ThreadPane(props: { id: number; state: State; path: string; now: number
   return (
     <>
       <Header title="thread" meta={t ? `in #${t.root.channel}` : undefined}>
-        <button className="tool" title="close (esc)" onClick={() => navigate(props.path)}>
+        <button className="tool" title="close (esc)" onClick={() => navigate(here({ thread: null }))}>
           <X size={15} strokeWidth={1.75} />
         </button>
       </Header>

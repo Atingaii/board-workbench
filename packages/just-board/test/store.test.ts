@@ -97,6 +97,27 @@ describe('the inspector store', () => {
     expect(state.pending.map((p) => p.key)).toEqual(['k2'])
   })
 
+  it('filters like the board: source, text, and labels on the message or its root', () => {
+    const state = store.merge(
+      start,
+      [
+        message(1, { labels: { pr: 'x/y#1', state: 'open' }, from: 'github' }),
+        message(2, { re: 1, text: 'Flaky test', from: 'slack' }),
+        message(3, { labels: { state: 'draft' } }),
+      ],
+      3,
+    )
+    const ids = (filter: Partial<store.Filter>) =>
+      Object.values(state.messages)
+        .filter((m) => store.matches(state, m, { label: [], ...filter }))
+        .map((m) => m.id)
+    expect(ids({ label: ['pr'] })).toEqual([1, 2])
+    expect(ids({ label: ['state=open|draft'] })).toEqual([1, 2, 3])
+    expect(ids({ label: ['pr=x/y#1'], text: 'flaky' })).toEqual([2])
+    expect(ids({ from: 'board' })).toEqual([3])
+    expect(store.filtering({ label: [] })).toBe(false)
+  })
+
   it('groups messages by author, place, and time', () => {
     const at = (minutes: number) => new Date(Date.UTC(2026, 9, 1, 12, minutes)).toISOString()
     const first = message(1, { createdAt: at(0) })

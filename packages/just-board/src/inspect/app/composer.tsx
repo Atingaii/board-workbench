@@ -1,7 +1,7 @@
 import { CloudOff, Tag, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as board from './board.ts'
-import { LabelEditor, LabelPopover, Suggest, type KnownLabels } from './ui.tsx'
+import { LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
 
 // Just Chat's composer: one outlined box, the textarea, a quiet toolbar.
 // Enter sends, Shift+Enter breaks a line, ⌘B / ⌘I / ⌘E format, lists continue,
@@ -182,14 +182,15 @@ export function Composer(props: {
           onKeyDown={onKeyDown}
         />
         <div className="composer-footer">
-          <LabelPopover
+          <Panel
+            title="labels"
             trigger={
               <>
                 <Tag size={14} />
                 {labelEntries.length > 0 && <span className="count">{labelEntries.length}</span>}
               </>
             }
-            title="labels for this message"
+            triggerTitle="labels for this message"
             open={labelsOpen}
             onOpenChange={setLabelsOpen}
           >
@@ -205,7 +206,7 @@ export function Composer(props: {
                 })
               }
             />
-          </LabelPopover>
+          </Panel>
           <button
             className={`tool${noSync ? ' on' : ''}`}
             aria-pressed={noSync}

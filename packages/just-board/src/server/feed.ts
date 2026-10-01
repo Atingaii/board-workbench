@@ -37,13 +37,27 @@ export const hasCriteria = (filters: ParsedFilters) =>
   filters.re !== undefined ||
   filters.by !== undefined ||
   filters.mentions !== undefined ||
+  filters.from !== undefined ||
+  filters.text !== undefined ||
   (filters.label?.length ?? 0) > 0
 
-/** Compiles filters once; handles resolve against the actors known at that moment. */
+type LabelFilter = readonly [string, readonly string[] | null]
+
+const hasLabel = (labels: Record<string, string>, [key, values]: LabelFilter) =>
+  key in labels && (values === null || values.includes(labels[key]!))
+
+/**
+ * Compiles filters once; handles resolve against the actors known at that
+ * moment. A label matches on the message or its thread's root, where sync puts
+ * labels, so `pr=…` means the PR's whole conversation. `messages` is the live
+ * state for that lookup.
+ */
 export function compileFilter(
   filters: ParsedFilters,
-  context: { me: string | null; actors: ActorsState },
+  context: { me: string | null; actors: ActorsState; messages?: MessagesState },
 ): (message: Message | undefined) => boolean {
+  const text = filters.text?.toLowerCase()
+  const labels = filters.label ?? []
   const channel = filters.channel
   const subtree = channel?.endsWith('/') ? channel.slice(0, -1) : null
   const by = filters.by === undefined ? null : actorSet(filters.by, context.actors)
@@ -64,8 +78,13 @@ export function compileFilter(
       return false
     if (by !== null && !by.has(message.by.actor)) return false
     if (mentions !== null && !message.mentions.some((id) => mentions.has(id))) return false
-    for (const [key, value] of filters.label ?? [])
-      if (message.labels[key] !== value) return false
+    if (filters.from !== undefined && (message.from ?? 'board') !== filters.from) return false
+    if (text !== undefined && !message.text.toLowerCase().includes(text)) return false
+    if (labels.length > 0) {
+      const root = message.re === null ? undefined : context.messages?.byId[message.re]
+      for (const label of labels)
+        if (!hasLabel(message.labels, label) && !(root && hasLabel(root.labels, label))) return false
+    }
     return true
   }
 }
@@ -114,6 +133,8 @@ export class FeedProjection {
     const hidden = HIDDEN.has(event.type) && !this.all
     const visible = !hidden && (this.criteria ? this.match(before) || this.match(after) : id !== null || this.all)
     if (!visible) return { index: event.index, view: null }
+    const by = (event.payload as { by?: { actor?: string } }).by?.actor
+    const actor = by ? this.actors.byId[by] : undefined
     return {
       index: event.index,
       view: {
@@ -122,6 +143,7 @@ export class FeedProjection {
         createdAt: iso(event.createdAt),
         payload: event.payload,
         ...(after ? { message: view(after, this.actors) } : {}),
+        ...(actor ? { actor: { id: actor.id, handle: actor.handle, name: actor.name, avatar: actor.avatar } } : {}),
       },
     }
   }
@@ -169,7 +191,7 @@ function projection(options: FeedOptions, messages: MessagesState) {
   return new FeedProjection(
     messages,
     options.actors,
-    compileFilter(options.filters, { me: options.me, actors: options.actors }),
+    compileFilter(options.filters, { me: options.me, actors: options.actors, messages }),
     hasCriteria(options.filters),
     options.all,
   )

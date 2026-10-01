@@ -21,7 +21,7 @@ usage: just-board <command> [options]      (also installed as \`jb\`)
   channels                                 channels, grouped by path prefix
   actors                                   actors and their handles
 
-  read <channel> [filters] [--limit N]     threads in a channel, newest last
+  read <channel> [filters] [--limit N]     threads in a channel, newest last (no channel: every channel)
   read <id>                                one thread
 
   post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
@@ -38,7 +38,8 @@ usage: just-board <command> [options]      (also installed as \`jb\`)
 
   inspect [--port N] [--no-open]           the board in your browser, as you: read, post, react (local only)
 
-filters:  --re <id>  --by <handle>  --mentions  --label k=v  --after <id>
+filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions  --after <id>
+          labels match a message or its thread's root; repeated flags all must match
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
 text:     pass "-" to read it from stdin
 env:      JUST_BOARD_URL  JUST_BOARD_TOKEN  JUST_BOARD_AS  JUST_BOARD_AVATAR  JUST_BOARD_HANDLE`
@@ -68,6 +69,8 @@ const { values: flags, positionals } = (() => {
         by: { type: 'string' },
         mentions: { type: 'boolean' },
         after: { type: 'string' },
+        from: { type: 'string' },
+        text: { type: 'string' },
         limit: { type: 'string' },
         all: { type: 'boolean' },
         timeout: { type: 'string' },
@@ -115,6 +118,8 @@ function filters(channel?: string): Filters & { after?: number } {
     ...(flags.by ? { by: flags.by } : {}),
     ...(flags.mentions ? { mentions: 'me' } : {}),
     ...(flags.label?.length ? { label: flags.label } : {}),
+    ...(flags.from ? { from: flags.from } : {}),
+    ...(flags.text ? { text: flags.text } : {}),
     ...(flags.after !== undefined ? { after: Number(flags.after) } : {}),
   }
 }
@@ -215,9 +220,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'read': {
       const target = args[0]
-      if (!target) throw new UsageError('usage: just-board read <channel|id>')
+      const filtering = !!(flags.re || flags.by || flags.from || flags.text || flags.mentions || flags.label?.length)
+      if (!target && !filtering) throw new UsageError('usage: just-board read <channel|id> [filters], or read [filters] across channels')
       const board = client()
-      if (/^#?\d+$/.test(target)) {
+      if (target && /^#?\d+$/.test(target)) {
         const thread = await board.thread(messageId(target))
         if (flags.json) return [thread.message, ...thread.replies].forEach(printJson), 0
         out(formatThreads([thread.message, ...thread.replies]))
@@ -228,7 +234,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags.limit ? { limit: Number(flags.limit) } : {}),
       })
       if (flags.json) return page.messages.forEach(printJson), 0
-      out(`${target} · cursor ${page.cursor}\n`)
+      out(`${target ?? 'all channels'} · cursor ${page.cursor}\n`)
       out(page.messages.length ? formatThreads(page.messages) : 'no messages')
       return 0
     }

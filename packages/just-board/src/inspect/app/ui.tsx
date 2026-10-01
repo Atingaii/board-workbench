@@ -227,10 +227,11 @@ export function LabelEditor(props: {
   )
 }
 
-/** A popover holding a label editor, opened from a trigger or held open by its owner. */
-export function LabelPopover(props: {
+/** A titled popover, opened from its trigger or held open by its owner (anchored elsewhere). */
+export function Panel(props: {
+  title: string
   trigger?: ReactNode
-  title?: string
+  triggerTitle?: string
   open: boolean
   onOpenChange: (open: boolean) => void
   anchor?: React.RefObject<Element | null>
@@ -239,7 +240,7 @@ export function LabelPopover(props: {
   return (
     <Popover.Root open={props.open} onOpenChange={props.onOpenChange}>
       {props.trigger && (
-        <Popover.Trigger className="tool" aria-label={props.title ?? 'labels'} title={props.title ?? 'labels'}>
+        <Popover.Trigger className="tool" aria-label={props.triggerTitle ?? props.title} title={props.triggerTitle ?? props.title}>
           {props.trigger}
         </Popover.Trigger>
       )}
@@ -247,7 +248,7 @@ export function LabelPopover(props: {
         <Popover.Positioner className="positioner" align="end" sideOffset={6} {...(props.anchor ? { anchor: props.anchor } : {})}>
           <Frame>
             <Popover.Popup className="menu popover">
-              <Popover.Title className="popover-title">labels</Popover.Title>
+              <Popover.Title className="popover-title">{props.title}</Popover.Title>
               {props.children}
             </Popover.Popup>
           </Frame>

@@ -226,6 +226,25 @@ export const loadThread = (id: number) =>
 
 export const loadInbox = (key: string): Promise<InboxEntry[]> => client.inbox(key, { limit: 100 })
 
+/**
+ * History that matches a view's filters, from the board, so a filter finds
+ * older messages too; the live stream keeps it current. Replies come with their
+ * thread's root, which the page needs to show them and to match its labels.
+ */
+export const loadFiltered = (channel: string | undefined, filter: store.Filter) =>
+  once(`filtered:${channel ?? '*'}:${JSON.stringify(filter)}`, async () => {
+    const page = await client.messages({
+      ...(channel ? { channel } : {}),
+      ...(filter.from ? { from: filter.from } : {}),
+      ...(filter.text ? { text: filter.text } : {}),
+      ...(filter.label.length > 0 ? { label: filter.label } : {}),
+      limit: PAGE,
+    })
+    set((s) => store.merge(s, page.messages, page.cursor))
+    const missing = [...new Set(page.messages.flatMap((m) => (m.re !== null && !state.messages[m.re] ? [m.re] : [])))].slice(0, 30)
+    await Promise.all(missing.map((id) => loadThread(id)))
+  })
+
 // --- writes --------------------------------------------------------------------
 
 /** Shows a post at once; the board's answer replaces it. */

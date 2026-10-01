@@ -209,6 +209,30 @@ describe('messages', () => {
     expect(await texts('by=ada')).toEqual(['hey @julian'])
     expect(await texts('mentions=me')).toEqual(['hey @julian'])
   })
+
+  it('filters by source, text, a label key or any of its values, and a thread root\'s labels', async () => {
+    const { fetch } = testBoard()
+    const julian = caller(fetch, await personToken('u_julian'), { 'x-board-handle': 'julian' })
+    const { body: pr } = await julian('POST', '/messages', {
+      channel: 'prs',
+      text: 'PR #1: Add filters',
+      labels: { pr: 'basehub-ai/just-board#1', state: 'open' },
+    })
+    await julian('POST', '/messages', { re: pr.message.id, text: 'Looks FLAKY to me' })
+    await julian('POST', '/messages', { channel: 'prs', text: 'PR #2: Draft', labels: { pr: 'basehub-ai/just-board#2', state: 'draft' } })
+    await julian('POST', '/messages', { channel: 'prs', text: 'no labels here' })
+
+    const texts = async (query: string) =>
+      (await julian('GET', `/messages?${query}`)).body.messages.map((m: { text: string }) => m.text)
+    // A key alone; a root's label reaches its replies.
+    expect(await texts('label=pr')).toEqual(['PR #1: Add filters', 'Looks FLAKY to me', 'PR #2: Draft'])
+    expect(await texts(`label=${encodeURIComponent('pr=basehub-ai/just-board#1')}`)).toEqual(['PR #1: Add filters', 'Looks FLAKY to me'])
+    expect(await texts(`label=${encodeURIComponent('state=open|draft')}&text=pr%20%23`)).toEqual(['PR #1: Add filters', 'PR #2: Draft'])
+    expect(await texts('label=pr&text=flaky')).toEqual(['Looks FLAKY to me'])
+    expect(await texts('from=board&text=no%20labels')).toEqual(['no labels here'])
+    expect(await texts('from=slack')).toEqual([])
+    expect((await julian('GET', '/messages?label=Bad=1')).status).toBe(400)
+  })
 })
 
 describe('events', () => {
@@ -242,6 +266,22 @@ describe('events', () => {
 
     const unrelated = await julian('GET', `/events?after=${left.body.cursor}&label=state=open&wait=0`)
     expect(unrelated.body.events).toHaveLength(0)
+  })
+
+  it("tails a PR's conversation by its label, and says who did what", async () => {
+    const { fetch } = testBoard()
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const { body: pr } = await julian('POST', '/messages', { channel: 'prs', text: 'PR #1', labels: { pr: 'x/y#1' } })
+    const start = (await julian('GET', '/events?label=pr%3Dx%2Fy%231&wait=0')).body.cursor
+    await julian('POST', '/messages', { channel: 'prs', text: 'elsewhere' })
+    await julian('POST', '/messages', { re: pr.message.id, text: 'a comment on the PR' })
+    await julian('POST', `/messages/${pr.message.id}/reactions`, { emoji: 'eyes' })
+    const { body } = await julian('GET', `/events?after=${start}&label=pr%3Dx%2Fy%231`)
+    expect(body.events.map((e: { type: string; message: { text: string } }) => [e.type, e.message.text])).toEqual([
+      ['message.posted', 'a comment on the PR'],
+      ['reaction.added', 'PR #1'],
+    ])
+    expect(body.events[1].actor).toMatchObject({ id: 'vercel:user:u_julian', name: 'julian' })
   })
 
   it('streams server-sent events from a cursor', async () => {
