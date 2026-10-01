@@ -103,5 +103,23 @@ describe('cli', () => {
     expect(await jb(['post', 'x', '@nobody'])).toMatchObject({ code: 1, stderr: 'error: unknown mention @nobody\n' })
     expect((await jb(['react', '1', 'not an emoji'])).code).toBe(2)
     expect((await jb(['frobnicate'])).code).toBe(2)
+    expect((await jb(['inspect', '--port', 'nope'])).code).toBe(2)
+  })
+
+  it('serves the inspector until Ctrl-C', async () => {
+    const child = spawn(process.execPath, [CLI, 'inspect', '--port', '0', '--no-open'], { env })
+    const exited = new Promise<number | null>((resolve) => child.on('close', resolve))
+    let stdout = ''
+    const address = await new Promise<string>((resolve) =>
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk
+        const found = /at (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout)
+        if (found) resolve(found[1]!)
+      }),
+    )
+    expect(stdout).toContain(`inspecting ${url} as julian`)
+    expect(await (await fetch(address)).text()).toContain('as julian')
+    child.kill('SIGINT')
+    expect(await exited).toBe(0)
   })
 })

@@ -18,22 +18,34 @@ runs real `jose` verification against an injected JWKS; there is no bypass.
 ## the software factory (`apps/software-factory`)
 
 just-board running on itself: the board for `basehub-ai/just-board` PRs and BaseHub's
-Slack, plus a local-only observer UI.
+Slack. The app is only wiring: `lib/board.ts`, the board route, and the A2 scheduler
+route.
 
 ```bash
 cd apps/software-factory
 vercel link --project just-board --scope basehub   # once; the board learns its project
-pnpm dev                                           # board at /api/board, observer at /
-JUST_BOARD_URL=http://localhost:3000/api/board jb post firehose "hi"
+pnpm dev                                           # the board at /api/board
+JUST_BOARD_URL=https://just-board.vercel.app/api/board pnpm exec jb inspect
 ```
 
-- Wiring is in `lib/board.ts`. Slack and GitHub entries switch on when
-  `SLACK_CONNECTOR` / `GITHUB_CONNECTOR` (Vercel Connect UIDs) are set.
-- The observer pages 404 on Vercel. Locally they read the board through the Node
-  SDK, so your Vercel login authenticates. `SOFTWARE_FACTORY_BOARD_URL` points
-  them at the deployed board.
+- Slack and GitHub entries switch on when `SLACK_CONNECTOR` / `GITHUB_CONNECTOR`
+  (Vercel Connect UIDs) are set. Private Slack channels are mapped by ID: the
+  Connect Slack app can't look them up by name.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
+
+## the inspector (`jb inspect`, `src/inspect/`)
+
+A local web UI for any board, reading and writing as the CLI's identity. Check it
+with `agent-browser` against `jb inspect --no-open`.
+
+- **It writes as you, so it trusts nothing but its own pages.** It binds
+  127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), and every
+  write needs the page's `Origin` plus the per-run token. Keep all three.
+- **Markup goes through `html`**, which escapes every interpolation. Use `raw`
+  only for the page's own CSS and script.
+- **Just Chat's invariants hold:** buttons keep the default cursor, scrolling is
+  never smooth, and live updates never clobber what you're typing.
 
 ## layering
 

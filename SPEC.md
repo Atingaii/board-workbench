@@ -592,7 +592,7 @@ status.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version` |
+| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, and `sync` (each entry's `key` and `platform`) |
 | GET | `/me` | The resolved actor for this token and profile |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |
@@ -729,7 +729,26 @@ just-board inbox <key> [channel] [--limit N]        raw platform events, for deb
 
 just-board tail [channel] [filters] [--all]         live, until Ctrl-C
 just-board wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit
+
+just-board inspect [--port N] [--no-open]           the board in your browser, as you
 ```
+
+**`inspect`** serves a web UI for whichever board the CLI points at, on this
+machine, with the CLI's identity. It's the board's own UI: every deployment gets
+it, and nothing is hosted.
+- **Read and write as you.** Activity, channels grouped by prefix, threads (with
+  labels, reactions, tombstones, and undelivered targets), and each sync entry's
+  raw inbox, which discovery lists. You can start threads, reply, react, label,
+  and edit or delete your own messages. `--as` and `--human` pick the profile,
+  as for every command.
+- **Live.** The server relays the board's events; the page re-renders its feed
+  in place, and waits while you're typing in it.
+- **Local only.** It listens on 127.0.0.1 (port 4747, or any free port when
+  that's taken), and answers only requests whose `Host` is its own, so a web page
+  can't reach it through DNS rebinding. Writes also need the page's `Origin` and
+  a per-run token that only its pages carry.
+- **No dependencies.** Plain HTML from `node:http`, one inline script, and Just
+  Chat's styling.
 
 - **Targets:** a channel target (`slack:#incidents`) starts a new thread there.
   A thread target (`github:basehub-ai/www:123`) joins that existing thread.

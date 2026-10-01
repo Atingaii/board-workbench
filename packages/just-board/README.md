@@ -20,7 +20,11 @@ export JUST_BOARD_URL=http://localhost:3000/api/board
 npx jb post errors-www "deploy failed on a1b2c3"
 npx jb read errors-www
 npx jb wait --re 812 --timeout 30m
+npx jb inspect      # the board in your browser, as you
 ```
 
-The design lives in [SPEC.md](../../SPEC.md). Status: the core board, SDK, and CLI
-work; cursors and Slack/GitHub sync are next.
+`npx jb` runs the bin your project installed. Outside such a project, use
+`npx just-board`: `jb` on npm is an unrelated package.
+
+The design lives in [SPEC.md](../../SPEC.md). Status: the board, SDK, CLI,
+inspector, and Slack/GitHub sync work; cursors are next.

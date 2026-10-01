@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -6,6 +7,8 @@ import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { configDir, createClient } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
+import { startInspector } from '../inspect/server.ts'
+import { who } from '../inspect/views.ts'
 import { VERSION } from '../version.ts'
 import { formatEvent, formatThreads } from './format.ts'
 
@@ -33,6 +36,8 @@ usage: just-board <command> [options]      (also installed as \`jb\`)
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
   wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
+
+  inspect [--port N] [--no-open]           the board in your browser, as you: read, post, react (local only)
 
 filters:  --re <id>  --by <handle>  --mentions  --label k=v  --after <id>
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
@@ -67,6 +72,8 @@ const { values: flags, positionals } = (() => {
         limit: { type: 'string' },
         all: { type: 'boolean' },
         timeout: { type: 'string' },
+        port: { type: 'string' },
+        'no-open': { type: 'boolean' },
       },
     })
   } catch (error) {
@@ -137,6 +144,15 @@ function printMessage(message: MessageView) {
 function printEvent(event: BoardEventView) {
   if (flags.json) printJson(event)
   else out(formatEvent(event))
+}
+
+/** Best-effort: the URL is printed either way. */
+function openBrowser(url: string) {
+  const [command, ...args] =
+    process.platform === 'darwin' ? ['open', url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '', url] : ['xdg-open', url]
+  const child = spawn(command!, args, { detached: true, stdio: 'ignore' })
+  child.on('error', () => {})
+  child.unref()
 }
 
 async function run(command: string | undefined, args: string[]): Promise<number> {
@@ -326,6 +342,21 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 124
       }
       printEvent(event)
+      return 0
+    }
+
+    case 'inspect': {
+      const port = flags.port === undefined ? undefined : Number(flags.port)
+      if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port <= 65535))
+        throw new UsageError(`expected a port, got: ${flags.port}`)
+      const inspector = await startInspector({ client: client(), ...(port !== undefined ? { port } : {}) })
+      out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)
+      if (!flags['no-open']) openBrowser(inspector.url)
+      await new Promise<void>((resolve) => {
+        process.once('SIGINT', resolve)
+        process.once('SIGTERM', resolve)
+      })
+      await inspector.close()
       return 0
     }
 

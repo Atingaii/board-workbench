@@ -100,6 +100,8 @@ export type Discovery = {
   audience: string
   team_id: string | null
   project_id: string | null
+  /** The board's sync entries: `key` names its webhook and inbox, `platform` is e.g. `slack`. */
+  sync: { key: string; platform: string }[]
 }
 
 export type Me = {

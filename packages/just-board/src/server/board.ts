@@ -218,6 +218,7 @@ export function board(options: BoardOptions = {}) {
             audience: boardUrl,
             team_id: identity.teamId,
             project_id: identity.projectId,
+            sync: Object.entries(options.sync ?? {}).map(([key, entry]) => ({ key, platform: entry.platform })),
           }
           return json(body)
         }
