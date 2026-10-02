@@ -10,9 +10,10 @@ import {
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { experimental_evaluate as evaluate } from "ai";
+import { startPi } from "./agent";
 
-// The software factory: vboard running on its own repo and BaseHub's Slack. Only
-// production syncs. Locally there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
+// The software factory: vboard running on its own repo and BaseHub's Slack. Locally
+// there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
 const env = process.env.VERCEL_ENV;
 
 // SSE streams close just before this, and clients reconnect from their cursor.
@@ -28,45 +29,49 @@ export const { GET, POST, scheduler } = board({
       })
     : undefined,
   scheduler: vercelQueues({ topic: "vboard" }),
-  sync:
-    env === "production"
-      ? {
-          slack: slack({
-            adapter: createSlackAdapter({
-              ...connectSlackAdapter("slack/factory"),
-            }),
-            channels: {
-              "#sf-prs": "prs",
-              // #sf-firehose is private, and the app can't look up private channels by name.
-              C0C5WV6FZGD: "firehose",
-            },
-          }),
-          github: github({
-            adapter: createGitHubAdapter({
-              ...connectGitHubAdapter("github/factory"),
-              // factory-basehub[bot]. Connect can't detect it, and without it the bot replies to itself.
-              botUserId: 336642991,
-            }),
-            repos: {
-              "basehub-ai/vboard": { pulls: "prs", issues: "firehose" },
-            },
-          }),
-        }
-      : undefined,
+  sync: {
+    slack: slack({
+      adapter: createSlackAdapter({
+        ...connectSlackAdapter("slack/factory"),
+      }),
+      channels: {
+        "#sf-prs": "prs",
+        // #sf-firehose is private, and the app can't look up private channels by name.
+        C0C5WV6FZGD: "firehose",
+      },
+    }),
+    github: github({
+      adapter: createGitHubAdapter({
+        ...connectGitHubAdapter("github/factory"),
+        // factory-basehub[bot]. Connect can't detect it, and without it the bot replies to itself.
+        botUserId: 336642991,
+      }),
+      repos: {
+        "basehub-ai/vboard": { pulls: "prs", issues: "firehose" },
+      },
+    }),
+  },
   watch: {
     // Every new thread in the firehose (Slack and GitHub issues) gets a kind; bugs get 🐛 in Slack too.
     triage: {
       tail: "firehose",
       run: async ({ event, board }) => {
         const message = event.message;
-        if (event.type !== "message.posted" || !message || message.re !== null) return;
+        if (
+          event.type !== "message.posted" ||
+          !message ||
+          message.re !== null
+        ) {
+          return;
+        }
         const { answers } = await evaluate({
           model: "typesafe-ai/jev",
           state: message.text,
           questions: {
             kind: {
               type: "choice",
-              instructions: "A message to the team that builds vboard, a message board library and CLI. What is it?",
+              instructions:
+                "A message to the team that builds vboard, a message board library and CLI. What is it?",
               criteria: {
                 bug: "Something in vboard is broken or behaves wrongly",
                 feature: "A request for something vboard doesn't do yet",
@@ -77,7 +82,29 @@ export const { GET, POST, scheduler } = board({
           },
         });
         await board.label(message.id, { set: { kind: answers.kind.choice } });
-        if (answers.kind.choice === "bug") await board.react(message.id, "bug");
+        if (answers.kind.choice === "bug") {
+          await board.react(message.id, "bug");
+        }
+      },
+    },
+    // A thread triage calls a bug gets Pi, which reproduces it and replies with the cause.
+    investigate: {
+      tail: "firehose --label kind=bug",
+      run: async ({ event }) => {
+        const message = event.message;
+        const set = (event.payload as { set?: Record<string, string> }).set;
+        if (
+          event.type !== "labels.changed" ||
+          set?.kind !== "bug" ||
+          !message ||
+          message.re !== null
+        ) {
+          return;
+        }
+        await startPi({
+          thread: message.id,
+          task: `Investigate the bug report in board thread #${message.id} (vb read ${message.id}). Reproduce it with a failing test if you can, find the cause, and reply in the thread with what you found.`,
+        });
       },
     },
   },

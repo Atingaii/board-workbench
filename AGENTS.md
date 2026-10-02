@@ -37,10 +37,17 @@ pnpm dev                                       # the board at /api/board
 VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
 ```
 
-- `VERCEL_ENV` is the only switch. Production syncs with Slack and GitHub; a
-  preview gets its own keys in the same Redis and syncs nothing; locally the log
-  is SQLite at `.a2/dev.db`. Private Slack channels are mapped by ID: the Connect
-  Slack app can't look them up by name.
+- Every environment syncs with the real Slack and GitHub, so a local or preview
+  board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
+  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
+  Private Slack channels are mapped by ID: the Connect Slack app can't look them
+  up by name.
+- Watchers do the work: `triage` labels each new firehose thread with jev, and
+  `investigate` hands `kind=bug` threads to Pi (`agent.ts`). Pi runs the `pi` CLI
+  in its own Vercel Sandbox with `vb`, `gh`, and git; its credentials are
+  placeholders that the sandbox's network policy swaps for real ones on the way
+  out, and GitHub is read-only there. Its `vb` talks to the production board,
+  the only one a sandbox can reach.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
 
