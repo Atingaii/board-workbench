@@ -50,7 +50,8 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
-  every message. Its `vb` talks to the production board, the only one a sandbox
+  every message. The policy also pins who Pi is on the board (profile `pi`,
+  session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.

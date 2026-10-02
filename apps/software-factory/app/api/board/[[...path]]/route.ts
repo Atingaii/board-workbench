@@ -10,7 +10,7 @@ import {
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { experimental_evaluate as evaluate } from "ai";
-import { tellPi } from "./agent";
+import { byPi, tellPi } from "./agent";
 
 // The software factory: vboard running on its own repo and BaseHub's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
@@ -58,7 +58,11 @@ export const { GET, POST, scheduler } = board({
       tail: "firehose",
       run: async ({ event, board }) => {
         const message = event.message;
-        if (event.type !== "message.posted" || !message || !byPerson(message)) {
+        if (
+          event.type !== "message.posted" ||
+          !message ||
+          byPi(message.re ?? message.id, message.by)
+        ) {
           return;
         }
         const thread = await board.thread(message.re ?? message.id);
@@ -93,7 +97,7 @@ export const { GET, POST, scheduler } = board({
       },
     },
     // Pi watches bug threads: it gets the report once triage calls it a bug, and hears
-    // when someone replies, then reads what's new itself.
+    // when anyone else replies, then reads what's new itself.
     pi: {
       tail: "firehose --label kind=bug",
       run: async ({ event }) => {
@@ -114,7 +118,7 @@ export const { GET, POST, scheduler } = board({
         } else if (
           event.type === "message.posted" &&
           message.re !== null &&
-          byPerson(message)
+          !byPi(message.re, message.by)
         ) {
           await tellPi({
             thread: message.re,
@@ -126,8 +130,3 @@ export const { GET, POST, scheduler } = board({
     },
   },
 });
-
-/** Written by a person, on the board or in Slack or GitHub: not by Pi (an agent) or a watcher. */
-function byPerson(message: { author: { kind: string } | null }) {
-  return message.author?.kind === "person" || message.author?.kind === "external";
-}

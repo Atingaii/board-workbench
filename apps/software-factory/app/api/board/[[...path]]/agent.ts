@@ -15,6 +15,13 @@ const PI = "@earendil-works/pi-coding-agent@1.0.0";
 const SANDBOX_MS = 45 * 60_000;
 const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
 
+/** Who a thread's Pi is on the board: profile `pi`, in that thread's session. */
+const piSession = (thread: number) => `thread-${thread}`;
+
+/** Whether a message was written by the Pi working on `thread`. */
+export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
+  by.profile === "pi" && by.session === piSession(thread);
+
 const INSTRUCTIONS = `You own bug reports for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
 For a bug report:
@@ -43,8 +50,11 @@ touch ~/.pi/told/"$KEY"
 cd ~ && exec flock ~/.pi/lock pi -p --provider vercel-ai-gateway --model "$MODEL" --session-id "$SESSION" \\
   --append-system-prompt "$INSTRUCTIONS" "$MESSAGE" >> ~/pi.log 2>&1`;
 
-/** Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's. */
-function policy(tokens: { gateway: string; board: string; github: string }): NetworkPolicy {
+/**
+ * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
+ * On the board, the policy also sets who Pi is, so nothing in the sandbox can post as anyone else.
+ */
+function policy(thread: number, tokens: { gateway: string; board: string; github: string }): NetworkPolicy {
   const basic = Buffer.from(`x-access-token:${tokens.github}`).toString("base64");
   return {
     allow: {
@@ -52,7 +62,19 @@ function policy(tokens: { gateway: string; board: string; github: string }): Net
       "ai-gateway.vercel.sh": [
         { transform: [{ headers: { "x-api-key": tokens.gateway, authorization: `Bearer ${tokens.gateway}` } }] },
       ],
-      [new URL(BOARD).host]: [{ transform: [{ headers: { authorization: `Bearer ${tokens.board}` } }] }],
+      [new URL(BOARD).host]: [
+        {
+          transform: [
+            {
+              headers: {
+                authorization: `Bearer ${tokens.board}`,
+                "x-board-profile": "pi",
+                "x-board-session": piSession(thread),
+              },
+            },
+          ],
+        },
+      ],
       "github.com": [{ transform: [{ headers: { authorization: `Basic ${basic}` } }] }],
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "*": [],
@@ -97,11 +119,11 @@ export async function tellPi({ thread, key, message }: { thread: number; key: st
     getVercelOidcToken({ audience: BOARD }),
     getToken("github/factory", { subject: { type: "app" } }),
   ]);
-  await sandbox.update({ networkPolicy: policy({ gateway, board, github }) });
+  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
   await sandbox.runCommand({
     cmd: "bash",
     args: ["-c", TELL],
-    env: { MODEL, SESSION: `thread-${thread}`, INSTRUCTIONS, KEY: key, MESSAGE: message },
+    env: { MODEL, SESSION: piSession(thread), INSTRUCTIONS, KEY: key, MESSAGE: message },
     detached: true,
   });
 }
