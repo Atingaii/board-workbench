@@ -1,13 +1,13 @@
-# just-board — v1 spec (draft)
+# vboard — v1 spec (draft)
 
 A message board you mount in one route. It has one durable log, verified
 authors, channels and threads, a live tail, and optional two-way sync with Slack
-and GitHub. The npm package `just-board` ships the server, the client SDK, and
+and GitHub. The npm package `vboard` ships the server, the client SDK, and
 the CLI. The API sits under the SDK, and the SDK sits under the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'just-board/server'
+import { board } from 'vboard/server'
 import { redisHttp } from 'experimental-a2/store-redis-http' // or store-postgres, store-redis, store-sqlite
 
 export const { GET, POST } = board({
@@ -20,8 +20,8 @@ export const { GET, POST } = board({
 production.
 
 ```bash
-export JUST_BOARD_URL=https://www.example.com/api/board
-just-board post errors-www "deploy failed on a1b2c3"
+export VBOARD_URL=https://www.example.com/api/board
+vboard post errors-www "deploy failed on a1b2c3"
 ```
 
 ## The model
@@ -70,45 +70,45 @@ just-board post errors-www "deploy failed on a1b2c3"
   A2 `store`, and every background job goes through the A2 `scheduler`. Sync
   needs no state store of its own.
 - **One client.** The CLI, your scripts, and sync handlers all use the same
-  just-board client. Only the transport and the defaults differ.
+  vboard client. Only the transport and the defaults differ.
 - **Fan-out is not a read path.** Handlers exist only to work with external
   systems: running inbound mappings and delivering outbound messages.
   Inbox-style views are queries.
 
 ## Package layout
 
-One package, `just-board`, with subpath exports:
+One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `just-board` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
-| `just-board/server` | `board()` and the trust helpers (`vercel()`, `githubActions()`) | server |
-| `just-board/slack` | `slack()`, the Slack sync adapter | server |
-| `just-board/github` | `github()`, the GitHub sync adapter | server |
-| `just-board/contract` | The A2 contract, API schemas, and pure reducers | isomorphic |
-| bins `just-board`, `jb` | The CLI, built only on `just-board`. `jb` is a short alias | Node ≥ 22 |
+| `vboard` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
+| `vboard/server` | `board()` and the trust helpers (`vercel()`, `githubActions()`) | server |
+| `vboard/slack` | `slack()`, the Slack sync adapter | server |
+| `vboard/github` | `github()`, the GitHub sync adapter | server |
+| `vboard/contract` | The A2 contract, API schemas, and pure reducers | isomorphic |
+| bins `vboard`, `vb` | The CLI, built only on `vboard`. `vb` is a short alias | Node ≥ 22 |
 
 ### Install
 
 ```bash
-pnpm i just-board experimental-a2                     # a board: log, API, SDK, CLI
+pnpm i vboard experimental-a2                         # a board: log, API, SDK, CLI
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
 ```
 
 Only the first line is needed to run the CLI against an existing board, e.g.
-with `npx just-board`.
+with `npx vboard`.
 
 **Dependencies:**
 
 - **Peer, required: `experimental-a2`.** You import your store and scheduler
   from it (e.g. `experimental-a2/store-redis-http`), and they must be the same
-  copy that just-board uses.
+  copy that vboard uses.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`.** They
-  are loaded only by `just-board/slack` and `just-board/github`. Your adapters
-  must match the `chat` version that just-board builds its Chat instances with.
+  are loaded only by `vboard/slack` and `vboard/github`. Your adapters
+  must match the `chat` version that vboard builds its Chat instances with.
 - **Installed by you, optionally: `@vercel/connect`.** You don't install a Chat
-  SDK state adapter, because just-board backs Chat SDK's state with the A2 store
+  SDK state adapter, because vboard backs Chat SDK's state with the A2 store
   (see [Sync](#sync)).
 - **Regular dependencies:** `zod` (v4), `jose` for JWT and JWKS verification,
   and `@vercel/oidc` for client-side token minting.
@@ -148,7 +148,7 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
 
 | Where | How | Principal |
 | --- | --- | --- |
-| Explicit | `JUST_BOARD_TOKEN` (any OIDC JWT; for other CI systems and tests) | depends on the issuer |
+| Explicit | `VBOARD_TOKEN` (any OIDC JWT; for other CI systems and tests) | depends on the issuer |
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
 | A local terminal | `@vercel/oidc` `refreshToken({ project, team })` with the board's IDs, then an exchange for the board's audience | `vercel:user:<user_id>` |
@@ -366,7 +366,7 @@ board({
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
-  bold. `jb inspect` renders it, dropping raw HTML.
+  bold. `vb inspect` renders it, dropping raw HTML.
 
 ## A2 contract
 
@@ -375,7 +375,7 @@ The board uses one contract and one session, `board`. Fields marked
 
 ```ts
 export const boardContract = contract({
-  name: 'just-board',
+  name: 'vboard',
   events: {
     'message.posted': z.object({
       channel: ChannelPath,
@@ -403,7 +403,7 @@ export const boardContract = contract({
 // Raw platform events live outside the board log, one session per external channel:
 // inbox:slack:C0123ABC, inbox:github:basehub-ai/www, …
 export const inboxContract = contract({
-  name: 'just-board-inbox',
+  name: 'vboard-inbox',
   events: {
     'external.received': z.object({ event: ExternalEvent, raw: z.unknown() }), // (server)
   },
@@ -411,8 +411,8 @@ export const inboxContract = contract({
 ```
 
 - **The board log holds only board facts.** Bookkeeping lives in side
-  contracts: read cursors in `just-board-cursors` (see [Cursors](#cursors)) and
-  raw platform events in `just-board-inbox`.
+  contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)) and
+  raw platform events in `vboard-inbox`.
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
   - `external.received` uses the platform's event or message ID as its event
@@ -426,14 +426,14 @@ export const inboxContract = contract({
   reactions. Later edits to a deleted message are ignored. This is the same
   invariant as Just Chat.
 - **The event feed hides bookkeeping (`actor.seen`, `message.synced`) by default.** `tail --all` shows every
-  board event. To see raw platform events, use `jb inbox`.
+  board event. To see raw platform events, use `vb inbox`.
 
 ### The sync events
 
 ```
 inbound   Slack ─▶ /webhooks/slack ─▶ inbox: external.received ─▶ inbound handler ─▶ board: message.posted {origin}
-outbound  jb reply ─▶ message.posted ─▶ outbound handler ─▶ Slack ─▶ message.synced
-attach    jb sync ─▶ thread.synced ─▶ outbound handler ─▶ Slack (root + backfill) ─▶ message.synced …
+outbound  vb reply ─▶ message.posted ─▶ outbound handler ─▶ Slack ─▶ message.synced
+attach    vb sync ─▶ thread.synced ─▶ outbound handler ─▶ Slack (root + backfill) ─▶ message.synced …
 ```
 
 **`thread.synced { root, target, cause, by }`** records that a thread is synced
@@ -443,7 +443,7 @@ with an external target. It's the only way the log says so.
   - **At creation.** A root's targets, from the config mirror (`cause:
     'config'`) or from `--sync` (`cause: 'request'`), are appended as
     `thread.synced` events in the same batch as the root's `message.posted`.
-  - **Later.** `jb sync <id> <target>`, `board.sync()`, or a handler passing
+  - **Later.** `vb sync <id> <target>`, `board.sync()`, or a handler passing
     `sync:` appends one on its own, recording who did it.
 - **How the outbound handler acts on it:**
   - **A channel target** (`slack:C0123ABC`) starts a new external thread. The
@@ -453,7 +453,7 @@ with an external target. It's the only way the log says so.
     only messages written after the join are delivered.
 
 **`external.received { event, raw }`** is the inbound inbox. It lives in the
-`just-board-inbox` contract, not the board log. The webhook route has the
+`vboard-inbox` contract, not the board log. The webhook route has the
 adapter verify the request, appends this event to the external channel's inbox
 session, and answers 200.
 
@@ -467,7 +467,7 @@ session, and answers 200.
   - **Durability.** The mirror or your function runs as an A2 handler, with
     retries and crash recovery, not inside Slack's 3-second webhook window.
   - **Dedupe.** A platform retry reuses the same event ID, so it does nothing.
-  - **Debugging.** `jb inbox` shows exactly what a platform sent.
+  - **Debugging.** `vb inbox` shows exactly what a platform sent.
   - **Ordering.** Each external thread has its own lane in the inbox session.
 - **Why it isn't in the board log:**
   - Raw payloads (tens of KB for GitHub) and a second event per inbound message
@@ -499,7 +499,7 @@ recorded as failed, and the thread moves on.
 - The message's `undelivered` field maps each target it didn't reach to the
   error (`{ 'slack:C0123ABC': 'not_in_channel' }`). A later `message.synced` for
   that target clears it.
-- `jb read` prints `✗ didn't reach <target>: <error>` under the message.
+- `vb read` prints `✗ didn't reach <target>: <error>` under the message.
 - Edits, deletes, and reactions are best-effort and never block a thread.
 
 `origin`, on messages that came in from a platform, is the inbound counterpart:
@@ -526,7 +526,7 @@ nothing else.
 ## Reading state
 
 Every read is a fold of the single session through A2 reducers. There are no
-tables. The reducers are defined in `just-board/contract` and cached by A2's
+tables. The reducers are defined in `vboard/contract` and cached by A2's
 snapshots.
 
 | Reducer | State | Used by |
@@ -576,7 +576,7 @@ in throwaway sandboxes don't lose their place.
 
   `--no-session` drops the session part, so every session of the actor shares
   one cursor.
-- **Storage:** a separate A2 contract, `just-board-cursors`, with one session
+- **Storage:** a separate A2 contract, `vboard-cursors`, with one session
   per actor (`cursors:<actor>`) and one event type:
   `cursor.moved { scope, session, index }`.
   - It's kept out of the board log, so reading never adds noise to the log.
@@ -645,9 +645,9 @@ status.
 ## Client SDK
 
 ```ts
-import { createClient } from 'just-board'
+import { createClient } from 'vboard'
 
-const board = createClient()   // Node: URL from JUST_BOARD_URL, token detected
+const board = createClient()   // Node: URL from VBOARD_URL, token detected
 
 const claude = createClient({ profile: 'claude' })   // posts as "claude via julian", built-in avatar
 const bot = createClient({ profile: { name: 'deploy-bot', avatar: 'https://example.com/bot.png' } })
@@ -669,7 +669,7 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 ```
 
 - **`url` and `token` are optional in Node.** The package's `node` export
-  condition includes detection: `JUST_BOARD_URL`, then the token order in
+  condition includes detection: `VBOARD_URL`, then the token order in
   [Tokens](#tokens). In browser and edge builds there's no detection, so you
   pass both: `createClient({ url, token: () => … })`. `token` is any function
   that returns an OIDC JWT.
@@ -706,41 +706,41 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 
 | Setting | Flag | Env | Default |
 | --- | --- | --- | --- |
-| Board URL | `--url` | `JUST_BOARD_URL` | the value saved by `just-board use <url>` |
-| Token | none | `JUST_BOARD_TOKEN` | detected (see [Tokens](#tokens)) |
-| Profile | `--as <name>` | `JUST_BOARD_AS` | detected from the agent environment |
-| Profile avatar | `--avatar <url>` | `JUST_BOARD_AVATAR` | built-in for detected agents; otherwise none |
+| Board URL | `--url` | `VBOARD_URL` | the value saved by `vboard use <url>` |
+| Token | none | `VBOARD_TOKEN` | detected (see [Tokens](#tokens)) |
+| Profile | `--as <name>` | `VBOARD_AS` | detected from the agent environment |
+| Profile avatar | `--avatar <url>` | `VBOARD_AVATAR` | built-in for detected agents; otherwise none |
 | Disable profile detection | `--human` | none | off |
-| Handle | `--handle <h>` | `JUST_BOARD_HANDLE` | your Vercel username |
+| Handle | `--handle <h>` | `VBOARD_HANDLE` | your Vercel username |
 | Share cursors across sessions | `--no-session` | none | a detected session gets its own cursors |
 | Output format | `--json` | none | human output |
 
 ### Commands
 
 ```
-just-board whoami                                   who am I, on which board, and when my token expires
-just-board use <url>                                save the default board
+vboard whoami                                   who am I, on which board, and when my token expires
+vboard use <url>                                save the default board
 
-just-board channels                                 channels and what they mirror, grouped by path prefix
-just-board actors                                   actors and their handles
+vboard channels                                 channels and what they mirror, grouped by path prefix
+vboard actors                                   actors and their handles
 
-just-board read <channel> [filters] [--limit N]     threads in a channel, newest last
-just-board read <id>                                one thread
+vboard read <channel> [filters] [--limit N]     threads in a channel, newest last
+vboard read <id>                                one thread
 
-just-board post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
-just-board reply <id> "<text>" [--no-sync] [--id <key>]   <id> may be any message in the thread
-just-board edit <id> "<text>"
-just-board delete <id>
-just-board react <id> <emoji> [--remove]
-just-board label <id> k=v... [--unset k]...
-just-board sync <id> <target>                       attach the thread to an external target, backfilling it in order
+vboard post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
+vboard reply <id> "<text>" [--no-sync] [--id <key>]   <id> may be any message in the thread
+vboard edit <id> "<text>"
+vboard delete <id>
+vboard react <id> <emoji> [--remove]
+vboard label <id> k=v... [--unset k]...
+vboard sync <id> <target>                       attach the thread to an external target, backfilling it in order
 
-just-board inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
 
-just-board tail [channel] [filters] [--all]         live, until Ctrl-C
-just-board wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit
+vboard tail [channel] [filters] [--all]         live, until Ctrl-C
+vboard wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit
 
-just-board inspect [--port N] [--no-open]           the board in your browser, as you
+vboard inspect [--port N] [--no-open]           the board in your browser, as you
 ```
 
 **`inspect`** serves a web UI for whichever board the CLI points at, on this
@@ -795,14 +795,14 @@ it, and nothing is hosted.
 ### What it looks like
 
 ```
-$ just-board whoami
+$ vboard whoami
 julian (vercel:user:u_abc123) as claude
 board  https://www.example.com/api/board · basehub/www
 token  vercel development · expires in 11h 42m
 ```
 
 ```
-$ just-board read errors-www
+$ vboard read errors-www
 errors-www · mirrors slack #errors-www · cursor 815
 
 #812  ada (slack) · 12m                                  [status=investigating]
@@ -815,7 +815,7 @@ errors-www · mirrors slack #errors-www · cursor 815
 ```
 
 ```
-$ just-board post errors-www "@ada the rollback is live"
+$ vboard post errors-www "@ada the rollback is live"
 error: ambiguous mention @ada: use @[slack:user:U0456] (ada, slack) or @[vercel:user:u_9f] (ada)
 ```
 
@@ -823,19 +823,19 @@ error: ambiguous mention @ada: use @[slack:user:U0456] (ada, slack) or @[vercel:
 
 ```bash
 # pick up whatever arrives in the channel
-just-board tail firehose-www --json | while read -r event; do …; done
+vboard tail firehose-www --json | while read -r event; do …; done
 
 # or, in a turn-based agent loop (--since last picks up anything that arrived between turns):
-next=$(just-board wait firehose-www --since last --json --timeout 1h) || exit 0
+next=$(vboard wait firehose-www --since last --json --timeout 1h) || exit 0
 id=$(jq -r .message.id <<<"$next")
 
-just-board react "$id" eyes
-just-board read firehose-www --label status=triaged --json   # the agent judges duplicates itself
-just-board label "$id" status=triaged dup-of=640
-reply=$(just-board reply "$id" "Thanks! Tracking this with #640.")   # synced to the Slack thread
+vboard react "$id" eyes
+vboard read firehose-www --label status=triaged --json   # the agent judges duplicates itself
+vboard label "$id" status=triaged dup-of=640
+reply=$(vboard reply "$id" "Thanks! Tracking this with #640.")   # synced to the Slack thread
 
 # block until a human answers in Slack
-just-board wait --re "$id" --after "$reply" --timeout 30m
+vboard wait --re "$id" --after "$reply" --timeout 30m
 ```
 
 ### Walkthrough: CI reports into Slack
@@ -846,9 +846,9 @@ just-board wait --re "$id" --after "$reply" --timeout 30m
 permissions:
   id-token: write
 steps:
-  - run: npx -y just-board@1 post errors-www "deploy failed: $SHA" --label source=ci
+  - run: npx -y vboard@1 post errors-www "deploy failed: $SHA" --label source=ci
     env:
-      JUST_BOARD_URL: https://www.example.com/api/board
+      VBOARD_URL: https://www.example.com/api/board
       SHA: ${{ github.sha }}
 ```
 
@@ -872,7 +872,7 @@ With `'basehub-ai/www': 'prs'` under `github()` and `'#prs': 'prs'` under
    file and line in `origin.context`:
 
    ```bash
-   just-board reply 820 "good catch, fixed in a1b2c3"
+   vboard reply 820 "good catch, fixed in a1b2c3"
    # 820 is ada's review comment on src/auth.ts:42 → re=812, replyTo=820
    # GitHub: posted into that inline review thread
    # Slack:  posted in the PR's thread, quoting ada's comment
@@ -882,7 +882,7 @@ With `'basehub-ai/www': 'prs'` under `github()` and `'#prs': 'prs'` under
    labels, so an agent can act on them:
 
    ```bash
-   next=$(jb wait prs --label review=approved --since last --json --timeout 1h) || exit 0
+   next=$(vb wait prs --label review=approved --since last --json --timeout 1h) || exit 0
    # merge it, run release checks, post a reply…
    ```
 
@@ -896,18 +896,18 @@ adapter for one platform account, keyed by a name you choose. It's configured
 by the platform's own things: Slack channels, GitHub repos.
 
 ```ts
-import { slack } from 'just-board/slack'
-import { github } from 'just-board/github'
+import { slack } from 'vboard/slack'
+import { github } from 'vboard/github'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 
-export const scheduler = vercelQueues({ topic: 'just-board' })
+export const scheduler = vercelQueues({ topic: 'vboard' })
 
 export const boardApp = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'just-board' }),
+  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
   scheduler,
   sync: {
     slack: slack({
@@ -949,7 +949,7 @@ export const boardApp = board({
   - Replies, reactions, edits, and deletes flow both ways.
 - **A function: an inbound handler.**
   - You decide what each platform event becomes on the board, using `board`, a
-    just-board client.
+    vboard client.
   - Nothing syncs back unless you opt in by passing `sync: message.thread` (or
     `event.thread`). Once a thread is synced, its later replies follow the normal
     rules automatically.
@@ -1011,11 +1011,11 @@ default.
    channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
    answers 200 right away. That's well inside Slack's 3-second retry window, and
    platform retries do nothing.
-3. The inbound handler, on the `just-board-inbox` contract, runs the mirror or
+3. The inbound handler, on the `vboard-inbox` contract, runs the mirror or
    your function on the external thread's lane. Its writes land in the board
    log.
 
-The `board` a function receives is a just-board client, the same type
+The `board` a function receives is a vboard client, the same type
 `createClient` returns. Only its transport and defaults differ:
 
 - **The transport is in-process,** with no HTTP and no token.
@@ -1079,12 +1079,12 @@ supported.
 ```
 @vercel/connect/chat   credentials   botToken() per call, webhookVerifier (Vercel OIDC)   (optional)
 @chat-adapter/*        protocol      parse platform events, call platform APIs
-chat                   runtime       one Chat instance per sync entry, created by just-board
-just-board/<platform>  sync adapter  entities, event types, thread grouping, rendering
-just-board             the board     the log, both handlers, Chat state on the A2 store
+chat                   runtime       one Chat instance per sync entry, created by vboard
+vboard/<platform>      sync adapter  entities, event types, thread grouping, rendering
+vboard                 the board     the log, both handlers, Chat state on the A2 store
 ```
 
-just-board never sees platform credentials. Webhooks are the only route that
+vboard never sees platform credentials. Webhooks are the only route that
 skips the board's bearer check, because platform requests can't carry a board
 token; the adapter authenticates them instead.
 
@@ -1154,7 +1154,7 @@ interface SyncPlatform {
 
 ### Chat SDK configuration (internal)
 
-just-board configures every Chat instance itself:
+vboard configures every Chat instance itself:
 
 - **`concurrency: 'concurrent'`.** Chat SDK's default is `drop`: a message that
   arrives while the thread's handler is still running is dropped, which would
@@ -1162,7 +1162,7 @@ just-board configures every Chat instance itself:
   instead.
 - **One Chat instance per sync entry.** Chat SDK prefixes thread IDs with the
   adapter name, so two Slack entries in one instance would collide on `slack:`.
-  just-board translates between Chat SDK IDs and its key-prefixed external IDs.
+  vboard translates between Chat SDK IDs and its key-prefixed external IDs.
 - **State comes from the A2 store, not a separate state adapter.** This is an
   internal adapter, `chatStateFromA2(store)`. It works because the board needs
   almost nothing from Chat SDK's state:
@@ -1252,8 +1252,8 @@ agents can watch GitHub without polling it:
 | issue | `state=open\|closed` |
 
 ```bash
-jb wait prs --label review=approved --since last   # start a merge when a PR is approved
-jb read prs --label state=open                     # what's pending
+vb wait prs --label review=approved --since last   # start a merge when a PR is approved
+vb read prs --label state=open                     # what's pending
 ```
 
 - **Label changes are ordinary `labels.changed` events,** attributed to the
@@ -1313,7 +1313,7 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
   - An issue being created becomes a root labeled `issue=ENG-123`; comments
     become replies, and comment threads (`…:c:<id>`) group under their issue.
   - The issue's workflow state is mirrored into a `status=` label, so agents can
-    `jb wait --label status=done`.
+    `vb wait --label status=done`.
   - Chat SDK's Linear adapter handles only comments, so the module reads issue
     events from the raw webhook, the same way `github()` does.
 - **A generic `chat()` and `defineSyncAdapter()`,** once someone asks for another
@@ -1331,7 +1331,7 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 | Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
 | Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions must resolve to exactly one actor, so a collision is an error, never a misroute. Nothing stronger is needed for v1. |
 | Where do read cursors live? | **On the server**, per actor, session, and scope, in a side A2 contract (see [Cursors](#cursors)). |
-| What's the bin called? | **`just-board` and `jb`.** `jb` can collide with other tools that install a `jb` binary, such as jsonnet-bundler. `just-board` always works. |
+| What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
 

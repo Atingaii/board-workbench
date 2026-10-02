@@ -28,9 +28,6 @@ importers:
       experimental-a2:
         specifier: 0.16.1
         version: 0.16.1(@vercel/queue@0.7.0)(react@19.3.0)
-      just-board:
-        specifier: workspace:*
-        version: link:../../packages/just-board
       next:
         specifier: ^16.3.8
         version: 16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -43,6 +40,9 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
+      vboard:
+        specifier: workspace:*
+        version: link:../../packages/vboard
     devDependencies:
       '@types/node':
         specifier: ^26.6.3
@@ -57,7 +57,7 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
-  packages/just-board:
+  packages/vboard:
     dependencies:
       '@vercel/oidc':
         specifier: ^3.8.9

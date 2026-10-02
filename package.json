@@ -1,5 +1,5 @@
 {
-  "name": "just-board-monorepo",
+  "name": "vboard-monorepo",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.23.0",

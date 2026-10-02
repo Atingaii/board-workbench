@@ -1,7 +1,7 @@
 # agents guide
 
-just-board is one npm package (`packages/just-board`): the server (`board()`),
-the client SDK, and the CLI (`just-board`, alias `jb`). [SPEC.md](./SPEC.md) is
+vboard is one npm package (`packages/vboard`): the server (`board()`),
+the client SDK, and the CLI (`vboard`, alias `vb`). [SPEC.md](./SPEC.md) is
 the design; read it before changing behavior.
 
 ## run it
@@ -17,15 +17,15 @@ runs real `jose` verification against an injected JWKS; there is no bypass.
 
 ## the software factory (`apps/software-factory`)
 
-just-board running on itself: the board for `basehub-ai/just-board` PRs and BaseHub's
+vboard running on itself: the board for `basehub-ai/vboard` PRs and BaseHub's
 Slack. The app is only wiring: `lib/board.ts`, the board route, and the A2 scheduler
 route.
 
 ```bash
 cd apps/software-factory
-vercel link --project just-board --scope basehub   # once; the board learns its project
-pnpm dev                                           # the board at /api/board
-JUST_BOARD_URL=https://just-board.vercel.app/api/board pnpm exec jb inspect
+vercel link --project vboard --scope basehub   # once; the board learns its project
+pnpm dev                                       # the board at /api/board
+VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
 ```
 
 - Slack and GitHub entries switch on when `SLACK_CONNECTOR` / `GITHUB_CONNECTOR`
@@ -34,10 +34,10 @@ JUST_BOARD_URL=https://just-board.vercel.app/api/board pnpm exec jb inspect
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
 
-## the inspector (`jb inspect`, `src/inspect/`)
+## the inspector (`vb inspect`, `src/inspect/`)
 
 A local web UI for any board, reading and writing as the CLI's identity. Check it
-with `agent-browser` against `jb inspect --no-open`; try writes against a local
+with `agent-browser` against `vb inspect --no-open`; try writes against a local
 board (`apps/software-factory` with `pnpm dev`), since production syncs to Slack
 and GitHub.
 

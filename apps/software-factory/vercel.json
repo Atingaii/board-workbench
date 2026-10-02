@@ -4,7 +4,7 @@
       "experimentalTriggers": [
         {
           "type": "queue/v2beta",
-          "topic": "just-board",
+          "topic": "vboard",
           "retryAfterSeconds": 30
         }
       ]

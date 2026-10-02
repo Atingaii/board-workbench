@@ -1,0 +1,289 @@
+import type {
+  ActorView,
+  BoardEventView,
+  ChannelView,
+  Discovery,
+  EventsPage,
+  EventsQueryInput,
+  FiltersInput,
+  InboxEntry,
+  Me,
+  MessagesPage,
+  MessagesQueryInput,
+  MessageView,
+  ThreadView,
+} from '../api/routes.ts'
+import type { Actor } from '../contract/reducers.ts'
+import { normalizeEmoji } from '../contract/emoji.ts'
+import { parseSse } from './sse.ts'
+
+export class BoardError extends Error {
+  readonly code: string
+  readonly status: number
+  constructor(code: string, message: string, status: number) {
+    super(message)
+    this.name = 'BoardError'
+    this.code = code
+    this.status = status
+  }
+}
+
+type Resolvable<T> = T | (() => T | Promise<T>)
+const resolve = async <T>(value: Resolvable<T>): Promise<T> =>
+  typeof value === 'function' ? await (value as () => T | Promise<T>)() : value
+
+/** A profile name, `{ name, avatar }`, or null for no profile. */
+export type ProfileOption = string | { name: string; avatar?: string } | null
+
+export type ClientOptions = {
+  /** The board's URL, e.g. `https://www.example.com/api/board`. */
+  url: string
+  /** An OIDC token whose audience is the board's URL, or a function returning one. */
+  token: Resolvable<string>
+  profile?: Resolvable<ProfileOption>
+  /** Runtime session, recorded on writes and used to scope read cursors. */
+  session?: Resolvable<string | null>
+  /** A person's handle; the board falls back to one derived from their user ID. */
+  handle?: Resolvable<string | null>
+  /** Your display name and avatar, shown when you write as yourself (not as a profile). */
+  person?: Resolvable<{ name?: string | null; avatar?: string | null } | null>
+  /** Extra headers on every request. */
+  headers?: Resolvable<Record<string, string>>
+  fetch?: typeof fetch
+}
+
+export type PostOptions = {
+  text: string
+  labels?: Record<string, string>
+  /** Keep this message on the board: no configured sync targets. */
+  noSync?: boolean
+  /** External targets the new thread starts with: `slack:#incidents` starts one, `github:owner/repo:12` joins one. */
+  sync?: string[]
+  /** Makes retries idempotent: the same id never posts twice. */
+  id?: string
+}
+
+export type ReplyOptions = Omit<PostOptions, 'sync'>
+
+export type WaitOptions = {
+  /** `'30s'`, `'10m'`, `'1h'`, or milliseconds. Default `'30m'`. */
+  timeout?: string | number
+  signal?: AbortSignal
+}
+
+const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }
+
+export function duration(value: string | number): number {
+  if (typeof value === 'number') return value
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/)
+  if (!match) throw new BoardError('invalid_duration', `invalid duration: ${value}`, 0)
+  return Number(match[1]) * UNITS[match[2] ?? 'ms']!
+}
+
+function queryString(query: object): string {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue
+    if (key === 'label') {
+      const labels = Array.isArray(value)
+        ? value
+        : typeof value === 'object'
+          ? Object.entries(value).map(([k, v]) => `${k}=${String(v)}`)
+          : [value]
+      for (const label of labels) params.append('label', String(label))
+    } else params.set(key, String(value))
+  }
+  const text = params.toString()
+  return text ? `?${text}` : ''
+}
+
+export type Filters = Omit<FiltersInput, 'label'> & {
+  /** `{ status: 'open' }` or `['status=open']`. */
+  label?: Record<string, string> | string[]
+}
+
+export type BoardClient = ReturnType<typeof createBoardClient>
+
+export function createBoardClient(options: ClientOptions) {
+  const base = options.url.replace(/\/+$/, '')
+  // Browsers reject a bare `fetch` detached from `window` ("Illegal invocation").
+  const doFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
+
+  async function headers(auth: boolean, as?: ProfileOption): Promise<Record<string, string>> {
+    const out: Record<string, string> = { ...(options.headers ? await resolve(options.headers) : {}) }
+    if (!auth) return out
+    out.authorization = `Bearer ${await resolve(options.token)}`
+    const profile = as !== undefined ? as : options.profile === undefined ? null : await resolve(options.profile)
+    if (profile !== null) {
+      const { name, avatar } = typeof profile === 'string' ? { name: profile, avatar: undefined } : profile
+      out['x-board-profile'] = name
+      if (avatar) out['x-board-avatar'] = avatar
+    } else {
+      const person = options.person === undefined ? null : await resolve(options.person)
+      if (person?.name) out['x-board-name'] = encodeURIComponent(person.name)
+      if (person?.avatar) out['x-board-avatar'] = person.avatar
+    }
+    // A profile chosen per request isn't this process's runtime session.
+    const session = as !== undefined ? null : options.session === undefined ? null : await resolve(options.session)
+    if (session) out['x-board-session'] = session
+    const handle = options.handle === undefined ? null : await resolve(options.handle)
+    if (handle) out['x-board-handle'] = handle
+    return out
+  }
+
+  async function raw(
+    method: string,
+    path: string,
+    init: { body?: unknown; auth?: boolean; headers?: Record<string, string>; signal?: AbortSignal } = {},
+  ): Promise<Response> {
+    const response = await doFetch(`${base}${path}`, {
+      method,
+      headers: {
+        ...(await headers(init.auth ?? true)),
+        ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...init.headers,
+      },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      ...(init.signal ? { signal: init.signal } : {}),
+    })
+    if (!response.ok) throw await toError(response)
+    return response
+  }
+
+  async function call<T>(
+    method: string,
+    path: string,
+    init?: Parameters<typeof raw>[2],
+  ): Promise<T> {
+    return (await (await raw(method, path, init)).json()) as T
+  }
+
+  const filtersQuery = (filters: Filters = {}) => filters
+
+  async function poll(
+    query: Filters & { after?: number; wait?: number; all?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<EventsPage> {
+    return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
+  }
+
+  return {
+    url: base,
+    /**
+     * The board's HTTP API with this client's credentials, and the response as
+     * the board sent it, errors included: for proxies like `vb inspect`.
+     */
+    request: async (
+      path: string,
+      init: {
+        method?: string
+        body?: Uint8Array<ArrayBuffer>
+        headers?: Record<string, string>
+        signal?: AbortSignal
+        /** Act as this profile (`null` for yourself) instead of the client's. */
+        as?: ProfileOption
+      } = {},
+    ): Promise<Response> =>
+      doFetch(`${base}${path}`, {
+        method: init.method ?? 'GET',
+        headers: { ...init.headers, ...(await headers(true, init.as)) },
+        ...(init.body ? { body: init.body } : {}),
+        ...(init.signal ? { signal: init.signal } : {}),
+      }),
+    discovery: () => call<Discovery>('GET', '/', { auth: false }),
+    me: () => call<Me>('GET', '/me'),
+    channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
+    actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
+
+    messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
+      call<MessagesPage>('GET', `/messages${queryString(query)}`),
+    thread: (id: number) => call<ThreadView>('GET', `/messages/${id}`),
+
+    async post(channel: string, input: string | PostOptions): Promise<MessageView> {
+      const body = typeof input === 'string' ? { text: input } : input
+      return (await call<{ message: MessageView }>('POST', '/messages', { body: { channel, ...body } })).message
+    },
+    async reply(id: number, input: string | ReplyOptions): Promise<MessageView> {
+      const body = typeof input === 'string' ? { text: input } : input
+      return (await call<{ message: MessageView }>('POST', '/messages', { body: { re: id, ...body } })).message
+    },
+    edit: (id: number, text: string) =>
+      call<{ ok: true }>('POST', `/messages/${id}/edit`, { body: { text } }),
+    delete: (id: number) => call<{ ok: true }>('POST', `/messages/${id}/delete`, { body: {} }),
+    /** `emoji` is a short name, `:name:`, or the character itself. */
+    react: (id: number, emoji: string, opts: { remove?: boolean } = {}) =>
+      call<{ ok: true }>('POST', `/messages/${id}/reactions`, {
+        body: { emoji: normalizeEmoji(emoji), ...opts },
+      }),
+    label: (id: number, change: { set?: Record<string, string>; unset?: string[] }) =>
+      call<{ ok: true }>('POST', `/messages/${id}/labels`, { body: change }),
+    /** Attaches the message's thread to an external target, backfilling it. Attaching twice is a no-op. */
+    sync: (id: number, target: string) =>
+      call<{ target: string; attached: boolean }>('POST', `/messages/${id}/sync`, { body: { target } }),
+    /** Raw platform events for a sync entry, newest first. */
+    inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
+      (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
+
+    poll,
+
+    /** Live events. Reconnects from the last seen index whenever the stream closes. */
+    async *events(
+      query: Filters & Pick<EventsQueryInput, 'after' | 'all'> = {},
+      opts: { signal?: AbortSignal } = {},
+    ): AsyncGenerator<BoardEventView> {
+      let after = query.after
+      let failures = 0
+      while (!opts.signal?.aborted) {
+        let response: Response
+        try {
+          response = await raw('GET', `/events${queryString({ ...filtersQuery(query), after })}`, {
+            headers: { accept: 'text/event-stream' },
+            ...(opts.signal ? { signal: opts.signal } : {}),
+          })
+        } catch (error) {
+          if (opts.signal?.aborted) return
+          if (error instanceof BoardError && error.status >= 400 && error.status < 500) throw error
+          await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
+          continue
+        }
+        failures = 0
+        try {
+          for await (const message of parseSse(response.body!, opts.signal)) {
+            if (message.id !== undefined) after = Number(message.id)
+            if (message.event === 'board' && message.data) yield JSON.parse(message.data) as BoardEventView
+          }
+        } catch (error) {
+          if (opts.signal?.aborted) return
+          await new Promise((r) => setTimeout(r, Math.min(30_000, 500 * 2 ** failures++)))
+        }
+      }
+    },
+
+    /** The next matching event after `after` (default: now), or null on timeout. */
+    async wait(
+      query: Filters & { after?: number } = {},
+      opts: WaitOptions = {},
+    ): Promise<BoardEventView | null> {
+      const deadline = Date.now() + duration(opts.timeout ?? '30m')
+      let after = query.after ?? (await poll({ ...query, after: undefined, wait: 0 }, opts.signal)).cursor
+      while (Date.now() < deadline && !opts.signal?.aborted) {
+        const wait = Math.max(0, Math.min(25, Math.ceil((deadline - Date.now()) / 1000)))
+        const page = await poll({ ...query, after, wait }, opts.signal)
+        if (page.events.length > 0) return page.events[0]!
+        after = page.cursor
+      }
+      return null
+    },
+  }
+}
+
+export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me, MessagesPage, MessageView, ThreadView }
+
+async function toError(response: Response): Promise<BoardError> {
+  try {
+    const body = (await response.json()) as { error?: { code?: string; message?: string } }
+    if (body.error?.message)
+      return new BoardError(body.error.code ?? 'error', body.error.message, response.status)
+  } catch {}
+  return new BoardError('http_error', `${response.status} ${response.statusText}`, response.status)
+}
