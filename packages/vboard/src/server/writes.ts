@@ -43,15 +43,6 @@ export type PostInput = {
   lenientMentions?: boolean
 }
 
-function mentionsFor(text: string, actors: ActorsState, pending: Actor | undefined, lenient: boolean) {
-  if (!lenient) return resolveMentions(text, actors, pending)
-  try {
-    return resolveMentions(text, actors, pending)
-  } catch {
-    return []
-  }
-}
-
 export async function writePost(ctx: WriteContext, input: PostInput) {
   const [{ state: messages }, { state: actors }] = await Promise.all([
     ctx.session.state(messagesReducer),
@@ -90,7 +81,7 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
   }
 
   const seen = actorSeen(identity.actor, actors)
-  const mentions = mentionsFor(input.text, actors, seen ? identity.actor : undefined, input.lenientMentions ?? false)
+  const mentions = resolveMentions(input.text, actors, seen ? identity.actor : undefined, input.lenientMentions ?? false)
   const synced = await Promise.all(
     targets.map(async ({ target, cause }) => ({
       type: 'thread.synced' as const,
@@ -150,7 +141,7 @@ export async function writeEdit(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  const mentions = mentionsFor(input.text, actors, seen ? input.identity.actor : undefined, input.from != null)
+  const mentions = resolveMentions(input.text, actors, seen ? input.identity.actor : undefined, input.from != null)
   await ctx.session.append(...(seen ? [seen] : []), {
     type: 'message.edited',
     payload: {

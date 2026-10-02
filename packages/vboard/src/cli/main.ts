@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
+import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { configDir, createClient } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
@@ -38,7 +39,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 
   inspect [--port N] [--no-open]           the board in your browser, as you: read, post, react (local only)
 
-filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions  --after <id>
+filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
 text:     pass "-" to read it from stdin
@@ -49,8 +50,10 @@ class UsageError extends Error {}
 const { values: flags, positionals } = (() => {
   try {
     return parseArgs({
+      args: withMentions(process.argv.slice(2)),
       allowPositionals: true,
       options: {
+        ...FILTER_FLAGS,
         url: { type: 'string' },
         as: { type: 'string' },
         avatar: { type: 'string' },
@@ -59,18 +62,12 @@ const { values: flags, positionals } = (() => {
         json: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
         version: { type: 'boolean', short: 'v' },
-        label: { type: 'string', multiple: true },
         unset: { type: 'string', multiple: true },
         id: { type: 'string' },
         'no-sync': { type: 'boolean' },
         sync: { type: 'string', multiple: true },
         remove: { type: 'boolean' },
-        re: { type: 'string' },
-        by: { type: 'string' },
-        mentions: { type: 'boolean' },
         after: { type: 'string' },
-        from: { type: 'string' },
-        text: { type: 'string' },
         limit: { type: 'string' },
         all: { type: 'boolean' },
         timeout: { type: 'string' },
@@ -116,7 +113,7 @@ function filters(channel?: string): Filters & { after?: number } {
     ...(channel ? { channel } : {}),
     ...(flags.re ? { re: messageId(flags.re) } : {}),
     ...(flags.by ? { by: flags.by } : {}),
-    ...(flags.mentions ? { mentions: 'me' } : {}),
+    ...(flags.mentions ? { mentions: flags.mentions.replace(/^@/, '') } : {}),
     ...(flags.label?.length ? { label: flags.label } : {}),
     ...(flags.from ? { from: flags.from } : {}),
     ...(flags.text ? { text: flags.text } : {}),

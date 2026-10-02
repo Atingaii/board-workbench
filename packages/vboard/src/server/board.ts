@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
-import { createServer, type A2Store, type A2Scheduler } from 'experimental-a2/server'
-import { boardContract, BOARD_SESSION } from '../contract/contract.ts'
+import { createServer, type A2Store, type A2Scheduler, type ServerOptions } from 'experimental-a2/server'
+import { boardContract, BOARD_SESSION, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, messagesReducer } from '../contract/reducers.ts'
 import {
   EditBody,
@@ -34,6 +34,7 @@ import { avatarSvg } from './avatars.ts'
 import { badRequest, forbidden, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId } from './identity.ts'
+import { createWatchers, type Watcher } from './watch.ts'
 import {
   writeAttach,
   writeDelete,
@@ -48,12 +49,14 @@ import {
 export type BoardOptions = {
   /** Any A2 store. Omitted: SQLite in development, memory in tests, an error in production. */
   store?: A2Store
-  /** Required for sync in production; mount `scheduler.handler(...board.servers)` in its own route. */
+  /** Required for sync in production. Mount the board's `scheduler` as `POST` in its own route. */
   scheduler?: A2Scheduler
   /** Machines outside this project that may call the board. */
   trustedSources?: readonly TrustedSource[]
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
   sync?: Record<string, SyncPlatform>
+  /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
+  watch?: Record<string, Watcher>
   /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */
   project?: { id: string; teamId?: string }
   /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
@@ -96,6 +99,28 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'avatar', pattern: /\/avatars\/([a-z0-9-]+)$/ },
   { method: 'GET', name: 'openapi', pattern: /\/openapi\.json$/ },
 ]
+
+type BoardHandlers = NonNullable<ServerOptions<BoardEvents>['handlers']>
+type BoardHandler = { lane?: unknown; handler: (ctx: never) => Promise<unknown> }
+
+/** A2 takes one handler per event type, so watchers and sync share it, on the same lanes: watchers first. */
+function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
+  const combined: Record<string, BoardHandler> = {}
+  for (const set of sets)
+    for (const [type, entry] of Object.entries(set) as [string, BoardHandler][]) {
+      const first = combined[type]
+      combined[type] = first
+        ? {
+            lane: first.lane,
+            handler: async (ctx: never) => {
+              await first.handler(ctx)
+              await entry.handler(ctx)
+            },
+          }
+        : entry
+    }
+  return combined as BoardHandlers
+}
 
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'message'])
 
@@ -148,11 +173,16 @@ export function board(options: BoardOptions = {}) {
     options.sync && Object.keys(options.sync).length > 0
       ? createSyncEngine({ entries: options.sync, store: options.store, scheduler: options.scheduler })
       : null
+  const watchers =
+    options.watch && Object.keys(options.watch).length > 0
+      ? createWatchers({ watch: options.watch, store: options.store, scheduler: options.scheduler })
+      : null
+  const handlers = [watchers?.boardHandlers, engine?.outboundHandlers].filter((set) => set !== undefined)
   const server = createServer({
     contract: boardContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    ...(engine ? { handlers: engine.outboundHandlers } : {}),
+    ...(handlers.length > 0 ? { handlers: combineHandlers(...handlers) } : {}),
   })
   const session = server.session(BOARD_SESSION)
   const writes: WriteContext = {
@@ -201,6 +231,7 @@ export function board(options: BoardOptions = {}) {
   }
 
   engine?.bind({ session, writes, clientAs })
+  watchers?.bind({ clientAs })
 
   async function dispatch(request: Request, injected: Identity | null): Promise<Response> {
     try {
@@ -365,12 +396,17 @@ export function board(options: BoardOptions = {}) {
   }
 
   const handle = (request: Request) => dispatch(request, null)
+  const servers = [server, ...(engine ? [engine.inboxServer] : []), ...(watchers ? [watchers.server] : [])]
   return {
     GET: handle,
     POST: handle,
     fetch: handle,
-    /** The A2 servers behind this board, for `scheduler.handler(...board.servers)`. */
-    servers: engine ? ([server, engine.inboxServer] as const) : ([server] as const),
+    /** The scheduler's callback: `export { scheduler as POST }` from a route of its own. */
+    scheduler: options.scheduler
+      ? options.scheduler.handler(...servers)
+      : async () => toErrorResponse(notFound('this board has no scheduler')),
+    /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
+    servers,
     /** For tests and tools. */
     engine,
     session,

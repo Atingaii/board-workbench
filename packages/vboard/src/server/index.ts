@@ -1,4 +1,5 @@
 export { board, type BoardOptions } from './board.ts'
+export { type Watcher } from './watch.ts'
 export {
   vercel,
   githubActions,

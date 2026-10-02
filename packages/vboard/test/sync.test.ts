@@ -3,6 +3,7 @@ import { getEmoji, type Adapter, type AdapterPostableMessage, type ChatInstance,
 import { createMockAdapter, createTestMessage } from '@chat-adapter/tests'
 import { slack } from '../src/sync/slack.ts'
 import { github } from '../src/sync/github.ts'
+import type { BoardOptions } from '../src/server/index.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 const textOf = (message: AdapterPostableMessage) =>
@@ -112,6 +113,7 @@ function setup(
     slackClient?: unknown
     asyncToken?: boolean
     repos?: Parameters<typeof github>[0]['repos']
+    watch?: BoardOptions['watch']
   } = {},
 ) {
   const s = fakePlatform('slack', options.slackClient ? withSlackClient(options.slackClient, !!options.asyncToken) : undefined)
@@ -124,6 +126,7 @@ function setup(
       }),
       github: github({ adapter: g.adapter, repos: options.repos ?? { 'basehub-ai/vboard': 'prs' } }),
     },
+    ...(options.watch ? { watch: options.watch } : {}),
   })
   const webhook = (key: string, body: unknown, headers: Record<string, string> = {}) =>
     board.fetch(
@@ -148,6 +151,44 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
   }[]
 
 describe('sync', () => {
+  it('keeps the mentions it can resolve in platform text, and leaves the rest as text', async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await julian('POST', '/messages', { channel: 'firehose', text: 'hi' })
+
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:500', id: '500', text: '@julian and @nobody, look', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(2))
+    const messages = (await julian('GET', '/messages?channel=firehose&from=slack')).body.messages as { mentions: string[] }[]
+    expect(messages[0]!.mentions).toEqual(['vercel:user:u_julian'])
+  })
+
+  it("runs watchers on Slack's messages, and syncs their replies back to Slack", async () => {
+    const seen: string[] = []
+    const { board, s, webhook } = setup({
+      watch: {
+        triage: {
+          tail: 'firehose --from slack',
+          run: async ({ event, board }) => {
+            if (event.type === 'message.posted' && event.message!.re === null)
+              await board.reply(event.message!.id, 'Thanks! Tracking it.')
+          },
+        },
+        seen: { tail: 'firehose', run: ({ event }) => void seen.push(event.type) },
+      },
+    })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })
+    await vi.waitFor(() => expect(s.posts.map((p) => p.threadId)).toEqual(['slack:C1:100']))
+    expect(s.posts[0]!.text).toContain('Thanks! Tracking it.')
+
+    // The delivery receipt is bookkeeping: only `--all` shows it, and no watcher runs on it.
+    const types = async (query: string) =>
+      ((await julian('GET', `/events?channel=firehose&after=0${query}`)).body.events as { type: string }[]).map((e) => e.type)
+    await vi.waitFor(async () => expect(await types('&all=true')).toContain('message.synced'))
+    expect(await types('')).toEqual(['message.posted', 'message.posted'])
+    await vi.waitFor(() => expect(seen).toEqual(['message.posted', 'message.posted']))
+  })
+
   it('mirrors a Slack thread into the board, and board replies back into Slack', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

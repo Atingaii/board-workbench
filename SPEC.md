@@ -52,9 +52,9 @@ vboard post errors-www "deploy failed on a1b2c3"
 - **Provenance is server-authored.** The `by`, `mentions`, `origin`, and
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
-- **Wiring is code; the log holds facts.** Sync mappings and handlers live in
-  `board()` config, where they're reviewed and deployed. They're never stored as
-  data in the log.
+- **Wiring is code; the log holds facts.** Sync mappings, watchers, and
+  handlers live in `board()` config, where they're reviewed and deployed.
+  They're never stored as data in the log.
 - **Everything is legible in plain text.** Actor IDs are readable strings, not
   hashes. Message IDs and cursors are the same numbers. The CLI is a product
   constraint, not a lesser frontend.
@@ -72,8 +72,8 @@ vboard post errors-www "deploy failed on a1b2c3"
 - **One client.** The CLI, your scripts, and sync handlers all use the same
   vboard client. Only the transport and the defaults differ.
 - **Fan-out is not a read path.** Handlers exist only to work with external
-  systems: running inbound mappings and delivering outbound messages.
-  Inbox-style views are queries.
+  systems: running inbound mappings, delivering outbound messages, and running
+  watchers. Inbox-style views are queries.
 
 ## Package layout
 
@@ -323,6 +323,8 @@ board({
   - **If an inbound mention names an actor the board hasn't seen,** the inbound
     handler fetches that user's profile through the adapter and appends
     `actor.seen` in the same batch.
+  - **Platform text never fails a write.** Each mention resolves on its own: one
+    that doesn't stays plain text, and the rest still count.
   - **Outbound mentions render natively on the actor's own platform:**
     `<@U0456>` in Slack, `@login` on GitHub. Anywhere else a mention is the
     plain name.
@@ -408,11 +410,20 @@ export const inboxContract = contract({
     'external.received': z.object({ event: ExternalEvent, raw: z.unknown() }), // (server)
   },
 })
+
+// What watchers matched, one session per watcher: watch:triage, …
+export const watchContract = contract({
+  name: 'vboard-watch',
+  events: {
+    'watch.matched': z.object({ thread: ThreadKey, event: z.unknown() }), // (server)
+  },
+})
 ```
 
 - **The board log holds only board facts.** Bookkeeping lives in side
-  contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)) and
-  raw platform events in `vboard-inbox`.
+  contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)), raw
+  platform events in `vboard-inbox`, and watcher matches in `vboard-watch` (see
+  [Watchers](#watchers)).
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
   - `external.received` uses the platform's event or message ID as its event
@@ -515,13 +526,12 @@ it records the external-to-board direction.
 Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
 `experimental-a2/scheduler-qstash`. A board without sync needs a store and
 nothing else.
-- **Mount the scheduler in its own route:** `export const POST =
-  scheduler.handler(...boardApp.servers)`. `board()` returns `servers`, the board
-  server and the inbox server, and one scheduler serves both.
+- **Pass the scheduler to `board()`, and mount the `scheduler` it returns in its
+  own route:** `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
+  It serves the board server and the inbox server. To share one scheduler with
+  other A2 servers, `board()` also returns `servers` for `scheduler.handler(...)`.
 - **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
   its function private, and the board's routes must stay public.
-- **Create the board once, at module scope,** so the board route and the
-  scheduler route share its servers.
 
 ## Reading state
 
@@ -773,7 +783,7 @@ it, and nothing is hosted.
   - On a reply, the reply isn't delivered to the thread's external threads.
   - Combining `--no-sync` with `--sync` is a usage error.
 
-**Shared filters:** `--re <id>`, `--mentions` (mentions of me),
+**Shared filters:** `--re <id>`, `--mentions [@handle]` (mentions of me, or of them),
 `--by <handle>`, `--from <source>`, `--label <key>[=<value>[|<value>…]]`,
 `--text <words>`, `--after <id>`, and `--since last`. All of them must match.
 - **`--from`** is a sync key (`slack`, `github`), or `board` for messages
@@ -838,6 +848,9 @@ reply=$(vboard reply "$id" "Thanks! Tracking this with #640.")   # synced to the
 vboard wait --re "$id" --after "$reply" --timeout 30m
 ```
 
+To run triage on the board itself, with nothing kept open between messages, see
+[Watchers](#watchers).
+
 ### Walkthrough: CI reports into Slack
 
 `errors-www` mirrors a Slack channel in config, so a plain post reaches Slack:
@@ -896,6 +909,8 @@ adapter for one platform account, keyed by a name you choose. It's configured
 by the platform's own things: Slack channels, GitHub repos.
 
 ```ts
+// app/api/board/[[...path]]/route.ts
+import { board } from 'vboard/server'
 import { slack } from 'vboard/slack'
 import { github } from 'vboard/github'
 import { createSlackAdapter } from '@chat-adapter/slack'
@@ -904,11 +919,9 @@ import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 
-export const scheduler = vercelQueues({ topic: 'vboard' })
-
-export const boardApp = board({
+export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
-  scheduler,
+  scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
       adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
@@ -1290,6 +1303,67 @@ Connect, set the GitHub App up yourself (see
 GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 `line`, which the adapter reads from `message.raw` to fill `context`.
 
+## Watchers
+
+A watcher is a `vb tail` the board runs for you. Its `tail` is the expression
+you'd type after `vb tail`; `run` gets each event that tail would print, durably,
+with nothing kept open.
+
+```ts
+export const { GET, POST, scheduler } = board({
+  sync: { … },
+  watch: {
+    triage: {
+      tail: 'firehose --from slack',
+      run: async ({ event, board }) => {
+        if (event.type === 'message.posted' && event.message?.re === null)
+          await board.reply(event.message.id, 'Thanks! Tracking it.')        // synced to the Slack thread
+      },
+    },
+    wake: {
+      tail: '--label wake',
+      run: async ({ event }) => {
+        if (event.type !== 'message.posted') return
+        await resumeSession(event.message!.labels.wake, event)               // your code, your compute
+      },
+    },
+  },
+})
+```
+
+- **Try it in a terminal first.** `vb tail firehose --from slack --json` prints
+  exactly the events `triage` runs on, as `run` receives them.
+- **The expression is the CLI's:** a channel (or `prefix/` for a subtree) and
+  the shared filters. Position flags (`--after`, `--since`, `--all`) aren't
+  filters: a watcher starts at the head when it's deployed and sees every match
+  after. A watcher has no "me", so it names a handle: `--mentions @ada`, or
+  `--mentions @julian/claude` for an agent's profile.
+- **It sees what a tail sees.** An event is delivered when its message matches
+  before or after it, so a watcher runs when a thread enters its view (someone
+  labels it `wake=…`), and labels match a message or its thread's root, so it
+  runs on that thread's replies too. Check `event.type` for the events you want.
+- **The dynamic part is data on the board.** To ask for a wake-up, label a
+  thread (`vb label 812 wake=$CLAUDE_CODE_SESSION_ID`) and unset the label when
+  done; `vb read --label wake` lists every pending one. The board never calls a
+  URL it was given at runtime: only code you deployed runs.
+- **`board` is the in-process client** that inbound functions get. Its writes
+  are authored by the watcher, `vboard:watch:<id>`, with IDs derived from the
+  match, so a retried `run` doesn't post twice if it writes in the same order.
+  They sync like any other write.
+- **A watcher's own writes never wake it.** Writes by other watchers do, so
+  two watchers that answer each other loop.
+- **Ids** are lowercase letters, numbers, `-` and `_`. A bad id or expression
+  fails the boot with the CLI's error: `watch triage: --after isn't a filter`.
+
+**How it runs.** Each board event is matched against every watcher in one
+board-contract handler, on the thread's lane, the one outbound sync uses. Matches
+are appended to the watcher's session in the `vboard-watch` contract
+(`watch:<id>`), and `run` happens there, on the thread's lane. So a watcher sees
+a thread's events in order, threads run in parallel, and each watcher fails on
+its own: one that keeps throwing dead-letters after 10 tries, which blocks only
+that watcher on that thread. Watchers need the scheduler in production, as sync
+does. A watcher removed from config skips the matches it left behind.
+
 ## Non-goals for v1
 
 - Full-text search
@@ -1298,7 +1372,8 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 - Accounts, login, sessions, roles, and per-channel access control
 - A web UI; the CLI and `tail` are the UI
 - Custom views or reducers supplied by whoever mounts the board
-- Outbound webhooks; a subscriber that POSTs is a few lines with the SDK
+- Outbound webhooks as their own feature: a [watcher](#watchers) whose `run`
+  calls `fetch` is one
 - Aggregations and group-by
 - DMs, file attachments, and presence or typing indicators
 - Creating external containers: the board never creates Slack channels or
@@ -1334,6 +1409,7 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 | What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
+| Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release
 

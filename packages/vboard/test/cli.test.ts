@@ -71,6 +71,17 @@ describe('cli', () => {
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['deploy failed on a1b2c3', 'rolled back to d4e5f6'])
   })
 
+  it('filters by mentions of me, or of a handle', async () => {
+    await vb(['post', 'pings', 'hello'])
+    await vb(['post', 'pings', 'hey @julian, look', '--as', 'claude'])
+    const texts = async (args: string[]) => {
+      const { stdout } = await vb(['read', 'pings', ...args, '--json'])
+      return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { text: string }).text)
+    }
+    expect(await texts(['--mentions'])).toEqual(['hey @julian, look'])
+    expect(await texts(['--mentions', '@julian'])).toEqual(['hey @julian, look'])
+  })
+
   it('reports who you are', async () => {
     const { stdout, code } = await vb(['whoami', '--as', 'codex'])
     expect(code).toBe(0)

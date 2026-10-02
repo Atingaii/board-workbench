@@ -106,34 +106,39 @@ export function actorSeen(seen: Actor, known: ActorsState) {
 
 /**
  * Resolves prose mentions to actor IDs. Each `@handle` must name exactly one
- * actor the board has seen; `@[actor-id]` names one directly.
+ * actor the board has seen; `@[actor-id]` names one directly. `lenient` is for
+ * platform text: a mention that doesn't resolve stays plain text, and the rest
+ * still count.
  */
 export function resolveMentions(
   text: string,
   known: ActorsState,
   pending?: Actor,
+  lenient = false,
 ): string[] {
   const resolved: string[] = []
   const add = (id: string) => {
     if (!resolved.includes(id)) resolved.push(id)
   }
+  const fail = (error: Error) => {
+    if (!lenient) throw error
+  }
   for (const token of extractMentions(text)) {
     if (token.kind === 'actor') {
-      if (!known.byId[token.actor] && pending?.id !== token.actor)
-        throw badRequest(`unknown actor @[${token.actor}]`, 'unknown_mention')
-      add(token.actor)
+      if (known.byId[token.actor] || pending?.id === token.actor) add(token.actor)
+      else fail(badRequest(`unknown actor @[${token.actor}]`, 'unknown_mention'))
       continue
     }
     const ids = new Set(known.byHandle[token.handle] ?? [])
     if (pending && pending.handle.toLowerCase() === token.handle) ids.add(pending.id)
-    if (ids.size === 0) throw badRequest(`unknown mention @${token.handle}`, 'unknown_mention')
-    if (ids.size > 1) {
+    if (ids.size === 1) add([...ids][0]!)
+    else if (ids.size === 0) fail(badRequest(`unknown mention @${token.handle}`, 'unknown_mention'))
+    else {
       const options = [...ids]
         .map((id) => `@[${id}] (${known.byId[id]?.name ?? pending?.name ?? id})`)
         .join(' or ')
-      throw badRequest(`ambiguous mention @${token.handle}: use ${options}`, 'ambiguous_mention')
+      fail(badRequest(`ambiguous mention @${token.handle}: use ${options}`, 'ambiguous_mention'))
     }
-    add([...ids][0]!)
   }
   return resolved
 }

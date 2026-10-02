@@ -14,8 +14,8 @@ import type { BoardSession } from './board.ts'
 
 export type ParsedFilters = z.output<typeof Filters>
 
-/** Bookkeeping events, shown only with `all`. */
-const HIDDEN = new Set(['actor.seen'])
+/** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
+const HIDDEN = new Set(['actor.seen', 'message.synced'])
 
 export function view(message: Message, actors: ActorsState): MessageView {
   const author = actors.byId[message.by.actor]
@@ -96,6 +96,30 @@ export function concernedMessageId(event: BoardEvent): number | null {
   return null
 }
 
+/** Folds one event into `messages` and `actors`, and returns the message it concerns before and after. */
+export function foldEvent(messages: MessagesState, actors: ActorsState, event: BoardEvent) {
+  const id = concernedMessageId(event)
+  const before = id === null ? undefined : structuredClone(messages.byId[id])
+  foldMessages(messages, event)
+  foldActors(actors, event)
+  const after = id === null ? undefined : messages.byId[id]
+  return { id, before, after }
+}
+
+/** An event as subscribers receive it, with its message as it is afterwards. */
+export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState): BoardEventView {
+  const by = (event.payload as { by?: { actor?: string } }).by?.actor
+  const actor = by ? actors.byId[by] : undefined
+  return {
+    index: event.index,
+    type: event.type,
+    createdAt: iso(event.createdAt),
+    payload: event.payload,
+    ...(after ? { message: view(after, actors) } : {}),
+    ...(actor ? { actor: { id: actor.id, handle: actor.handle, name: actor.name, avatar: actor.avatar } } : {}),
+  }
+}
+
 export type FeedItem = { index: number; view: BoardEventView | null }
 
 /**
@@ -125,27 +149,11 @@ export class FeedProjection {
   }
 
   step(event: BoardEvent): FeedItem {
-    const id = concernedMessageId(event)
-    const before = id === null ? undefined : structuredClone(this.messages.byId[id])
-    foldMessages(this.messages, event)
-    foldActors(this.actors, event)
-    const after = id === null ? undefined : this.messages.byId[id]
+    const { id, before, after } = foldEvent(this.messages, this.actors, event)
     const hidden = HIDDEN.has(event.type) && !this.all
     const visible = !hidden && (this.criteria ? this.match(before) || this.match(after) : id !== null || this.all)
     if (!visible) return { index: event.index, view: null }
-    const by = (event.payload as { by?: { actor?: string } }).by?.actor
-    const actor = by ? this.actors.byId[by] : undefined
-    return {
-      index: event.index,
-      view: {
-        index: event.index,
-        type: event.type,
-        createdAt: iso(event.createdAt),
-        payload: event.payload,
-        ...(after ? { message: view(after, this.actors) } : {}),
-        ...(actor ? { actor: { id: actor.id, handle: actor.handle, name: actor.name, avatar: actor.avatar } } : {}),
-      },
-    }
+    return { index: event.index, view: eventView(event, after, this.actors) }
   }
 }
 

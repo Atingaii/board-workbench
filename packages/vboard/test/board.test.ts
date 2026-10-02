@@ -23,6 +23,30 @@ describe('discovery', () => {
   })
 })
 
+describe('scheduler', () => {
+  it("is the scheduler's callback for every server behind the board", () => {
+    const callback = async () => new Response(null, { status: 204 })
+    let mounted: readonly unknown[] = []
+    const board = testBoard({
+      scheduler: {
+        schedule: async () => {},
+        handler: (...servers) => {
+          mounted = servers
+          return callback
+        },
+      },
+    })
+    expect(board.scheduler).toBe(callback)
+    expect(mounted).toEqual(board.servers)
+  })
+
+  it('answers 404 when the board has none', async () => {
+    const response = await testBoard().scheduler(new Request(`${BOARD_URL}/a2/scheduler`, { method: 'POST' }))
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ error: { message: 'this board has no scheduler' } })
+  })
+})
+
 describe('auth', () => {
   it('rejects requests without a token', async () => {
     const { fetch } = testBoard()

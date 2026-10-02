@@ -195,3 +195,20 @@ export type InboxEvent = ContractEvent<InboxEvents>
 
 /** `inbox:slack:C0123ABC`: the inbox session for one external channel. */
 export const inboxSession = (channel: string) => `inbox:${channel}`
+
+/** What watchers matched, outside the board log: one session per watcher, so each fails on its own. */
+export const watchContract = contract({
+  name: 'vboard-watch',
+  events: {
+    'watch.matched': z.object({
+      thread: ThreadKey,
+      /** The board event, as `vb tail --json` prints it. */
+      event: z.unknown(),
+    }),
+  },
+})
+
+export type WatchEvents = typeof watchContract.events
+
+/** `watch:triage`: the session for one watcher. */
+export const watchSession = (id: string) => `watch:${id}`
