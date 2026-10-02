@@ -35,13 +35,19 @@ export const Emoji = z
 /** `vercel:user:u_abc123`, or `vercel:user:u_abc123+claude` for a profile. */
 export const ActorId = z.string().min(1).max(256)
 
+/** What an actor is: a `person`, an `agent` acting for a principal (`--as claude`), a deployment, a workflow, or a platform user (`external`). */
 export const ActorKind = z.enum([
   'person',
-  'profile',
+  'agent',
   'deployment',
   'workflow',
   'external',
 ])
+
+/** `actor.seen` events written before agents were called agents say `profile`. */
+export const SeenActorKind = z.union([ActorKind, z.literal('profile')])
+
+export const actorKind = (kind: z.infer<typeof SeenActorKind>): ActorKind => (kind === 'profile' ? 'agent' : kind)
 
 export const Handle = z.string().min(1).max(128)
 

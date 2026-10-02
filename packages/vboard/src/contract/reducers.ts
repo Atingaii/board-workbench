@@ -1,5 +1,5 @@
 import { canonicalEmoji } from './emoji.ts'
-import type { ActorKind, Author, Labels } from './schemas.ts'
+import { actorKind, type ActorKind, type Author, type Labels } from './schemas.ts'
 import { boardContract, type BoardEvent, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
@@ -184,7 +184,7 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
     if (remaining.length > 0) state.byHandle[key] = remaining
     else delete state.byHandle[key]
   }
-  state.byId[actor] = { id: actor, kind, handle, name, avatar }
+  state.byId[actor] = { id: actor, kind: actorKind(kind), handle, name, avatar }
   const key = handle.toLowerCase()
   const ids = (state.byHandle[key] ??= [])
   if (!ids.includes(actor)) ids.push(actor)

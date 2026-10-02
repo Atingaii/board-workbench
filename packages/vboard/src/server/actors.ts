@@ -55,7 +55,7 @@ export function resolveActor(
   const known = profile !== null && (KNOWN_AGENTS as readonly string[]).includes(profile)
   const actor: Actor = {
     id,
-    kind: profile === null ? principal.kind : 'profile',
+    kind: profile === null ? principal.kind : 'agent',
     handle: profile === null ? baseHandle : `${baseHandle}/${profile}`,
     name: profileName ?? personName ?? baseHandle,
     avatar: avatarHeader ?? (known ? `${boardUrl}/avatars/${profile}` : null),

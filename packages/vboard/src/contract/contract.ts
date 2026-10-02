@@ -2,7 +2,7 @@ import { contract, type ContractEvent } from 'experimental-a2'
 import { z } from 'zod'
 import {
   ActorId,
-  ActorKind,
+  SeenActorKind,
   Author,
   ChannelPath,
   Emoji,
@@ -95,7 +95,7 @@ export const boardContract = contract({
     }),
     'actor.seen': z.object({
       actor: ActorId,
-      kind: ActorKind,
+      kind: SeenActorKind,
       handle: Handle,
       name: z.string().min(1).max(128),
       avatar: z.string().url().nullable(),

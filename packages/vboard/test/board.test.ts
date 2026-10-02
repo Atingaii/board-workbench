@@ -60,6 +60,17 @@ describe('auth', () => {
     expect((await call('GET', '/me')).status).toBe(401)
   })
 
+  it('reads agents the log recorded with their old kind, profile, as agents', async () => {
+    const board = testBoard()
+    await board.session.append({
+      type: 'actor.seen',
+      payload: { actor: 'vercel:user:u_ada+claude', kind: 'profile', handle: 'ada/claude', name: 'claude', avatar: null },
+    })
+    const call = caller(board.fetch, await personToken())
+    const { body } = await call('GET', '/actors')
+    expect(body.actors).toContainEqual(expect.objectContaining({ id: 'vercel:user:u_ada+claude', kind: 'agent' }))
+  })
+
   it('identifies a person by the user_id on a development token', async () => {
     const { fetch } = testBoard()
     const call = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
@@ -81,7 +92,7 @@ describe('auth', () => {
     expect(body).toMatchObject({
       actor: 'vercel:user:u_julian+claude',
       principal: 'vercel:user:u_julian',
-      kind: 'profile',
+      kind: 'agent',
       handle: 'julian/claude',
       name: 'Claude',
       avatar: `${BOARD_URL}/avatars/claude`,

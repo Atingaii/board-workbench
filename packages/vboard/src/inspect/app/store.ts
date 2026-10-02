@@ -1,5 +1,6 @@
 import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView } from '../../api/routes.ts'
 import { canonicalEmoji } from '../../contract/emoji.ts'
+import { actorKind } from '../../contract/schemas.ts'
 
 // The board, as this page knows it. Pure functions over plain state: the page
 // loads snapshots, folds the live stream in, and overlays your own writes until
@@ -157,7 +158,7 @@ export function applyEvent(state: State, event: BoardEventView): State {
   }
   if (event.type === 'actor.seen') {
     const { actor, kind, handle, name, avatar } = event.payload
-    next = { ...next, actors: { ...next.actors, [actor]: { kind, handle, name, avatar } } }
+    next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar } } }
   }
   return event.index > next.cursor ? { ...next, cursor: event.index } : next
 }
