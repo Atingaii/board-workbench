@@ -15,6 +15,9 @@ const PI = "@earendil-works/pi-coding-agent@1.0.0";
 const SANDBOX_MS = 45 * 60_000;
 const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
 
+/** Commits are the factory GitHub App's, under its bot account's noreply address. */
+const GIT_AUTHOR = { name: "factory-basehub[bot]", email: "336642991+factory-basehub[bot]@users.noreply.github.com" };
+
 /** Who a thread's Pi is on the board: profile `pi`, in that thread's session. */
 const piSession = (thread: number) => `thread-${thread}`;
 
@@ -129,7 +132,18 @@ export async function tellPi({ thread, key, message }: { thread: number; key: st
   await sandbox.runCommand({
     cmd: "bash",
     args: ["-c", TELL],
-    env: { MODEL, SESSION: piSession(thread), INSTRUCTIONS, KEY: key, MESSAGE: message },
+    env: {
+      MODEL,
+      SESSION: piSession(thread),
+      INSTRUCTIONS,
+      KEY: key,
+      MESSAGE: message,
+      // Over any git config Pi writes: otherwise it picks an identity, and GitHub credits a stranger.
+      GIT_AUTHOR_NAME: GIT_AUTHOR.name,
+      GIT_AUTHOR_EMAIL: GIT_AUTHOR.email,
+      GIT_COMMITTER_NAME: GIT_AUTHOR.name,
+      GIT_COMMITTER_EMAIL: GIT_AUTHOR.email,
+    },
     detached: true,
   });
 }
