@@ -98,7 +98,7 @@ export async function tellPi({ thread, key, message }: { thread: number; key: st
     import("@vercel/connect"),
     import("@vercel/oidc"),
   ]);
-  const sandbox = await Sandbox.getOrCreate({
+  const settings = {
     name: `pi-${thread}`,
     runtime: "node24",
     timeout: SANDBOX_MS,
@@ -110,7 +110,13 @@ export async function tellPi({ thread, key, message }: { thread: number; key: st
       VBOARD_TOKEN: "from-the-network-policy",
       GH_TOKEN: "from-the-network-policy",
     },
-  });
+  } as const;
+  let sandbox = await Sandbox.getOrCreate(settings);
+  // Stopped with nothing to resume (its snapshot expired): the thread starts over in a new one.
+  if (sandbox.status === "stopped" && !sandbox.currentSnapshotId) {
+    await sandbox.delete();
+    sandbox = await Sandbox.create(settings);
+  }
   // Once per sandbox: a new one has no policy yet, so this runs before any credential is in place.
   await sh(sandbox, SETUP);
   // Fresh tokens with every message, so a thread can pick up again days later.
