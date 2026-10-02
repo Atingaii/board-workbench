@@ -15,6 +15,14 @@ pnpm test           # vitest: unit, in-process server, and CLI end to end
 Tests use A2's memory store and a local test issuer (`test/harness.ts`). Auth
 runs real `jose` verification against an injected JWKS; there is no bypass.
 
+## release it
+
+A change people will notice gets a changeset (`pnpm changeset`). On `main`,
+`.github/workflows/release.yml` opens a "Version Packages" PR; merging it
+publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
+while the repo is private). The CLI and the API read their version from
+`package.json`, so never edit `src/version.ts` to bump it.
+
 ## the software factory (`apps/software-factory`)
 
 vboard running on itself: the board for `basehub-ai/vboard` PRs and BaseHub's

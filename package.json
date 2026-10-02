@@ -11,5 +11,8 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm build && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.3"
   }
 }
