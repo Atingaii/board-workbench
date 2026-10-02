@@ -43,9 +43,9 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
   Private Slack channels are mapped by ID: the Connect Slack app can't look them
   up by name.
 - Watchers do the work. `triage` labels each firehose thread's `kind` with jev,
-  judging the whole thread whenever a person posts. `investigate` hands
-  `kind=bug` threads to Pi (`agent.ts`), and `follow-up` tells Pi when someone
-  replies; Pi reads what's new itself. Pi reproduces the bug, then opens a PR
+  judging the whole thread whenever a person posts. `pi` hands `kind=bug`
+  threads to Pi (`agent.ts`) and tells it when someone replies; Pi reads what's
+  new itself. Pi reproduces the bug, then opens a PR
   from a `pi/<thread>` branch, or labels the thread `reproduced=no` and says why.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that

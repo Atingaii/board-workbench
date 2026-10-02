@@ -29,6 +29,27 @@ function message(id: number, overrides: Partial<MessageView> = {}): MessageView 
   }
 }
 
+/** A message.posted event as the stream sends it: its payload mirrors the message. */
+const postedEvent = (m: MessageView): BoardEventView => ({
+  index: m.id,
+  type: 'message.posted',
+  createdAt: '',
+  payload: {
+    channel: m.channel,
+    text: m.text,
+    re: m.re,
+    replyTo: m.replyTo,
+    thread: m.thread,
+    labels: m.labels,
+    noSync: m.noSync,
+    mentions: m.mentions,
+    by: m.by,
+    origin: m.origin,
+    from: m.from,
+  },
+  message: m,
+})
+
 const start: store.State = { ...store.initialState, me: { actor: ME } as store.State['me'] }
 
 describe('the inspector store', () => {
@@ -41,7 +62,7 @@ describe('the inspector store', () => {
   })
 
   it('folds live events in, and counts new threads', () => {
-    const posted: BoardEventView = { index: 3, type: 'message.posted', createdAt: '', payload: {}, message: message(3, { channel: 'new' }) }
+    const posted = postedEvent(message(3, { channel: 'new' }))
     let state = store.applyEvent(start, posted)
     expect(state.channels.new).toMatchObject({ threads: 1, messages: 1, lastIndex: 3 })
     expect(state.cursor).toBe(3)
@@ -51,7 +72,7 @@ describe('the inspector store', () => {
       index: 4,
       type: 'actor.seen',
       createdAt: '',
-      payload: { actor: ME, handle: 'julian', name: 'Julian', avatar: 'https://example.com/a.png' },
+      payload: { actor: ME, kind: 'person', handle: 'julian', name: 'Julian', avatar: 'https://example.com/a.png' },
     })
     expect(store.shown(state, 3)!.author).toMatchObject({ name: 'Julian', avatar: 'https://example.com/a.png' })
   })
@@ -83,17 +104,14 @@ describe('the inspector store', () => {
     const post: store.Pending = { key: 'k', channel: 'ops', re: null, text: 'four', noSync: false, labels: {}, createdAt: '', error: null }
     const other: store.Pending = { ...post, key: 'k2', text: 'five' }
     let state: store.State = { ...start, pending: [post, other] }
-    state = store.applyEvent(state, { index: 17, type: 'message.posted', createdAt: '', payload: {}, message: message(17, { text: 'four' }) })
+    state = store.applyEvent(state, postedEvent(message(17, { text: 'four' })))
     expect(state.pending.map((p) => p.key)).toEqual(['k2'])
     expect(store.channelThreads(state, 'ops').threads.map((t) => t.root.text)).toEqual(['four'])
     // Someone else's identical message isn't yours.
-    state = store.applyEvent(state, {
-      index: 18,
-      type: 'message.posted',
-      createdAt: '',
-      payload: {},
-      message: message(18, { text: 'five', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null, session: null } }),
-    })
+    state = store.applyEvent(
+      state,
+      postedEvent(message(18, { text: 'five', by: { actor: 'slack:user:U1', principal: 'slack:user:U1', profile: null, session: null } })),
+    )
     expect(state.pending.map((p) => p.key)).toEqual(['k2'])
   })
 

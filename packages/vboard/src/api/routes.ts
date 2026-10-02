@@ -7,6 +7,7 @@ import {
   MessageId,
   MessageText,
 } from '../contract/schemas.ts'
+import type { BoardEvent } from '../contract/contract.ts'
 import type { Actor, Channel, Message } from '../contract/reducers.ts'
 
 const id = z.coerce.number().int().positive()
@@ -92,16 +93,21 @@ export type PostInput = z.input<typeof PostBody>
 export type ActorView = Pick<Actor, 'handle' | 'name' | 'avatar'>
 export type MessageView = Message & { author: ActorView | null }
 
-export type BoardEventView = {
-  index: number
-  type: string
-  createdAt: string
-  payload: unknown
-  /** The message the event concerns, as it is after the event. */
-  message?: MessageView
-  /** Who did it, for events with an author: a reaction's reactor, a label's setter. */
-  actor?: ActorView & { id: string }
-}
+/** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */
+export type BoardEventView = BoardEvent extends infer E
+  ? E extends { type: infer T; payload: infer P }
+    ? {
+        index: number
+        type: T
+        createdAt: string
+        payload: P
+        /** The message the event concerns, as it is after the event. */
+        message?: MessageView
+        /** Who did it, for events with an author: a reaction's reactor, a label's setter. */
+        actor?: ActorView & { id: string }
+      }
+    : never
+  : never
 
 export type Discovery = {
   version: string

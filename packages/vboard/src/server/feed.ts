@@ -110,6 +110,8 @@ export function foldEvent(messages: MessagesState, actors: ActorsState, event: B
 export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState): BoardEventView {
   const by = (event.payload as { by?: { actor?: string } }).by?.actor
   const actor = by ? actors.byId[by] : undefined
+  // `type` and `payload` come from the same event, so they still match; TypeScript
+  // can't follow that through a union, and this is the one place views are made.
   return {
     index: event.index,
     type: event.type,
@@ -117,7 +119,7 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
     payload: event.payload,
     ...(after ? { message: view(after, actors) } : {}),
     ...(actor ? { actor: { id: actor.id, handle: actor.handle, name: actor.name, avatar: actor.avatar } } : {}),
-  }
+  } as BoardEventView
 }
 
 export type FeedItem = { index: number; view: BoardEventView | null }

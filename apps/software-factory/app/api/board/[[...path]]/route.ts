@@ -92,45 +92,36 @@ export const { GET, POST, scheduler } = board({
         }
       },
     },
-    // A thread triage calls a bug goes to Pi, which reproduces it and opens a PR, or closes it.
-    investigate: {
+    // Pi watches bug threads: it gets the report once triage calls it a bug, and hears
+    // when someone replies, then reads what's new itself.
+    pi: {
       tail: "firehose --label kind=bug",
       run: async ({ event }) => {
         const message = event.message;
-        const set = (event.payload as { set?: Record<string, string> }).set;
-        if (
-          event.type !== "labels.changed" ||
-          set?.kind !== "bug" ||
-          !message ||
-          message.re !== null
-        ) {
+        if (!message) {
           return;
         }
-        await tellPi({
-          thread: message.id,
-          key: "report",
-          message: `There's a bug report in board thread #${message.id}.`,
-        });
-      },
-    },
-    // Someone replied in a bug thread: Pi hears there's news, and reads it itself.
-    "follow-up": {
-      tail: "firehose --label kind=bug",
-      run: async ({ event }) => {
-        const message = event.message;
         if (
-          event.type !== "message.posted" ||
-          !message ||
-          message.re === null ||
-          !byPerson(message)
+          event.type === "labels.changed" &&
+          event.payload.set.kind === "bug" &&
+          message.re === null
         ) {
-          return;
+          await tellPi({
+            thread: message.id,
+            key: "report",
+            message: `There's a bug report in board thread #${message.id}.`,
+          });
+        } else if (
+          event.type === "message.posted" &&
+          message.re !== null &&
+          byPerson(message)
+        ) {
+          await tellPi({
+            thread: message.re,
+            key: `news-${message.id}`,
+            message: `There's new activity in board thread #${message.re}.`,
+          });
         }
-        await tellPi({
-          thread: message.re,
-          key: `news-${message.id}`,
-          message: `There's new activity in board thread #${message.re}.`,
-        });
       },
     },
   },
