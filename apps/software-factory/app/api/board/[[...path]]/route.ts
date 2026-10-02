@@ -127,7 +127,7 @@ export const { GET, POST, scheduler } = board({
   },
 });
 
-/** Written by a person, here or on a platform: not by Pi (a profile) or a watcher. */
-function byPerson(message: { by: { actor: string; profile: string | null } }) {
-  return message.by.profile === null && !message.by.actor.startsWith("vboard:");
+/** Written by a person, on the board or in Slack or GitHub: not by Pi (an agent) or a watcher. */
+function byPerson(message: { author: { kind: string } | null }) {
+  return message.author?.kind === "person" || message.author?.kind === "external";
 }

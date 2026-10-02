@@ -25,7 +25,7 @@ export function view(message: Message, actors: ActorsState): MessageView {
     reactions: Object.fromEntries(
       Object.entries(message.reactions).map(([emoji, ids]) => [emoji, [...ids]]),
     ),
-    author: author ? { handle: author.handle, name: author.name, avatar: author.avatar } : null,
+    author: author ? { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar } : null,
   }
 }
 
@@ -118,7 +118,7 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
     createdAt: iso(event.createdAt),
     payload: event.payload,
     ...(after ? { message: view(after, actors) } : {}),
-    ...(actor ? { actor: { id: actor.id, handle: actor.handle, name: actor.name, avatar: actor.avatar } } : {}),
+    ...(actor ? { actor: { id: actor.id, kind: actor.kind, handle: actor.handle, name: actor.name, avatar: actor.avatar } } : {}),
   } as BoardEventView
 }
 

@@ -90,7 +90,8 @@ export type MessagesQueryInput = z.input<typeof MessagesQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
 
-export type ActorView = Pick<Actor, 'handle' | 'name' | 'avatar'>
+/** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'>
 export type MessageView = Message & { author: ActorView | null }
 
 /** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */

@@ -156,8 +156,8 @@ export function applyEvent(state: State, event: BoardEventView): State {
       }
   }
   if (event.type === 'actor.seen') {
-    const actor = event.payload as { actor: string; handle: string; name: string; avatar: string | null }
-    next = { ...next, actors: { ...next.actors, [actor.actor]: { handle: actor.handle, name: actor.name, avatar: actor.avatar } } }
+    const { actor, kind, handle, name, avatar } = event.payload
+    next = { ...next, actors: { ...next.actors, [actor]: { kind, handle, name, avatar } } }
   }
   return event.index > next.cursor ? { ...next, cursor: event.index } : next
 }

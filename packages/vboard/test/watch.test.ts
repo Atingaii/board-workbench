@@ -99,7 +99,7 @@ describe('watchers', () => {
     expect(seen.events[1]!.message).toMatchObject({
       text: 'Thanks! Tracking it.',
       by: { actor: 'vboard:watch:triage' },
-      author: { handle: 'triage' },
+      author: { handle: 'triage', kind: 'deployment' },
     })
     // Matches are recorded before anything runs, so triage's session is final: one match, not two.
     const watchServer = board.servers.at(-1)!

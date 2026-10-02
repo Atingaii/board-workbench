@@ -24,7 +24,7 @@ function message(id: number, overrides: Partial<MessageView> = {}): MessageView 
     editedAt: null,
     deleted: false,
     undelivered: {},
-    author: { handle: 'julian', name: 'julian', avatar: null },
+    author: { kind: 'person', handle: 'julian', name: 'julian', avatar: null },
     ...overrides,
   }
 }
