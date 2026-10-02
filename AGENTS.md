@@ -42,12 +42,16 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
   Private Slack channels are mapped by ID: the Connect Slack app can't look them
   up by name.
-- Watchers do the work: `triage` labels each new firehose thread with jev, and
-  `investigate` hands `kind=bug` threads to Pi (`agent.ts`). Pi runs the `pi` CLI
-  in its own Vercel Sandbox with `vb`, `gh`, and git; its credentials are
-  placeholders that the sandbox's network policy swaps for real ones on the way
-  out, and GitHub is read-only there. Its `vb` talks to the production board,
-  the only one a sandbox can reach.
+- Watchers do the work. `triage` labels each firehose thread's `kind` with jev,
+  judging the whole thread whenever a person posts. `investigate` hands
+  `kind=bug` threads to Pi (`agent.ts`), and `follow-up` tells Pi when someone
+  replies; Pi reads what's new itself. Pi reproduces the bug, then opens a PR
+  from a `pi/<thread>` branch, or labels the thread `reproduced=no` and says why.
+- Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
+  per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
+  the sandbox's network policy swaps for real ones on the way out, refreshed with
+  every message. Its `vb` talks to the production board, the only one a sandbox
+  can reach.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
 

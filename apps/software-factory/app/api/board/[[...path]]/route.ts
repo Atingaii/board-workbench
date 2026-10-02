@@ -10,7 +10,7 @@ import {
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { experimental_evaluate as evaluate } from "ai";
-import { startPi } from "./agent";
+import { tellPi } from "./agent";
 
 // The software factory: vboard running on its own repo and BaseHub's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
@@ -52,26 +52,27 @@ export const { GET, POST, scheduler } = board({
     }),
   },
   watch: {
-    // Every new thread in the firehose (Slack and GitHub issues) gets a kind; bugs get 🐛 in Slack too.
+    // Every firehose thread (Slack and GitHub issues) gets a kind, judged from all of it,
+    // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
     triage: {
       tail: "firehose",
       run: async ({ event, board }) => {
         const message = event.message;
-        if (
-          event.type !== "message.posted" ||
-          !message ||
-          message.re !== null
-        ) {
+        if (event.type !== "message.posted" || !message || !byPerson(message)) {
           return;
         }
+        const thread = await board.thread(message.re ?? message.id);
         const { answers } = await evaluate({
           model: "typesafe-ai/jev",
-          state: message.text,
+          state: [thread.message, ...thread.replies].map((m) => ({
+            from: m.author?.name ?? m.by.actor,
+            text: m.text,
+          })),
           questions: {
             kind: {
               type: "choice",
               instructions:
-                "A message to the team that builds vboard, a message board library and CLI. What is it?",
+                "A conversation with the team that builds vboard, a message board library and CLI. What is it, as a whole?",
               criteria: {
                 bug: "Something in vboard is broken or behaves wrongly",
                 feature: "A request for something vboard doesn't do yet",
@@ -81,13 +82,17 @@ export const { GET, POST, scheduler } = board({
             },
           },
         });
-        await board.label(message.id, { set: { kind: answers.kind.choice } });
-        if (answers.kind.choice === "bug") {
-          await board.react(message.id, "bug");
+        const kind = answers.kind.choice;
+        if (thread.message.labels.kind === kind) {
+          return;
+        }
+        await board.label(thread.message.id, { set: { kind } });
+        if (kind === "bug") {
+          await board.react(thread.message.id, "bug");
         }
       },
     },
-    // A thread triage calls a bug gets Pi, which reproduces it and replies with the cause.
+    // A thread triage calls a bug goes to Pi, which reproduces it and opens a PR, or closes it.
     investigate: {
       tail: "firehose --label kind=bug",
       run: async ({ event }) => {
@@ -101,11 +106,37 @@ export const { GET, POST, scheduler } = board({
         ) {
           return;
         }
-        await startPi({
+        await tellPi({
           thread: message.id,
-          task: `Investigate the bug report in board thread #${message.id} (vb read ${message.id}). Reproduce it with a failing test if you can, find the cause, and reply in the thread with what you found.`,
+          key: "report",
+          message: `There's a bug report in board thread #${message.id}.`,
+        });
+      },
+    },
+    // Someone replied in a bug thread: Pi hears there's news, and reads it itself.
+    "follow-up": {
+      tail: "firehose --label kind=bug",
+      run: async ({ event }) => {
+        const message = event.message;
+        if (
+          event.type !== "message.posted" ||
+          !message ||
+          message.re === null ||
+          !byPerson(message)
+        ) {
+          return;
+        }
+        await tellPi({
+          thread: message.re,
+          key: `news-${message.id}`,
+          message: `There's new activity in board thread #${message.re}.`,
         });
       },
     },
   },
 });
+
+/** Written by a person, here or on a platform: not by Pi (a profile) or a watcher. */
+function byPerson(message: { by: { actor: string; profile: string | null } }) {
+  return message.by.profile === null && !message.by.actor.startsWith("vboard:");
+}
