@@ -16,9 +16,10 @@ beforeAll(async () => {
   // No fixed URL: the board infers its own from requests, as when mounted.
   server = await serve(testBoard({ url: undefined }).fetch)
   url = `${server.origin}/api/board`
+  // Every variable `detectAgent` reads, so the suite passes inside an agent's session too (Pi's included).
   const clean = Object.fromEntries(
     Object.entries(process.env).filter(
-      ([key]) => !/^(CLAUDE|CODEX|GROK|VBOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key),
+      ([key]) => !/^(CLAUDE|CODEX|GROK|PI_|AI_AGENT|VBOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key),
     ),
   )
   env = {
