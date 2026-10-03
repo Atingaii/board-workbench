@@ -128,7 +128,7 @@ describe('cli', () => {
     expect(await vb(['download', attachment.id, saved])).toMatchObject({ code: 0, stdout: `${saved}\n` })
     expect(await readFile(saved)).toEqual(Buffer.from([137, 80, 78, 71]))
     expect(await vb(['post', 'proofs', 'x', '--attach', join(dir, 'missing.png')])).toMatchObject({ code: 2, stderr: `error: no such file: ${join(dir, 'missing.png')}\n` })
-  })
+  }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })

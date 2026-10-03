@@ -465,7 +465,8 @@ export function createSyncEngine(options: {
     try {
       ids = await platform.uploadFiles(toChat(copy.thread), files)
     } catch (error) {
-      if (!platform.refusesFiles?.(error)) throw error
+      // Retried, and if it gives up, `message.sync_failed` says it was the files: the text is there.
+      if (!platform.refusesFiles?.(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
       const adapter = (await chatFor(keyOf(target))).getAdapter(platform.adapter.name)
@@ -473,6 +474,7 @@ export function createSyncEngine(options: {
         console.warn(`[vboard] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
+    // If this append fails after an upload, the retry uploads again: rare, and a duplicate beats a loss.
     await ctx.session.append(`files:${message.id}:${target}`, {
       type: 'message.files_synced',
       payload: { id: message.id, thread: message.thread, target, files: ids },
