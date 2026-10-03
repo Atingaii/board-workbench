@@ -30,7 +30,19 @@ type SlackClient = {
     join(args: { channel: string }): Promise<unknown>
   }
   users?: { info(args: { user: string }): Promise<{ user?: { profile?: { image_72?: string; image_48?: string } } }> }
+  files?: { delete(args: { file: string }): Promise<unknown> }
 }
+
+/** Slack's answers that mean "no files from this app", not "try again". */
+const REFUSED = new Set([
+  'missing_scope',
+  'not_allowed_token_type',
+  'no_permission',
+  'restricted_action',
+  'file_uploads_disabled',
+  'file_uploads_except_images_disabled',
+  'file_upload_size_restricted',
+])
 
 /** A Slack API error's code (`missing_scope`), with the scope it needed. */
 function slackError(error: unknown): string {
@@ -167,7 +179,17 @@ export function slack(options: {
     adapter: options.adapter,
     createChat: () => createChat(options.adapter),
     canStartThreads: true,
-    uploadsFiles: true,
+    // The adapter uploads files given without text as their own message: here, right after the text.
+    async uploadFiles(thread, files) {
+      const sent = await options.adapter.postMessage(thread, { markdown: '', files })
+      return ((sent.raw as { uploadedFileIds?: string[] } | null)?.uploadedFileIds ?? []).filter(Boolean)
+    },
+    refusesFiles: (error) => REFUSED.has((error as { data?: { error?: string } } | null)?.data?.error ?? ''),
+    async deleteFiles(ids) {
+      const web = await client()
+      for (const file of ids)
+        await web?.files?.delete({ file }).catch((error: unknown) => console.warn(`[vboard] slack: couldn't delete file ${file} (${slackError(error)})`))
+    },
     mappings: options.channels,
     // `#name` is looked up by name; anything else is a channel ID.
     async resolveChannel(key) {

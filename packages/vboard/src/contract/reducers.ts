@@ -202,7 +202,8 @@ export const actorsReducer = boardContract
   .fold(foldActors)
 
 /** A copy of a board message on a platform. */
-export type ExternalCopy = { thread: string; message: string }
+/** `files`: the platform's IDs for the message's files, or null when it refused them; unset until they're sent. */
+export type ExternalCopy = { thread: string; message: string; files?: string[] | null }
 
 export type SyncedThread = {
   root: number
@@ -262,9 +263,14 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
       }
       return state
     }
+    case 'message.files_synced': {
+      const copy = state.copies[event.payload.id]?.[event.payload.target]
+      if (copy) copy.files = event.payload.files
+      return state
+    }
     case 'message.synced': {
       const { id, target, external } = event.payload
-      ;(state.copies[id] ??= {})[target] = external
+      ;(state.copies[id] ??= {})[target] = { ...external }
       state.byExternalMessage[externalMessageKey(external.thread, external.message)] = id
       const thread = state.threads[event.payload.thread]
       if (thread && thread.root === id && !isThreadTarget(target)) {

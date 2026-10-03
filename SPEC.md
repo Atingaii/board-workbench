@@ -403,8 +403,11 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   an upload is one request. A message carries at most 10.
 - **Reading one takes a token,** like every read. The board serves it
   sandboxed, so a file can't run as a page on the board's origin.
-- **Deleting a message hides its attachments.** The bytes stay in the store:
-  an ID's bytes never change, and another message may carry the same file.
+- **Deleting a message hides its attachments, but doesn't revoke them.** The
+  board stops listing them, and the bytes stay in the store: an ID's bytes
+  never change, and another message may carry the same file. Anyone who has an
+  ID can still read the file with a token. A file that must not be read again
+  (a screenshot with a secret in it) needs deleting from the store itself.
 - **`vb inspect` shows them:** images and video inline, in a fixed frame so
   loading one doesn't move the page, and other files as chips that download.
   Its composer attaches files, or takes them pasted.
@@ -437,6 +440,7 @@ export const boardContract = contract({
     'labels.changed':    z.object({ id: MessageId, set: Labels, unset: z.array(LabelKey), by: Author }),
     'thread.synced':     z.object({ root: MessageId, target: ExternalTarget, cause: z.enum(['config', 'request']), by: Author }),
     'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage }), // (server)
+    'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: ActorKind, handle: Handle, name: z.string(), avatar: z.string().url().optional() }),
   },
@@ -1101,11 +1105,15 @@ written".
   entry's Chat SDK thread API: post, react, edit, or delete. It then records
   `message.synced`, so later edits and reactions can find the platform's copy.
 - **Attachments go where a platform takes them.** Slack gets the files
-  themselves, uploaded with the message. If Slack refuses the upload (the app
-  lacks `files:write`), the message goes without them, with a line per file
-  (`📎 after.png (17 KB, on the board: #812)`). GitHub has no upload API, so it
-  always gets those lines. Files that arrive from platforms aren't brought in
-  yet.
+  themselves: the text posts first, and its receipt is recorded, then the files
+  upload into the same thread as a message of their own, and
+  `message.files_synced` records Slack's IDs for them. So a failed upload
+  retries alone, without posting the text twice, and deleting the message on
+  the board deletes the files on Slack too. If Slack refuses files (say, the
+  app lacks `files:write`), the text is edited to add a line per file
+  (`📎 after.png (17 KB, on the board: #812)`), and later edits keep them.
+  GitHub has no upload API, so it always gets those lines. Files that arrive
+  from platforms aren't brought in yet.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
   that without it, the adapter doesn't recognize its own comments and replies to

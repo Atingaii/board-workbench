@@ -91,6 +91,17 @@ export const boardContract = contract({
       target: ExternalTarget,
       external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300) }),
     }),
+    /**
+     * Board message `id`'s files reached `target` after its text: `files` are the
+     * platform's IDs for them, or null when the platform refused files and the
+     * text got a line for each instead.
+     */
+    'message.files_synced': z.object({
+      id: MessageId,
+      thread: ThreadKey,
+      target: ExternalTarget,
+      files: z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable(),
+    }),
     /** A delivery that gave up: board message `id` didn't reach `target`, and `error` says why. */
     'message.sync_failed': z.object({
       id: MessageId,

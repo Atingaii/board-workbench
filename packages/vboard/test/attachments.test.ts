@@ -12,7 +12,7 @@ async function setup(options: Parameters<typeof testBoard>[0] = {}) {
   const board = testBoard(options)
   const token = await personToken()
   const fetch = ((input: RequestInfo | URL, init?: RequestInit) => board.fetch(new Request(input, init))) as typeof globalThis.fetch
-  return { board, client: createBoardClient({ url: BOARD_URL, token, fetch }), call: caller(board.fetch, token) }
+  return { board, token, client: createBoardClient({ url: BOARD_URL, token, fetch }), call: caller(board.fetch, token) }
 }
 
 describe('attachments', () => {
@@ -57,8 +57,27 @@ describe('attachments', () => {
   })
 
   it('refuses files over 4 MB, and uploads when the board has nowhere to keep them', async () => {
-    const { client } = await setup()
+    const { board, client, token } = await setup()
     await expect(client.upload({ data: new Uint8Array(4 * 1024 * 1024 + 1), name: 'big.bin' })).rejects.toMatchObject({ status: 413, code: 'too_large' })
+
+    // Without a content-length, the board stops reading once it's past the limit.
+    let sent = 0
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += 1024 * 1024
+        controller.enqueue(new Uint8Array(1024 * 1024))
+      },
+    })
+    const chunked = await board.fetch(
+      new Request(`${BOARD_URL}/attachments`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+        body: endless,
+        duplex: 'half',
+      } as RequestInit),
+    )
+    expect(chunked.status).toBe(413)
+    expect(sent).toBeLessThanOrEqual(6 * 1024 * 1024)
 
     vi.stubEnv('NODE_ENV', 'production')
     try {

@@ -176,6 +176,27 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
+const tooLarge = () => new HttpError(413, 'too_large', `attachments are at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
+
+/** The body, refused as soon as it's past `max`: with or without a `content-length`, it never reads more. */
+async function readCapped(request: Request, max: number): Promise<Uint8Array> {
+  if (Number(request.headers.get('content-length') ?? 0) > max) throw tooLarge()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for await (const chunk of request.body ?? []) {
+    size += chunk.byteLength
+    if (size > max) throw tooLarge()
+    chunks.push(chunk)
+  }
+  const body = new Uint8Array(size)
+  let at = 0
+  for (const chunk of chunks) {
+    body.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return body
+}
+
 /** Mounts a board: one log in one route. Create it once, at module scope. */
 export function board(options: BoardOptions = {}) {
   const blob = options.blob ?? defaultBlob()
@@ -386,10 +407,8 @@ export function board(options: BoardOptions = {}) {
           } catch {
             throw badRequest('`x-board-filename` is not URI-encoded')
           }
-          if (Number(request.headers.get('content-length') ?? 0) > ATTACHMENT_BYTES_MAX)
-            throw new HttpError(413, 'too_large', `attachments are at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
           const attachment = await writeUpload(blob, {
-            data: new Uint8Array(await request.arrayBuffer()),
+            data: await readCapped(request, ATTACHMENT_BYTES_MAX),
             name: decoded,
             type: request.headers.get('content-type'),
           })
