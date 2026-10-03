@@ -28,6 +28,10 @@ export const byPi = (thread: number, by: { profile: string | null; session: stri
 /** What Pi does in a thread: work a firehose thread (bug, feature, question), or review a pull request. */
 export type Task = "thread" | "review";
 
+/** How Pi keeps people company in any thread: they see it's on it, and get pinged when it answers. */
+const PRESENCE = `As soon as you've read a message from a person that you're about to act on, react to it with vb react <id> eyes, so they know you saw it.
+When you reply to a person, mention them so they're notified: use @[<actor id>] with the by.actor from vb read <id> --json (for example @[slack:user:U0456]), since a plain @handle can be ambiguous.`;
+
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
 A thread's kind label (bug, feature, question) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create that links the thread, and you reply with the PR link.
@@ -50,7 +54,10 @@ Don't push, approve, merge, or close the PR: people decide that.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it: answer questions, and review again if new commits landed (gh pr view <N> --json commits).
 Keep replies short, and end each with a list of what you ran.`;
 
-const INSTRUCTIONS: Record<Task, string> = { thread: THREAD, review: REVIEW };
+const INSTRUCTIONS: Record<Task, string> = {
+  thread: `${THREAD}\n${PRESENCE}`,
+  review: `${REVIEW}\n${PRESENCE}`,
+};
 
 const SETUP = `set -e
 command -v pi >/dev/null || npm install -g ${PI} vboard pnpm >/dev/null 2>&1
