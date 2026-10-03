@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { BoardEventView, InboxEntry } from '../../api/routes.ts'
+import type { Attachment } from '../../contract/schemas.ts'
 import { createBoardClient } from '../../client/client.ts'
 import * as store from './store.ts'
 
@@ -247,29 +248,77 @@ export const loadFiltered = (channel: string | undefined, filter: store.Filter) 
 
 // --- writes --------------------------------------------------------------------
 
-/** Shows a post at once; the board's answer replaces it. */
+/** A post's files, kept until it lands so a retry can send them again. */
+const outgoing = new Map<string, File[]>()
+
+/** Shows a post at once; the board's answer replaces it. Files upload first. */
 export async function send(
-  post: { channel: string; re: number | null; text: string; noSync: boolean; labels: Record<string, string> },
+  post: { channel: string; re: number | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[] },
   key: string = crypto.randomUUID(),
 ) {
-  const pending: store.Pending = { ...post, key, createdAt: new Date().toISOString(), error: null }
+  const files = post.files ?? outgoing.get(key) ?? []
+  outgoing.set(key, files)
+  const pending: store.Pending = {
+    channel: post.channel,
+    re: post.re,
+    text: post.text,
+    noSync: post.noSync,
+    labels: post.labels,
+    ...(files.length ? { files: files.map((f) => ({ name: f.name, size: f.size })) } : {}),
+    key,
+    createdAt: new Date().toISOString(),
+    error: null,
+  }
   set((s) => ({ ...s, pending: [...s.pending.filter((p) => p.key !== key), pending] }))
   try {
+    const attachments = await Promise.all(files.map((file) => client.upload({ data: file, name: file.name })))
     const options = {
       text: post.text,
       id: key,
+      ...(attachments.length ? { attachments } : {}),
       ...(post.noSync ? { noSync: true } : {}),
       ...(Object.keys(post.labels).length > 0 ? { labels: post.labels } : {}),
     }
     const sent = post.re === null ? await client.post(post.channel, options) : await client.reply(post.re, options)
+    outgoing.delete(key)
     set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent], sent.id))
   } catch (error) {
     set((s) => ({ ...s, pending: s.pending.map((p) => (p.key === key ? { ...p, error: message(error) } : p)) }))
   }
 }
 
-export const retry = (pending: store.Pending) => send(pending, pending.key)
-export const discard = (key: string) => set((s) => ({ ...s, pending: s.pending.filter((p) => p.key !== key) }))
+export const retry = ({ files: _shown, ...pending }: store.Pending) => send(pending, pending.key)
+
+// --- attachments -----------------------------------------------------------------
+
+const objectUrls = new Map<string, Promise<string>>()
+
+/** An attachment as a `blob:` URL. The page fetches it with its token: an `<img>` can't send one. */
+export function attachmentUrl(id: string): Promise<string> {
+  let url = objectUrls.get(id)
+  if (!url) {
+    url = client.download(id).then(async (response) => URL.createObjectURL(await response.blob()))
+    url.catch(() => objectUrls.delete(id))
+    objectUrls.set(id, url)
+  }
+  return url
+}
+
+/** Saves an attachment under its own name. */
+export async function saveAttachment(attachment: Attachment) {
+  try {
+    const link = document.createElement('a')
+    link.href = await attachmentUrl(attachment.id)
+    link.download = attachment.name
+    link.click()
+  } catch (error) {
+    toast(`couldn't download ${attachment.name}: ${message(error)}`)
+  }
+}
+export const discard = (key: string) => {
+  outgoing.delete(key)
+  set((s) => ({ ...s, pending: s.pending.filter((p) => p.key !== key) }))
+}
 
 /**
  * Applies a change at once and sends it. The board's next view of the message

@@ -1,9 +1,12 @@
 import { z } from 'zod'
 import {
+  AttachmentId,
+  ATTACHMENTS_PER_MESSAGE_MAX,
   ChannelPath,
   Emoji,
   LabelKey,
   Labels,
+  MESSAGE_TEXT_MAX,
   MessageId,
   MessageText,
 } from '../contract/schemas.ts'
@@ -56,12 +59,19 @@ export const PostBody = z
   .object({
     channel: ChannelPath.optional(),
     re: MessageId.optional(),
-    text: MessageText,
+    /** May be empty when the message has attachments. */
+    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
     /** External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. */
     sync: z.array(z.string().min(3).max(300)).max(10).optional(),
     id: z.string().min(1).max(200).optional(),
+    /** IDs from `POST /attachments`. */
+    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+  })
+  .refine((body) => body.text.trim().length > 0 || (body.attachments?.length ?? 0) > 0, {
+    message: 'message text is empty',
+    path: ['text'],
   })
   .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
     message: 'a post needs `channel`; a reply needs `re`',
@@ -167,6 +177,9 @@ export const routes = {
   webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },
   avatar: { method: 'GET', path: '/avatars/:name' },
+  /** The file is the body; `content-type` is its type and `x-board-filename` its name, URI-encoded. */
+  upload: { method: 'POST', path: '/attachments' },
+  attachment: { method: 'GET', path: '/attachments/:id' },
   openapi: { method: 'GET', path: '/openapi.json' },
 } as const
 

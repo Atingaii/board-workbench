@@ -21,6 +21,8 @@ export type Pending = {
   text: string
   noSync: boolean
   labels: Record<string, string>
+  /** Files going with it, shown while it's on its way. */
+  files?: { name: string; size: number }[]
   createdAt: string
   error: string | null
 }

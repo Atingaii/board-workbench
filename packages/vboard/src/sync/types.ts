@@ -1,4 +1,4 @@
-import type { Adapter, Author as ChatAuthor, Chat, Message as ChatMessage } from 'chat'
+import type { Adapter, Author as ChatAuthor, Chat, FileUpload, Message as ChatMessage } from 'chat'
 import type { BoardClient } from '../client/client.ts'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 
@@ -16,6 +16,16 @@ export type SyncPlatform = {
   createChat(): Chat
   /** Whether a new board thread can start a thread in one of its channels. */
   readonly canStartThreads: boolean
+  /**
+   * Uploads a message's files into its thread (a Chat SDK thread ID), after
+   * the message, and answers the platform's IDs for them. A platform without
+   * it gets a line per file in the text instead.
+   */
+  uploadFiles?(thread: string, files: FileUpload[]): Promise<string[]>
+  /** Whether an `uploadFiles` error means the platform won't take files, so lines stand in, rather than that it failed for now. */
+  refusesFiles?(error: unknown): boolean
+  /** Deletes files `uploadFiles` uploaded, when their message is deleted on the board. */
+  deleteFiles?(ids: string[]): Promise<void>
   /** Platform channel key → board channel (a mirror) or a function (an inbound handler). */
   readonly mappings: Readonly<Record<string, string | InboundFunction>>
   /** `#prs` → `C0123ABC`. */

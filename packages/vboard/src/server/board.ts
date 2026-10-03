@@ -3,6 +3,7 @@ import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Store, type A2Scheduler, type ServerOptions } from 'experimental-a2/server'
 import { boardContract, BOARD_SESSION, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, messagesReducer } from '../contract/reducers.ts'
+import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import {
   EditBody,
   EventsQuery,
@@ -31,7 +32,8 @@ import {
 } from './auth.ts'
 import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
-import { badRequest, forbidden, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
+import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
+import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId } from './identity.ts'
 import { createWatchers, type Watcher } from './watch.ts'
@@ -67,6 +69,11 @@ export type BoardOptions = {
   auth?: AuthOptions
   /** SSE streams close after this long, before the platform's limit; clients reconnect. */
   streamMaxMs?: number
+  /**
+   * Where attachments live: `vercelBlob()` from `vboard/blob`. Omitted: memory
+   * in tests, `.a2/attachments` in development, and no uploads in production.
+   */
+  blob?: BlobStore
 }
 
 const boardServer = (options: BoardOptions) =>
@@ -98,6 +105,8 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'POST', name: 'webhook', pattern: /\/webhooks\/([A-Za-z0-9_-]+)$/ },
   { method: 'GET', name: 'avatar', pattern: /\/avatars\/([a-z0-9-]+)$/ },
   { method: 'GET', name: 'openapi', pattern: /\/openapi\.json$/ },
+  { method: 'POST', name: 'upload', pattern: /\/attachments$/ },
+  { method: 'GET', name: 'attachment', pattern: /\/attachments\/([A-Za-z0-9_-]+)$/ },
 ]
 
 type BoardHandlers = NonNullable<ServerOptions<BoardEvents>['handlers']>
@@ -167,11 +176,33 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
+const tooLarge = () => new HttpError(413, 'too_large', `attachments are at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
+
+/** The body, refused as soon as it's past `max`: with or without a `content-length`, it never reads more. */
+async function readCapped(request: Request, max: number): Promise<Uint8Array> {
+  if (Number(request.headers.get('content-length') ?? 0) > max) throw tooLarge()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for await (const chunk of request.body ?? []) {
+    size += chunk.byteLength
+    if (size > max) throw tooLarge()
+    chunks.push(chunk)
+  }
+  const body = new Uint8Array(size)
+  let at = 0
+  for (const chunk of chunks) {
+    body.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return body
+}
+
 /** Mounts a board: one log in one route. Create it once, at module scope. */
 export function board(options: BoardOptions = {}) {
+  const blob = options.blob ?? defaultBlob()
   const engine =
     options.sync && Object.keys(options.sync).length > 0
-      ? createSyncEngine({ entries: options.sync, store: options.store, scheduler: options.scheduler })
+      ? createSyncEngine({ entries: options.sync, store: options.store, scheduler: options.scheduler, blob })
       : null
   const watchers =
     options.watch && Object.keys(options.watch).length > 0
@@ -330,7 +361,9 @@ export function board(options: BoardOptions = {}) {
           require(principal, 'post')
           const body = PostBody.parse(await readJson(request))
           if (body.sync?.length) require(principal, 'sync')
+          const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
           const message = await writePost(writes, {
+            attachments,
             identity,
             channel: body.channel,
             re: body.re,
@@ -365,6 +398,24 @@ export function board(options: BoardOptions = {}) {
           await writeLabels(writes, { identity, id: match.id!, set: body.set, unset: body.unset })
           return json({ ok: true })
         }
+        case 'upload': {
+          require(principal, 'post')
+          const name = request.headers.get('x-board-filename')
+          let decoded: string | null = null
+          try {
+            decoded = name === null ? null : decodeURIComponent(name)
+          } catch {
+            throw badRequest('`x-board-filename` is not URI-encoded')
+          }
+          const attachment = await writeUpload(blob, {
+            data: await readCapped(request, ATTACHMENT_BYTES_MAX),
+            name: decoded,
+            type: request.headers.get('content-type'),
+          })
+          return json({ attachment }, 201)
+        }
+        case 'attachment':
+          return await attachmentResponse(blob, match.param!)
         case 'sync': {
           require(principal, 'sync')
           const body = SyncBody.parse(await readJson(request))

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -109,6 +109,26 @@ describe('cli', () => {
     expect(answered.code).toBe(0)
     expect(JSON.parse(answered.stdout).message.text).toBe('me!')
   })
+
+  it('attaches files, shows them, and downloads them', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vboard-files-'))
+    const shot = join(dir, 'after.png')
+    await writeFile(shot, Buffer.from([137, 80, 78, 71]))
+    const posted = await vb(['post', 'proofs', '--attach', shot])
+    expect(posted).toMatchObject({ code: 0, stderr: '' })
+    const id = posted.stdout.trim()
+    const reply = await vb(['reply', id, 'and the log', '--attach', shot, '--json'])
+    const [attachment] = JSON.parse(reply.stdout).attachments
+    expect(attachment).toMatchObject({ name: 'after.png', type: 'image/png', size: 4 })
+
+    const read = await vb(['read', id])
+    expect(read.stdout).toContain(`📎 after.png · image/png · 4 B · ${attachment.id}`)
+
+    const saved = join(dir, 'copy.png')
+    expect(await vb(['download', attachment.id, saved])).toMatchObject({ code: 0, stdout: `${saved}\n` })
+    expect(await readFile(saved)).toEqual(Buffer.from([137, 80, 78, 71]))
+    expect(await vb(['post', 'proofs', 'x', '--attach', join(dir, 'missing.png')])).toMatchObject({ code: 2, stderr: `error: no such file: ${join(dir, 'missing.png')}\n` })
+  }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })

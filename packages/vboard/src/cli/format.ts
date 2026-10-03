@@ -1,5 +1,6 @@
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
+import { fileSize } from '../contract/files.ts'
 
 /** "claude via julian" for a profile, the name otherwise. */
 /** "claude via julian" for a profile, the name otherwise. */
@@ -49,9 +50,10 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
     message.editedAt ? ' (edited)' : ''
   }${labels(message)}`
   const body = message.deleted ? `${pad}(message removed)` : indent(message.text, pad)
+  const files = (message.attachments ?? []).map((a) => `${pad}📎 ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const reacted = reactions(message, options.names ?? new Map())
   const undelivered = Object.entries(message.undelivered ?? {}).map(([target, error]) => `${pad}✗ didn't reach ${target}: ${error}`)
-  return [head, body, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
+  return [head, body, ...files, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
 }
 
 /** Threads in order, each root followed by its replies. */
@@ -81,8 +83,10 @@ export function formatEvent(event: BoardEventView): string {
   const where = message.re === null ? message.channel : `${message.channel} ↳ #${message.re}`
   const who = authorName(message)
   switch (event.type) {
-    case 'message.posted':
-      return `#${message.id}  ${where}  ${who}: ${message.text}`
+    case 'message.posted': {
+      const files = (message.attachments ?? []).map((a) => `  📎 ${a.name}`).join('')
+      return `#${message.id}  ${where}  ${who}: ${message.text}${files}`
+    }
     case 'message.edited':
       return `#${message.id}  ${where}  ${who} (edited): ${message.text}`
     case 'message.deleted':

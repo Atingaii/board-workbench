@@ -17,9 +17,12 @@ import {
   messagesReducer,
   syncReducer,
   type ActorsState,
+  type ExternalCopy,
   type Message,
 } from '../contract/reducers.ts'
+import { fileSize } from '../contract/files.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
+import { readAttachmentData, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import type { BoardSession } from '../server/board.ts'
 import { badRequest, notFound } from '../server/errors.ts'
@@ -65,6 +68,8 @@ export function createSyncEngine(options: {
   entries: Record<string, SyncPlatform>
   store?: A2Store | undefined
   scheduler?: A2Scheduler | undefined
+  /** Where attachments' bytes are, for platforms that take uploads. */
+  blob?: BlobStore | null
 }) {
   const entries = options.entries
   let binding: BoardBinding | null = null
@@ -397,6 +402,20 @@ export function createSyncEngine(options: {
     return { markdown: `${quoted}**${name}**: ${message.text}` }
   }
 
+  /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
+  const attachmentNotes = (message: Message) =>
+    message.attachments.map((a) => `\n📎 ${a.name} (${fileSize(a.size)}, on the board: #${message.id})`).join('')
+
+  /**
+   * `render`, with a line per file where the files won't follow: on a platform
+   * that takes no uploads, or one that refused them (`noted`).
+   */
+  const renderFor = (key: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
+    const { markdown } = render(message, actors, quote)
+    const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadFiles || !options.blob)
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown }
+  }
+
   type Ctx<K extends keyof BoardEvents> = HandlerContext<BoardEvents, K>
 
   async function latest(ctx: Ctx<keyof BoardEvents>) {
@@ -421,10 +440,44 @@ export function createSyncEngine(options: {
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
     const chat = await chatFor(keyOf(target))
-    const sent = await chat.thread(toChat(place)).post(render(message, state.actors, inSubthread ? undefined : replyTo))
+    const sent = await chat.thread(toChat(place)).post(renderFor(keyOf(target), message, state.actors, inSubthread ? undefined : replyTo))
+    const external = { thread: place, message: sent.id }
     await ctx.session.append(`receipt:${message.id}:${target}`, {
       type: 'message.synced',
-      payload: { id: message.id, thread: message.thread, target, external: { thread: place, message: sent.id } },
+      payload: { id: message.id, thread: message.thread, target, external },
+    })
+    return external
+  }
+
+  /**
+   * A message's files, into the thread its text went to, once. The text's
+   * receipt comes first, so a retry sends only what's missing. If the platform
+   * refuses files, the text gets a line for each; any other failure retries.
+   */
+  async function deliverFiles(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy, actors: ActorsState) {
+    const platform = platformOf(keyOf(target))
+    const blob = options.blob
+    if (!platform.uploadFiles || !blob || message.attachments.length === 0 || copy.files !== undefined) return
+    const files = await Promise.all(
+      message.attachments.map(async (a) => ({ data: Buffer.from(await readAttachmentData(blob, a.id)), filename: a.name, mimeType: a.type })),
+    )
+    let ids: string[] | null
+    try {
+      ids = await platform.uploadFiles(toChat(copy.thread), files)
+    } catch (error) {
+      // Retried, and if it gives up, `message.sync_failed` says it was the files: the text is there.
+      if (!platform.refusesFiles?.(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
+      console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
+      ids = null
+      const adapter = (await chatFor(keyOf(target))).getAdapter(platform.adapter.name)
+      await adapter.editMessage(toChat(copy.thread), copy.message, renderFor(keyOf(target), message, actors, undefined, true)).catch((edit: unknown) =>
+        console.warn(`[vboard] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
+      )
+    }
+    // If this append fails after an upload, the retry uploads again: rare, and a duplicate beats a loss.
+    await ctx.session.append(`files:${message.id}:${target}`, {
+      type: 'message.files_synced',
+      payload: { id: message.id, thread: message.thread, target, files: ids },
     })
   }
 
@@ -467,23 +520,33 @@ export function createSyncEngine(options: {
     if (!externalThread) {
       try {
         const chat = await chatFor(keyOf(target))
-        const sent = await chat.channel(toChat(target)).post(render(root, state.actors))
+        const sent = await chat.channel(toChat(target)).post(renderFor(keyOf(target), root, state.actors))
         externalThread = toExternal(keyOf(target), sent.threadId)
+        const external = { thread: externalThread, message: sent.id }
         await ctx.session.append(`receipt:${root.id}:${target}`, {
           type: 'message.synced',
-          payload: { id: root.id, thread, target, external: { thread: externalThread, message: sent.id } },
+          payload: { id: root.id, thread, target, external },
         })
+        await deliverFiles(ctx, root, target, external, state.actors)
       } catch (error) {
         return settle(ctx, thread, [{ id: root.id, target, error }])
       }
+    } else {
+      const copy = state.sync.copies[root.id]?.[target]
+      if (copy)
+        try {
+          await deliverFiles(ctx, root, target, copy, state.actors)
+        } catch (error) {
+          return settle(ctx, thread, [{ id: root.id, target, error }])
+        }
     }
     const failures: Failure[] = []
     for (const replyId of state.messages.replies[root.id] ?? []) {
       const reply = state.messages.byId[replyId]
       if (!reply || reply.deleted || reply.noSync || cameFrom(reply, target)) continue
-      if (state.sync.copies[replyId]?.[target]) continue
       try {
-        await postReply(ctx, state, reply, target, externalThread)
+        const copy = state.sync.copies[replyId]?.[target] ?? (await postReply(ctx, state, reply, target, externalThread))
+        await deliverFiles(ctx, reply, target, copy, state.actors)
       } catch (error) {
         failures.push({ id: replyId, target, error })
       }
@@ -506,9 +569,10 @@ export function createSyncEngine(options: {
     for (const target of synced.targets) {
       const externalThread = synced.external[target]
       if (!externalThread) continue // the root isn't there yet; its thread.synced handler backfills
-      if (cameFrom(message, target) || state.sync.copies[message.id]?.[target]) continue
+      if (cameFrom(message, target)) continue
       try {
-        await postReply(ctx, state, message, target, externalThread)
+        const copy = state.sync.copies[message.id]?.[target] ?? (await postReply(ctx, state, message, target, externalThread))
+        await deliverFiles(ctx, message, target, copy, state.actors)
       } catch (error) {
         failures.push({ id: message.id, target, error })
       }
@@ -529,8 +593,13 @@ export function createSyncEngine(options: {
       try {
         const adapter = (await chatFor(keyOf(target))).getAdapter(platformOf(keyOf(target)).adapter.name)
         const chatThread = toChat(copy.thread)
-        if (event.type === 'message.edited' && message) await adapter.editMessage(chatThread, copy.message, render(message, state.actors))
-        else if (event.type === 'message.deleted') await adapter.deleteMessage(chatThread, copy.message)
+        if (event.type === 'message.edited' && message)
+          await adapter.editMessage(chatThread, copy.message, renderFor(keyOf(target), message, state.actors, undefined, copy.files === null))
+        else if (event.type === 'message.deleted') {
+          await adapter.deleteMessage(chatThread, copy.message)
+          // The files went as a message of their own.
+          if (copy.files?.length) await platformOf(keyOf(target)).deleteFiles?.(copy.files)
+        }
         else if (event.type === 'reaction.added') await adapter.addReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
         else if (event.type === 'reaction.removed') await adapter.removeReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
       } catch (error) {

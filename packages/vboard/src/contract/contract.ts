@@ -2,6 +2,8 @@ import { contract, type ContractEvent } from 'experimental-a2'
 import { z } from 'zod'
 import {
   ActorId,
+  Attachment,
+  ATTACHMENTS_PER_MESSAGE_MAX,
   SeenActorKind,
   Author,
   ChannelPath,
@@ -41,7 +43,8 @@ export const boardContract = contract({
   events: {
     'message.posted': z.object({
       channel: ChannelPath,
-      text: MessageText,
+      /** Empty only when the message has attachments. */
+      text: z.union([MessageText, z.literal('')]),
       /** The thread root, or null for a root. */
       re: MessageId.nullable(),
       /** The exact message replied to, when it isn't the root. */
@@ -53,6 +56,8 @@ export const boardContract = contract({
       by: Author,
       origin: Origin.nullable(),
       from: From,
+      /** Files on the message. Events written before attachments have none. */
+      attachments: z.array(Attachment).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     }),
     'message.edited': z.object({
       id: MessageId,
@@ -85,6 +90,17 @@ export const boardContract = contract({
       thread: ThreadKey,
       target: ExternalTarget,
       external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300) }),
+    }),
+    /**
+     * Board message `id`'s files reached `target` after its text: `files` are the
+     * platform's IDs for them, or null when the platform refused files and the
+     * text got a line for each instead.
+     */
+    'message.files_synced': z.object({
+      id: MessageId,
+      thread: ThreadKey,
+      target: ExternalTarget,
+      files: z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable(),
     }),
     /** A delivery that gave up: board message `id` didn't reach `target`, and `error` says why. */
     'message.sync_failed': z.object({

@@ -20,6 +20,8 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
   const posts: { threadId: string; text: string; id: string }[] = []
   const channelPosts: { channelId: string; text: string; id: string }[] = []
   const reactions: { threadId: string; messageId: string; emoji: string; added: boolean }[] = []
+  const edits: { threadId: string; messageId: string; text: string }[] = []
+  const deletes: { threadId: string; messageId: string }[] = []
   const author = (user: string, name = user) => ({ userId: user, userName: name, fullName: name, isBot: false, isMe: false })
   const adapter: Adapter = createMockAdapter(name, {
     name,
@@ -61,7 +63,16 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     postMessage: async (threadId: string, message: AdapterPostableMessage) => {
       const id = `m${++next}`
       posts.push({ threadId, text: textOf(message), id })
-      return { id, threadId, raw: {} }
+      // Like Slack's adapter: files upload as their own message, and their IDs come back.
+      const files = typeof message === 'object' && 'files' in message ? (message.files ?? []) : []
+      return { id, threadId, raw: files.length ? { uploadedFileIds: files.map((f) => `F_${f.filename}`) } : {} }
+    },
+    editMessage: async (threadId: string, messageId: string, message: AdapterPostableMessage) => {
+      edits.push({ threadId, messageId, text: textOf(message) })
+      return { id: messageId, threadId, raw: {} }
+    },
+    deleteMessage: async (threadId: string, messageId: string) => {
+      deletes.push({ threadId, messageId })
     },
     postChannelMessage: async (channelId: string, message: AdapterPostableMessage) => {
       const id = `t${++next}`
@@ -76,7 +87,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     },
   } as Partial<Adapter>)
   extend(adapter)
-  return { adapter, posts, channelPosts, reactions }
+  return { adapter, posts, channelPosts, reactions, edits, deletes }
 }
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
@@ -206,6 +217,104 @@ describe('sync', () => {
     expect(s.posts[0]).toMatchObject({ threadId: 'slack:C1:100' })
     expect(s.posts[0]!.text).toContain('looking into it')
     expect(s.channelPosts).toHaveLength(0) // a thread that came from Slack is never re-posted to its channel
+  })
+
+  it('uploads attachments to Slack after the text, and notes them on GitHub, which takes no uploads', async () => {
+    const files = { delete: vi.fn(async () => ({ ok: true })) }
+    const { board, s, g, webhook } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }, files } })
+    const token = await personToken()
+    const julian = caller(board.fetch, token)
+    const upload = async (name: string) => {
+      const response = await board.fetch(
+        new Request(`${BOARD_URL}/attachments`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-board-filename': name },
+          body: new Uint8Array([1, 2, 3]),
+        }),
+      )
+      return ((await response.json()) as { attachment: { id: string } }).attachment.id
+    }
+
+    // A Slack thread: the reply's text goes first, then its file, into the same thread.
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:1727.1', id: '1727.1', text: 'login is broken', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    const reply = (await julian('POST', '/messages', { re: root!.id, text: 'fixed, see after', attachments: [await upload('after.png')] })).body.message
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(s.posts.map((p) => p.threadId)).toEqual(['slack:C1:1727.1', 'slack:C1:1727.1'])
+    expect(JSON.parse(s.posts[0]!.text)).toEqual({ markdown: expect.stringContaining('fixed, see after') })
+    expect(s.posts[0]!.text).not.toContain('📎')
+    expect(JSON.parse(s.posts[1]!.text)).toMatchObject({ markdown: '', files: [{ filename: 'after.png', mimeType: 'image/png' }] })
+
+    // Deleting it on the board deletes the text and the files Slack made a message of.
+    await julian('POST', `/messages/${reply.id}/delete`, {})
+    await vi.waitFor(() => expect(files.delete).toHaveBeenCalledWith({ file: 'F_after.png' }))
+    expect(s.deletes).toEqual([{ threadId: 'slack:C1:1727.1', messageId: s.posts[0]!.id }])
+
+    // A PR thread: GitHub gets a note instead.
+    await webhook(
+      'github',
+      {
+        action: 'opened',
+        repository: { full_name: 'basehub-ai/vboard' },
+        sender: { login: 'julianbenegas', id: 42 },
+        pull_request: { number: 7, title: 'Fix login', html_url: 'https://github.com/basehub-ai/vboard/pull/7', draft: false, merged: false },
+      },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 'att1' },
+    )
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const [pr] = await read(julian, 'prs')
+    const proof = (await julian('POST', '/messages', { re: pr!.id, text: '', attachments: [await upload('proof.png')] })).body.message
+    await vi.waitFor(() => expect(g.posts).toHaveLength(1))
+    expect(g.posts[0]!.text).toContain(`📎 proof.png (3 B, on the board: #${proof.id})`)
+    expect(g.posts[0]!.text).not.toContain('"files"')
+  })
+
+  it('notes the files in the text when Slack refuses them, and retries any other failure without posting the text twice', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { board, s, webhook } = setup()
+    const post = s.adapter.postMessage.bind(s.adapter)
+    let answer: string | null = 'ratelimited'
+    s.adapter.postMessage = async (threadId, message) => {
+      if (typeof message === 'object' && 'files' in message && message.files?.length && answer) {
+        const code = answer
+        if (code === 'ratelimited') answer = 'missing_scope'
+        throw Object.assign(new Error(code), { data: { error: code } })
+      }
+      return post(threadId, message)
+    }
+    const token = await personToken()
+    const julian = caller(board.fetch, token)
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:1727.2', id: '1727.2', text: 'broken', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    const uploaded = await board.fetch(
+      new Request(`${BOARD_URL}/attachments`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'text/plain', 'x-board-filename': 'repro.log' },
+        body: 'stack trace',
+      }),
+    )
+    const { attachment } = (await uploaded.json()) as { attachment: { id: string } }
+    const { body } = await julian('POST', '/messages', { re: root!.id, text: 'logs', attachments: [attachment.id] })
+
+    // A rate limit retries the upload alone (each drain is the next attempt); the refusal that follows notes the file in the text.
+    await vi.waitFor(async () => {
+      await board.servers[0]!.drain('board')
+      expect(s.edits).toHaveLength(1)
+    })
+    expect(s.posts).toHaveLength(1)
+    expect(s.posts[0]!.text).not.toContain('📎')
+    expect(s.edits[0]).toMatchObject({ messageId: s.posts[0]!.id, text: expect.stringContaining('📎 repro.log') })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("won't take"))
+
+    // An edit keeps the notes, since the files never went.
+    await julian('POST', `/messages/${body.message.id}/edit`, { text: 'logs, again' })
+    await vi.waitFor(() => expect(s.edits).toHaveLength(2))
+    expect(s.edits[1]!.text).toContain('📎 repro.log')
+    warn.mockRestore()
+    error.mockRestore()
   })
 
   it('starts a Slack thread for a board root in a mirrored channel, then follows it', async () => {
