@@ -67,6 +67,19 @@ describe('watchers', () => {
     expect(wake.events[1]!.message).toMatchObject({ text: 'still broken', re: root.id })
   })
 
+  it('wake on replies in labeled threads only, like a review watcher on `prs --label pr`', async () => {
+    const review = recorder('prs --label pr')
+    const { fetch } = testBoard({ watch: { review: review.watcher } })
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    const pr = (await julian('POST', '/messages', { channel: 'prs', text: 'PR #12', labels: { pr: 'acme/www#12' } })).body.message
+    const chat = (await julian('POST', '/messages', { channel: 'prs', text: 'who owns the release?' })).body.message
+    await julian('POST', '/messages', { re: chat.id, text: 'me' })
+    await julian('POST', '/messages', { re: pr.id, text: 'looks good' })
+
+    await vi.waitFor(() => expect(review.events.map((event) => event.message?.text)).toEqual(['PR #12', 'looks good']))
+  })
+
   it('wake for any of a label\'s values, and not for others', async () => {
     const wake = recorder('--label kind=bug|feature|question')
     const { fetch } = testBoard({ watch: { wake: wake.watcher } })
