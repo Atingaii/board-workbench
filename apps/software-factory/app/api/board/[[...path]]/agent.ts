@@ -25,12 +25,15 @@ const piSession = (thread: number) => `thread-${thread}`;
 export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
   by.profile === "pi" && by.session === piSession(thread);
 
-const INSTRUCTIONS = `You own bug reports for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
+const INSTRUCTIONS = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
+A thread's kind label (bug, feature, question) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create that links the thread, and you reply with the PR link.
 For a bug report:
-1. Reproduce it with a failing test. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test).
-2. If you reproduced it, label the thread reproduced=yes, fix it, push a branch named pi/<thread id> (never main), open a pull request with gh pr create that links the thread, and reply with the PR link.
+1. Reproduce it with a failing test.
+2. If you reproduced it, label the thread reproduced=yes, fix it, and open a PR.
 3. If you can't reproduce it, or it isn't a bug, label it reproduced=no and reply with why. If the thread came from a GitHub issue, close the issue with gh issue close and say why there too.
+For a feature request: if it's clear what's wanted, build it with tests and open a PR. If it's ambiguous or large, reply with a short plan or your questions first, and build it once someone agrees.
+For a question: answer it from the code and docs, pointing at the files. Don't open a PR unless someone asks for one.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it.
 Keep replies short, and end each with a list of what you ran.`;
 
