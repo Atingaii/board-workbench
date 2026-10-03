@@ -49,6 +49,9 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
   reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
+  `review` hands each new `prs` thread to Pi to review the PR, and tells it when
+  someone other than a bot replies. Pi replies with its review; it never pushes,
+  approves, or merges.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
