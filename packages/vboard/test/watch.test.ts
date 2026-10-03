@@ -67,6 +67,22 @@ describe('watchers', () => {
     expect(wake.events[1]!.message).toMatchObject({ text: 'still broken', re: root.id })
   })
 
+  it('wake for any of a label\'s values, and not for others', async () => {
+    const wake = recorder('--label kind=bug|feature|question')
+    const { fetch } = testBoard({ watch: { wake: wake.watcher } })
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    const noise = (await julian('POST', '/messages', { channel: 'firehose', text: 'lunch?' })).body.message
+    await julian('POST', `/messages/${noise.id}/labels`, { set: { kind: 'noise' } })
+    await julian('POST', '/messages', { re: noise.id, text: 'pizza' })
+    const feature = (await julian('POST', '/messages', { channel: 'firehose', text: 'add exports' })).body.message
+    await julian('POST', `/messages/${feature.id}/labels`, { set: { kind: 'feature' } })
+    await julian('POST', '/messages', { re: feature.id, text: 'csv please' })
+
+    await vi.waitFor(() => expect(wake.types()).toEqual(['labels.changed', 'message.posted']))
+    expect(wake.events.map((event) => event.message?.re ?? event.message?.id)).toEqual([feature.id, feature.id])
+  })
+
   it('match mentions by handle', async () => {
     const pinged = recorder('--mentions @ada')
     const { fetch } = testBoard({ watch: { pinged: pinged.watcher } })

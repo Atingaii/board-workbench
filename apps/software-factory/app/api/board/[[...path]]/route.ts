@@ -12,6 +12,15 @@ import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { experimental_evaluate as evaluate } from "ai";
 import { byPi, tellPi } from "./agent";
 
+/** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
+const PI_TASKS = {
+  bug: "a bug report",
+  feature: "a feature request",
+  question: "a question",
+} as const;
+const PI_KINDS = Object.keys(PI_TASKS) as (keyof typeof PI_TASKS)[];
+const isPiKind = (kind: string): kind is keyof typeof PI_TASKS => kind in PI_TASKS;
+
 // The software factory: vboard running on its own repo and BaseHub's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
 const env = process.env.VERCEL_ENV;
@@ -96,24 +105,22 @@ export const { GET, POST, scheduler } = board({
         }
       },
     },
-    // Pi watches bug threads: it gets the report once triage calls it a bug, and hears
-    // when anyone else replies, then reads what's new itself.
+    // Pi watches every thread worth acting on (bugs, features, questions; not noise): it
+    // gets the thread once triage gives it one of those kinds, is told again if the kind
+    // changes, and hears when anyone else replies, then reads what's new itself.
     pi: {
-      tail: "firehose --label kind=bug",
+      tail: `firehose --label kind=${PI_KINDS.join("|")}`,
       run: async ({ event }) => {
         const message = event.message;
         if (!message) {
           return;
         }
-        if (
-          event.type === "labels.changed" &&
-          event.payload.set.kind === "bug" &&
-          message.re === null
-        ) {
+        const kind = event.type === "labels.changed" ? event.payload.set.kind : undefined;
+        if (kind && isPiKind(kind) && message.re === null) {
           await tellPi({
             thread: message.id,
-            key: "report",
-            message: `There's a bug report in board thread #${message.id}.`,
+            key: `kind-${kind}`,
+            message: `There's ${PI_TASKS[kind]} in board thread #${message.id}.`,
           });
         } else if (
           event.type === "message.posted" &&
