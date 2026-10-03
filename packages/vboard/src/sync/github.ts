@@ -71,17 +71,11 @@ function tagsOf(item: Item): Record<string, string> {
   return Object.fromEntries(tags.filter((tag) => tag !== null))
 }
 
-/** `labeled`, `unlabeled`, `assigned`, `unassigned`: the one label they set or unset. */
-function tagChange(action: string, body: Record<string, unknown>): { labels: Record<string, string>; unset: string[] } | null {
-  const tag =
-    action === 'labeled' || action === 'unlabeled'
-      ? tagOf('tag', (body.label as Label | undefined)?.name)
-      : action === 'assigned' || action === 'unassigned'
-        ? tagOf('assignee', (body.assignee as User | undefined)?.login)
-        : null
-  if (!tag) return null
-  return action.startsWith('un') ? { labels: {}, unset: [tag[0]] } : { labels: Object.fromEntries([tag]), unset: [] }
-}
+/** Actions that change only labels and assignees, which every PR and issue event reconciles. */
+const TAG_ACTIONS = ['labeled', 'unlabeled', 'assigned', 'unassigned']
+
+/** The label key prefixes the mirror owns on a GitHub root: keys under them that GitHub doesn't have are unset. */
+const OWNED = ['tag.', 'assignee.']
 
 type Lifecycle = Omit<Extract<ExternalEvent, { kind: 'lifecycle' }>, 'kind' | 'channel' | 'thread' | 'author'>
 
@@ -90,12 +84,11 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
   const action = String(body.action ?? '')
   const sender = body.sender as User | undefined
   if (name === 'pull_request') {
-    const pr = body.pull_request as Item & { number: number; title: string; html_url: string; draft?: boolean; merged?: boolean }
-    const pr_label = { pr: `${(body.repository as { full_name: string }).full_name}#${pr.number}`, ...tagsOf(pr) }
+    const pr = body.pull_request as { number: number; title: string; html_url: string; draft?: boolean; merged?: boolean }
+    const pr_label = { pr: `${(body.repository as { full_name: string }).full_name}#${pr.number}` }
     const base = { title: `PR #${pr.number}: ${pr.title}`, url: pr.html_url, unset: [] as string[] }
-    const change = tagChange(action, body)
-    if (change)
-      return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, ...change, type: `pr.${action}`, reply: null, createRoot: false } }
+    if (TAG_ACTIONS.includes(action))
+      return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: `pr.${action}`, labels: {}, reply: null, createRoot: false } }
     switch (action) {
       case 'opened':
         return {
@@ -153,12 +146,11 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
     }
   }
   if (name === 'issues') {
-    const issue = body.issue as Item & { number: number; title: string; html_url: string }
-    const label = { issue: `${(body.repository as { full_name: string }).full_name}#${issue.number}`, ...tagsOf(issue) }
+    const issue = body.issue as { number: number; title: string; html_url: string }
+    const label = { issue: `${(body.repository as { full_name: string }).full_name}#${issue.number}` }
     const base = { title: `Issue #${issue.number}: ${issue.title}`, url: issue.html_url, unset: [] as string[] }
-    const change = tagChange(action, body)
-    if (change)
-      return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, ...change, type: `issue.${action}`, reply: null, createRoot: false } }
+    if (TAG_ACTIONS.includes(action))
+      return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: `issue.${action}`, labels: {}, reply: null, createRoot: false } }
     if (action === 'opened')
       return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: 'issue.opened', labels: { ...label, state: 'open' }, reply: null, createRoot: true } }
     if (action === 'closed')
@@ -224,6 +216,9 @@ export function github(options: {
       }
       const found = lifecycle(name, parsed)
       if (!found) return []
+      // Every PR and issue event carries all of its labels and assignees, so each one reconciles them.
+      const item = (parsed.pull_request ?? parsed.issue) as Item | undefined
+      if (item) Object.assign(found.lifecycle, { labels: { ...tagsOf(item), ...found.lifecycle.labels }, owns: OWNED })
       const repo = (parsed.repository as { full_name: string }).full_name
       const thread = name === 'issues' ? `${key}:${repo}:issue:${found.number}` : `${key}:${repo}:${found.number}`
       const delivery = headers.get('x-github-delivery') ?? `${name}:${found.lifecycle.type}:${found.number}`

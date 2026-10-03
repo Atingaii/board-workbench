@@ -167,6 +167,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     url: z.string().nullable(),
     labels: z.record(z.string(), z.string()),
     unset: z.array(z.string()),
+    /** Key prefixes the platform owns on the root, e.g. `tag.`: keys under them that aren't in `labels` are unset. */
+    owns: z.array(z.string()).optional(),
     /** A reply to add to the thread, e.g. "merged by julian". */
     reply: z.string().nullable(),
     /** Create the root if the board hasn't seen this thread. */
