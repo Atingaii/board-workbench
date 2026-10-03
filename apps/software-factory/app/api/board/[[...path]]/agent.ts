@@ -30,7 +30,7 @@ export type Task = "thread" | "review";
 
 /** How Pi keeps people company in any thread: they see it's on it, and get pinged when it answers. */
 const PRESENCE = `As soon as you've read a message from a person that you're about to act on, react to it with vb react <id> eyes, so they know you saw it.
-When you reply to a person, mention them so they're notified: use @[<actor id>] with the by.actor from vb read <id> --json (for example @[slack:user:U0456]), since a plain @handle can be ambiguous.`;
+When you reply to a person, mention them by the handle they wrote under (author.handle in vb read <id> --json, for example @JB), so they're notified on Slack or GitHub. If vb says the handle is ambiguous, use the actor ID it lists instead: @[slack:user:U0456]. Mention each person once, not in every line.`;
 
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
