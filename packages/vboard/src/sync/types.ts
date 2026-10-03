@@ -16,6 +16,8 @@ export type SyncPlatform = {
   createChat(): Chat
   /** Whether a new board thread can start a thread in one of its channels. */
   readonly canStartThreads: boolean
+  /** Whether it takes file uploads with a post. Otherwise attachments become notes in the text. */
+  readonly uploadsFiles?: boolean
   /** Platform channel key → board channel (a mirror) or a function (an inbound handler). */
   readonly mappings: Readonly<Record<string, string | InboundFunction>>
   /** `#prs` → `C0123ABC`. */

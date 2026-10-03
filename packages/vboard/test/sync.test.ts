@@ -208,6 +208,76 @@ describe('sync', () => {
     expect(s.channelPosts).toHaveLength(0) // a thread that came from Slack is never re-posted to its channel
   })
 
+  it('uploads attachments to Slack, and notes them on GitHub, which takes no uploads', async () => {
+    const { board, s, g, webhook } = setup()
+    const token = await personToken()
+    const julian = caller(board.fetch, token)
+    const upload = async (name: string) => {
+      const response = await board.fetch(
+        new Request(`${BOARD_URL}/attachments`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-board-filename': name },
+          body: new Uint8Array([1, 2, 3]),
+        }),
+      )
+      return ((await response.json()) as { attachment: { id: string } }).attachment.id
+    }
+
+    // A Slack thread: the board reply's file goes up with it.
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:1727.1', id: '1727.1', text: 'login is broken', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    await julian('POST', '/messages', { re: root!.id, text: 'fixed, see after', attachments: [await upload('after.png')] })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(JSON.parse(s.posts[0]!.text)).toMatchObject({ markdown: expect.stringContaining('fixed, see after'), files: [{ filename: 'after.png', mimeType: 'image/png' }] })
+
+    // A PR thread: GitHub gets a note instead.
+    await webhook(
+      'github',
+      {
+        action: 'opened',
+        repository: { full_name: 'basehub-ai/vboard' },
+        sender: { login: 'julianbenegas', id: 42 },
+        pull_request: { number: 7, title: 'Fix login', html_url: 'https://github.com/basehub-ai/vboard/pull/7', draft: false, merged: false },
+      },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 'att1' },
+    )
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const [pr] = await read(julian, 'prs')
+    const reply = (await julian('POST', '/messages', { re: pr!.id, text: '', attachments: [await upload('proof.png')] })).body.message
+    await vi.waitFor(() => expect(g.posts).toHaveLength(1))
+    expect(g.posts[0]!.text).toContain(`📎 proof.png (3 B, on the board: #${reply.id})`)
+    expect(g.posts[0]!.text).not.toContain('"files"')
+  })
+
+  it('sends notes when Slack refuses the upload', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { board, s, webhook } = setup()
+    const post = s.adapter.postMessage.bind(s.adapter)
+    s.adapter.postMessage = async (threadId, message) => {
+      if (typeof message === 'object' && 'files' in message && message.files?.length) throw Object.assign(new Error('missing_scope'), { data: { error: 'missing_scope' } })
+      return post(threadId, message)
+    }
+    const token = await personToken()
+    const julian = caller(board.fetch, token)
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:1727.2', id: '1727.2', text: 'broken', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    const uploaded = await board.fetch(
+      new Request(`${BOARD_URL}/attachments`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'text/plain', 'x-board-filename': 'repro.log' },
+        body: 'stack trace',
+      }),
+    )
+    const { attachment } = (await uploaded.json()) as { attachment: { id: string } }
+    await julian('POST', '/messages', { re: root!.id, text: 'logs', attachments: [attachment.id] })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.posts[0]!.text).toContain('📎 repro.log')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("couldn't upload"), 'missing_scope')
+    warn.mockRestore()
+  })
+
   it('starts a Slack thread for a board root in a mirrored channel, then follows it', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

@@ -167,6 +167,7 @@ export function slack(options: {
     adapter: options.adapter,
     createChat: () => createChat(options.adapter),
     canStartThreads: true,
+    uploadsFiles: true,
     mappings: options.channels,
     // `#name` is looked up by name; anything else is a channel ID.
     async resolveChannel(key) {

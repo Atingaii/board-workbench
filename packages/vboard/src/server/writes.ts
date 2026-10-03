@@ -10,7 +10,7 @@ import {
   type ActorsState,
   type Message,
 } from '../contract/reducers.ts'
-import type { Author, Labels } from '../contract/schemas.ts'
+import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import type { BoardSession } from './board.ts'
@@ -41,6 +41,8 @@ export type PostInput = {
   from?: string | null
   /** Platform text: mentions the board can't resolve are left as plain text. */
   lenientMentions?: boolean
+  /** Files the board stored, as it recorded them. */
+  attachments?: Attachment[]
 }
 
 export async function writePost(ctx: WriteContext, input: PostInput) {
@@ -106,6 +108,7 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
         by: identity.author,
         origin: input.origin ?? null,
         from: input.from ?? null,
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       },
     },
     ...synced,

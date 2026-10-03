@@ -2,6 +2,9 @@ import { z } from 'zod'
 
 export const CHANNEL_PATH_MAX = 80
 export const MESSAGE_TEXT_MAX = 10_000
+/** Under Vercel Functions' 4.5 MB request body limit, so an upload fits in one request. */
+export const ATTACHMENT_BYTES_MAX = 4 * 1024 * 1024
+export const ATTACHMENTS_PER_MESSAGE_MAX = 10
 
 const segment = '[a-z0-9][a-z0-9_-]*'
 
@@ -58,9 +61,21 @@ export const Author = z.object({
   session: z.string().nullable(),
 })
 
+/** 128 random bits, base64url: an attachment is named by an ID nobody can guess. */
+export const AttachmentId = z.string().regex(/^[A-Za-z0-9_-]{22}$/, 'invalid attachment id')
+
+/** A file on a message. The board records `type` and `size` from what it stored, never from the request. */
+export const Attachment = z.object({
+  id: AttachmentId,
+  name: z.string().min(1).max(255),
+  type: z.string().min(1).max(255),
+  size: z.number().int().nonnegative(),
+})
+
 export type ChannelPath = z.infer<typeof ChannelPath>
 export type MessageId = z.infer<typeof MessageId>
 export type Labels = z.infer<typeof Labels>
 export type ActorId = z.infer<typeof ActorId>
 export type ActorKind = z.infer<typeof ActorKind>
 export type Author = z.infer<typeof Author>
+export type Attachment = z.infer<typeof Attachment>

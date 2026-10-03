@@ -1,5 +1,5 @@
 import { canonicalEmoji } from './emoji.ts'
-import { actorKind, type ActorKind, type Author, type Labels } from './schemas.ts'
+import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
 import { boardContract, type BoardEvent, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
@@ -27,6 +27,7 @@ export type Message = {
   deleted: boolean
   /** Sync targets this message didn't reach, with why. A later delivery clears its entry. */
   undelivered: Record<string, string>
+  attachments: Attachment[]
 }
 
 export type MessagesState = {
@@ -63,6 +64,7 @@ export function foldMessages(
         editedAt: null,
         deleted: false,
         undelivered: {},
+        attachments: payload.attachments ?? [],
       }
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
       return state
@@ -82,6 +84,7 @@ export function foldMessages(
       message.text = ''
       message.reactions = {}
       message.mentions = []
+      message.attachments = []
       return state
     }
     case 'reaction.added': {

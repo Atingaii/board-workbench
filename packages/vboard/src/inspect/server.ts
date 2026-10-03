@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net'
 import type { Me } from '../api/routes.ts'
 import type { BoardClient } from '../client/client.ts'
+import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import { CSS } from './style.ts'
 
 /** A browser UI for one board, on this machine, reading and writing as the client's identity. */
@@ -44,7 +45,9 @@ const shell = (token: string) => `<!doctype html>
 
 const CSP = [
   "default-src 'none'",
-  'img-src https: http://localhost:* http://127.0.0.1:* data:',
+  // Attachments arrive as `blob:` URLs: the page fetches them through the proxy, with its token.
+  'img-src https: http://localhost:* http://127.0.0.1:* data: blob:',
+  'media-src blob:',
   "style-src 'unsafe-inline'",
   "script-src 'self'",
   "connect-src 'self'",
@@ -84,7 +87,8 @@ export async function startInspector(options: { client: BoardClient; port?: numb
     streams.add(controller)
     response.on('close', () => controller.abort())
     try {
-      const body = reading ? undefined : await read(request)
+      // An upload is a whole file; everything else is a little JSON.
+      const body = reading ? undefined : await read(request, path === '/attachments' ? ATTACHMENT_BYTES_MAX : undefined)
       // The page may pick who you act as: one of your profiles, or yourself (an empty name).
       const chosen = request.headers['x-inspect-profile']
       const as = typeof chosen === 'string' ? (chosen === '' ? null : chosen) : undefined
@@ -94,6 +98,7 @@ export async function startInspector(options: { client: BoardClient; port?: numb
         headers: {
           ...(request.headers['content-type'] ? { 'content-type': String(request.headers['content-type']) } : {}),
           ...(request.headers.accept ? { accept: String(request.headers.accept) } : {}),
+          ...(request.headers['x-board-filename'] ? { 'x-board-filename': String(request.headers['x-board-filename']) } : {}),
         },
         ...(body ? { body } : {}),
         signal: controller.signal,

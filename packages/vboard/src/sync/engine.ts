@@ -19,7 +19,9 @@ import {
   type ActorsState,
   type Message,
 } from '../contract/reducers.ts'
+import { fileSize } from '../contract/files.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
+import { readAttachmentData, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import type { BoardSession } from '../server/board.ts'
 import { badRequest, notFound } from '../server/errors.ts'
@@ -65,6 +67,8 @@ export function createSyncEngine(options: {
   entries: Record<string, SyncPlatform>
   store?: A2Store | undefined
   scheduler?: A2Scheduler | undefined
+  /** Where attachments' bytes are, for platforms that take uploads. */
+  blob?: BlobStore | null
 }) {
   const entries = options.entries
   let binding: BoardBinding | null = null
@@ -397,6 +401,35 @@ export function createSyncEngine(options: {
     return { markdown: `${quoted}**${name}**: ${message.text}` }
   }
 
+  /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
+  const attachmentNotes = (message: Message) =>
+    message.attachments.map((a) => `\n📎 ${a.name} (${fileSize(a.size)}, on the board: #${message.id})`).join('')
+
+  /** `render`, for a platform that takes no uploads: the files become notes. */
+  const renderFor = (key: string, message: Message, actors: ActorsState, quote?: Message) => {
+    const { markdown } = render(message, actors, quote)
+    return { markdown: platformOf(key).uploadsFiles ? markdown : `${markdown}${message.attachments.length ? '\n' : ''}${attachmentNotes(message)}` }
+  }
+
+  /**
+   * Posts a board message to a platform, files and all where it takes uploads.
+   * If the upload is refused (say, the app lacks a scope), the text goes alone, with notes.
+   */
+  async function send<T>(key: string, message: Message, actors: ActorsState, quote: Message | undefined, post: (postable: { markdown: string; files?: { data: Buffer; filename: string; mimeType: string }[] }) => Promise<T>): Promise<T> {
+    const blob = options.blob
+    if (!platformOf(key).uploadsFiles || !blob || message.attachments.length === 0) return post(renderFor(key, message, actors, quote))
+    const files = await Promise.all(
+      message.attachments.map(async (a) => ({ data: Buffer.from(await readAttachmentData(blob, a.id)), filename: a.name, mimeType: a.type })),
+    )
+    try {
+      return await post({ ...render(message, actors, quote), files })
+    } catch (error) {
+      console.warn(`[vboard] couldn't upload #${message.id}'s files to ${key}, sending notes instead:`, describe(error))
+      const { markdown } = render(message, actors, quote)
+      return post({ markdown: `${markdown}\n${attachmentNotes(message)}` })
+    }
+  }
+
   type Ctx<K extends keyof BoardEvents> = HandlerContext<BoardEvents, K>
 
   async function latest(ctx: Ctx<keyof BoardEvents>) {
@@ -421,7 +454,7 @@ export function createSyncEngine(options: {
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
     const chat = await chatFor(keyOf(target))
-    const sent = await chat.thread(toChat(place)).post(render(message, state.actors, inSubthread ? undefined : replyTo))
+    const sent = await send(keyOf(target), message, state.actors, inSubthread ? undefined : replyTo, (postable) => chat.thread(toChat(place)).post(postable))
     await ctx.session.append(`receipt:${message.id}:${target}`, {
       type: 'message.synced',
       payload: { id: message.id, thread: message.thread, target, external: { thread: place, message: sent.id } },
@@ -467,7 +500,7 @@ export function createSyncEngine(options: {
     if (!externalThread) {
       try {
         const chat = await chatFor(keyOf(target))
-        const sent = await chat.channel(toChat(target)).post(render(root, state.actors))
+        const sent = await send(keyOf(target), root, state.actors, undefined, (postable) => chat.channel(toChat(target)).post(postable))
         externalThread = toExternal(keyOf(target), sent.threadId)
         await ctx.session.append(`receipt:${root.id}:${target}`, {
           type: 'message.synced',
@@ -529,7 +562,7 @@ export function createSyncEngine(options: {
       try {
         const adapter = (await chatFor(keyOf(target))).getAdapter(platformOf(keyOf(target)).adapter.name)
         const chatThread = toChat(copy.thread)
-        if (event.type === 'message.edited' && message) await adapter.editMessage(chatThread, copy.message, render(message, state.actors))
+        if (event.type === 'message.edited' && message) await adapter.editMessage(chatThread, copy.message, renderFor(keyOf(target), message, state.actors))
         else if (event.type === 'message.deleted') await adapter.deleteMessage(chatThread, copy.message)
         else if (event.type === 'reaction.added') await adapter.addReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
         else if (event.type === 'reaction.removed') await adapter.removeReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))

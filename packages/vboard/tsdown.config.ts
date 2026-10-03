@@ -8,6 +8,7 @@ export default defineConfig([
       server: 'src/server/index.ts',
       slack: 'src/sync/slack.ts',
       github: 'src/sync/github.ts',
+      blob: 'src/blob/vercel.ts',
       contract: 'src/contract/index.ts',
       cli: 'src/cli/main.ts',
     },

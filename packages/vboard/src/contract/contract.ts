@@ -2,6 +2,8 @@ import { contract, type ContractEvent } from 'experimental-a2'
 import { z } from 'zod'
 import {
   ActorId,
+  Attachment,
+  ATTACHMENTS_PER_MESSAGE_MAX,
   SeenActorKind,
   Author,
   ChannelPath,
@@ -41,7 +43,8 @@ export const boardContract = contract({
   events: {
     'message.posted': z.object({
       channel: ChannelPath,
-      text: MessageText,
+      /** Empty only when the message has attachments. */
+      text: z.union([MessageText, z.literal('')]),
       /** The thread root, or null for a root. */
       re: MessageId.nullable(),
       /** The exact message replied to, when it isn't the root. */
@@ -53,6 +56,8 @@ export const boardContract = contract({
       by: Author,
       origin: Origin.nullable(),
       from: From,
+      /** Files on the message. Events written before attachments have none. */
+      attachments: z.array(Attachment).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     }),
     'message.edited': z.object({
       id: MessageId,

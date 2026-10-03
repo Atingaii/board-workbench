@@ -38,6 +38,10 @@
       "types": "./dist/github.d.mts",
       "default": "./dist/github.mjs"
     },
+    "./blob": {
+      "types": "./dist/blob.d.mts",
+      "default": "./dist/blob.mjs"
+    },
     "./contract": {
       "types": "./dist/contract.d.mts",
       "default": "./dist/contract.mjs"
@@ -57,6 +61,7 @@
     "zod": "^4.6.5"
   },
   "peerDependencies": {
+    "@vercel/blob": "^2.8.0",
     "chat": "^4.41.1",
     "experimental-a2": "^0.16.1"
   },
@@ -68,6 +73,7 @@
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vercel/blob": "^2.8.0",
     "ai": "^7.0.127",
     "chat": "^4.41.1",
     "experimental-a2": "0.16.1",
@@ -82,6 +88,9 @@
     "vitest": "^5.0.3"
   },
   "peerDependenciesMeta": {
+    "@vercel/blob": {
+      "optional": true
+    },
     "chat": {
       "optional": true
     }
