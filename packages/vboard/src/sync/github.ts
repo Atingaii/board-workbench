@@ -6,7 +6,7 @@ import type { InterceptedEvent, SyncPlatform } from './types.ts'
 
 /** What a GitHub inbound function receives. */
 export type GitHubEvent = {
-  /** `pr.opened`, `pr.ready`, `pr.draft`, `pr.reopened`, `pr.closed`, `issue.opened`, `review.submitted`, `comment`, … */
+  /** `pr.opened`, `pr.ready`, `pr.draft`, `pr.reopened`, `pr.closed`, `pr.labeled`, `issue.opened`, `issue.assigned`, `review.submitted`, `comment`, … */
   type: string
   /** `github:owner/repo:12`. Pass it as `sync` to join this PR or issue. */
   thread: string
@@ -40,6 +40,43 @@ const author = (user: User | undefined): ExternalAuthor => ({
   isBot: user?.type === 'Bot',
 })
 
+type Label = { name?: string }
+type Item = { labels?: Label[]; assignees?: User[] }
+
+/** `good first issue` → `good-first-issue`: the part of a label key a name gives. Empty when nothing's left. */
+const slug = (name: string) =>
+  name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^[-_.]+|-+$/g, '')
+
+/**
+ * A GitHub label or assignee as a board label: `bug` → `tag.bug=bug`,
+ * `julianbenegas` → `assignee.julianbenegas=julianbenegas`. The keys don't
+ * name GitHub, so a filter like `--label tag.bug` holds for any platform.
+ */
+function tagOf(prefix: 'tag' | 'assignee', name: string | undefined): [string, string] | null {
+  const key = name ? slug(name) : ''
+  return key ? [`${prefix}.${key}`.slice(0, 64), name!.slice(0, 256)] : null
+}
+
+/** A PR's or issue's current labels and assignees, as board labels. */
+function tagsOf(item: Item): Record<string, string> {
+  const tags = [
+    ...(item.labels ?? []).map((label) => tagOf('tag', label.name)),
+    ...(item.assignees ?? []).map((user) => tagOf('assignee', user.login)),
+  ]
+  return Object.fromEntries(tags.filter((tag) => tag !== null))
+}
+
+/** Actions that change only labels and assignees, which every PR and issue event reconciles. */
+const TAG_ACTIONS = ['labeled', 'unlabeled', 'assigned', 'unassigned']
+
+/** The label key prefixes the mirror owns on a GitHub root: keys under them that GitHub doesn't have are unset. */
+const OWNED = ['tag.', 'assignee.']
+
 type Lifecycle = Omit<Extract<ExternalEvent, { kind: 'lifecycle' }>, 'kind' | 'channel' | 'thread' | 'author'>
 
 /** Maps a raw `pull_request`, `pull_request_review`, or `issues` webhook to a lifecycle event. */
@@ -50,6 +87,8 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
     const pr = body.pull_request as { number: number; title: string; html_url: string; draft?: boolean; merged?: boolean }
     const pr_label = { pr: `${(body.repository as { full_name: string }).full_name}#${pr.number}` }
     const base = { title: `PR #${pr.number}: ${pr.title}`, url: pr.html_url, unset: [] as string[] }
+    if (TAG_ACTIONS.includes(action))
+      return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: `pr.${action}`, labels: {}, reply: null, createRoot: false } }
     switch (action) {
       case 'opened':
         return {
@@ -110,6 +149,8 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
     const issue = body.issue as { number: number; title: string; html_url: string }
     const label = { issue: `${(body.repository as { full_name: string }).full_name}#${issue.number}` }
     const base = { title: `Issue #${issue.number}: ${issue.title}`, url: issue.html_url, unset: [] as string[] }
+    if (TAG_ACTIONS.includes(action))
+      return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: `issue.${action}`, labels: {}, reply: null, createRoot: false } }
     if (action === 'opened')
       return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: 'issue.opened', labels: { ...label, state: 'open' }, reply: null, createRoot: true } }
     if (action === 'closed')
@@ -175,6 +216,9 @@ export function github(options: {
       }
       const found = lifecycle(name, parsed)
       if (!found) return []
+      // Every PR and issue event carries all of its labels and assignees, so each one reconciles them.
+      const item = (parsed.pull_request ?? parsed.issue) as Item | undefined
+      if (item) Object.assign(found.lifecycle, { labels: { ...tagsOf(item), ...found.lifecycle.labels }, owns: OWNED })
       const repo = (parsed.repository as { full_name: string }).full_name
       const thread = name === 'issues' ? `${key}:${repo}:issue:${found.number}` : `${key}:${repo}:${found.number}`
       const delivery = headers.get('x-github-delivery') ?? `${name}:${found.lifecycle.type}:${found.number}`

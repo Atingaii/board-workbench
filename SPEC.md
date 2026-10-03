@@ -1255,6 +1255,8 @@ the rest of the GitHub App's webhooks:
 | `review.submitted` | A reply such as "approved by ada", plus the review body. `approved` and `changes requested` set the `review` label |
 | `review.dismissed` | Unsets `review` |
 | `pr.closed` | A reply ("merged by julian" or "closed"), and `state=merged` or `state=closed` |
+| `pr.labeled`, `pr.unlabeled`, `issue.labeled`, `issue.unlabeled` | Reconciles `tag.*` labels. No reply |
+| `pr.assigned`, `pr.unassigned`, `issue.assigned`, `issue.unassigned` | Reconciles `assignee.*` labels. No reply |
 
 **State labels.** The mirror keeps GitHub's state on each root as labels, so
 agents can watch GitHub without polling it:
@@ -1263,17 +1265,35 @@ agents can watch GitHub without polling it:
 | --- | --- |
 | PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested` (set by the latest approving or change-requesting review) |
 | issue | `state=open\|closed` |
+| both | `tag.<label>=<name>` per GitHub label, `assignee.<login>=<login>` per assignee |
 
 ```bash
 vb wait prs --label review=approved --since last   # start a merge when a PR is approved
 vb read prs --label state=open                     # what's pending
+vb read issues --label tag.bug                     # issues labeled bug
 ```
+
+- **Tags and assignees are keyed by name, not by platform.** A GitHub label's
+  name becomes a key: lowercased, with runs of other characters turned into
+  `-` (`good first issue` → `tag.good-first-issue`). The value keeps the
+  name as written. A name with nothing left (`🐛`) is skipped. Keys don't say
+  `github`, so `--label tag.bug` would match a Linear issue's `bug` label too.
+  Two names that make the same key share it, until GitHub has neither.
+- **Every PR and issue event reconciles them.** GitHub sends a PR's or issue's
+  full labels and assignees with each event, so the mirror sets those and
+  unsets any `tag.*` or `assignee.*` key GitHub doesn't have. A missed
+  `unlabeled` heals on the next event, and a root starts with what its PR or
+  issue has when the root is created.
+- **A label change that changes nothing writes nothing.** GitHub follows an
+  issue opened with labels by a `labeled` event for each; those don't wake
+  anyone.
 
 - **Label changes are ordinary `labels.changed` events,** attributed to the
   GitHub actor who caused them. The before/after filter rule means a PR leaving
   `state=open` is delivered to anyone watching that view.
-- **The mirror owns `state` and `review` on GitHub roots.** If someone changes
-  them on the board, the next GitHub event overwrites them.
+- **The mirror owns `state`, `review`, `tag.*`, and `assignee.*` on GitHub
+  roots.** If someone changes them on the board, the next GitHub event
+  overwrites them.
 - **Board labels never sync out to platforms.**
 - **Repo functions don't get state labels automatically.** They can set their
   own with `board.label`.
@@ -1389,6 +1409,8 @@ does. A watcher removed from config skips the matches it left behind.
     become replies, and comment threads (`…:c:<id>`) group under their issue.
   - The issue's workflow state is mirrored into a `status=` label, so agents can
     `vb wait --label status=done`.
+  - Labels and the assignee become `tag.*` and `assignee.*`, as GitHub's do. A
+    label in a group (`Type › Bug`, one per group) becomes `tag.type=Bug`.
   - Chat SDK's Linear adapter handles only comments, so the module reads issue
     events from the raw webhook, the same way `github()` does.
 - **A generic `chat()` and `defineSyncAdapter()`,** once someone asks for another
