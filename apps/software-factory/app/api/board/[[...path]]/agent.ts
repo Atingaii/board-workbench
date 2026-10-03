@@ -25,7 +25,10 @@ const piSession = (thread: number) => `thread-${thread}`;
 export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
   by.profile === "pi" && by.session === piSession(thread);
 
-const INSTRUCTIONS = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
+/** What Pi does in a thread: work a firehose thread (bug, feature, question), or review a pull request. */
+export type Task = "thread" | "review";
+
+const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
 A thread's kind label (bug, feature, question) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create that links the thread, and you reply with the PR link.
 For a bug report:
@@ -36,6 +39,18 @@ For a feature request: if it's clear what's wanted, build it with tests and open
 For a question: answer it from the code and docs, pointing at the files. Don't open a PR unless someone asks for one.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it.
 Keep replies short, and end each with a list of what you ran.`;
+
+const REVIEW = `You review pull requests for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
+The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack and the PR on GitHub), vb label <id> k=v labels it. Run vb help for the rest.
+For a pull request (its board thread's root has a pr=owner/repo#N label):
+1. Clone with gh repo clone basehub-ai/vboard, then gh pr checkout <N>. Read gh pr view <N> and gh pr diff <N>, and SPEC.md and AGENTS.md for the parts it touches.
+2. Run pnpm install and pnpm check. Try the change where you can: a test that should fail without it, or the CLI by hand.
+3. Reply in the thread with your review: blocking problems first, each with file:line and why, then smaller suggestions. If it's good to merge, say so plainly.
+Don't push, approve, merge, or close the PR: people decide that.
+When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it: answer questions, and review again if new commits landed (gh pr view <N> --json commits).
+Keep replies short, and end each with a list of what you ran.`;
+
+const INSTRUCTIONS: Record<Task, string> = { thread: THREAD, review: REVIEW };
 
 const SETUP = `set -e
 command -v pi >/dev/null || npm install -g ${PI} vboard pnpm >/dev/null 2>&1
@@ -94,11 +109,21 @@ async function sh(sandbox: Sandbox, script: string) {
 }
 
 /**
- * Sends Pi a message about a thread: the first one is its task, later ones say
+ * Sends Pi a message about a thread: the first one is its task (a thread to work or a PR to review), later ones say
  * there's news. Pi's sandbox and session for the thread are created on first use.
  * `key` names the message, so telling Pi the same thing twice is a no-op.
  */
-export async function tellPi({ thread, key, message }: { thread: number; key: string; message: string }) {
+export async function tellPi({
+  task,
+  thread,
+  key,
+  message,
+}: {
+  task: Task;
+  thread: number;
+  key: string;
+  message: string;
+}) {
   const [{ Sandbox }, { getToken }, { getVercelOidcToken }] = await Promise.all([
     import("@vercel/sandbox"),
     import("@vercel/connect"),
@@ -138,7 +163,7 @@ export async function tellPi({ thread, key, message }: { thread: number; key: st
     env: {
       MODEL,
       SESSION: piSession(thread),
-      INSTRUCTIONS,
+      INSTRUCTIONS: INSTRUCTIONS[task],
       KEY: key,
       MESSAGE: message,
       // Over any git config Pi writes: otherwise it picks an identity, and GitHub credits a stranger.

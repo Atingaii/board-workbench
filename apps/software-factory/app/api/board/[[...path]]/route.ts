@@ -118,6 +118,7 @@ export const { GET, POST, scheduler } = board({
         const kind = event.type === "labels.changed" ? event.payload.set.kind : undefined;
         if (kind && isPiKind(kind) && message.re === null) {
           await tellPi({
+            task: "thread",
             thread: message.id,
             key: `kind-${kind}`,
             message: `There's ${PI_TASKS[kind]} in board thread #${message.id}.`,
@@ -128,6 +129,38 @@ export const { GET, POST, scheduler } = board({
           !byPi(message.re, message.by)
         ) {
           await tellPi({
+            task: "thread",
+            thread: message.re,
+            key: `news-${message.id}`,
+            message: `There's new activity in board thread #${message.re}.`,
+          });
+        }
+      },
+    },
+    // Pi reviews PRs: a PR's thread opens in `prs` when it's opened or marked ready, and
+    // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there.
+    review: {
+      tail: "prs",
+      run: async ({ event }) => {
+        const message = event.message;
+        if (event.type !== "message.posted" || !message) {
+          return;
+        }
+        if (message.re === null) {
+          if (message.labels.pr) {
+            await tellPi({
+              task: "review",
+              thread: message.id,
+              key: "pr",
+              message: `There's a pull request to review in board thread #${message.id}.`,
+            });
+          }
+        } else if (
+          !byPi(message.re, message.by) &&
+          !message.author?.handle.endsWith("[bot]")
+        ) {
+          await tellPi({
+            task: "review",
             thread: message.re,
             key: `news-${message.id}`,
             message: `There's new activity in board thread #${message.re}.`,
