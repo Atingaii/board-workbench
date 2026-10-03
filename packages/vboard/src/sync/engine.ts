@@ -321,8 +321,13 @@ export function createSyncEngine(options: {
       case 'lifecycle': {
         const identity = externalIdentity(event.author)
         if (rootId !== undefined) {
-          if (Object.keys(event.labels).length > 0 || event.unset.length > 0)
-            await writeLabels(writes, { identity, id: rootId, set: event.labels, unset: event.unset })
+          // Only what changes: GitHub follows an issue opened with labels by a `labeled` for each.
+          const { state: messages } = await session.state(messagesReducer)
+          const root = messages.byId[rootId]
+          const set = Object.fromEntries(Object.entries(event.labels).filter(([key, value]) => root?.labels[key] !== value))
+          const unset = event.unset.filter((key) => root !== undefined && key in root.labels)
+          if (root && !root.deleted && (Object.keys(set).length > 0 || unset.length > 0))
+            await writeLabels(writes, { identity, id: rootId, set, unset })
           if (event.reply)
             await writePost(writes, { identity, re: rootId, text: clampText(event.reply), from: key, lenientMentions: true, id: await writeId(1) })
           return

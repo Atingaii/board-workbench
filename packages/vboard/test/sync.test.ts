@@ -365,6 +365,57 @@ describe('sync', () => {
     expect(await read(julian, 'prs')).toHaveLength(1)
   })
 
+  it("mirrors GitHub's labels and assignees as `tag.*` and `assignee.*` labels", async () => {
+    const { board, webhook } = setup({ repos: { 'basehub-ai/vboard': { pulls: 'prs', issues: 'issues' } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const sender = { login: 'julianbenegas', id: 42 }
+    let delivery = 0
+    const send = (name: string, body: Record<string, unknown>) =>
+      webhook('github', { repository, sender, ...body }, { 'x-github-event': name, 'x-github-delivery': `t${++delivery}` })
+    const labelEvents = async () =>
+      ((await julian('GET', '/events?after=0&all=true')).body.events as { type: string }[]).filter((e) => e.type === 'labels.changed')
+
+    const issue = { number: 10, title: 'Label sync', html_url: 'https://github.com/x/issues/10' }
+    const labels = [{ name: 'bug' }, { name: 'Good First Issue' }, { name: '🐛' }]
+    await send('issues', { action: 'opened', issue: { ...issue, labels, assignees: [{ login: 'julianbenegas' }] } })
+    await vi.waitFor(async () => expect(await read(julian, 'issues')).toHaveLength(1))
+    const [root] = await read(julian, 'issues')
+    expect(root!.labels).toEqual({
+      issue: 'basehub-ai/vboard#10',
+      state: 'open',
+      'tag.bug': 'bug',
+      'tag.good-first-issue': 'Good First Issue',
+      'assignee.julianbenegas': 'julianbenegas',
+    })
+
+    // GitHub follows an issue opened with labels by a `labeled` for each: nothing changes, so nothing's written.
+    await send('issues', { action: 'labeled', issue, label: { name: 'bug' } })
+    await send('issues', { action: 'labeled', issue, label: { name: 'priority: high' } })
+    await vi.waitFor(async () => expect((await read(julian, 'issues'))[0]!.labels['tag.priority-high']).toBe('priority: high'))
+    expect(await labelEvents()).toHaveLength(1)
+
+    await send('issues', { action: 'unlabeled', issue, label: { name: 'bug' } })
+    await send('issues', { action: 'unassigned', issue, assignee: { login: 'julianbenegas' } })
+    await vi.waitFor(async () => {
+      const { labels } = (await read(julian, 'issues'))[0]!
+      expect(labels).not.toHaveProperty('tag.bug')
+      expect(labels).not.toHaveProperty('assignee.julianbenegas')
+    })
+    expect((await read(julian, 'issues')).filter((m) => m.re !== null)).toHaveLength(0) // label changes post no replies
+
+    // A draft PR has no thread yet; it starts with whatever labels it has when it's ready.
+    const pr = { number: 11, title: 'Draft', html_url: 'https://github.com/x/pull/11', merged: false }
+    await send('pull_request', { action: 'opened', pull_request: { ...pr, draft: true } })
+    await send('pull_request', { action: 'labeled', pull_request: { ...pr, draft: true }, label: { name: 'wip' } })
+    await send('pull_request', { action: 'ready_for_review', pull_request: { ...pr, draft: false, labels: [{ name: 'wip' }] } })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    expect((await read(julian, 'prs'))[0]!.labels).toMatchObject({ state: 'open', 'tag.wip': 'wip' })
+    await send('pull_request', { action: 'assigned', pull_request: pr, assignee: { login: 'pi-bot[bot]' } })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]!.labels['assignee.pi-bot-bot']).toBe('pi-bot[bot]'))
+    expect((await julian('GET', '/messages?label=tag.wip')).body.messages).toHaveLength(1)
+  })
+
   it("keeps GitHub's markdown and avatars, and posts markdown to platforms", async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
