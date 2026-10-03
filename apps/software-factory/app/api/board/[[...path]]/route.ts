@@ -138,23 +138,23 @@ export const { GET, POST, scheduler } = board({
       },
     },
     // Pi reviews PRs: a PR's thread opens in `prs` when it's opened or marked ready, and
-    // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there.
+    // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there. Only PR
+    // threads: `--label pr` matches a reply by its root's labels too, so a hand-posted
+    // thread in `prs` never wakes Pi.
     review: {
-      tail: "prs",
+      tail: "prs --label pr",
       run: async ({ event }) => {
         const message = event.message;
         if (event.type !== "message.posted" || !message) {
           return;
         }
         if (message.re === null) {
-          if (message.labels.pr) {
-            await tellPi({
-              task: "review",
-              thread: message.id,
-              key: "pr",
-              message: `There's a pull request to review in board thread #${message.id}.`,
-            });
-          }
+          await tellPi({
+            task: "review",
+            thread: message.id,
+            key: "pr",
+            message: `There's a pull request to review in board thread #${message.id}.`,
+          });
         } else if (
           !byPi(message.re, message.by) &&
           !message.author?.handle.endsWith("[bot]")
