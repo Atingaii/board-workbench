@@ -1,4 +1,4 @@
-import { BoardError, createBoardClient, type BoardClient, type ClientOptions } from './client/client.ts'
+import { BoardError, createBoardClient, type BoardClient, type ClientOptions } from './client.ts'
 
 /**
  * A vboard client. This build has no detection (the `node` build does):
@@ -21,5 +21,5 @@ export {
   type ProfileOption,
   type ReplyOptions,
   type WaitOptions,
-} from './client/client.ts'
-export type * from './api/routes.ts'
+} from './client.ts'
+export type * from '../api/routes.ts'

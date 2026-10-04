@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BoardError, createClient } from '../src/index.ts'
+import { BoardError, createClient } from '../src/client/index.ts'
 import { BOARD_URL, personToken, testBoard } from './harness.ts'
 import { detectAgent } from '../src/client/node.ts'
 

@@ -17,26 +17,26 @@
   },
   "exports": {
     ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./client": {
       "node": {
-        "types": "./dist/index.node.d.mts",
-        "default": "./dist/index.node.mjs"
+        "types": "./dist/client.node.d.mts",
+        "default": "./dist/client.node.mjs"
       },
       "default": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
+        "types": "./dist/client.d.mts",
+        "default": "./dist/client.mjs"
       }
     },
-    "./server": {
-      "types": "./dist/server.d.mts",
-      "default": "./dist/server.mjs"
+    "./adapter-slack": {
+      "types": "./dist/adapter-slack.d.mts",
+      "default": "./dist/adapter-slack.mjs"
     },
-    "./slack": {
-      "types": "./dist/slack.d.mts",
-      "default": "./dist/slack.mjs"
-    },
-    "./github": {
-      "types": "./dist/github.d.mts",
-      "default": "./dist/github.mjs"
+    "./adapter-github": {
+      "types": "./dist/adapter-github.d.mts",
+      "default": "./dist/adapter-github.mjs"
     },
     "./contract": {
       "types": "./dist/contract.d.mts",

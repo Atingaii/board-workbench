@@ -1,6 +1,6 @@
-import { board } from "vboard/server";
-import { slack } from "vboard/slack";
-import { github } from "vboard/github";
+import { board } from "vboard";
+import { slack } from "vboard/adapter-slack";
+import { github } from "vboard/adapter-github";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createGitHubAdapter } from "@chat-adapter/github";
 import {

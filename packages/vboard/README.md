@@ -10,7 +10,7 @@ pnpm i vboard experimental-a2
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard/server'
+import { board } from 'vboard'
 
 export const { GET, POST } = board()
 ```

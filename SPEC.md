@@ -7,7 +7,7 @@ the CLI. The API sits under the SDK, and the SDK sits under the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard/server'
+import { board } from 'vboard'
 import { redisHttp } from 'experimental-a2/store-redis-http' // or store-postgres, store-redis, store-sqlite
 
 export const { GET, POST } = board({
@@ -81,12 +81,12 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
-| `vboard/server` | `board()` and the trust helpers (`vercel()`, `githubActions()`) | server |
-| `vboard/slack` | `slack()`, the Slack sync adapter | server |
-| `vboard/github` | `github()`, the GitHub sync adapter | server |
-| `vboard/contract` | The A2 contract, API schemas, and pure reducers | isomorphic |
-| bins `vboard`, `vb` | The CLI, built only on `vboard`. `vb` is a short alias | Node ≥ 22 |
+| `vboard` | `board()` and the trust helpers (`vercel()`, `githubActions()`) | server |
+| `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
+| `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
+| `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
+| `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
+| bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
 
 ### Install
 
@@ -105,8 +105,9 @@ with `npx vboard`.
   from it (e.g. `experimental-a2/store-redis-http`), and they must be the same
   copy that vboard uses.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`.** They
-  are loaded only by `vboard/slack` and `vboard/github`. Your adapters
-  must match the `chat` version that vboard builds its Chat instances with.
+  are loaded only by `vboard/adapter-slack` and `vboard/adapter-github`. Your
+  adapters must match the `chat` version that vboard builds its Chat instances
+  with.
 - **Installed by you, optionally: `@vercel/connect`.** You don't install a Chat
   SDK state adapter, because vboard backs Chat SDK's state with the A2 store
   (see [Sync](#sync)).
@@ -655,7 +656,7 @@ status.
 ## Client SDK
 
 ```ts
-import { createClient } from 'vboard'
+import { createClient } from 'vboard/client'
 
 const board = createClient()   // Node: URL from VBOARD_URL, token detected
 
@@ -678,8 +679,8 @@ for await (const event of board.events({ channel: 'errors-www', after: page.curs
 const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // resolves null on timeout
 ```
 
-- **`url` and `token` are optional in Node.** The package's `node` export
-  condition includes detection: `VBOARD_URL`, then the token order in
+- **`url` and `token` are optional in Node.** The `node` export condition of
+  `vboard/client` includes detection: `VBOARD_URL`, then the token order in
   [Tokens](#tokens). In browser and edge builds there's no detection, so you
   pass both: `createClient({ url, token: () => … })`. `token` is any function
   that returns an OIDC JWT.
@@ -910,9 +911,9 @@ by the platform's own things: Slack channels, GitHub repos.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard/server'
-import { slack } from 'vboard/slack'
-import { github } from 'vboard/github'
+import { board } from 'vboard'
+import { slack } from 'vboard/adapter-slack'
+import { github } from 'vboard/adapter-github'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
@@ -931,7 +932,7 @@ export const { GET, POST, scheduler } = board({
         '#prs': 'prs',
         '#alerts': async ({ message, board }) => {        // Sentry posts here
           const project = message.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-          await board.post(`alerts/${project}`, { text: message.text, sync: message.thread })
+          await board.post(`alerts/${project}`, { text: message.text, sync: [message.thread] })
         },
       },
     }),
@@ -944,8 +945,8 @@ export const { GET, POST, scheduler } = board({
       repos: {
         'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
-          if (event.type === 'pr.opened' && !event.pr.draft)
-            await board.post('prs', { text: event.pr.title, sync: event.thread })
+          if (event.type === 'pr.opened')
+            await board.post('prs', { text: event.title, sync: [event.thread] })
         },
       },
     }),
@@ -963,7 +964,7 @@ export const { GET, POST, scheduler } = board({
 - **A function: an inbound handler.**
   - You decide what each platform event becomes on the board, using `board`, a
     vboard client.
-  - Nothing syncs back unless you opt in by passing `sync: message.thread` (or
+  - Nothing syncs back unless you opt in by passing `sync: [message.thread]` (or
     `event.thread`). Once a thread is synced, its later replies follow the normal
     rules automatically.
   - The function is called only for events in threads that aren't synced yet.
@@ -1431,6 +1432,7 @@ does. A watcher removed from config skips the matches it left behind.
 | What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
+| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and sync adapters are `vboard/adapter-*`, named for the Chat SDK adapter each takes. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release
