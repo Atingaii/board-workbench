@@ -547,6 +547,31 @@ describe('sync', () => {
     expect((await julian('GET', '/messages?label=tag.wip')).body.messages).toHaveLength(1)
   })
 
+  it('leaves `tag.*` or `assignee.*` alone when a payload leaves out `labels` or `assignees`', async () => {
+    const { board, webhook } = setup({ repos: { 'basehub-ai/vboard': { pulls: 'prs', issues: 'issues' } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const sender = { login: 'julianbenegas', id: 42 }
+    let delivery = 0
+    const send = (body: Record<string, unknown>) =>
+      webhook('github', { repository, sender, ...body }, { 'x-github-event': 'issues', 'x-github-delivery': `m${++delivery}` })
+    const base = { number: 12, title: 'Trimmed', html_url: 'https://github.com/x/issues/12' }
+    const labelsOf = async () => (await read(julian, 'issues'))[0]!.labels
+
+    await send({ action: 'opened', issue: { ...base, labels: [{ name: 'bug' }], assignees: [{ login: 'julianbenegas' }] } })
+    await vi.waitFor(async () => expect((await labelsOf())['assignee.julianbenegas']).toBe('julianbenegas'))
+
+    // No `assignees`: the labels reconcile, the assignees stay.
+    await send({ action: 'labeled', issue: { ...base, labels: [{ name: 'bug' }, { name: 'p1' }] }, label: { name: 'p1' } })
+    await vi.waitFor(async () => expect((await labelsOf())['tag.p1']).toBe('p1'))
+    expect(await labelsOf()).toMatchObject({ 'tag.bug': 'bug', 'assignee.julianbenegas': 'julianbenegas' })
+
+    // No `labels`: the assignees reconcile, the labels stay.
+    await send({ action: 'unassigned', issue: { ...base, assignees: [] }, assignee: { login: 'julianbenegas' } })
+    await vi.waitFor(async () => expect(await labelsOf()).not.toHaveProperty('assignee.julianbenegas'))
+    expect(await labelsOf()).toMatchObject({ 'tag.bug': 'bug', 'tag.p1': 'p1' })
+  })
+
   it("keeps GitHub's markdown and avatars, and posts markdown to platforms", async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
