@@ -25,31 +25,41 @@ while the repo is private). The CLI and the API read their version from
 
 ## the software factory (`apps/software-factory`)
 
-vboard running on itself: the board for `basehub-ai/vboard` PRs and BaseHub's
-Slack. The app is only wiring: the board route holds the whole config, and the A2
-scheduler route re-exports the board's `scheduler`. They're separate routes because
-the queue trigger makes its function private.
+vboard as a v0 feedback bot, on the `vercel-internal-playground/vboard` project:
+people post v0 feedback in Slack, and v0 fixes the ones worth fixing and opens a
+draft PR on `vercel/v0`. The board route holds the whole config, `v0.ts` starts
+v0 chats, `app/api/v0-hook` hears back from v0, and the A2 scheduler route
+re-exports the board's `scheduler` (separate because the queue trigger makes its
+function private).
 
 ```bash
 cd apps/software-factory
-vercel link --project vboard --scope basehub   # once; the board learns its project
-pnpm dev                                       # the board at /api/board
-VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
+vercel link --project vboard --scope vercel-internal-playground   # once
+pnpm dev                                                          # the board at /api/board
+VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
-- Every environment syncs with the real Slack and GitHub, so a local or preview
-  board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
-  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  Private Slack channels are mapped by ID: the Connect Slack app can't look them
-  up by name.
-- Watchers do the work: `triage` labels each new firehose thread with jev, and
-  `investigate` hands `kind=bug` threads to Pi (`agent.ts`). Pi runs the `pi` CLI
-  in its own Vercel Sandbox with `vb`, `gh`, and git; its credentials are
-  placeholders that the sandbox's network policy swaps for real ones on the way
-  out, and GitHub is read-only there. Its `vb` talks to the production board,
-  the only one a sandbox can reach.
+- Every environment syncs with the real Slack, so a local or preview board posts
+  there too. `VERCEL_ENV` only picks the log: production's Redis keys, a
+  preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
+  channels are private, so they're mapped by ID.
+- `triage` acks each new thread in `#feedback-v0-vboard`, decides with an LLM
+  whether it's worth fixing, and if so starts a v0 chat and announces it in
+  `#feedback-v0-prs`. `report` replies in that announcement's thread once
+  `/api/v0-hook` has read v0's finished reply (with an LLM) and labelled the
+  report with the PR, a summary, and the likely owner.
+- Everything talks to v0 with the deployment's Vercel OIDC token, no API key. The
+  project is git-linked to `vercel/v0`, so each chat works on its own
+  `v0/vboard-<chatId>` branch and `credentialAccess.github` lets its `gh` open
+  the PR as the GitHub App (vercel/v0#30977). The board registers a webhook per
+  chat (vercel/v0#30982). Both are behind v0 flags that are on for Vercel teams.
+  The link would also deploy `vercel/v0` pushes here, so the project's Ignored
+  Build Step is `exit 0`: deploy with `vercel deploy --prod` from the repo root.
+- Production is behind Vercel Authentication. The CLI and v0's webhook get
+  through with the automation bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`), and
+  `/api/v0-hook` also checks `V0_HOOK_KEY`.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
-  (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
+  (`vercel.json`).
 
 ## the inspector (`vb inspect`, `src/inspect/`)
 

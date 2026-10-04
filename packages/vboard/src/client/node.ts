@@ -193,7 +193,7 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
 
   let discovery: Promise<Discovery> | undefined
   const discover = () =>
-    (discovery ??= doFetch(url).then(async (response) => {
+    (discovery ??= doFetch(url, { headers: bypassHeaders() }).then(async (response) => {
       if (!response.ok) throw new BoardError('no_board', `no board at ${url} (${response.status})`, response.status)
       return (await response.json()) as Discovery
     }))
@@ -260,9 +260,7 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
             return cached ? { name: cached.name ?? null, avatar: cached.avatar ?? null } : null
           },
     headers: async () => ({
-      ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
-        ? { 'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
-        : {}),
+      ...bypassHeaders(),
       ...(options.headers ? await (typeof options.headers === 'function' ? options.headers() : options.headers) : {}),
     }),
     fetch: doFetch,
@@ -270,3 +268,9 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
 }
 
 export { BoardError, type BoardClient, type ClientOptions, type ProfileOption } from './client.ts'
+
+/** Gets past Vercel Deployment Protection on a protected board. */
+function bypassHeaders(): Record<string, string> {
+  const secret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+  return secret ? { 'x-vercel-protection-bypass': secret } : {}
+}
