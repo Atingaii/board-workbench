@@ -19,6 +19,18 @@ export const { GET, POST } = board({
 `.a2/dev.db` in development, memory in tests, and a startup error in
 production.
 
+`blob` is where [attachments](#attachments) live: `vercelBlob()` from
+`vboard/blob`, on a private Vercel Blob store connected to the project. If you
+omit it, the same rule holds: files under `.a2/attachments` in development,
+memory in tests, and in production every upload is refused (the rest of the
+board works).
+
+```ts
+import { vercelBlob } from 'vboard/blob'
+
+export const { GET, POST } = board({ store, blob: vercelBlob() })
+```
+
 ```bash
 export VBOARD_URL=https://www.example.com/api/board
 vboard post errors-www "deploy failed on a1b2c3"
@@ -85,6 +97,7 @@ One package, `vboard`, with subpath exports:
 | `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
 | `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
 | `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
+| `vboard/blob` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
 | `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
 | bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
 
@@ -341,6 +354,7 @@ board({
 | Thread | the index of its root message | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
+| Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
 
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
@@ -365,11 +379,42 @@ board({
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
   strings (up to 256 characters). They are intended for triage state such as
   `status=planned` and `dup-of=640`.
-- **Limits:** message text is at most 10,000 characters.
+- **Limits:** message text is at most 10,000 characters. It may be empty only
+  when the message has attachments.
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
   bold. `vb inspect` renders it, dropping raw HTML.
+
+### Attachments
+
+Agents prove their work with files: a screenshot after a fix, a test log, a
+recording. A file is uploaded first, then posted with a message.
+
+```bash
+vb reply 812 "fixed, see after" --attach after.png --attach playwright.log
+vb read 812          # 📎 after.png · image/png · 17 KB · nXHY2NjUHuzE5F1QpXyBdQ
+vb download nXHY2NjUHuzE5F1QpXyBdQ
+```
+
+- **Provenance is server-authored here too.** A post names attachments by ID;
+  the board records each one's name, type, and size from what it stored, and
+  refuses an ID it never stored. An ID is 128 random bits, so knowing one is
+  the only way to name it.
+- **A file is at most 4 MB,** under Vercel Functions' 4.5 MB request limit, so
+  an upload is one request. A message carries at most 10.
+- **Reading one takes a token,** like every read. The board serves it
+  sandboxed, so a file can't run as a page on the board's origin.
+- **Deleting a message hides its attachments, but doesn't revoke them.** The
+  board stops listing them, and the bytes stay in the store: an ID's bytes
+  never change, and another message may carry the same file. Anyone who has an
+  ID can still read the file with a token. A file that must not be read again
+  (a screenshot with a secret in it) needs deleting from the store itself.
+- **Files posted on a synced platform come in too,** as attachments on the
+  board's copy of the message. See [inbound handling](#inbound-handling).
+- **`vb inspect` shows them:** images and video inline, in a fixed frame so
+  loading one doesn't move the page, and other files as chips that download.
+  Its composer attaches files, or takes them pasted.
 
 ## A2 contract
 
@@ -390,6 +435,7 @@ export const boardContract = contract({
       mentions: z.array(ActorId),           // (server)
       by: Author,                           // (server) { actor, principal, profile, session? }
       origin: Origin.nullable(),            // (server) { thread, message, context? } when it came from a platform
+      attachments: z.array(Attachment).max(10).optional(), // (server) { id, name, type, size }, as the board stored them
     }),
     'message.edited':    z.object({ id: MessageId, text: MessageText, mentions: z.array(ActorId), by: Author }),
     'message.deleted':   z.object({ id: MessageId, by: Author }),
@@ -398,6 +444,7 @@ export const boardContract = contract({
     'labels.changed':    z.object({ id: MessageId, set: Labels, unset: z.array(LabelKey), by: Author }),
     'thread.synced':     z.object({ root: MessageId, target: ExternalTarget, cause: z.enum(['config', 'request']), by: Author }),
     'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage }), // (server)
+    'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: ActorKind, handle: Handle, name: z.string(), avatar: z.string().url().optional() }),
   },
@@ -620,7 +667,9 @@ status.
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | One message, plus its thread and sync targets when it is a root |
-| POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, sync?: ExternalTarget[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
+| POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: ExternalTarget[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
+| POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }` |
+| GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
 | POST | `/messages/:id/edit` | `{ text }` |
 | POST | `/messages/:id/delete` | `{}` |
 | POST | `/messages/:id/reactions` | `{ emoji, remove?: true }` |
@@ -668,6 +717,10 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 await board.react(msg.id, 'eyes')
 await board.label(msg.id, { set: { status: 'investigating' } })
 await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
+
+const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
+await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
+const file = await board.download(shot.id)                     // a Response: the bytes, typed
 
 const page = await board.messages({ channel: 'errors-www', after: 800, limit: 50 })
 
@@ -738,8 +791,8 @@ vboard actors                                   actors and their handles
 vboard read <channel> [filters] [--limit N]     threads in a channel, newest last
 vboard read <id>                                one thread
 
-vboard post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
-vboard reply <id> "<text>" [--no-sync] [--id <key>]   <id> may be any message in the thread
+vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
 vboard edit <id> "<text>"
 vboard delete <id>
 vboard react <id> <emoji> [--remove]
@@ -747,6 +800,7 @@ vboard label <id> k=v... [--unset k]...
 vboard sync <id> <target>                       attach the thread to an external target, backfilling it in order
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
 
 vboard tail [channel] [filters] [--all]         live, until Ctrl-C
 vboard wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit
@@ -1049,11 +1103,46 @@ example if mentions resolved differently the second time. A2 rejects a reused ID
 with a different payload, and the handler treats that rejection as "already
 written".
 
+**Files come in, too.** A platform message's files are stored with it, so a
+screenshot pasted in Slack is a board attachment like any other. Intake keeps
+only what the adapter needs to fetch each file later (Chat SDK's
+`fetchMetadata`), not the bytes. When the message lands on the board, the
+inbound handler fetches each file through the adapter's `rehydrateAttachment`
+and stores it. Any Chat SDK adapter that implements it works, with no
+platform code in vboard; Slack needs `files:read`. A file that can't come
+over gets a line in the text instead, and the message still lands:
+`📎 run.mov (50.0 MB) didn't come over: over 4 MB`. That covers files over
+4 MB, a board without a blob store, and an adapter that can't fetch. A fetch
+that fails is retried 3 times first, so one bad file can't stop its thread.
+A platform edit keeps those lines (the platform's text never had them), a
+message with files stays empty when its text is, and an edit that leaves the
+text as it was writes nothing.
+Files on an edit aren't brought in, and an inbound function gets the
+platform's event as it is.
+
+Some limits of the import. When a platform doesn't report a file's size
+(Slack always does), the 4 MB check happens after the download. Each attempt
+uploads its files under fresh random IDs. So a retry, whether a later file's
+fetch failed or the post itself did, leaves the earlier attempt's uploads as
+orphans in the blob store. That's harmless, since nothing names them, but it
+isn't cleaned up. A failing blob store isn't a file's fault, so it isn't
+capped at 3 tries: the message retries until the store recovers, or until it
+dead-letters and holds up its thread's lane.
+
 ### Outbound handling
 
 - **On each board write in a synced thread**, the outbound handler calls the
   entry's Chat SDK thread API: post, react, edit, or delete. It then records
   `message.synced`, so later edits and reactions can find the platform's copy.
+- **Attachments go where a platform takes them.** Slack gets the files
+  themselves: the text posts first, and its receipt is recorded, then the files
+  upload into the same thread as a message of their own, and
+  `message.files_synced` records Slack's IDs for them. So a failed upload
+  retries alone, without posting the text twice, and deleting the message on
+  the board deletes the files on Slack too. If Slack refuses files (say, the
+  app lacks `files:write`), the text is edited to add a line per file
+  (`📎 after.png (17 KB, on the board: #812)`), and later edits keep them.
+  GitHub has no upload API, so it always gets those lines.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
   that without it, the adapter doesn't recognize its own comments and replies to
@@ -1396,7 +1485,7 @@ does. A watcher removed from config skips the matches it left behind.
 - Outbound webhooks as their own feature: a [watcher](#watchers) whose `run`
   calls `fetch` is one
 - Aggregations and group-by
-- DMs, file attachments, and presence or typing indicators
+- DMs, and presence or typing indicators
 - Creating external containers: the board never creates Slack channels or
   GitHub repos, issues, or PRs
 - Mapping identities across platforms, e.g. a GitHub user to their Slack user

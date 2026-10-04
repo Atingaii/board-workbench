@@ -14,6 +14,8 @@ import type {
   ThreadView,
 } from '../api/routes.ts'
 import type { Actor } from '../contract/reducers.ts'
+import { typeOf } from '../contract/files.ts'
+import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { parseSse } from './sse.ts'
 
@@ -61,9 +63,25 @@ export type PostOptions = {
   sync?: string[]
   /** Makes retries idempotent: the same id never posts twice. */
   id?: string
+  /** Files from `upload`, or their IDs. */
+  attachments?: (Attachment | string)[]
 }
 
 export type ReplyOptions = Omit<PostOptions, 'sync'>
+
+/** What `upload` takes: the bytes, and what to call them. */
+export type UploadInput = {
+  data: Blob | Uint8Array<ArrayBuffer>
+  name: string
+  /** A MIME type; a `Blob`'s own type, or one from the name's extension, otherwise. */
+  type?: string
+}
+
+const messageBody = (input: string | PostOptions | ReplyOptions) => {
+  if (typeof input === 'string') return { text: input }
+  const { attachments, ...rest } = input
+  return attachments?.length ? { ...rest, attachments: attachments.map((a) => (typeof a === 'string' ? a : a.id)) } : rest
+}
 
 export type WaitOptions = {
   /** `'30s'`, `'10m'`, `'1h'`, or milliseconds. Default `'30m'`. */
@@ -200,13 +218,25 @@ export function createBoardClient(options: ClientOptions) {
     thread: (id: number) => call<ThreadView>('GET', `/messages/${id}`),
 
     async post(channel: string, input: string | PostOptions): Promise<MessageView> {
-      const body = typeof input === 'string' ? { text: input } : input
-      return (await call<{ message: MessageView }>('POST', '/messages', { body: { channel, ...body } })).message
+      return (await call<{ message: MessageView }>('POST', '/messages', { body: { channel, ...messageBody(input) } })).message
     },
     async reply(id: number, input: string | ReplyOptions): Promise<MessageView> {
-      const body = typeof input === 'string' ? { text: input } : input
-      return (await call<{ message: MessageView }>('POST', '/messages', { body: { re: id, ...body } })).message
+      return (await call<{ message: MessageView }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })).message
     },
+    /** Stores a file on the board, for a post or reply's `attachments`. At most 4 MB. */
+    async upload(input: UploadInput): Promise<Attachment> {
+      const type = input.type || (input.data instanceof Blob ? input.data.type : '') || typeOf(input.name)
+      const response = await doFetch(`${base}/attachments`, {
+        method: 'POST',
+        headers: { ...(await headers(true)), 'content-type': type, 'x-board-filename': encodeURIComponent(input.name) },
+        body: input.data,
+      })
+      if (!response.ok) throw await toError(response)
+      return ((await response.json()) as { attachment: Attachment }).attachment
+    },
+    /** An attachment's bytes, as the board serves them: `content-type` is the file's type. */
+    download: (id: string, opts: { signal?: AbortSignal } = {}) =>
+      raw('GET', `/attachments/${encodeURIComponent(id)}`, opts.signal ? { signal: opts.signal } : {}),
     edit: (id: number, text: string) =>
       call<{ ok: true }>('POST', `/messages/${id}/edit`, { body: { text } }),
     delete: (id: number) => call<{ ok: true }>('POST', `/messages/${id}/delete`, { body: {} }),

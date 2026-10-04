@@ -1,5 +1,7 @@
-import { CloudOff, Tag, X } from 'lucide-react'
+import { CloudOff, FileText, Paperclip, Tag, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { fileSize } from '../../contract/files.ts'
+import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX } from '../../contract/schemas.ts'
 import * as board from './board.ts'
 import { LabelEditor, Panel, Suggest, type KnownLabels } from './ui.tsx'
 
@@ -35,7 +37,7 @@ function insert(el: HTMLTextAreaElement, start: number, end: number, text: strin
 
 const LIST_ITEM = /^(\s*)([-*]|\d+\.)\s(.*)$/
 
-export type Send = { text: string; noSync: boolean; channel: string; labels: Record<string, string> }
+export type Send = { text: string; noSync: boolean; channel: string; labels: Record<string, string>; files: File[] }
 
 export function Composer(props: {
   scope: string
@@ -52,7 +54,24 @@ export function Composer(props: {
   const [noSync, setNoSync] = useState(false)
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [labelsOpen, setLabelsOpen] = useState(false)
+  const [files, setFiles] = useState<File[]>([])
   const area = useRef<HTMLTextAreaElement>(null)
+  const picker = useRef<HTMLInputElement>(null)
+
+  /** Adds files from the picker or a paste, up to what a message can carry. */
+  const attach = (added: File[]) => {
+    const fitting = added.filter((file) => {
+      if (file.size <= ATTACHMENT_BYTES_MAX) return true
+      board.toast(`${file.name} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
+      return false
+    })
+    setFiles((current) => {
+      const next = [...current, ...fitting]
+      if (next.length > ATTACHMENTS_PER_MESSAGE_MAX) board.toast(`a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX} files`)
+      return next.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)
+    })
+    area.current?.focus()
+  }
 
   useEffect(() => {
     setText(readDraft(props.scope))
@@ -71,14 +90,15 @@ export function Composer(props: {
   }
 
   const target = channel.trim().replace(/^#/, '')
-  const canSend = text.trim().length > 0 && (!props.channels || target.length > 0)
+  const canSend = (text.trim().length > 0 || files.length > 0) && (!props.channels || target.length > 0)
 
   const send = () => {
-    if (!text.trim()) return
+    if (!text.trim() && files.length === 0) return
     if (props.channels && !target) return board.toast('pick a channel to post in')
-    props.onSend({ text: text.trim(), noSync, channel: target, labels })
+    props.onSend({ text: text.trim(), noSync, channel: target, labels, files })
     change('')
     setLabels({})
+    setFiles([])
   }
 
   const wrap = (el: HTMLTextAreaElement, marker: string) => {
@@ -180,8 +200,41 @@ export function Composer(props: {
           placeholder={props.placeholder}
           onChange={(event) => change(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={(event) => {
+            const pasted = [...event.clipboardData.files]
+            if (pasted.length === 0) return
+            event.preventDefault()
+            attach(pasted)
+          }}
         />
+        {files.length > 0 && (
+          <div className="chips composer-files">
+            {files.map((file, i) => (
+              <span key={i} className="file">
+                <FileText size={14} strokeWidth={1.75} />
+                <span className="file-name">{file.name}</span>
+                <span className="faint">{fileSize(file.size)}</span>
+                <button title={`remove ${file.name}`} onClick={() => setFiles((current) => current.filter((_, j) => j !== i))}>
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="composer-footer">
+          <button className="tool" title="attach files (or paste them)" onClick={() => picker.current?.click()}>
+            <Paperclip size={14} />
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            hidden
+            onChange={(event) => {
+              attach([...(event.target.files ?? [])])
+              event.target.value = ''
+            }}
+          />
           <Panel
             title="labels"
             trigger={

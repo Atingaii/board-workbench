@@ -1,5 +1,5 @@
 import { canonicalEmoji } from './emoji.ts'
-import { actorKind, type ActorKind, type Author, type Labels } from './schemas.ts'
+import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
 import { boardContract, type BoardEvent, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
@@ -27,6 +27,7 @@ export type Message = {
   deleted: boolean
   /** Sync targets this message didn't reach, with why. A later delivery clears its entry. */
   undelivered: Record<string, string>
+  attachments: Attachment[]
 }
 
 export type MessagesState = {
@@ -63,6 +64,7 @@ export function foldMessages(
         editedAt: null,
         deleted: false,
         undelivered: {},
+        attachments: payload.attachments ?? [],
       }
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
       return state
@@ -82,6 +84,7 @@ export function foldMessages(
       message.text = ''
       message.reactions = {}
       message.mentions = []
+      message.attachments = []
       return state
     }
     case 'reaction.added': {
@@ -199,7 +202,8 @@ export const actorsReducer = boardContract
   .fold(foldActors)
 
 /** A copy of a board message on a platform. */
-export type ExternalCopy = { thread: string; message: string }
+/** `files`: the platform's IDs for the message's files, or null when it refused them; unset until they're sent. */
+export type ExternalCopy = { thread: string; message: string; files?: string[] | null }
 
 export type SyncedThread = {
   root: number
@@ -259,9 +263,14 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
       }
       return state
     }
+    case 'message.files_synced': {
+      const copy = state.copies[event.payload.id]?.[event.payload.target]
+      if (copy) copy.files = event.payload.files
+      return state
+    }
     case 'message.synced': {
       const { id, target, external } = event.payload
-      ;(state.copies[id] ??= {})[target] = external
+      ;(state.copies[id] ??= {})[target] = { ...external }
       state.byExternalMessage[externalMessageKey(external.thread, external.message)] = id
       const thread = state.threads[event.payload.thread]
       if (thread && thread.root === id && !isThreadTarget(target)) {

@@ -244,6 +244,16 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 .label button:hover { color: var(--bright); }
 /* Your own reaction: a little brighter, not louder. */
 .chip.mine { border-color: var(--muted); background: var(--shade-hover); color: var(--bright); }
+/* Attachments: media in a fixed frame, so loading never moves the page; files as chips. */
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.attachment-media { display: block; width: 320px; max-width: 100%; height: 200px; border: 1px solid var(--hairline); background: var(--shade); overflow: hidden; }
+.attachment-media img, .attachment-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 8px; border: 1px solid var(--hairline); background: var(--shade); color: var(--dim); font-size: 12px; }
+button.file:hover { background: var(--shade-hover); color: var(--bright); }
+.file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file button { color: var(--faint); display: inline-flex; }
+.file button:hover { color: var(--bright); }
+.composer-files { margin: 0 12px 4px; }
 .replies { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 0 -4px; padding: 2px 6px 2px 4px; color: var(--dim); font-size: 12px; font-weight: 600; }
 .replies:hover { background: var(--shade-hover); color: var(--bright); }
 .replies .time { font-weight: 400; }

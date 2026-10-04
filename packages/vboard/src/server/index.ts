@@ -1,5 +1,6 @@
 export { board, type BoardOptions } from './board.ts'
 export { type Watcher } from './watch.ts'
+export { memoryBlob, fsBlob, type BlobStore } from './blob.ts'
 export {
   vercel,
   githubActions,
