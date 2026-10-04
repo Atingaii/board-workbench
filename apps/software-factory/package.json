@@ -15,18 +15,18 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@vercel/connect": "^2.3.4",
     "@vercel/oidc": "^3.8.9",
     "@vercel/queue": "^0.7.0",
+    "@vercel/sandbox": "^3.5.1",
     "ai": "^7.0.127",
     "chat": "^4.41.1",
     "experimental-a2": "0.16.1",
     "next": "^16.3.8",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "v0": "^3.0.8",
-    "vboard": "workspace:*",
-    "zod": "^4.6.5"
+    "vboard": "workspace:*"
   }
 }
