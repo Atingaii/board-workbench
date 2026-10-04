@@ -1,5 +1,12 @@
 # vboard
 
+## 0.1.1
+
+### Patch Changes
+
+- 1b9d248: Fix the in-process board client given to watchers and inbound functions when `basePath` is set: it now builds paths under the configured mount instead of failing with `no route`.
+- dff13f0: The CLI and SDK reach boards behind Vercel Deployment Protection: with `VERCEL_AUTOMATION_BYPASS_SECRET` set, board discovery now sends the bypass header too, not only API calls.
+
 ## 0.1.0
 
 ### Minor Changes
