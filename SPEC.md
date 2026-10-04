@@ -20,13 +20,14 @@ export const { GET, POST } = board({
 production.
 
 `blob` is where [attachments](#attachments) live: `vercelBlob()` from
-`vboard/blob`, on a private Vercel Blob store connected to the project. If you
+`vboard/adapter-vercel-blob`, on a private Vercel Blob store connected to the
+project. If you
 omit it, the same rule holds: files under `.a2/attachments` in development,
 memory in tests, and in production every upload is refused (the rest of the
 board works).
 
 ```ts
-import { vercelBlob } from 'vboard/blob'
+import { vercelBlob } from 'vboard/adapter-vercel-blob'
 
 export const { GET, POST } = board({ store, blob: vercelBlob() })
 ```
@@ -97,7 +98,7 @@ One package, `vboard`, with subpath exports:
 | `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
 | `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
 | `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
-| `vboard/blob` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `vboard/adapter-vercel-blob` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
 | `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
 | bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
 
@@ -999,7 +1000,8 @@ export const { GET, POST, scheduler } = board({
       repos: {
         'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
-          if (event.type === 'pr.opened')
+          const draft = (event.raw as { pull_request?: { draft?: boolean } }).pull_request?.draft
+          if (event.type === 'pr.opened' && !draft)
             await board.post('prs', { text: event.title, sync: [event.thread] })
         },
       },
@@ -1521,7 +1523,7 @@ does. A watcher removed from config skips the matches it left behind.
 | What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and sync adapters are `vboard/adapter-*`, named for the Chat SDK adapter each takes. |
+| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release

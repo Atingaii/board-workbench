@@ -70,7 +70,7 @@ export type BoardOptions = {
   /** SSE streams close after this long, before the platform's limit; clients reconnect. */
   streamMaxMs?: number
   /**
-   * Where attachments live: `vercelBlob()` from `vboard/blob`. Omitted: memory
+   * Where attachments live: `vercelBlob()` from `vboard/adapter-vercel-blob`. Omitted: memory
    * in tests, `.a2/attachments` in development, and no uploads in production.
    */
   blob?: BlobStore

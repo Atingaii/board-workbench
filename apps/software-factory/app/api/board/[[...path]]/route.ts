@@ -1,7 +1,7 @@
 import { board } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { github } from "vboard/adapter-github";
-import { vercelBlob } from "vboard/blob";
+import { vercelBlob } from "vboard/adapter-vercel-blob";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createGitHubAdapter } from "@chat-adapter/github";
 import {
