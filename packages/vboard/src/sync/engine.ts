@@ -65,6 +65,13 @@ const externalFile = (a: ChatAttachment): ExternalFile => ({
 const fileNote = (file: ExternalFile, why: string) =>
   `📎 ${file.name ?? 'a file'}${file.size !== undefined ? ` (${fileSize(file.size)})` : ''} didn't come over: ${why}`
 
+/** A platform message's text with its file notes after it. */
+const withNotes = (text: string, notes: string[]) =>
+  notes.length ? `${text.trim() ? `${text}\n\n` : ''}${notes.join('\n')}` : text
+
+/** The file notes in a message's text, so a platform edit (which only knows the text it shows) keeps them. */
+const notesIn = (text: string) => text.split('\n').filter((line) => /^📎 .* didn't come over: /u.test(line))
+
 /** Tries per file before it's noted instead: a retry repeats the whole message, so keep it short. */
 const FILE_ATTEMPTS = 3
 
@@ -369,7 +376,7 @@ export function createSyncEngine(options: {
         // Files only come over for a post: an inbound function gets the platform's event as is.
         const posting = rootId !== undefined || typeof target === 'string'
         const { attachments, notes } = posting && event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
-        const text = notes.length ? `${event.text.trim() ? `${event.text}\n\n` : ''}${notes.join('\n')}` : event.text
+        const text = withNotes(event.text, notes)
         const base = {
           identity,
           text: clampText(text, attachments.length > 0),
@@ -395,8 +402,14 @@ export function createSyncEngine(options: {
           return void (await writeDelete(writes, { identity: system, id, from: key, asAuthor: false }))
         }
         const identity = externalIdentity(event.author)
-        if (event.kind === 'edited')
-          return void (await writeEdit(writes, { identity, id, text: clampText(event.text), from: key, asAuthor: false }))
+        if (event.kind === 'edited') {
+          // The platform's text never had the file notes, and a message with files may have none.
+          const { state: messages } = await session.state(messagesReducer)
+          const stored = messages.byId[id]
+          const text = clampText(withNotes(event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
+          if (stored && stored.text === text) return
+          return void (await writeEdit(writes, { identity, id, text, from: key, asAuthor: false }))
+        }
         return void (await writeReaction(writes, { identity, id, emoji: event.emoji, remove: !event.added, from: key }))
       }
       case 'lifecycle': {

@@ -1112,8 +1112,20 @@ over gets a line in the text instead, and the message still lands:
 `📎 run.mov (50.0 MB) didn't come over: over 4 MB`. That covers files over
 4 MB, a board without a blob store, and an adapter that can't fetch. A fetch
 that fails is retried 3 times first, so one bad file can't stop its thread.
+A platform edit keeps those lines (the platform's text never had them), a
+message with files stays empty when its text is, and an edit that leaves the
+text as it was writes nothing.
 Files on an edit aren't brought in, and an inbound function gets the
 platform's event as it is.
+
+Some limits of the import. When a platform doesn't report a file's size
+(Slack always does), the 4 MB check happens after the download. Each attempt
+uploads its files under fresh random IDs. So a retry, whether a later file's
+fetch failed or the post itself did, leaves the earlier attempt's uploads as
+orphans in the blob store. That's harmless, since nothing names them, but it
+isn't cleaned up. A failing blob store isn't a file's fault, so it isn't
+capped at 3 tries: the message retries until the store recovers, or until it
+dead-letters and holds up its thread's lane.
 
 ### Outbound handling
 

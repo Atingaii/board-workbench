@@ -21,6 +21,7 @@ type WebhookPayload =
       /** Files on the message; their bytes are what `served` holds at each `url`. */
       files?: { name: string; mimeType: string; url: string; size?: number }[]
     }
+  | { type: 'edit'; threadId: string; id: string; text: string; user: string }
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
@@ -46,7 +47,12 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     handleWebhook: async (request: Request, options?: WebhookOptions) => {
       if (request.headers.get('x-github-event')) return new Response('ok')
       const body = (await request.json()) as WebhookPayload
-      if (body.type === 'message')
+      if (body.type === 'edit')
+        await chat.processMessageUpdated(
+          { adapter, threadId: body.threadId, message: createTestMessage(body.id, body.text, { threadId: body.threadId, author: author(body.user) }) },
+          options,
+        )
+      else if (body.type === 'message')
         await chat.processMessage(
           adapter,
           body.threadId,
@@ -340,6 +346,16 @@ describe('sync', () => {
       expect(body.replies[0]).toMatchObject({ text: "and the recording\n\n📎 run.mov (50.0 MB) didn't come over: over 4 MB", attachments: [] })
     })
     expect(s.fetches).toEqual(['https://files.slack.test/shot.png']) // the big one was never downloaded
+
+    // Slack edits know only the text they show: the file-only root stays empty, and the reply keeps its note.
+    await webhook('slack', { type: 'edit', threadId: 'slack:C1:500.1', id: '500.1', text: '', user: 'U1' })
+    await webhook('slack', { type: 'edit', threadId: 'slack:C1:500.1', id: '500.2', text: 'and the recording, again', user: 'U1' })
+    await vi.waitFor(async () => {
+      const { body } = await julian('GET', `/messages/${root!.id}`)
+      expect(body.replies[0]).toMatchObject({ text: "and the recording, again\n\n📎 run.mov (50.0 MB) didn't come over: over 4 MB" })
+    })
+    const { body: after } = await julian('GET', `/messages/${root!.id}`)
+    expect(after.message).toMatchObject({ text: '', editedAt: null, attachments: [{ name: 'shot.png' }] })
     expect(s.posts).toHaveLength(0) // nothing echoes back to Slack
   })
 
