@@ -134,6 +134,20 @@ const ExternalAuthor = z.object({
   isBot: z.boolean(),
 })
 
+/**
+ * A file on a platform message, as Chat SDK describes it: enough for the
+ * platform's adapter to fetch it later (`rehydrateAttachment`), never the bytes.
+ */
+export const ExternalFile = z.object({
+  type: z.enum(['image', 'file', 'video', 'audio']),
+  name: z.string().max(1000).optional(),
+  mimeType: z.string().max(255).optional(),
+  size: z.number().int().nonnegative().optional(),
+  url: z.string().max(4000).optional(),
+  fetchMetadata: z.record(z.string(), z.string().max(4000)).optional(),
+})
+export type ExternalFile = z.infer<typeof ExternalFile>
+
 /** A platform event, normalized at intake. Thread IDs are external IDs with the sync key prefix. */
 export const ExternalEvent = z.discriminatedUnion('kind', [
   z.object({
@@ -146,6 +160,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     text: z.string(),
     context: z.string().nullable(),
     author: ExternalAuthor,
+    /** Files on the message, fetched when it lands on the board. Older events have none. */
+    files: z.array(ExternalFile).max(20).optional(),
   }),
   z.object({
     kind: z.literal('edited'),

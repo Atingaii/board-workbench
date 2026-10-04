@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getEmoji, type Adapter, type AdapterPostableMessage, type ChatInstance, type WebhookOptions } from 'chat'
+import { getEmoji, type Adapter, type Attachment, type AdapterPostableMessage, type ChatInstance, type WebhookOptions } from 'chat'
 import { createMockAdapter, createTestMessage } from '@chat-adapter/tests'
 import { slack } from '../src/sync/slack.ts'
 import { github } from '../src/sync/github.ts'
@@ -10,7 +10,17 @@ const textOf = (message: AdapterPostableMessage) =>
   typeof message === 'string' ? message : JSON.stringify(message)
 
 type WebhookPayload =
-  | { type: 'message'; threadId: string; id: string; text: string; user: string; name?: string; raw?: unknown }
+  | {
+      type: 'message'
+      threadId: string
+      id: string
+      text: string
+      user: string
+      name?: string
+      raw?: unknown
+      /** Files on the message; their bytes are what `served` holds at each `url`. */
+      files?: { name: string; mimeType: string; url: string; size?: number }[]
+    }
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
@@ -22,6 +32,9 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
   const reactions: { threadId: string; messageId: string; emoji: string; added: boolean }[] = []
   const edits: { threadId: string; messageId: string; text: string }[] = []
   const deletes: { threadId: string; messageId: string }[] = []
+  /** What the platform hands over for a file URL: the bytes, or an error to throw. */
+  const served = new Map<string, Uint8Array | Error>()
+  const fetches: string[] = []
   const author = (user: string, name = user) => ({ userId: user, userName: name, fullName: name, isBot: false, isMe: false })
   const adapter: Adapter = createMockAdapter(name, {
     name,
@@ -41,6 +54,22 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
             threadId: body.threadId,
             author: author(body.user, body.name),
             ...(body.raw ? { raw: body.raw } : {}),
+            ...(body.files
+              ? {
+                  attachments: body.files.map((f) => ({
+                    type: f.mimeType.startsWith('image/') ? ('image' as const) : ('file' as const),
+                    name: f.name,
+                    mimeType: f.mimeType,
+                    url: f.url,
+                    ...(f.size !== undefined ? { size: f.size } : {}),
+                    fetchMetadata: { url: f.url },
+                    // The live closure doesn't survive the inbox: the board must use rehydrateAttachment.
+                    fetchData: async () => {
+                      throw new Error('stale fetchData called')
+                    },
+                  })),
+                }
+              : {}),
           }),
           options,
         )
@@ -79,6 +108,18 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
       channelPosts.push({ channelId, text: textOf(message), id })
       return { id, threadId: `${channelId}:${id}`, raw: {} }
     },
+    // Like Slack's: rebuilds the download from what the attachment kept.
+    rehydrateAttachment: (attachment: Attachment) => ({
+      ...attachment,
+      fetchData: async () => {
+        const url = attachment.fetchMetadata!.url!
+        fetches.push(url)
+        const found = served.get(url)
+        if (!found) throw new Error(`404 ${url}`)
+        if (found instanceof Error) throw found
+        return Buffer.from(found)
+      },
+    }),
     addReaction: async (threadId: string, messageId: string, emoji: unknown) => {
       reactions.push({ threadId, messageId, emoji: String(emoji), added: true })
     },
@@ -87,7 +128,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     },
   } as Partial<Adapter>)
   extend(adapter)
-  return { adapter, posts, channelPosts, reactions, edits, deletes }
+  return { adapter, posts, channelPosts, reactions, edits, deletes, served, fetches }
 }
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
@@ -268,6 +309,78 @@ describe('sync', () => {
     await vi.waitFor(() => expect(g.posts).toHaveLength(1))
     expect(g.posts[0]!.text).toContain(`📎 proof.png (3 B, on the board: #${proof.id})`)
     expect(g.posts[0]!.text).not.toContain('"files"')
+  })
+
+  it('brings files posted in Slack onto the board, fetched through the adapter', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    s.served.set('https://files.slack.test/shot.png', png)
+
+    // A root with only a file: no "(no text)" filler.
+    await webhook('slack', {
+      type: 'message', threadId: 'slack:C1:500.1', id: '500.1', text: '', user: 'U1',
+      files: [{ name: 'shot.png', mimeType: 'image/png', url: 'https://files.slack.test/shot.png', size: png.byteLength }],
+    })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = (await read(julian, 'firehose')) as unknown as { id: number; text: string; attachments: { id: string; name: string; type: string; size: number }[] }[]
+    expect(root!.text).toBe('')
+    expect(root!.attachments).toEqual([{ id: expect.any(String), name: 'shot.png', type: 'image/png', size: png.byteLength }])
+    const file = await board.fetch(new Request(`${BOARD_URL}/attachments/${root!.attachments[0]!.id}`, { headers: { authorization: `Bearer ${await personToken()}` } }))
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(png)
+
+    // A reply in the thread, with text, and a file too big to bring over: it keeps its text and gets a line instead.
+    await webhook('slack', {
+      type: 'message', threadId: 'slack:C1:500.1', id: '500.2', text: 'and the recording', user: 'U1',
+      files: [{ name: 'run.mov', mimeType: 'video/quicktime', url: 'https://files.slack.test/run.mov', size: 50 * 1024 * 1024 }],
+    })
+    await vi.waitFor(async () => {
+      const { body } = await julian('GET', `/messages/${root!.id}`)
+      expect(body.replies).toHaveLength(1)
+      expect(body.replies[0]).toMatchObject({ text: "and the recording\n\n📎 run.mov (50.0 MB) didn't come over: over 4 MB", attachments: [] })
+    })
+    expect(s.fetches).toEqual(['https://files.slack.test/shot.png']) // the big one was never downloaded
+    expect(s.posts).toHaveLength(0) // nothing echoes back to Slack
+  })
+
+  it('retries a file Slack fails to hand over, then notes it if it keeps failing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const log = new TextEncoder().encode('stack trace')
+    let flaky = 1
+    s.served.set('https://files.slack.test/flaky.log', new Error('ECONNRESET'))
+    s.served.set('https://files.slack.test/gone.log', new Error('403 Forbidden'))
+    const inbox = board.servers[1]!
+
+    await webhook('slack', {
+      type: 'message', threadId: 'slack:C1:600.1', id: '600.1', text: 'logs', user: 'U1',
+      files: [{ name: 'flaky.log', mimeType: 'text/plain', url: 'https://files.slack.test/flaky.log' }],
+    })
+    // The first attempt fails; then Slack answers.
+    await vi.waitFor(() => expect(s.fetches).toHaveLength(flaky))
+    s.served.set('https://files.slack.test/flaky.log', log)
+    await vi.waitFor(async () => {
+      await inbox.drain('inbox:slack:C1')
+      expect(await read(julian, 'firehose')).toHaveLength(1)
+    })
+    const [root] = (await read(julian, 'firehose')) as unknown as { id: number; text: string; attachments: { name: string }[] }[]
+    expect(root).toMatchObject({ text: 'logs', attachments: [{ name: 'flaky.log' }] })
+    flaky = s.fetches.length
+
+    await webhook('slack', {
+      type: 'message', threadId: 'slack:C1:600.1', id: '600.2', text: 'older one', user: 'U1',
+      files: [{ name: 'gone.log', mimeType: 'text/plain', url: 'https://files.slack.test/gone.log', size: 11 }],
+    })
+    await vi.waitFor(async () => {
+      await inbox.drain('inbox:slack:C1')
+      const { body } = await julian('GET', `/messages/${root!.id}`)
+      expect(body.replies[0]).toMatchObject({ text: "older one\n\n📎 gone.log (11 B) didn't come over: slack wouldn't hand it over", attachments: [] })
+    })
+    expect(s.fetches.length - flaky).toBe(3) // FILE_ATTEMPTS, then a note: the thread's lane moves on
+    warn.mockRestore()
+    error.mockRestore()
   })
 
   it('notes the files in the text when Slack refuses them, and retries any other failure without posting the text twice', async () => {

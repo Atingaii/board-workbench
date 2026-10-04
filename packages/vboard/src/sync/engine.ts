@@ -1,5 +1,5 @@
 import { canonicalEmoji } from '../contract/emoji.ts'
-import type { Chat, Message as ChatMessage, ReactionEvent } from 'chat'
+import type { Attachment as ChatAttachment, Chat, Message as ChatMessage, ReactionEvent } from 'chat'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
 import type { BoardClient } from '../client/client.ts'
@@ -8,6 +8,7 @@ import {
   inboxSession,
   type BoardEvents,
   type ExternalEvent,
+  type ExternalFile,
   type InboxEvent,
 } from '../contract/contract.ts'
 import {
@@ -20,9 +21,9 @@ import {
   type ExternalCopy,
   type Message,
 } from '../contract/reducers.ts'
-import { fileSize } from '../contract/files.ts'
-import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
-import { readAttachmentData, type BlobStore } from '../server/blob.ts'
+import { fileSize, typeOf } from '../contract/files.ts'
+import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, type Attachment } from '../contract/schemas.ts'
+import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import type { BoardSession } from '../server/board.ts'
 import { badRequest, notFound } from '../server/errors.ts'
@@ -44,10 +45,28 @@ export type BoardBinding = {
   clientAs(identity: Identity, trigger: string): BoardClient
 }
 
-const clampText = (text: string) => {
-  const trimmed = text.trim() === '' ? '(no text)' : text
+/** `files`: a message with files may have no text. */
+const clampText = (text: string, files = false) => {
+  const trimmed = text.trim() === '' ? (files ? '' : '(no text)') : text
   return trimmed.length > MESSAGE_TEXT_MAX ? `${trimmed.slice(0, MESSAGE_TEXT_MAX - 1)}…` : trimmed
 }
+
+/** A Chat SDK attachment as the inbox keeps it: what the adapter needs to fetch it again, without the bytes or the closure. */
+const externalFile = (a: ChatAttachment): ExternalFile => ({
+  type: a.type,
+  ...(a.name ? { name: a.name.slice(0, 1000) } : {}),
+  ...(a.mimeType ? { mimeType: a.mimeType.slice(0, 255) } : {}),
+  ...(typeof a.size === 'number' && Number.isInteger(a.size) && a.size >= 0 ? { size: a.size } : {}),
+  ...(a.url && a.url.length <= 4000 ? { url: a.url } : {}),
+  ...(a.fetchMetadata ? { fetchMetadata: a.fetchMetadata } : {}),
+})
+
+/** A platform file the board couldn't bring over gets a line in the text instead. */
+const fileNote = (file: ExternalFile, why: string) =>
+  `📎 ${file.name ?? 'a file'}${file.size !== undefined ? ` (${fileSize(file.size)})` : ''} didn't come over: ${why}`
+
+/** Tries per file before it's noted instead: a retry repeats the whole message, so keep it short. */
+const FILE_ATTEMPTS = 3
 
 const jsonSafe = (value: unknown): unknown => {
   try {
@@ -194,6 +213,7 @@ export function createSyncEngine(options: {
           text: platform.markdown(message),
           context: platform.context(message),
           author: await authorOf(message),
+          ...(message.attachments?.length ? { files: message.attachments.slice(0, 20).map(externalFile) } : {}),
         },
         message.raw,
         `message:${where.subthread ?? where.thread}|${message.id}`,
@@ -282,7 +302,58 @@ export function createSyncEngine(options: {
     }
   }
 
-  async function inbound(trigger: InboxEvent) {
+  /**
+   * A platform message's files, onto the board: each is fetched through its
+   * adapter (Chat SDK's `rehydrateAttachment`, so any platform that has it works)
+   * and stored. A file that can't come over (too big, no blob store, the
+   * platform refused) becomes a line in the text; a failed fetch retries the
+   * message a few times first.
+   */
+  async function importFiles(platform: SyncPlatform, files: ExternalFile[], attempt: number) {
+    const attachments: Attachment[] = []
+    const notes: string[] = []
+    const blob = options.blob
+    for (const file of files.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)) {
+      if (!blob) {
+        notes.push(fileNote(file, 'this board has no blob store'))
+        continue
+      }
+      if (file.size !== undefined && file.size > ATTACHMENT_BYTES_MAX) {
+        notes.push(fileNote(file, `over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`))
+        continue
+      }
+      const fetchData = platform.adapter.rehydrateAttachment?.({ ...file }).fetchData
+      if (!fetchData) {
+        notes.push(fileNote(file, `${platform.platform} can't hand it over`))
+        continue
+      }
+      let data: Uint8Array
+      try {
+        const fetched = await fetchData()
+        data = fetched instanceof ArrayBuffer ? new Uint8Array(fetched) : new Uint8Array(fetched.buffer, fetched.byteOffset, fetched.byteLength)
+      } catch (error) {
+        if (attempt < FILE_ATTEMPTS) throw error
+        console.warn(`[vboard] couldn't fetch ${file.name ?? 'a file'} from ${platform.platform}:`, describe(error))
+        notes.push(fileNote(file, `${platform.platform} wouldn't hand it over`))
+        continue
+      }
+      if (data.byteLength > ATTACHMENT_BYTES_MAX) {
+        notes.push(fileNote(file, `over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`))
+        continue
+      }
+      if (data.byteLength === 0) {
+        notes.push(fileNote(file, 'it was empty'))
+        continue
+      }
+      const name = file.name ?? `${file.type}`
+      attachments.push(await writeUpload(blob, { data, name, type: file.mimeType || typeOf(name) }))
+    }
+    for (const file of files.slice(ATTACHMENTS_PER_MESSAGE_MAX))
+      notes.push(fileNote(file, `a message carries at most ${ATTACHMENTS_PER_MESSAGE_MAX}`))
+    return { attachments, notes }
+  }
+
+  async function inbound(trigger: InboxEvent, attempt = 1) {
     const { writes, session, clientAs } = bound()
     const { sync: key, event, raw } = trigger.payload
     const platform = platformOf(key)
@@ -295,9 +366,14 @@ export function createSyncEngine(options: {
     switch (event.kind) {
       case 'message': {
         const identity = externalIdentity(event.author)
+        // Files only come over for a post: an inbound function gets the platform's event as is.
+        const posting = rootId !== undefined || typeof target === 'string'
+        const { attachments, notes } = posting && event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
+        const text = notes.length ? `${event.text.trim() ? `${event.text}\n\n` : ''}${notes.join('\n')}` : event.text
         const base = {
           identity,
-          text: clampText(event.text),
+          text: clampText(text, attachments.length > 0),
+          ...(attachments.length ? { attachments } : {}),
           origin: { thread: event.thread, subthread: event.subthread, message: event.message, context: event.context },
           from: key,
           lenientMentions: true,
@@ -368,7 +444,7 @@ export function createSyncEngine(options: {
       'external.received': {
         lane: ({ event }) => `thread:${event.payload.event.thread}`,
         handler: async (ctx) => {
-          await inbound(ctx.event as InboxEvent)
+          await inbound(ctx.event as InboxEvent, ctx.attempt)
         },
       },
     },
