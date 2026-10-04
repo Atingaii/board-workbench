@@ -1,0 +1,31 @@
+{
+  "name": "v0-feedback",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "pnpm --filter vboard build && next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@chat-adapter/slack": "^4.41.1",
+    "@vercel/connect": "^2.3.4",
+    "@vercel/queue": "^0.7.0",
+    "ai": "^7.0.127",
+    "chat": "^4.41.1",
+    "experimental-a2": "0.16.1",
+    "next": "^16.3.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "v0": "^3.0.8",
+    "vboard": "workspace:*",
+    "zod": "^4.6.5"
+  }
+}

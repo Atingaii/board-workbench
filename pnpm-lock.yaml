@@ -70,6 +70,58 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  apps/v0-feedback:
+    dependencies:
+      '@chat-adapter/slack':
+        specifier: ^4.41.1
+        version: 4.41.1(ai@7.0.127(zod@4.6.5))(debug@4.4.3)(zod@4.6.5)
+      '@vercel/connect':
+        specifier: ^2.3.4
+        version: 2.3.4(@chat-adapter/slack@4.41.1(ai@7.0.127(zod@4.6.5))(debug@4.4.3)(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ai@7.0.127(zod@4.6.5))
+      '@vercel/queue':
+        specifier: ^0.7.0
+        version: 0.7.0
+      ai:
+        specifier: ^7.0.127
+        version: 7.0.127(zod@4.6.5)
+      chat:
+        specifier: ^4.41.1
+        version: 4.41.1(ai@7.0.127(zod@4.6.5))(zod@4.6.5)
+      experimental-a2:
+        specifier: 0.16.1
+        version: 0.16.1(@vercel/queue@0.7.0)(ai@7.0.127(zod@4.6.5))(react@19.3.0)
+      next:
+        specifier: ^16.3.8
+        version: 16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.3.0
+        version: 19.3.0(react@19.3.0)
+      v0:
+        specifier: ^3.0.8
+        version: 3.0.8
+      vboard:
+        specifier: workspace:*
+        version: link:../../packages/vboard
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      '@types/react':
+        specifier: ^19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   packages/vboard:
     dependencies:
       '@vercel/oidc':
@@ -281,6 +333,9 @@ packages:
   '@clack/prompts@1.8.1':
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
+
+  '@dmsnell/diff-match-patch@1.1.0':
+    resolution: {integrity: sha512-yejLPmM5pjsGvxS9gXablUSbInW7H976c/FJ4iQxWIm7/38xBySRemTPDe34lhg1gVLbJntX0+sH0jYfU+PN9A==}
 
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
@@ -1899,6 +1954,11 @@ packages:
   jsonc-parser@3.3.1:
     resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
 
+  jsondiffpatch@0.7.6:
+    resolution: {integrity: sha512-zE9+AXFq+MkTolDor2Cw1nJzLC0aleqPkYf52Kb4Kn4mJcka/gFHpGI2JBVEJCfWOvBl0OoxZS+wuLdislQcqg==}
+    engines: {node: ^18.0.0 || >=20.0.0}
+    hasBin: true
+
   jsonlines@0.1.1:
     resolution: {integrity: sha512-ekDrAGso79Cvf+dtm+mL8OBI2bmAOt3gssYs833De/C9NmIpWDWyUO4zPgB5x2/OhY366dkhgfPMYfwZF7yOZA==}
 
@@ -2643,6 +2703,9 @@ packages:
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
+  v0@3.0.8:
+    resolution: {integrity: sha512-HUFWLonFmrI3CEyWf0A9noyWmR6ZaGHZR0jCH1WPcBA41qfQxytKECg3e1UY+SZPuCqihWY1Kngiwsh1ua5Weg==}
+
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
@@ -3009,6 +3072,8 @@ snapshots:
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
+
+  '@dmsnell/diff-match-patch@1.1.0': {}
 
   '@emnapi/runtime@1.11.3':
     dependencies:
@@ -4343,6 +4408,10 @@ snapshots:
 
   jsonc-parser@3.3.1: {}
 
+  jsondiffpatch@0.7.6:
+    dependencies:
+      '@dmsnell/diff-match-patch': 1.1.0
+
   jsonlines@0.1.1: {}
 
   launch-editor@2.14.1:
@@ -5375,6 +5444,11 @@ snapshots:
   use-sync-external-store@1.7.0(react@19.3.0):
     dependencies:
       react: 19.3.0
+
+  v0@3.0.8:
+    dependencies:
+      '@vercel/oidc': 3.8.9
+      jsondiffpatch: 0.7.6
 
   vary@1.1.2:
     optional: true
