@@ -111,11 +111,16 @@ export function createSyncEngine(options: {
   }
   const keyOf = (target: string) => target.slice(0, target.indexOf(':'))
   /** `slack:C0123:1727.1` (Chat SDK) → `${key}:C0123:1727.1` (board). */
-  const toExternal = (key: string, chatId: string) => `${key}:${chatId.slice(chatId.indexOf(':') + 1)}`
+  const toExternal = (key: string, chatId: string) => {
+    const id = chatId.slice(chatId.indexOf(':') + 1)
+    return `${key}:${platformOf(key).fromChatId?.(id) ?? id}`
+  }
   /** The reverse: board external ID → Chat SDK ID. */
   const toChat = (external: string) => {
     const key = keyOf(external)
-    return `${platformOf(key).adapter.name}:${external.slice(key.length + 1)}`
+    const platform = platformOf(key)
+    const id = external.slice(key.length + 1)
+    return `${platform.adapter.name}:${platform.toChatId?.(id) ?? id}`
   }
 
   // --- mappings ---------------------------------------------------------------
@@ -256,7 +261,9 @@ export function createSyncEngine(options: {
     })
     chat.onReaction(async (event: ReactionEvent) => {
       const where = located(key, platform, event.threadId)
-      const stamp = (event.raw as { event_ts?: string } | null)?.event_ts ?? String(Date.now())
+      // Slack stamps a reaction event; WhatsApp sends each reaction as a message with its own ID.
+      const raw = event.raw as { event_ts?: string; id?: string } | null
+      const stamp = raw?.event_ts ?? raw?.id ?? String(Date.now())
       await intake(
         key,
         {
@@ -409,6 +416,14 @@ export function createSyncEngine(options: {
           const text = clampText(withNotes(event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
           if (stored && stored.text === text) return
           return void (await writeEdit(writes, { identity, id, text, from: key, asAuthor: false }))
+        }
+        if (platform.singleReaction) {
+          const { state: messages } = await session.state(messagesReducer)
+          const emoji = canonicalEmoji(event.emoji)
+          for (const [held, actors] of Object.entries(messages.byId[id]?.reactions ?? {}))
+            if (actors.includes(identity.actor.id) && !(event.added && held === emoji))
+              await writeReaction(writes, { identity, id, emoji: held, remove: true, from: key })
+          if (!event.added) return
         }
         return void (await writeReaction(writes, { identity, id, emoji: event.emoji, remove: !event.added, from: key }))
       }

@@ -3,12 +3,13 @@ import { defineConfig } from 'tsdown'
 export default defineConfig([
   {
     entry: {
-      index: 'src/index.ts',
-      'index.node': 'src/index.node.ts',
-      server: 'src/server/index.ts',
-      slack: 'src/sync/slack.ts',
-      github: 'src/sync/github.ts',
-      blob: 'src/blob/vercel.ts',
+      index: 'src/server/index.ts',
+      client: 'src/client/index.ts',
+      'client.node': 'src/client/index.node.ts',
+      'adapter-slack': 'src/sync/slack.ts',
+      'adapter-github': 'src/sync/github.ts',
+      'adapter-kapso': 'src/sync/kapso.ts',
+      'adapter-vercel-blob': 'src/blob/vercel.ts',
       contract: 'src/contract/index.ts',
       cli: 'src/cli/main.ts',
     },

@@ -17,30 +17,34 @@
   },
   "exports": {
     ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./client": {
       "node": {
-        "types": "./dist/index.node.d.mts",
-        "default": "./dist/index.node.mjs"
+        "types": "./dist/client.node.d.mts",
+        "default": "./dist/client.node.mjs"
       },
       "default": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
+        "types": "./dist/client.d.mts",
+        "default": "./dist/client.mjs"
       }
     },
-    "./server": {
-      "types": "./dist/server.d.mts",
-      "default": "./dist/server.mjs"
+    "./adapter-slack": {
+      "types": "./dist/adapter-slack.d.mts",
+      "default": "./dist/adapter-slack.mjs"
     },
-    "./slack": {
-      "types": "./dist/slack.d.mts",
-      "default": "./dist/slack.mjs"
+    "./adapter-github": {
+      "types": "./dist/adapter-github.d.mts",
+      "default": "./dist/adapter-github.mjs"
     },
-    "./github": {
-      "types": "./dist/github.d.mts",
-      "default": "./dist/github.mjs"
+    "./adapter-kapso": {
+      "types": "./dist/adapter-kapso.d.mts",
+      "default": "./dist/adapter-kapso.mjs"
     },
-    "./blob": {
-      "types": "./dist/blob.d.mts",
-      "default": "./dist/blob.mjs"
+    "./adapter-vercel-blob": {
+      "types": "./dist/adapter-vercel-blob.d.mts",
+      "default": "./dist/adapter-vercel-blob.mjs"
     },
     "./contract": {
       "types": "./dist/contract.d.mts",
@@ -70,6 +74,7 @@
     "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@chat-adapter/tests": "^4.41.1",
+    "@kapso/chat-adapter": "^0.1.1",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

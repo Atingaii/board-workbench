@@ -3,7 +3,7 @@ import { ephemeralState } from './state.ts'
 
 /**
  * One Chat SDK instance per sync entry. Platform modules call this, so
- * `vboard/server` never loads Chat SDK unless sync is configured.
+ * the board (`vboard`) never loads Chat SDK unless sync is configured.
  */
 export const createChat = (adapter: Adapter): Chat =>
   new Chat({
