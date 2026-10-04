@@ -53,12 +53,12 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
 
 ## the v0 feedback bot (`apps/v0-feedback`)
 
-vboard as a v0 feedback bot, here while we iterate before it moves to `vercel/v0`, on the `vercel-internal-playground/vboard` project:
-people post v0 feedback in Slack, and v0 fixes the ones worth fixing and opens a
-draft PR on `vercel/v0`. The board route holds the whole config, `v0.ts` starts
-v0 chats, `app/api/v0-hook` hears back from v0, and the A2 scheduler route
-re-exports the board's `scheduler` (separate because the queue trigger makes its
-function private).
+vboard as a v0 feedback bot on the `vercel-internal-playground/vboard` project,
+here until it moves to `vercel/v0`: people post v0 feedback in Slack, and v0
+fixes the ones worth fixing and opens a draft PR on `vercel/v0`. The board
+route holds the whole config, `v0.ts` starts v0 chats, `app/api/v0-hook` hears
+back from v0, and the A2 scheduler route re-exports the board's `scheduler`
+(separate because the queue trigger makes its function private).
 
 ```bash
 cd apps/v0-feedback
@@ -86,8 +86,6 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 - Production is behind Vercel Authentication. The CLI and v0's webhook get
   through with the automation bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`), and
   `/api/v0-hook` also checks `V0_HOOK_KEY`.
-- The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
-  (`vercel.json`).
 
 ## the inspector (`vb inspect`, `src/inspect/`)
 

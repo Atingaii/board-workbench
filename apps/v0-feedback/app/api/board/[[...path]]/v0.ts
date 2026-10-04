@@ -1,10 +1,8 @@
 import { v0 } from "v0";
 
-// A v0 chat for an intake thread, created with the deployment's Vercel OIDC token. v0
-// gives a project's chats its git link: with this Vercel project linked to vercel/v0,
-// each chat works on its own v0/vboard-<chatId> branch there. With credentialAccess.github
-// (vercel/v0#30977, flagged on for Vercel teams), the chat's sandbox can use gh as the
-// GitHub App installation on that repo, so v0 opens the pull request itself.
+// A v0 chat per report, created with the deployment's Vercel OIDC token. The project's
+// git link gives each chat its own v0/vboard-<chatId> branch on vercel/v0, and
+// credentialAccess.github (vercel/v0#30977) lets its gh open the pull request.
 
 /** The API only offers v0's own models: v0-mini, v0-pro (its default), v0-max, v0-max-fast. */
 const MODEL = { modelId: "v0-max", imageGenerations: false } as const;
@@ -52,4 +50,3 @@ async function watch(chatId: string) {
     .catch((error: unknown) => ({ error }));
   if (hook.error) console.warn("v0 webhook not registered", chatId, JSON.stringify(hook.error));
 }
-
