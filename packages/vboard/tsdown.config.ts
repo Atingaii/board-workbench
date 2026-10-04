@@ -8,6 +8,7 @@ export default defineConfig([
       'client.node': 'src/client/index.node.ts',
       'adapter-slack': 'src/sync/slack.ts',
       'adapter-github': 'src/sync/github.ts',
+      'adapter-kapso': 'src/sync/kapso.ts',
       contract: 'src/contract/index.ts',
       cli: 'src/cli/main.ts',
     },

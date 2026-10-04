@@ -87,6 +87,7 @@ const slackParts = (LOGOS.slack.match(/M[^M]+/g) ?? []).map((d, i) => ({ d, fill
 const SOURCES: Record<string, { name: string; paths: { d: string; fill: string }[] }> = {
   slack: { name: 'Slack', paths: slackParts },
   github: { name: 'GitHub', paths: [{ d: LOGOS.github, fill: 'currentColor' }] },
+  whatsapp: { name: 'WhatsApp', paths: [{ d: LOGOS.whatsapp, fill: '#25D366' }] },
 }
 
 /** Where a message came from, as that platform's mark. */

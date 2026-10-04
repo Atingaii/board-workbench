@@ -20,6 +20,12 @@ export type SyncPlatform = {
   readonly mappings: Readonly<Record<string, string | InboundFunction>>
   /** `#prs` → `C0123ABC`. */
   resolveChannel(key: string): Promise<string>
+  /** A Chat SDK thread or channel ID, without its adapter prefix, as the board writes it, when they differ. */
+  fromChatId?(id: string): string
+  /** The reverse of `fromChatId`. */
+  toChatId?(id: string): string
+  /** Each person keeps one reaction per message, as on WhatsApp: a new one replaces theirs, and a removal names none. */
+  readonly singleReaction?: boolean
   /** Folds sub-threads into the thread a board thread maps to. */
   groupThread(thread: string): string
   /** The channel a thread is in, when it isn't Chat SDK's: GitHub splits a repo into its PRs and its issues. */

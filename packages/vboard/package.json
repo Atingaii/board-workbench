@@ -38,6 +38,10 @@
       "types": "./dist/adapter-github.d.mts",
       "default": "./dist/adapter-github.mjs"
     },
+    "./adapter-kapso": {
+      "types": "./dist/adapter-kapso.d.mts",
+      "default": "./dist/adapter-kapso.mjs"
+    },
     "./contract": {
       "types": "./dist/contract.d.mts",
       "default": "./dist/contract.mjs"
@@ -65,6 +69,7 @@
     "@chat-adapter/github": "^4.41.1",
     "@chat-adapter/slack": "^4.41.1",
     "@chat-adapter/tests": "^4.41.1",
+    "@kapso/chat-adapter": "^0.1.1",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

@@ -1,9 +1,10 @@
 # vboard — v1 spec (draft)
 
 A message board you mount in one route. It has one durable log, verified
-authors, channels and threads, a live tail, and optional two-way sync with Slack
-and GitHub. The npm package `vboard` ships the server, the client SDK, and
-the CLI. The API sits under the SDK, and the SDK sits under the CLI.
+authors, channels and threads, a live tail, and optional two-way sync with Slack,
+GitHub, and WhatsApp (through Kapso). The npm package `vboard` ships the server,
+the client SDK, and the CLI. The API sits under the SDK, and the SDK sits under
+the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
@@ -37,9 +38,10 @@ vboard post errors-www "deploy failed on a1b2c3"
    thread, wherever it was written, is delivered to every one of those external
    threads except the one it came from.
 5. **Sync is configured per platform, keyed by the platform's own things.**
-   Slack sync is keyed by Slack channels, and GitHub sync is keyed by repos. A
-   key maps either to a board channel, which makes a two-way mirror, or to a
-   function, which handles inbound events however you like.
+   Slack sync is keyed by Slack channels, GitHub sync by repos, and WhatsApp
+   sync by phone numbers. A key maps either to a board channel, which makes a
+   two-way mirror, or to a function, which handles inbound events however you
+   like.
 
 ## Principles
 
@@ -85,14 +87,21 @@ One package, `vboard`, with subpath exports:
 | `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
 | `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
 | `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
+| `vboard/adapter-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
 | bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
+
+Sync adapters are named for the Chat SDK adapter they take: `adapter-kapso`
+takes `@kapso/chat-adapter`, which leaves `adapter-whatsapp` for
+`@chat-adapter/whatsapp`, Meta's own, whose threads are contacts rather than
+conversations.
 
 ### Install
 
 ```bash
 pnpm i vboard experimental-a2                         # a board: log, API, SDK, CLI
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
+pnpm i chat @kapso/chat-adapter                       # + sync with WhatsApp, through Kapso
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
 ```
 
@@ -104,10 +113,10 @@ with `npx vboard`.
 - **Peer, required: `experimental-a2`.** You import your store and scheduler
   from it (e.g. `experimental-a2/store-redis-http`), and they must be the same
   copy that vboard uses.
-- **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`.** They
-  are loaded only by `vboard/adapter-slack` and `vboard/adapter-github`. Your
-  adapters must match the `chat` version that vboard builds its Chat instances
-  with.
+- **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`,
+  `@kapso/chat-adapter`.** They are loaded only by `vboard/adapter-slack`,
+  `vboard/adapter-github`, and `vboard/adapter-kapso`. Your adapters
+  must match the `chat` version that vboard builds its Chat instances with.
 - **Installed by you, optionally: `@vercel/connect`.** You don't install a Chat
   SDK state adapter, because vboard backs Chat SDK's state with the A2 store
   (see [Sync](#sync)).
@@ -993,8 +1002,8 @@ default.
    support something, that delivery is skipped.
 2. **Starting a thread.** A root posted on the board, including one posted by a
    handler, starts threads in its channel's mirrored channels, on every platform
-   that can start threads in a channel. Slack can; GitHub can't. `sync` targets
-   are added on top, and `noSync` drops the mirrored channels.
+   that can start threads in a channel. Slack can; GitHub and WhatsApp can't.
+   `sync` targets are added on top, and `noSync` drops the mirrored channels.
 3. **Inbound events.** A platform event is handled if its thread is already
    synced with a board thread, in which case it becomes a reply, reaction, edit,
    or delete. It's also handled if its channel or repo is in config, in which
@@ -1139,6 +1148,7 @@ the board. The adapter then uses plain configuration from env:
   2. Give it the permissions and events listed under [GitHub](#github), and
      install it on the repos you map.
   3. Pass the App's ID, private key, and webhook secret to the adapter.
+- **WhatsApp, through Kapso:** see [WhatsApp (Kapso)](#whatsapp-kapso).
 
 Both paths end at the same route. The only difference is who verifies the
 webhook: Connect's OIDC verifier, or the platform's own signature check.
@@ -1324,6 +1334,65 @@ Connect, set the GitHub App up yourself (see
 GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 `line`, which the adapter reads from `message.raw` to fill `context`.
 
+### WhatsApp (Kapso)
+
+`kapso({ adapter, numbers })`, with
+[Kapso's Chat SDK adapter](https://chat-sdk.dev/adapters/vendor-official/kapso).
+Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
+the numbers themselves.
+
+```ts
+import { kapso } from 'vboard/adapter-kapso'
+import { createKapsoAdapter } from '@kapso/chat-adapter'
+
+sync: {
+  kapso: kapso({
+    adapter: createKapsoAdapter(), // reads KAPSO_API_KEY and KAPSO_WEBHOOK_SECRET
+    numbers: { '16315558151': 'support' },
+  }),
+},
+```
+
+| Thing | ID |
+| --- | --- |
+| A business number, the channel | `kapso:16315558151` |
+| A Kapso conversation, a thread | `kapso:16315558151:<WhatsApp ID>:<conversation ID>` |
+
+Kapso's adapter base64url-encodes each part of its IDs; the board writes them
+decoded, so `--sync` targets and the inbox read as above.
+
+- **A thread is a Kapso conversation.** WhatsApp has no threads, so a contact's
+  messages group into Kapso's conversations: one starts when they write, and
+  ends after a day of quiet or when someone closes it in Kapso. Writing again
+  after that starts a new thread.
+- **Authors** are `whatsapp:user:<WhatsApp ID>`, named by their WhatsApp
+  profile name.
+- **The board never starts a conversation.** A number has no threads to start,
+  so a root in a mirrored channel stays on the board. A function can join the
+  conversation it was handed with `sync: [message.thread]`.
+- **Replies go out within WhatsApp's window.** WhatsApp takes free-form messages
+  only within 24 hours of the contact's last one. A board reply after that
+  fails, and is recorded as `message.sync_failed`. Templates aren't synced;
+  send them with `@kapso/whatsapp-cloud-api`.
+- **One reaction each.** WhatsApp keeps one reaction per person per message, so
+  a contact's new reaction replaces theirs on the board, and removing it clears
+  it. The business number has one too: the board's reactions on a WhatsApp
+  message show there as the latest one added, and removing any of them clears
+  it.
+- **Media becomes links.** An image, video, voice note, or document becomes a
+  link in the message, after its caption, when Kapso mirrored it. A voice
+  note's transcript is quoted when Kapso has one.
+- **Not synced:** edits and deletes, which WhatsApp can't do for recipients, and
+  button and list replies.
+- **Board messages post from the business number,** as `*julian*: …`.
+
+**Setup:**
+1. In Kapso, create an API key and copy the number's phone number ID.
+2. Add a webhook with the URL `https://<host>/api/board/webhooks/kapso`, a
+   secret key, and the `whatsapp.message.received` event.
+3. Set `KAPSO_API_KEY` and `KAPSO_WEBHOOK_SECRET`, or pass them to
+   `createKapsoAdapter`. Without the secret, the adapter rejects every webhook.
+
 ## Watchers
 
 A watcher is a `vb tail` the board runs for you. Its `tail` is the expression
@@ -1400,7 +1469,8 @@ does. A watcher removed from config skips the matches it left behind.
 - Creating external containers: the board never creates Slack channels or
   GitHub repos, issues, or PRs
 - Mapping identities across platforms, e.g. a GitHub user to their Slack user
-- Sync adapters other than Slack and GitHub, and any public sync-adapter API
+- Sync adapters other than Slack, GitHub, and WhatsApp (Kapso), and any public
+  sync-adapter API
 
 ## After v1
 
@@ -1433,6 +1503,7 @@ does. A watcher removed from config skips the matches it left behind.
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
 | What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and sync adapters are `vboard/adapter-*`, named for the Chat SDK adapter each takes. |
+| What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release

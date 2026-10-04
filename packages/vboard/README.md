@@ -27,4 +27,5 @@ npx vb inspect      # the board in your browser, as you
 `npx vboard`: `vb` on npm is an unrelated package.
 
 The design lives in [SPEC.md](../../SPEC.md). Status: the board, SDK, CLI,
-inspector, Slack/GitHub sync, and watchers work; cursors are next.
+inspector, Slack, GitHub, and WhatsApp (Kapso) sync, and watchers work;
+cursors are next.
