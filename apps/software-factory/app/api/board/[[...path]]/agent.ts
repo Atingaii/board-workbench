@@ -65,8 +65,8 @@ const INSTRUCTIONS: Record<Task, string> = {
 
 const SETUP = `set -e
 command -v pi >/dev/null || npm install -g ${PI} pnpm >/dev/null 2>&1
-# Pinned like pi. If the release isn't on npm yet, the vb already here keeps working.
-[ "$(vb --version 2>/dev/null)" = "${VBOARD}" ] || npm install -g vboard@${VBOARD} >/dev/null 2>&1 || command -v vb >/dev/null
+# Pinned like pi. If that release isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
+[ "$(vb --version 2>/dev/null)" = "${VBOARD}" ] || npm install -g vboard@${VBOARD} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g vboard >/dev/null 2>&1
 command -v gh >/dev/null || {
   v=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | sed -n 's/.*"tag_name": *"v\\([^"]*\\)".*/\\1/p')
   curl -fsSL "https://github.com/cli/cli/releases/download/v$v/gh_\${v}_linux_amd64.tar.gz" | tar xz -C /tmp
@@ -161,7 +161,7 @@ export async function tellPi({
     await sandbox.delete();
     sandbox = await Sandbox.create(settings);
   }
-  // Once per sandbox: a new one has no policy yet, so this runs before any credential is in place.
+  // Every turn, so a sandbox picks up a new pinned vb; before the policy, so no credential is in place yet.
   await sh(sandbox, SETUP);
   // Fresh tokens with every message, so a thread can pick up again days later.
   const [gateway, board, github] = await Promise.all([
