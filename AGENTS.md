@@ -58,6 +58,11 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
   every message. The policy also pins who Pi is on the board (profile `pi`,
   session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
+- Attachments live in the project's private Blob store, `vboard-attachments`
+  (`BLOB_READ_WRITE_TOKEN`), shared by every deployment; locally they're files
+  in `.a2/attachments`. Pi attaches proof (test runs, screenshots) to the reply
+  that links its PR. Its `vb` is pinned (`VBOARD` in `agent.ts`): bump it with
+  each release Pi should use, since setup upgrades sandboxes to exactly that.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
 
