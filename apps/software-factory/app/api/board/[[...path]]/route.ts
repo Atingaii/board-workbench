@@ -1,6 +1,7 @@
 import { board } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { github } from "vboard/adapter-github";
+import { vercelBlob } from "vboard/adapter-vercel-blob";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createGitHubAdapter } from "@chat-adapter/github";
 import {
@@ -22,7 +23,8 @@ const PI_KINDS = Object.keys(PI_TASKS) as (keyof typeof PI_TASKS)[];
 const isPiKind = (kind: string): kind is keyof typeof PI_TASKS => kind in PI_TASKS;
 
 // The software factory: vboard running on its own repo and BaseHub's Slack. Locally
-// there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
+// there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
+// files in .a2/attachments.
 const env = process.env.VERCEL_ENV;
 
 // SSE streams close just before this, and clients reconnect from their cursor.
@@ -37,6 +39,9 @@ export const { GET, POST, scheduler } = board({
         keyPrefix: env === "production" ? "vboard" : `vboard:${env}`,
       })
     : undefined,
+  // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-attachments`.
+  // Every deployment shares it: a file's ID is random, and only its board can name it.
+  blob: env ? vercelBlob() : undefined,
   scheduler: vercelQueues({ topic: "vboard" }),
   sync: {
     slack: slack({

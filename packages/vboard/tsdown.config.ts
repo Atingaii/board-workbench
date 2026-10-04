@@ -9,6 +9,7 @@ export default defineConfig([
       'adapter-slack': 'src/sync/slack.ts',
       'adapter-github': 'src/sync/github.ts',
       'adapter-kapso': 'src/sync/kapso.ts',
+      'adapter-vercel-blob': 'src/blob/vercel.ts',
       contract: 'src/contract/index.ts',
       cli: 'src/cli/main.ts',
     },

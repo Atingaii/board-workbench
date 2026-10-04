@@ -11,6 +11,8 @@ const BOARD = "https://vboard-basehub.vercel.app/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
+/** The `vb` Pi runs: the first release with `--attach`. A thread's sandbox outlives releases, so setup upgrades it in place. */
+const VBOARD = "0.0.3";
 /** A sandbox stops after this long idle in a turn; its files come back with it. */
 const SANDBOX_MS = 45 * 60_000;
 const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
@@ -41,6 +43,8 @@ For a bug report:
 3. If you can't reproduce it, or it isn't a bug, label it reproduced=no and reply with why. If the thread came from a GitHub issue, close the issue with gh issue close and say why there too.
 For a feature request: if it's clear what's wanted, build it with tests and open a PR. If it's ambiguous or large, reply with a short plan or your questions first, and build it once someone agrees.
 For a question: answer it from the code and docs, pointing at the files. Don't open a PR unless someone asks for one.
+Show your work: when you fix a bug or build something, attach proof to the reply that links the PR, with --attach <file> (repeatable, up to 4 MB each). Always attach the test run (the failing test, then it passing, saved to a file), and a screenshot too when the change is something people can see and you can capture it. People see them in Slack and vb inspect; GitHub gets a line pointing at the board.
+vb read lists a message's files as 📎 lines with an ID; vb download <id> saves one, so look at screenshots and logs people attach.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it.
 Keep replies short, and end each with a list of what you ran.`;
 
@@ -49,7 +53,7 @@ The board is how you talk to people. vb read <id> shows a thread, vb reply <id> 
 For a pull request (its board thread's root has a pr=owner/repo#N label):
 1. Clone with gh repo clone basehub-ai/vboard, then gh pr checkout <N>. Read gh pr view <N> and gh pr diff <N>, and SPEC.md and AGENTS.md for the parts it touches.
 2. Run pnpm install and pnpm check. Try the change where you can: a test that should fail without it, or the CLI by hand.
-3. Reply in the thread with your review: blocking problems first, each with file:line and why, then smaller suggestions. If it's good to merge, say so plainly.
+3. Reply in the thread with your review: blocking problems first, each with file:line and why, then smaller suggestions. If it's good to merge, say so plainly. When you tried the change by hand, attach what you saw with --attach <file> (a log or a screenshot, up to 4 MB each). vb read lists files people attached as 📎 lines; vb download <id> saves one.
 Don't push, approve, merge, or close the PR: people decide that.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it: answer questions, and review again if new commits landed (gh pr view <N> --json commits).
 Keep replies short, and end each with a list of what you ran.`;
@@ -60,7 +64,9 @@ const INSTRUCTIONS: Record<Task, string> = {
 };
 
 const SETUP = `set -e
-command -v pi >/dev/null || npm install -g ${PI} vboard pnpm >/dev/null 2>&1
+command -v pi >/dev/null || npm install -g ${PI} pnpm >/dev/null 2>&1
+# Pinned like pi. If that release isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
+[ "$(vb --version 2>/dev/null)" = "${VBOARD}" ] || npm install -g vboard@${VBOARD} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g vboard >/dev/null 2>&1
 command -v gh >/dev/null || {
   v=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | sed -n 's/.*"tag_name": *"v\\([^"]*\\)".*/\\1/p')
   curl -fsSL "https://github.com/cli/cli/releases/download/v$v/gh_\${v}_linux_amd64.tar.gz" | tar xz -C /tmp
@@ -155,7 +161,7 @@ export async function tellPi({
     await sandbox.delete();
     sandbox = await Sandbox.create(settings);
   }
-  // Once per sandbox: a new one has no policy yet, so this runs before any credential is in place.
+  // Every turn, so a sandbox picks up a new pinned vb; before the policy, so no credential is in place yet.
   await sh(sandbox, SETUP);
   // Fresh tokens with every message, so a thread can pick up again days later.
   const [gateway, board, github] = await Promise.all([

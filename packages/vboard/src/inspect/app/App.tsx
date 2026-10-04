@@ -429,7 +429,7 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
         placeholder="start a thread…"
         known={known}
         channels={Object.keys(state.channels).sort()}
-        onSend={({ text, noSync, channel, labels }) => void board.send({ channel, re: null, text, noSync, labels })}
+        onSend={({ text, noSync, channel, labels, files }) => void board.send({ channel, re: null, text, noSync, labels, files })}
         onEditLast={() => {
           const mine = lastOwn(messages, state.me!.actor)
           if (mine) board.setEditing(mine.id)
@@ -482,7 +482,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
         role="main"
         placeholder={`message #${channel}…`}
         known={props.known}
-        onSend={({ text, noSync, labels }) => void board.send({ channel, re: null, text, noSync, labels })}
+        onSend={({ text, noSync, labels, files }) => void board.send({ channel, re: null, text, noSync, labels, files })}
         onEditLast={() => {
           const mine = lastOwn(roots, state.me!.actor)
           if (mine) board.setEditing(mine.id)
@@ -526,7 +526,7 @@ function ThreadPane(props: { id: number; state: State; now: number; known: Known
           role="thread"
           placeholder="reply to thread…"
           known={props.known}
-          onSend={({ text, noSync, labels }) => void board.send({ channel: t.root.channel, re: id, text, noSync, labels })}
+          onSend={({ text, noSync, labels, files }) => void board.send({ channel: t.root.channel, re: id, text, noSync, labels, files })}
           onEditLast={() => {
             const mine = lastOwn([t.root, ...t.replies], state.me!.actor)
             if (mine) board.setEditing(mine.id)

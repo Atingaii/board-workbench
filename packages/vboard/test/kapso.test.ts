@@ -4,6 +4,8 @@ import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { kapso } from '../src/sync/kapso.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+
 const SECRET = 'kapso-test-secret'
 const NUMBER = '16315558151'
 const JANE = '15551234567'
@@ -12,9 +14,22 @@ const JANE = '15551234567'
 function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'support' }) {
   const texts: { phoneNumberId: string; to: string; body: string }[] = []
   const reactions: { phoneNumberId: string; to: string; reaction: { messageId: string; emoji?: string } }[] = []
+  const uploads: { phoneNumberId: string; type: string; fileName: string; bytes: number }[] = []
+  const images: { phoneNumberId: string; to: string; image: { id?: string; caption?: string } }[] = []
   const client = {
     isKapsoProxy: () => true,
+    media: {
+      download: async ({ mediaId }: { mediaId: string }) => (mediaId === 'MEDIA_1' ? PNG.buffer.slice(0) : new ArrayBuffer(0)),
+      upload: async (input: { phoneNumberId: string; type: string; file: Blob; fileName: string }) => {
+        uploads.push({ phoneNumberId: input.phoneNumberId, type: input.type, fileName: input.fileName, bytes: input.file.size })
+        return { id: `MEDIA_UP${uploads.length}` }
+      },
+    },
     messages: {
+      sendImage: async (input: (typeof images)[number]) => {
+        images.push(input)
+        return { messages: [{ id: `wamid.img${images.length}` }] }
+      },
       sendText: async (input: (typeof texts)[number]) => {
         texts.push(input)
         return { messages: [{ id: `wamid.out${texts.length}` }] }
@@ -51,7 +66,7 @@ function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'su
   const text = (id: string, body: string, conversation?: string) =>
     receive({ id, type: 'text', text: { body } }, conversation ? { conversation } : {})
   const react = (id: string, target: string, emoji: string) => receive({ id, type: 'reaction', reaction: { message_id: target, emoji } })
-  return { board, texts, reactions, receive, text, react }
+  return { board, texts, reactions, uploads, images, receive, text, react }
 }
 
 type Read = { id: number; text: string; re: number | null; from: string | null; reactions: Record<string, string[]>; by: { actor: string } }
@@ -121,18 +136,35 @@ describe('kapso sync', () => {
     expect(reactions).toHaveLength(1) // Jane's reactions aren't echoed back
   })
 
-  it('keeps captions and links media Kapso mirrored', async () => {
-    const { board, receive } = setup()
-    const julian = caller(board.fetch, await personToken())
+  it('brings WhatsApp media onto the board as files, and sends board files to WhatsApp', async () => {
+    const { board, texts, uploads, images, receive } = setup()
+    const token = await personToken()
+    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
     await receive({
       id: 'wamid.1',
       type: 'image',
       image: { id: 'MEDIA_1', caption: 'my receipt' },
-      kapso: { direction: 'inbound', media_url: 'https://media.kapso.test/receipt.jpg' },
+      kapso: { direction: 'inbound', media_data: { content_type: 'image/png', byte_size: PNG.byteLength } },
     })
-    await vi.waitFor(async () =>
-      expect((await read(julian, 'support'))[0]?.text).toBe('my receipt\n\n[image](https://media.kapso.test/receipt.jpg)'),
+    await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(1))
+    const [root] = (await read(julian, 'support')) as unknown as { id: number; text: string; attachments: { id: string; name: string; type: string }[] }[]
+    expect(root).toMatchObject({ text: 'my receipt', attachments: [{ name: 'image', type: 'image/png' }] })
+    const file = await board.fetch(new Request(`${BOARD_URL}/attachments/${root!.attachments[0]!.id}`, { headers: { authorization: `Bearer ${token}` } }))
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(PNG)
+
+    // A board reply's text goes first, then each file as its own WhatsApp message.
+    const uploaded = await board.fetch(
+      new Request(`${BOARD_URL}/attachments`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-board-filename': 'refund.png' },
+        body: PNG,
+      }),
     )
+    const { attachment } = (await uploaded.json()) as { attachment: { id: string } }
+    await julian('POST', '/messages', { re: root!.id, text: 'refunded, see this', attachments: [attachment.id] })
+    await vi.waitFor(() => expect(images).toEqual([{ phoneNumberId: NUMBER, to: JANE, image: { id: 'MEDIA_UP1' } }]))
+    expect(texts).toEqual([{ phoneNumberId: NUMBER, to: JANE, body: '*julian*: refunded, see this' }])
+    expect(uploads).toEqual([{ phoneNumberId: NUMBER, type: 'image/png', fileName: 'refund.png', bytes: PNG.byteLength }])
   })
 
   it('hands new conversations on a function-mapped number to the function, which can join them', async () => {

@@ -1,5 +1,5 @@
-import { Ellipsis, MessageSquare, SmilePlus, Tag } from 'lucide-react'
-import { memo, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Ellipsis, FileText, MessageSquare, SmilePlus, Tag } from 'lucide-react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
@@ -7,6 +7,8 @@ import { LOGOS } from '../../contract/logos.ts'
 import type { MessageView } from '../../api/routes.ts'
 import { authorName, who } from '../../cli/format.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
+import { fileSize } from '../../contract/files.ts'
+import type { Attachment } from '../../contract/schemas.ts'
 import * as board from './board.ts'
 import { Ago } from './nav.tsx'
 import { continues, type Groupable, type Pending } from './store.ts'
@@ -78,6 +80,56 @@ export const Text = memo(function Text({ text, edited = false }: { text: string;
     </div>
   )
 })
+
+const IMAGE = /^image\/(png|jpeg|gif|webp|avif)$/
+const VIDEO = /^video\/(mp4|webm)$/
+
+/**
+ * A message's files: images and videos in a fixed-size frame, so one loading
+ * never moves what you're reading; anything else as a chip that saves it.
+ */
+export function Attachments({ items }: { items: Attachment[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="attachments">
+      {items.map((attachment) => (
+        <AttachmentView key={attachment.id} attachment={attachment} />
+      ))}
+    </div>
+  )
+}
+
+function AttachmentView({ attachment }: { attachment: Attachment }) {
+  const media = IMAGE.test(attachment.type) ? 'image' : VIDEO.test(attachment.type) ? 'video' : null
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!media) return
+    let live = true
+    board.attachmentUrl(attachment.id).then(
+      (next) => live && setUrl(next),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [attachment.id, media])
+  const title = `${attachment.name} · ${fileSize(attachment.size)}`
+  if (media === 'image')
+    return (
+      <button className="attachment-media" title={`${title} · click to open`} onClick={() => url && window.open(url, '_blank', 'noopener')}>
+        {url && <img src={url} alt={attachment.name} />}
+      </button>
+    )
+  if (media === 'video')
+    return <span className="attachment-media" title={title}>{url && <video src={url} controls preload="metadata" />}</span>
+  return (
+    <button className="file" title={`download ${attachment.name}`} onClick={() => void board.saveAttachment(attachment)}>
+      <FileText size={14} strokeWidth={1.75} />
+      <span className="file-name">{attachment.name}</span>
+      <span className="faint">{fileSize(attachment.size)}</span>
+    </button>
+  )
+}
 
 // Slack's mark is four dot-and-bar pairs, one color each: bottom-left, top-left,
 // top-right, bottom-right, in the order Simple Icons draws them.
@@ -208,7 +260,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
       <MenuSeparator />
       {options.openThread && <MenuItem onClick={() => options.openThread!(thread)}>{m.re === null ? 'reply in thread' : 'open thread'}</MenuItem>}
       <MenuItem onClick={() => setLabelsOpen(true)}>labels…</MenuItem>
-      <MenuItem onClick={() => void copy(m.text, 'text')}>copy text</MenuItem>
+      {m.text && <MenuItem onClick={() => void copy(m.text, 'text')}>copy text</MenuItem>}
       <MenuItem onClick={() => void copy(String(m.id), `#${m.id}`)} hint={`#${m.id}`}>
         copy id
       </MenuItem>
@@ -263,7 +315,10 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
           ) : editing ? (
             <Editor m={m} />
           ) : (
-            <Text text={m.text} edited={m.editedAt !== null} />
+            <>
+              {m.text && <Text text={m.text} edited={m.editedAt !== null} />}
+              <Attachments items={m.attachments ?? []} />
+            </>
           )}
           {(Object.keys(m.labels).length > 0 || Object.keys(m.reactions).length > 0) && (
             <div className="chips">
@@ -373,7 +428,18 @@ export function PendingRow({ post, me, continued = false }: { post: Pending; me:
             <span className="time">{status}</span>
           </div>
         )}
-        <Text text={post.text} />
+        {post.text && <Text text={post.text} />}
+        {post.files && (
+          <div className="attachments">
+            {post.files.map((file, i) => (
+              <span key={i} className="file">
+                <FileText size={14} strokeWidth={1.75} />
+                <span className="file-name">{file.name}</span>
+                <span className="faint">{fileSize(file.size)}</span>
+              </span>
+            ))}
+          </div>
+        )}
         {post.error && (
           <div className="undelivered">
             ✗ {post.error} · <button onClick={() => void board.retry(post)}>retry</button> · <button onClick={() => board.discard(post.key)}>discard</button>

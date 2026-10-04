@@ -1,8 +1,12 @@
 // `vboard/contract`: the board log's contract, its entity schemas, and the views
 // people read. Sync bookkeeping, side contracts, and the folds stay internal.
 export {
+  ATTACHMENT_BYTES_MAX,
+  ATTACHMENTS_PER_MESSAGE_MAX,
   ActorId,
   ActorKind,
+  Attachment,
+  AttachmentId,
   Author,
   CHANNEL_PATH_MAX,
   ChannelPath,

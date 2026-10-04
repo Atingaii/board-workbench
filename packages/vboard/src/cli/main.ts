@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { configDir, createClient } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
+import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { formatEvent, formatThreads, who } from './format.ts'
@@ -25,14 +26,15 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   read <channel> [filters] [--limit N]     threads in a channel, newest last (no channel: every channel)
   read <id>                                one thread
 
-  post <channel> "<text>" [--label k=v]... [--sync <target>]... [--no-sync] [--id <key>]
-  reply <id> "<text>" [--id <key>] [--no-sync]
+  post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+  reply <id> ["<text>"] [--attach <file>]... [--id <key>] [--no-sync]
   edit <id> "<text>"
   delete <id>
   react <id> <emoji> [--remove]
   label <id> k=v... [--unset k]...
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
+  download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
   wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
@@ -42,7 +44,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
-text:     pass "-" to read it from stdin
+text:     pass "-" to read it from stdin; it may be left out when you --attach
 env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
 class UsageError extends Error {}
@@ -66,6 +68,7 @@ const { values: flags, positionals } = (() => {
         id: { type: 'string' },
         'no-sync': { type: 'boolean' },
         sync: { type: 'string', multiple: true },
+        attach: { type: 'string', multiple: true },
         remove: { type: 'boolean' },
         after: { type: 'string' },
         limit: { type: 'string' },
@@ -106,6 +109,26 @@ async function text(value: string | undefined): Promise<string> {
   const chunks: Buffer[] = []
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
   return Buffer.concat(chunks).toString('utf8').replace(/\n$/, '')
+}
+
+
+/** Uploads each `--attach` file, checking them all before sending any. */
+async function attachments(board: ReturnType<typeof client>): Promise<Attachment[]> {
+  const paths = flags.attach ?? []
+  for (const path of paths) {
+    const info = await stat(path).catch(() => null)
+    if (!info?.isFile()) throw new UsageError(`no such file: ${path}`)
+    if (info.size > ATTACHMENT_BYTES_MAX) throw new UsageError(`${path} is over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+  }
+  const uploaded: Attachment[] = []
+  for (const path of paths)
+    uploaded.push(
+      await board.upload({
+        data: new Uint8Array(await readFile(path)),
+        name: basename(path),
+      }),
+    )
+  return uploaded
 }
 
 function filters(channel?: string): Filters & { after?: number } {
@@ -240,8 +263,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const [channel, body] = args
       if (!channel) throw new UsageError('usage: vboard post <channel> "<text>"')
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
-      const message = await client().post(channel, {
-        text: await text(body),
+      const board = client()
+      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const files = await attachments(board)
+      const message = await board.post(channel, {
+        text: content,
+        ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags.id ? { id: flags.id } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
@@ -253,8 +280,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'reply': {
       const id = messageId(args[0])
-      const message = await client().reply(id, {
-        text: await text(args[1]),
+      const board = client()
+      const content = args[1] === undefined && flags.attach?.length ? '' : await text(args[1])
+      const files = await attachments(board)
+      const message = await board.reply(id, {
+        text: content,
+        ...(files.length ? { attachments: files } : {}),
         ...(flags.id ? { id: flags.id } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
       })
@@ -301,6 +332,20 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const result = await client().sync(id, args[1])
       if (flags.json) printJson(result)
       else out(result.attached ? `synced with ${result.target}` : `already synced with ${result.target}`)
+      return 0
+    }
+
+    case 'download': {
+      const id = args[0]
+      if (!id) throw new UsageError('usage: vboard download <attachment> [path]   (the id `vb read` shows after 📎)')
+      const response = await client().download(id)
+      const data = new Uint8Array(await response.arrayBuffer())
+      if (args[1] === '-') return process.stdout.write(data), 0
+      const disposition = response.headers.get('content-disposition') ?? ''
+      const named = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
+      const path = args[1] ?? basename(named ? decodeURIComponent(named) : id)
+      await writeFile(path, data)
+      out(path)
       return 0
     }
 

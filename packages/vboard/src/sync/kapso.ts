@@ -20,6 +20,7 @@ export type KapsoMessage = {
 export type KapsoHandler = (args: { message: KapsoMessage; board: BoardClient }) => unknown
 
 type Raw = { kapso?: { transcript?: { text?: unknown } } } | null
+type Sent = { responses?: { messages?: { id?: string }[] }[] } | null
 
 // Kapso's thread IDs base64url-encode each part. The parts are phone number IDs,
 // WhatsApp IDs (digits), and conversation IDs, so the board writes them as they are.
@@ -42,6 +43,13 @@ export function kapso(options: {
     adapter: options.adapter,
     createChat: () => createChat(options.adapter),
     canStartThreads: false,
+    // Each file goes as its own WhatsApp message: an image, video, audio, or document. WhatsApp can't delete them.
+    async uploadFiles(thread, files) {
+      const sent = await options.adapter.postMessage(thread, { markdown: '', files })
+      return ((sent.raw as Sent)?.responses ?? []).flatMap((response) => response.messages?.[0]?.id ?? [])
+    },
+    // The adapter's answer for a file it can't send; WhatsApp's own refusals retry, then fail.
+    refusesFiles: (error) => (error as { code?: string } | null)?.code === 'VALIDATION_ERROR',
     mappings: options.numbers,
     async resolveChannel(key) {
       if (!/^\d+$/.test(key)) throw new Error(`${key} isn't a phone number ID; use the number's ID from Kapso, not the number`)
@@ -53,16 +61,12 @@ export function kapso(options: {
     groupThread: (thread) => thread,
     isRoot: () => false,
     context: () => null,
-    // Media arrives as attachments, linked when Kapso mirrored them; voice notes may carry a transcript.
+    // Media comes over as attachments, through the adapter. A voice note may carry Kapso's transcript.
     markdown(message: ChatMessage) {
       const text = markdownOf(message)
       const transcript = (message.raw as Raw)?.kapso?.transcript?.text
-      const files = message.attachments.map((file) => {
-        const name = file.name ?? file.type
-        return file.url ? `[${name}](${file.url})` : `(${name})`
-      })
       const heard = typeof transcript === 'string' && transcript.trim() && transcript !== text ? `> ${transcript.trim()}` : null
-      return [text, heard, ...files].filter(Boolean).join('\n\n')
+      return [text, heard].filter(Boolean).join('\n\n')
     },
     handlerArgs(event: ExternalEvent, raw, board) {
       if (event.kind !== 'message') return { message: null, board }

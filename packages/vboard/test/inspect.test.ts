@@ -54,6 +54,18 @@ describe('inspect', () => {
     expect(app.headers.get('content-type')).toContain('javascript')
   })
 
+  it('uploads attachments through the proxy, name and all, and serves them back', async () => {
+    const ui = page()
+    const file = await ui.upload({ data: new TextEncoder().encode('TypeError at login.tsx:42'), name: 'before fix.log', type: 'text/plain' })
+    expect(file).toMatchObject({ name: 'before fix.log', type: 'text/plain' })
+    const posted = await ui.post('ops', { text: '', attachments: [file] })
+    expect(posted.attachments).toEqual([file])
+    expect(await (await ui.download(file.id)).text()).toBe('TypeError at login.tsx:42')
+    // Like every write, an upload needs the page's origin.
+    const forged = await board('/attachments', { method: 'POST', headers: { 'x-inspect-token': token, 'content-type': 'text/plain' }, body: 'x' })
+    expect(forged.status).toBe(403)
+  })
+
   it('lets the page read and write the board as you', async () => {
     const ui = page()
     expect(await ui.me()).toMatchObject({ actor: 'vercel:user:u_julian', handle: 'julian' })

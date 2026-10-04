@@ -9,6 +9,8 @@ export {
   type PostOptions,
   type ProfileOption,
   type ReplyOptions,
+  type UploadInput,
   type WaitOptions,
 } from './client.ts'
+export type { Attachment } from '../contract/schemas.ts'
 export type * from '../api/routes.ts'

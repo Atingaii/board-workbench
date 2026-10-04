@@ -15,7 +15,7 @@ import type { BoardSession } from './board.ts'
 export type ParsedFilters = z.output<typeof Filters>
 
 /** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
-const HIDDEN = new Set(['actor.seen', 'message.synced'])
+const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
 
 export function view(message: Message, actors: ActorsState): MessageView {
   const author = actors.byId[message.by.actor]

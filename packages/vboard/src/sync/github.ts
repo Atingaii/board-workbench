@@ -74,8 +74,13 @@ function tagsOf(item: Item): Record<string, string> {
 /** Actions that change only labels and assignees, which every PR and issue event reconciles. */
 const TAG_ACTIONS = ['labeled', 'unlabeled', 'assigned', 'unassigned']
 
-/** The label key prefixes the mirror owns on a GitHub root: keys under them that GitHub doesn't have are unset. */
-const OWNED = ['tag.', 'assignee.']
+/**
+ * The label key prefixes the mirror owns on a GitHub root: keys under them that GitHub doesn't have are unset.
+ * A prefix is owned only when the payload carries its array, so a trimmed payload doesn't unset every key.
+ */
+function ownedBy(item: Item): string[] {
+  return [...(Array.isArray(item.labels) ? ['tag.'] : []), ...(Array.isArray(item.assignees) ? ['assignee.'] : [])]
+}
 
 type Lifecycle = Omit<Extract<ExternalEvent, { kind: 'lifecycle' }>, 'kind' | 'channel' | 'thread' | 'author'>
 
@@ -216,9 +221,9 @@ export function github(options: {
       }
       const found = lifecycle(name, parsed)
       if (!found) return []
-      // Every PR and issue event carries all of its labels and assignees, so each one reconciles them.
+      // Every PR and issue event carries all of its labels and assignees, so each one reconciles whichever it has.
       const item = (parsed.pull_request ?? parsed.issue) as Item | undefined
-      if (item) Object.assign(found.lifecycle, { labels: { ...tagsOf(item), ...found.lifecycle.labels }, owns: OWNED })
+      if (item) Object.assign(found.lifecycle, { labels: { ...tagsOf(item), ...found.lifecycle.labels }, owns: ownedBy(item) })
       const repo = (parsed.repository as { full_name: string }).full_name
       const thread = name === 'issues' ? `${key}:${repo}:issue:${found.number}` : `${key}:${repo}:${found.number}`
       const delivery = headers.get('x-github-delivery') ?? `${name}:${found.lifecycle.type}:${found.number}`

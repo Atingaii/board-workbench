@@ -58,6 +58,11 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
   every message. The policy also pins who Pi is on the board (profile `pi`,
   session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
+- Attachments live in the project's private Blob store, `vboard-attachments`
+  (`BLOB_READ_WRITE_TOKEN`), shared by every deployment; locally they're files
+  in `.a2/attachments`. Pi attaches proof (test runs, screenshots) to the reply
+  that links its PR. Its `vb` is pinned (`VBOARD` in `agent.ts`): bump it with
+  each release Pi should use, since setup upgrades sandboxes to exactly that.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
 
@@ -77,7 +82,8 @@ and GitHub.
 - **The proxy acts as you, so it trusts nothing but its own page.** It binds
   127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), requires the
   per-run token on every `/board` request and the page's `Origin` on writes.
-  Keep all of them.
+  Keep all of them. That's why attachments render from `blob:` URLs: the page
+  fetches each file with its token, since an `<img>` can't send one.
 - **The bundle is built** into `dist/inspect/app.js` by `tsdown` (React
   included). `pnpm test` builds first; running from source finds it in `dist`.
 - **It's Just Chat's UI, ported.** Base UI (`@base-ui/react`) for menus,
