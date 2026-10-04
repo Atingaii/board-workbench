@@ -247,7 +247,8 @@ export function board(options: BoardOptions = {}) {
   function clientAs(identity: Identity, trigger: string): BoardClient {
     let writesMade = 0
     return createBoardClient({
-      url: 'http://in-process.board',
+      // Under the configured mount, so `route()` accepts the paths it builds.
+      url: `http://in-process.board${(options.basePath ?? '').replace(/\/+$/, '')}`,
       token: 'in-process',
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         let request = new Request(input, init)

@@ -172,6 +172,7 @@ function setup(
     asyncToken?: boolean
     repos?: Parameters<typeof github>[0]['repos']
     watch?: BoardOptions['watch']
+    basePath?: string
   } = {},
 ) {
   const s = fakePlatform('slack', options.slackClient ? withSlackClient(options.slackClient, !!options.asyncToken) : undefined)
@@ -185,6 +186,7 @@ function setup(
       github: github({ adapter: g.adapter, repos: options.repos ?? { 'basehub-ai/vboard': 'prs' } }),
     },
     ...(options.watch ? { watch: options.watch } : {}),
+    ...(options.basePath !== undefined ? { basePath: options.basePath } : {}),
   })
   const webhook = (key: string, body: unknown, headers: Record<string, string> = {}) =>
     board.fetch(
@@ -522,6 +524,27 @@ describe('sync', () => {
     await webhook('slack', { type: 'message', threadId: 'slack:C3:300', id: '301', text: 'thanks', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'alerts/www')).toHaveLength(3))
     expect(seen).toHaveLength(1)
+  })
+
+  it.each(['/api/board', '/api/board/'])('hands threads to the function on a board mounted at basePath %s', async (basePath) => {
+    const errors: string[] = []
+    const { board, webhook } = setup({
+      basePath,
+      alerts: async ({ message, board }) => {
+        try {
+          await board.post('alerts/www', { text: message.text, sync: [message.thread] })
+        } catch (error) {
+          errors.push((error as Error).message)
+        }
+      },
+    })
+    const julian = caller(board.fetch, await personToken())
+    const payload = { type: 'message', threadId: 'slack:C3:310', id: '310', text: 'TypeError', user: 'B_SENTRY' }
+    await webhook('slack', payload)
+    await webhook('slack', payload) // a platform retry stays idempotent
+    await vi.waitFor(async () => expect(await read(julian, 'alerts/www')).toHaveLength(1))
+    expect(errors).toEqual([])
+    expect((await read(julian, 'alerts/www'))[0]!.by.actor).toBe('slack:user:B_SENTRY')
   })
 
   it('turns a PR into a thread with state labels, and starts a Slack thread for it', async () => {
