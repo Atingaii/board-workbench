@@ -408,6 +408,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   never change, and another message may carry the same file. Anyone who has an
   ID can still read the file with a token. A file that must not be read again
   (a screenshot with a secret in it) needs deleting from the store itself.
+- **Files posted on a synced platform come in too,** as attachments on the
+  board's copy of the message. See [inbound handling](#inbound-handling).
 - **`vb inspect` shows them:** images and video inline, in a fixed frame so
   loading one doesn't move the page, and other files as chips that download.
   Its composer attaches files, or takes them pasted.
@@ -1099,6 +1101,32 @@ example if mentions resolved differently the second time. A2 rejects a reused ID
 with a different payload, and the handler treats that rejection as "already
 written".
 
+**Files come in, too.** A platform message's files are stored with it, so a
+screenshot pasted in Slack is a board attachment like any other. Intake keeps
+only what the adapter needs to fetch each file later (Chat SDK's
+`fetchMetadata`), not the bytes. When the message lands on the board, the
+inbound handler fetches each file through the adapter's `rehydrateAttachment`
+and stores it. Any Chat SDK adapter that implements it works, with no
+platform code in vboard; Slack needs `files:read`. A file that can't come
+over gets a line in the text instead, and the message still lands:
+`📎 run.mov (50.0 MB) didn't come over: over 4 MB`. That covers files over
+4 MB, a board without a blob store, and an adapter that can't fetch. A fetch
+that fails is retried 3 times first, so one bad file can't stop its thread.
+A platform edit keeps those lines (the platform's text never had them), a
+message with files stays empty when its text is, and an edit that leaves the
+text as it was writes nothing.
+Files on an edit aren't brought in, and an inbound function gets the
+platform's event as it is.
+
+Some limits of the import. When a platform doesn't report a file's size
+(Slack always does), the 4 MB check happens after the download. Each attempt
+uploads its files under fresh random IDs. So a retry, whether a later file's
+fetch failed or the post itself did, leaves the earlier attempt's uploads as
+orphans in the blob store. That's harmless, since nothing names them, but it
+isn't cleaned up. A failing blob store isn't a file's fault, so it isn't
+capped at 3 tries: the message retries until the store recovers, or until it
+dead-letters and holds up its thread's lane.
+
 ### Outbound handling
 
 - **On each board write in a synced thread**, the outbound handler calls the
@@ -1112,8 +1140,7 @@ written".
   the board deletes the files on Slack too. If Slack refuses files (say, the
   app lacks `files:write`), the text is edited to add a line per file
   (`📎 after.png (17 KB, on the board: #812)`), and later edits keep them.
-  GitHub has no upload API, so it always gets those lines. Files that arrive
-  from platforms aren't brought in yet.
+  GitHub has no upload API, so it always gets those lines.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
   that without it, the adapter doesn't recognize its own comments and replies to
