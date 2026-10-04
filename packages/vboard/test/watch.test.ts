@@ -135,6 +135,34 @@ describe('watchers', () => {
     expect(await watchServer.session('watch:triage').history()).toHaveLength(1)
   })
 
+  it.each(['/api/board', '/api/board/'])('read and write through a board mounted at an explicit basePath %s', async (basePath) => {
+    const results: unknown[] = []
+    const board = testBoard({
+      basePath,
+      watch: {
+        triage: {
+          tail: 'firehose',
+          run: async ({ event, board }) => {
+            if (event.type !== 'message.posted' || event.message!.re !== null) return
+            try {
+              await board.react(event.message!.id, 'eyes')
+              await board.reply(event.message!.id, 'on it')
+              results.push((await board.thread(event.message!.id)).replies.length)
+            } catch (error) {
+              results.push((error as Error).message)
+            }
+          },
+        },
+      },
+    })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
+    await vi.waitFor(() => expect(results).toEqual([1]))
+    const after = (await julian('GET', `/messages/${root.id}`)).body
+    expect(after.message.reactions).toEqual({ eyes: ['vboard:watch:triage'] })
+  })
+
   it("fail on their own: a broken watcher doesn't hold up writes or other watchers", async () => {
     const ok = recorder('firehose')
     const { fetch } = testBoard({
