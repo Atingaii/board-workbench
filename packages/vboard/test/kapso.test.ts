@@ -80,6 +80,11 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
   (await call('GET', `/messages?channel=${channel}`)).body.messages as Read[]
 
 describe('kapso sync', () => {
+  it('requires the public read operation at setup', () => {
+    const adapter = createKapsoAdapter({ client: { isKapsoProxy: () => true } as never, webhookSecret: SECRET, phoneNumberId: NUMBER })
+    expect(() => kapso({ adapter, numbers: {} } as unknown as import('../src/sync/kapso.ts').KapsoOptions)).toThrow('public markRead operation')
+  })
+
 
   it('omits attribution without losing media-only replies or their receipts', async () => {
     const { board, text, texts, images, uploads } = setup(undefined, undefined, ({ message }) => message.text)
@@ -201,8 +206,9 @@ describe('kapso sync', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { board, texts, text } = setup({
       '+1 631-555-8151': 'support',
-      [NUMBER]: async ({ message, board }) => {
-        await board.post('leads', { text: `${message.author.name}: ${message.text}`, sync: [message.thread] })
+      [NUMBER]: async ({ event, board }) => {
+        if (event.kind !== 'message') return
+        await board.sync('leads', event, { text: `${event.author.name}: ${event.text}` })
       },
     })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

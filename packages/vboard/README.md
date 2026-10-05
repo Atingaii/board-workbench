@@ -32,13 +32,12 @@ cursors are next.
 
 ## Customize sync
 
-String mappings keep the automatic mirror. Opt in to a callback for every
-incoming event with `handlerMode: 'all'`, then delegate what you want to keep:
+String mappings keep the automatic mirror. Function mappings receive every
+incoming event, and delegate what you want to keep:
 
 ```ts
 github({
   adapter,
-  handlerMode: 'all',
   repos: {
     'basehub-ai/vboard': async ({ event, board }) => {
       const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
@@ -51,12 +50,11 @@ github({
 The callback client imports the current verified event with normal provenance,
 media, state reconciliation, and retries. `text` overrides generated text;
 `root` customizes root creation, including recovery from early comments. A
-callback that does not delegate skips that event. Existing function mappings
-keep their legacy behavior unless opted in. `board.sync(messageId, target)`
+callback that does not delegate skips that event. `board.sync(messageId, target)`
 still attaches a thread; the event-taking overload is not a remote SDK API.
 
 Providers also accept `render: ({ message }) => message.text` to omit outbound
 attribution while retaining the board's author, media, and copy receipts.
 `vboard/sync` exports shared event schemas and `SyncProvider` for custom Chat SDK
 providers. See the [sync contract](../../SPEC.md#event-callbacks-and-default-imports)
-for callback lifecycle, SDK client dependencies, and extension examples.
+for callback lifecycle, required SDK client operations, and extension examples.

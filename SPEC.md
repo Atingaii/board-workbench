@@ -116,7 +116,7 @@ conversations.
 ```bash
 pnpm i vboard experimental-a2                         # a board: log, API, SDK, CLI
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
-pnpm i chat @kapso/chat-adapter                       # + sync with WhatsApp, through Kapso
+pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api                       # + sync with WhatsApp, through Kapso
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
 ```
 
@@ -1009,9 +1009,10 @@ export const { GET, POST, scheduler } = board({
         '#errors-www': 'errors-www',
         '#firehose-www': 'firehose-www',
         '#prs': 'prs',
-        '#alerts': async ({ message, board }) => {        // Sentry posts here
-          const project = message.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-          await board.post(`alerts/${project}`, { text: message.text, sync: [message.thread] })
+        '#alerts': async ({ event, board }) => {
+          if (event.kind !== 'message') return
+          const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+          await board.sync(`alerts/${project}`, event)
         },
       },
     }),
@@ -1024,9 +1025,7 @@ export const { GET, POST, scheduler } = board({
       repos: {
         'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
-          const draft = (event.raw as { pull_request?: { draft?: boolean } }).pull_request?.draft
-          if (event.type === 'pr.opened' && !draft)
-            await board.post('prs', { text: event.title, sync: [event.thread] })
+          await board.sync('prs', event, { labels: { area: 'docs' } })
         },
       },
     }),
@@ -1034,20 +1033,18 @@ export const { GET, POST, scheduler } = board({
 })
 ```
 
-**Each key maps to one of two things:**
+**Each mapping chooses a default mirror or an event callback:**
 
-- **A board channel (string): a two-way mirror.**
-  - Platform threads become board threads.
-  - New board threads in that channel start threads on the platform, where the
-    platform supports that.
-  - Replies, reactions, edits, and deletes flow both ways.
-- **A function: an inbound handler.**
-  - You decide what each platform event becomes on the board, using `board`, a
-    vboard client.
-  - Nothing syncs back unless you opt in by passing `sync: [message.thread]` (or
-    `event.thread`). Once a thread is synced, its later replies follow the normal
-    rules automatically.
-  - The function is called only for events in threads that aren't synced yet.
+- **A board channel (string): a two-way mirror.** Incoming events use default
+  imports. New board threads start external threads where supported, and replies,
+  reactions, edits, and deletes flow through the connection automatically.
+- **A function: a callback for every incoming event.** It receives `{ event,
+  board }`, including for connected threads. Call `board.sync(channel, event)` to
+  apply the default import, pass overrides, or use other board operations. Calling
+  no default sync skips that event. Once connected, outgoing delivery is automatic.
+- **`{ channel, run }`: a callback with static reverse routing.** Incoming events
+  go through `run`. The declared channel also lets new board-created threads find
+  the external channel without executing the callback to discover routing.
 
 **Entry keys** are names you choose, such as `slack` and `acme`, and the sync
 adapter decides the platform. The key appears in external IDs
@@ -1067,16 +1064,13 @@ default.
 
 ### Event callbacks and default imports
 
-Set `handlerMode: 'all'` on a sync provider to opt function mappings into every
-incoming event, including connected threads. Without it, existing functions keep
-handling only new, unsynced conversations. String mappings retain their default
-mirror behavior.
+Function mappings receive every incoming event, including connected threads.
+String mappings are shorthand for applying default imports to every event.
 
 ```ts
 sync: {
   github: github({
     adapter,
-    handlerMode: 'all',
     repos: {
       'basehub-ai/vboard': async ({ event, board }) => {
         const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
@@ -1121,8 +1115,7 @@ comments, edits, and reactions. Its lifecycle union narrows native PR/issue data
 by `type`. Envelopes are validated and frozen before application callbacks.
 
 A bare function chooses a board channel at import time; the board cannot infer
-reverse routing for a new board-created thread from that function. With
-`handlerMode: 'all'`, a mapping may declare both a channel and a callback:
+reverse routing for a new board-created thread from that function. A mapping may declare both a channel and a callback:
 
 ```ts
 channels: {
@@ -1278,7 +1271,7 @@ isn't synced or replayed.
   ticks). The adapter only remembers messages whose webhook reached its own
   instance. Pass `markRead: (input) => client.messages.markRead(input)` to
   `kapso()` to use the board's latest message through a public SDK client across
-  serverless instances. Without it, typing relies on the adapter's own live cache.
+  serverless instances. This operation is required at setup.
 - **Slack** sets the thread's assistant status, which only shows in assistant
   threads; elsewhere it's a no-op. **GitHub** has no typing, so it's a no-op.
 - It needs the `post` capability.
@@ -1298,11 +1291,11 @@ adapter: createSlackAdapter({
 adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
 ```
 
-With Connect, pass a public Slack `client` resolver for name lookups, membership,
+With async tokens, including Connect, a public Slack `client` resolver is required for name lookups, membership,
 avatars, and file deletion. The resolver obtains the configured bot token and
 returns `adapter.withBotToken(token, () => adapter.webClient)`. Vboard never calls
 the SDK's protected token resolver. Static-token adapters can use their public
-`webClient` directly. The two example apps supply this resolver.
+`webClient` directly. An async-token adapter without a resolver fails at setup. The two example apps supply this resolver.
 
 With Connect:
 - `botToken` becomes a function that mints a short-lived token per call.
@@ -1429,7 +1422,7 @@ vboard configures every Chat instance itself:
 `slack({ adapter, channels })`. Keys are Slack channels, by name (`'#prs'`) or
 ID (`'C0123ABC'`).
 
-**A function receives `{ message, board }`.** `message` contains:
+**A function receives `{ event, board }`.** The shared envelope includes:
 - `text`
 - `author`
 - `channel`
@@ -1530,15 +1523,16 @@ vb read issues --label tag.bug                     # issues labeled bug
   roots.** If someone changes them on the board, the next GitHub event
   overwrites them.
 - **Board labels never sync out to platforms.**
-- **Repo functions don't get state labels automatically.** They can set their
-  own with `board.label`.
+- **Repo callbacks control whether defaults run.** Delegating through
+  `board.sync(channel, event)` imports state labels; callbacks can also supply
+  label overrides or call `board.label` themselves.
 
 - **A function receives `{ event, board }`,** with `event` typed as the union
   above. Every event carries `thread`.
 - **A comment on a PR or issue the board hasn't seen** fetches it through the
   adapter's `.octokit`, creates a root from its title and URL with its author,
   state, labels, and assignees, then posts the comment as a reply. Known threads
-  and repo functions need no such fetch. A failed fetch retries the inbound event.
+  need no such fetch. Callbacks that skip default imports also skip this lookup. A failed fetch retries the inbound event.
 - **Drafts are mirrored immediately.** Watchers can filter by `state=open` if
   they only want ready PRs.
 - **Roots never flow into GitHub.** A new board thread in a channel that a repo
@@ -1572,10 +1566,17 @@ the numbers themselves.
 ```ts
 import { kapso } from 'vboard/adapter-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
+import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
+
+const client = new WhatsAppClient({
+  baseUrl: 'https://api.kapso.ai/meta/whatsapp',
+  kapsoApiKey: process.env.KAPSO_API_KEY!,
+})
 
 sync: {
   kapso: kapso({
-    adapter: createKapsoAdapter(), // reads KAPSO_API_KEY and KAPSO_WEBHOOK_SECRET
+    adapter: createKapsoAdapter({ client }),
+    markRead: (input) => client.messages.markRead(input),
     numbers: { '16315558151': 'support' },
   }),
 },

@@ -533,13 +533,14 @@ describe('sync', () => {
     expect(partial).toMatchObject({ status: 200, body: { targets: ['github:basehub-ai/vboard:12'] } })
   })
 
-  it('hands unsynced threads in a function-mapped channel to the function, once', async () => {
+  it('runs function mappings for connected conversations and delegates normal imports', async () => {
     const seen: string[] = []
     const { board, s, webhook } = setup({
-      alerts: async ({ message, board }) => {
-        seen.push(message.text)
-        const project = message.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-        await board.post(`alerts/${project}`, { text: message.text, sync: [message.thread] })
+      alerts: async ({ event, board }) => {
+        if (event.kind !== 'message') return
+        seen.push(event.text)
+        const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+        await board.sync(`alerts/${project}`, event)
       },
     })
     const julian = caller(board.fetch, await personToken())
@@ -552,21 +553,21 @@ describe('sync', () => {
     expect(root!.by.actor).toBe('slack:user:B_SENTRY')
     expect(s.channelPosts).toHaveLength(0) // joining a thread doesn't re-post the root
 
-    // The thread is synced now: replies flow both ways without the function.
     await julian('POST', '/messages', { re: root!.id, text: 'on it' })
     await vi.waitFor(() => expect(s.posts.map((p) => p.threadId)).toEqual(['slack:C3:300']))
     await webhook('slack', { type: 'message', threadId: 'slack:C3:300', id: '301', text: 'thanks', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await read(julian, 'alerts/www')).toHaveLength(3))
-    expect(seen).toHaveLength(1)
+    expect(seen).toEqual(['TypeError in checkout, project: www', 'thanks'])
   })
 
   it.each(['/api/board', '/api/board/'])('hands threads to the function on a board mounted at basePath %s', async (basePath) => {
     const errors: string[] = []
     const { board, webhook } = setup({
       basePath,
-      alerts: async ({ message, board }) => {
+      alerts: async ({ event, board }) => {
+        if (event.kind !== 'message') return
         try {
-          await board.post('alerts/www', { text: message.text, sync: [message.thread] })
+          await board.sync('alerts/www', event)
         } catch (error) {
           errors.push((error as Error).message)
         }
@@ -1029,6 +1030,11 @@ describe('sync', () => {
 })
 
 describe('provider callbacks', () => {
+  it('requires a public client resolver for async-token Slack adapters at setup', () => {
+    const adapter = fakePlatform('slack', withSlackClient({}, true)).adapter
+    expect(() => slack({ adapter, channels: { C1: 'support' } })).toThrow('public client resolver')
+  })
+
 
   it('resumes a failed callback after import without treating the retry as an echo', async () => {
     const s = fakePlatform('slack')
@@ -1036,7 +1042,7 @@ describe('provider callbacks', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const board = testBoard({ sync: { slack: slack({
-        adapter: s.adapter, handlerMode: 'all',
+        adapter: s.adapter,
         channels: { C1: async ({ event, board }) => {
           const imported = await board.sync('support', event)
           await board.reply(imported.root!, 'ack')
@@ -1060,7 +1066,7 @@ describe('provider callbacks', () => {
     const s = fakePlatform('slack')
     const seen: string[] = []
     const board = testBoard({ sync: { work: slack({
-      adapter: s.adapter, handlerMode: 'all',
+      adapter: s.adapter,
       channels: { C1: async ({ event, board }) => {
         seen.push(event.type)
         expect(event.platform).toBe('slack')
@@ -1099,7 +1105,7 @@ describe('provider callbacks', () => {
     const s = fakePlatform('slack')
     let saved!: () => Promise<unknown>
     const board = testBoard({ sync: { slack: slack({
-      adapter: s.adapter, handlerMode: 'all',
+      adapter: s.adapter,
       channels: { C1: async ({ event, board }) => {
         await expect(board.sync('support', { ...event })).rejects.toThrow('current verified event')
         saved = () => board.sync('support', event)
@@ -1126,7 +1132,7 @@ describe('provider callbacks', () => {
     const run = vi.fn(async ({ event, board }: Parameters<import('../src/sync/provider.ts').SyncHandler<import('../src/sync/slack.ts').SlackEvent>>[0]) => {
       await board.sync('support', event)
     })
-    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, handlerMode: 'all', channels: { C1: { channel: 'support', run } } }) } })
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, channels: { C1: { channel: 'support', run } } }) } })
     const call = caller(board.fetch, await personToken())
     const posted = await call('POST', '/messages', { channel: 'support', text: 'new board thread' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
@@ -1145,7 +1151,7 @@ describe('provider callbacks', () => {
     Object.assign(g.adapter, { octokit: { rest: { pulls: { get } } } })
     const seen: { type: string; subject: string }[] = []
     const board = testBoard({ sync: { git: github({
-      adapter: g.adapter, handlerMode: 'all',
+      adapter: g.adapter,
       repos: { 'basehub-ai/vboard': async ({ event, board }) => {
         seen.push({ type: event.type, subject: event.subject.type })
         await board.sync(event.subject.type === 'pull_request' ? 'prs' : 'issues', event, {
@@ -1179,7 +1185,7 @@ describe('provider callbacks', () => {
     const get = vi.fn()
     Object.assign(g.adapter, { octokit: { rest: { pulls: { get } } } })
     const seen = vi.fn()
-    const board = testBoard({ sync: { github: github({ adapter: g.adapter, handlerMode: 'all', repos: { 'basehub-ai/vboard': seen } }) } })
+    const board = testBoard({ sync: { github: github({ adapter: g.adapter, repos: { 'basehub-ai/vboard': seen } }) } })
     await board.fetch(new Request(`${BOARD_URL}/webhooks/github`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'github:basehub-ai/vboard:99', id: 'c1', text: 'skip', user: '1' }) }))
     await vi.waitFor(() => expect(seen).toHaveBeenCalledOnce())
     expect(get).not.toHaveBeenCalled()

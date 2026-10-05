@@ -407,7 +407,7 @@ export function createSyncEngine(options: {
       },
     }
     try {
-      if (mapping?.run && (mapping.mode === 'all' || (!linked && (event.kind === 'message' || event.kind === 'lifecycle')))) {
+      if (mapping?.run) {
         await mapping.run(context)
         return
       }

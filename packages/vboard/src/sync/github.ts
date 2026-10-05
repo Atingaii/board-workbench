@@ -1,30 +1,9 @@
 import type { Adapter, Message as ChatMessage } from 'chat'
-import type { BoardClient } from '../client/client.ts'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
 import { SyncProvider, type InterceptedEvent, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput } from './provider.ts'
-
-/** What a GitHub inbound function receives. */
-export type LegacyGitHubEvent = {
-  /** `pr.opened`, `pr.ready`, `pr.draft`, `pr.reopened`, `pr.closed`, `pr.labeled`, `issue.opened`, `issue.assigned`, `review.submitted`, `comment`, … */
-  type: string
-  /** `github:owner/repo:12`. Pass it as `sync` to join this PR or issue. */
-  thread: string
-  /** `github:owner/repo:pulls` or `github:owner/repo:issues`. */
-  channel: string
-  title: string
-  url: string | null
-  text: string
-  author: ExternalAuthor
-  raw: unknown
-}
-
-export type GitHubHandler = (args: { event: LegacyGitHubEvent; board: BoardClient }) => unknown
-
-/** A repo's PRs and issues: one board channel (or function) for both, or one for each. Leave one out to skip it. */
-export type GitHubRepo = string | GitHubHandler | { pulls?: string | GitHubHandler; issues?: string | GitHubHandler }
 
 /** `owner/repo:12` (and its review threads) → `owner/repo:pulls`; `owner/repo:issue:3` → `owner/repo:issues`. */
 function channelOf(thread: string): string {
@@ -183,7 +162,6 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
   return null
 }
 
-
 const GitHubSubject = z.object({ type: z.enum(['pull_request', 'issue']), repo: z.string(), number: z.number().int().positive() })
 const NativeItem = z.looseObject({
   number: z.number(), title: z.string(), html_url: z.string(),
@@ -207,11 +185,13 @@ export const GitHubEvent = z.discriminatedUnion('type', [
 ])
 export type GitHubEvent = z.infer<typeof GitHubEvent>
 
-type RepoMapping<H> = H | { pulls?: H; issues?: H }
-export type GitHubOptions = { render?: (input: RenderInput) => string; adapter: Adapter } & (
-  | { handlerMode?: 'legacy'; repos: Record<string, GitHubRepo> }
-  | { handlerMode: 'all'; repos: Record<string, RepoMapping<EventMapping<GitHubEvent>>> }
-)
+export type GitHubHandler = SyncHandler<GitHubEvent>
+export type GitHubRepo = EventMapping<GitHubEvent> | { pulls?: EventMapping<GitHubEvent>; issues?: EventMapping<GitHubEvent> }
+export type GitHubOptions = {
+  adapter: Adapter
+  render?: (input: RenderInput) => string
+  repos: Record<string, GitHubRepo>
+}
 
 /**
  * Syncs GitHub repos with board channels. Keys are repos (`'owner/repo'`);
@@ -219,8 +199,6 @@ export type GitHubOptions = { render?: (input: RenderInput) => string; adapter: 
  * function, or `{ pulls, issues }` to send each somewhere else. Roots never
  * flow into GitHub: a board thread doesn't open an issue.
  */
-export function github(options: Extract<GitHubOptions, { handlerMode: 'all' }>): GitHubProvider
-export function github(options: Extract<GitHubOptions, { handlerMode?: 'legacy' }>): GitHubProvider
 export function github(options: GitHubOptions): GitHubProvider {
   return new GitHubProvider(options)
 }
@@ -304,29 +282,10 @@ export class GitHubProvider extends SyncProvider<GitHubEvent> {
         return { target, channel: at === -1 ? target : channelOf(target), kind: at === -1 ? 'channel' : 'thread' }
       },
     })
-    if (options.handlerMode === 'all') {
-      for (const [repo, value] of Object.entries(options.repos)) {
-        const { pulls, issues } = typeof value === 'object' && !('run' in value) ? value : { pulls: value, issues: value }
-        if (pulls) this.map(`${repo}:pulls`, pulls)
-        if (issues) this.map(`${repo}:issues`, issues)
-      }
-    } else {
-      for (const [repo, value] of Object.entries(options.repos)) {
-        const { pulls, issues } = typeof value === 'object' ? value : { pulls: value, issues: value }
-        for (const [kind, mapping] of Object.entries({ pulls, issues })) {
-          if (!mapping) continue
-          const key = `${repo}:${kind}`
-          if (typeof mapping === 'string') this.map(key, mapping)
-          else this.mappings[key] = {
-            mode: 'legacy',
-            run: ({ event, raw, board }) => {
-              const shared = { thread: event.thread, channel: event.channel, raw }
-              if (event.kind === 'lifecycle') return mapping({ event: { ...shared, type: event.type, title: event.title, url: event.url, text: event.reply ?? event.title, author: event.author }, board })
-              if (event.kind === 'message') return mapping({ event: { ...shared, type: 'comment', title: '', url: null, text: event.text, author: event.author }, board })
-            },
-          }
-        }
-      }
+    for (const [repo, value] of Object.entries(options.repos)) {
+      const { pulls, issues } = typeof value === 'object' && !('run' in value) ? value : { pulls: value, issues: value }
+      if (pulls) this.map(`${repo}:pulls`, pulls)
+      if (issues) this.map(`${repo}:issues`, issues)
     }
   }
 

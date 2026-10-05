@@ -1,15 +1,8 @@
 import type { Adapter, Message as ChatMessage } from 'chat'
-import type { BoardClient } from '../client/client.ts'
-import type { ExternalAuthor } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { SyncProvider, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type LegacyMessage } from './provider.ts'
-
-/** What a Slack inbound function receives for each message in a thread the board hasn't synced yet. */
-export type SlackMessage = LegacyMessage
-
-export type SlackHandler = (args: { message: SlackMessage; board: BoardClient }) => unknown
+import { SyncProvider, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput } from './provider.ts'
 
 type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean }
 export type SlackClient = {
@@ -43,33 +36,39 @@ function slackError(error: unknown): string {
   return data.needed ? `${data.error}, needs ${data.needed}` : data.error
 }
 
-
 export const SlackEvent = eventSchema('slack', 'message')
 export type SlackEvent = z.infer<typeof SlackEvent>
 
-export type SlackOptions = { client?: () => Promise<SlackClient>; render?: (input: RenderInput) => string; adapter: Adapter } & (
-  | { handlerMode?: 'legacy'; channels: Record<string, string | SlackHandler> }
-  | { handlerMode: 'all'; channels: Record<string, EventMapping<SlackEvent>> }
-)
+export type SlackHandler = SyncHandler<SlackEvent>
+export type SlackOptions = {
+  adapter: Adapter
+  render?: (input: RenderInput) => string
+  client?: () => Promise<SlackClient>
+  channels: Record<string, EventMapping<SlackEvent>>
+}
 
 /**
  * Syncs Slack channels with board channels. Keys are channels by name
  * (`'#prs'`) or ID (`'C0123ABC'`); values are a board channel (a two-way
- * mirror) or a function that handles new threads itself. The app joins public
+ * mirror) or a callback that handles every incoming event. The app joins public
  * channels it isn't in; private ones need an invite.
  */
-export function slack(options: Extract<SlackOptions, { handlerMode: 'all' }>): SlackProvider
-export function slack(options: Extract<SlackOptions, { handlerMode?: 'legacy' }>): SlackProvider
 export function slack(options: SlackOptions): SlackProvider {
   return new SlackProvider(options)
 }
 
 export class SlackProvider extends SyncProvider<SlackEvent> {
   constructor(options: SlackOptions) {
+    let directClient: SlackClient | undefined
+    if (!options.client) {
+      try {
+        directClient = (options.adapter as Adapter & { webClient?: SlackClient }).webClient
+      } catch {
+        throw new Error('slack requires a public client resolver when the adapter uses async tokens')
+      }
+    }
     async function client(): Promise<SlackClient | undefined> {
-      if (options.client) return options.client()
-      const adapter = options.adapter as Adapter & { webClient?: SlackClient }
-      return adapter.webClient
+      return options.client ? options.client() : directClient
     }
 
     // One listing resolves every name. A miss lists again, since the channel may be
@@ -214,11 +213,7 @@ export class SlackProvider extends SyncProvider<SlackEvent> {
         return { target: at === -1 ? channel : `${channel}:${target.slice(at + 1)}`, channel, kind: at === -1 ? 'channel' : 'thread' }
       },
     })
-    if (options.handlerMode === 'all') {
-      for (const [key, value] of Object.entries(options.channels)) this.map(key, value)
-    } else {
-      for (const [key, value] of Object.entries(options.channels)) this.legacyMessage(key, value)
-    }
+    for (const [key, value] of Object.entries(options.channels)) this.map(key, value)
   }
 
   override event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): SlackEvent {

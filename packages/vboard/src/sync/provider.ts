@@ -28,7 +28,6 @@ export type SyncContext = {
 
 export type ProviderMapping = {
   channel?: string
-  mode: 'legacy' | 'all'
   run?: (context: SyncContext) => unknown
 }
 
@@ -36,9 +35,6 @@ export type RenderInput = { message: Readonly<Message>; author: Readonly<Actor> 
 export type EventMapping<E extends ProviderEvent> = string | SyncHandler<E> | { channel: string; run: SyncHandler<E> }
 
 export type FileDelivery = { message: string; files: string[] }
-
-export type LegacyMessage = Pick<Extract<ExternalEvent, { kind: 'message' }>, 'text' | 'author' | 'channel' | 'thread'> & { id: string; raw: unknown }
-export type LegacyMessageHandler = (args: { message: LegacyMessage; board: BoardClient }) => unknown
 
 export type SyncTransport = {
   platform: string
@@ -114,7 +110,6 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     return this.transport.markdown?.(message) ?? markdownOf(message)
   }
 
-
   abstract event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): E
 
   sync(context: SyncContext, channel: string, _event: E, overrides?: SyncOverrides): Promise<SyncResult> {
@@ -125,25 +120,13 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     return this.transport.render?.(input) ?? `**${input.label}**: ${input.message.text}`
   }
 
-  protected legacyMessage(key: string, value: string | LegacyMessageHandler) {
-    if (typeof value === 'string') return this.map(key, value)
-    this.mappings[key] = {
-      mode: 'legacy',
-      run: ({ event, raw, board }) => {
-        if (event.kind !== 'message') return
-        return value({ message: { id: event.message, text: event.text, author: event.author, channel: event.channel, thread: event.thread, raw }, board })
-      },
-    }
-  }
-
   protected map(key: string, value: EventMapping<E>) {
     if (typeof value === 'string') {
-      this.mappings[key] = { channel: value, mode: 'all' }
+      this.mappings[key] = { channel: value }
       return
     }
     const handler = typeof value === 'function' ? value : value.run
     this.mappings[key] = {
-      mode: 'all',
       ...(typeof value === 'object' ? { channel: value.channel } : {}),
       run: (context) => {
         const event = immutable(this.event(context))
