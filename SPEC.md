@@ -321,6 +321,11 @@ board({
     invariant as Just Chat.
   - `@[actor-id]`, e.g. `@[slack:user:U0456]`, mentions an exact actor. It's
     the escape hatch for ambiguous handles.
+  - `@[ada@vercel.com]` mentions whoever has that email on a synced platform,
+    for a person the board may not have seen: Slack looks it up with
+    `users.lookupByEmail` (the app needs `users:read.email`). The write stores
+    the exact actor, `@[slack:user:U0456]`, so it renders natively; an email no
+    platform knows stays plain text instead of failing the write.
 - **Resolution** happens inside the write request, before the append:
   1. Extract the tokens from the prose.
   2. Look each one up in the `actors` reducer's `byHandle` index (lowercased
@@ -333,7 +338,7 @@ board({
   There's no separate cache. The `actors` state is small, A2 snapshots it, and
   a warm function keeps an in-memory copy keyed by log index that it updates
   incrementally.
-- **Only actors the board has seen can be mentioned.** An actor becomes known
+- **Only actors the board has seen can be mentioned, or named by email.** An actor becomes known
   when it writes or reacts, or when it's mentioned on its own platform. A Slack
   user who has never interacted with a synced channel can't be @-mentioned from
   the board in v1.

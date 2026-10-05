@@ -13,6 +13,7 @@ import {
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
+import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
 import { badRequest, forbidden, notFound } from './errors.ts'
 import { view } from './feed.ts'
@@ -35,7 +36,34 @@ export type WriteContext = {
   configTargets: (channel: string) => Promise<string[]>
   /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
   normalizeTarget: (target: string) => Promise<string>
+  /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
+  findByEmail?: (email: string) => Promise<Actor | null>
 }
+
+/**
+ * `@[ada@vercel.com]`: each email a synced platform knows becomes that user's exact
+ * mention, `@[slack:user:U0456]`, so it reads natively there; the rest stay plain text.
+ */
+async function withEmailMentions(ctx: WriteContext, text: string): Promise<{ text: string; found: Actor[] }> {
+  const emails = extractMentions(text).flatMap((token) =>
+    token.kind === 'actor' && token.actor.includes('@') ? [token.actor] : [],
+  )
+  if (emails.length === 0) return { text, found: [] }
+  const byEmail = new Map<string, Actor | null>()
+  for (const email of emails) byEmail.set(email, (await ctx.findByEmail?.(email).catch(() => null)) ?? null)
+  return {
+    text: replaceMentions(text, (token) => {
+      if (token.kind !== 'actor' || !byEmail.has(token.actor)) return null
+      const actor = byEmail.get(token.actor)
+      return actor ? `@[${actor.id}]` : token.actor
+    }),
+    found: [...byEmail.values()].filter((actor) => actor !== null),
+  }
+}
+
+/** The actors a write can mention: the ones the board knows, plus the ones an email named. */
+const knownWith = (actors: ActorsState, found: Actor[]): ActorsState =>
+  found.length === 0 ? actors : { ...actors, byId: { ...actors.byId, ...Object.fromEntries(found.map((a) => [a.id, a])) } }
 
 export type PostInput = {
   identity: Identity
@@ -92,7 +120,9 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
   }
 
   const seen = actorSeen(identity.actor, actors)
-  const mentions = resolveMentions(input.text, actors, seen ? identity.actor : undefined, input.lenientMentions ?? false)
+  const { text, found } = await withEmailMentions(ctx, input.text)
+  const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
+  const mentions = resolveMentions(text, knownWith(actors, found), seen ? identity.actor : undefined, input.lenientMentions ?? false)
   const synced = await Promise.all(
     targets.map(async ({ target, cause }) => ({
       type: 'thread.synced' as const,
@@ -102,12 +132,13 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
   )
   const rows = await ctx.session.append(
     ...(seen ? [seen] : []),
+    ...named,
     {
       type: 'message.posted',
       ...(id ? { id } : {}),
       payload: {
         channel: channel!,
-        text: input.text,
+        text,
         re,
         replyTo,
         thread,
@@ -153,13 +184,15 @@ export async function writeEdit(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  const mentions = resolveMentions(input.text, actors, seen ? input.identity.actor : undefined, input.from != null)
-  await ctx.session.append(...(seen ? [seen] : []), {
+  const { text, found } = await withEmailMentions(ctx, input.text)
+  const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
+  const mentions = resolveMentions(text, knownWith(actors, found), seen ? input.identity.actor : undefined, input.from != null)
+  await ctx.session.append(...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
       id: message.id,
       thread: message.thread,
-      text: input.text,
+      text,
       mentions,
       by: input.identity.author,
       from: input.from ?? null,

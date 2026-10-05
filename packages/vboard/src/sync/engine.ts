@@ -17,6 +17,7 @@ import {
   isThreadTarget,
   messagesReducer,
   syncReducer,
+  type Actor,
   type ActorsState,
   type ExternalCopy,
   type Message,
@@ -154,6 +155,16 @@ export function createSyncEngine(options: {
     })
     resolved.set(key, entry)
     return entry.map
+  }
+
+  /** The first synced platform's user with this email, as a board actor. */
+  async function findByEmail(email: string): Promise<Actor | null> {
+    for (const platform of Object.values(entries)) {
+      const author = await platform.findByEmail?.(email).catch(() => null)
+      if (author)
+        return { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar }
+    }
+    return null
   }
 
   async function configTargets(channel: string): Promise<string[]> {
@@ -817,6 +828,7 @@ export function createSyncEngine(options: {
     },
     configTargets,
     normalizeTarget,
+    findByEmail,
     handleWebhook,
     readInbox,
     typing,

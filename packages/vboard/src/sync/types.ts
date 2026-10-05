@@ -53,6 +53,8 @@ export type SyncPlatform = {
   fetchRoot?(thread: string): Promise<{ text: string; labels: Record<string, string>; author: ExternalAuthor }>
   /** Short context for a message, e.g. the file and line of a review comment. */
   context(message: ChatMessage): string | null
+  /** The platform's user with this email, for `@[ada@vercel.com]` mentions, or null. */
+  findByEmail?(email: string): Promise<ExternalAuthor | null>
   /** How a mentioned actor reads on this platform, when it's one of its own: `<@U0456>` in Slack. */
   mention?(actor: Actor): string | null
   /** A message's text as markdown, the board's format. */
