@@ -394,7 +394,21 @@ export function createSyncEngine(options: {
           id: await writeId(0),
         }
         if (rootId !== undefined) return void (await writePost(writes, { ...base, re: rootId }))
-        if (typeof target === 'string') return void (await writePost(writes, { ...base, channel: target }))
+        if (typeof target === 'string') {
+          if (!platform.fetchRoot) return void (await writePost(writes, { ...base, channel: target }))
+          const fetched = await platform.fetchRoot(event.thread.slice(key.length + 1))
+          const root = await writePost(writes, {
+            identity: externalIdentity(fetched.author),
+            channel: target,
+            text: clampText(fetched.text),
+            labels: fetched.labels,
+            origin: { thread: event.thread, subthread: null, message: `root:${trigger.id}`, context: null },
+            from: key,
+            lenientMentions: true,
+            id: await writeId(1),
+          })
+          return void (await writePost(writes, { ...base, re: root.id }))
+        }
         if (typeof target === 'function')
           await (target as (args: unknown) => unknown)(platform.handlerArgs(event, raw, clientAs(identity, trigger.id)))
         return

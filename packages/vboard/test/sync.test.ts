@@ -174,13 +174,14 @@ function setup(
     channels?: SlackChannels
     slackClient?: unknown
     asyncToken?: boolean
+    githubClient?: unknown
     repos?: Parameters<typeof github>[0]['repos']
     watch?: BoardOptions['watch']
     basePath?: string
   } = {},
 ) {
   const s = fakePlatform('slack', options.slackClient ? withSlackClient(options.slackClient, !!options.asyncToken) : undefined)
-  const g = fakePlatform('github')
+  const g = fakePlatform('github', options.githubClient ? (adapter) => Object.assign(adapter, { octokit: options.githubClient }) : undefined)
   const board = testBoard({
     sync: {
       slack: slack({
@@ -626,6 +627,113 @@ describe('sync', () => {
     expect(events.filter((e) => e.type === 'actor.seen')).toHaveLength(1) // the comment didn't rewrite the author
   })
 
+  it('mirrors a draft PR before its deployment comments and keeps the root when it becomes ready', async () => {
+    const get = vi.fn()
+    const { board, s, g, webhook } = setup({ githubClient: { rest: { pulls: { get } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const sender = { id: 42, login: 'julianbenegas' }
+    const pr = { number: 38, title: 'Fix imports', html_url: 'https://github.com/basehub-ai/vboard/pull/38' }
+    await webhook('github', { action: 'opened', repository, sender, pull_request: { ...pr, draft: true } }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'draft-opened' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const [root] = await read(julian, 'prs')
+    expect(root).toMatchObject({ text: `PR #38: Fix imports\n${pr.html_url}`, labels: { pr: 'basehub-ai/vboard#38', state: 'draft' } })
+
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:38', id: 'deploy', text: 'Building', user: '35613825', name: 'vercel[bot]' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
+    await webhook('github', { action: 'ready_for_review', repository, sender, pull_request: { ...pr, draft: false } }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'draft-ready' })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]).toMatchObject({ id: root!.id, labels: { state: 'open' } }))
+    expect((await read(julian, 'prs'))[1]).toMatchObject({ text: 'Building', re: root!.id })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.channelPosts).toHaveLength(1)
+    expect(s.channelPosts[0]!.text).toContain('PR #38: Fix imports')
+    expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
+    expect(get).not.toHaveBeenCalled()
+    expect(g.posts).toHaveLength(0)
+  })
+
+  it.each([
+    { thread: 'basehub-ai/vboard:50', issue: false, draft: false, merged: false, state: 'open', expectedState: 'open' },
+    { thread: 'basehub-ai/vboard:50:rc:123', issue: false, draft: true, merged: false, state: 'open', expectedState: 'draft' },
+    { thread: 'basehub-ai/vboard:50', issue: false, draft: false, merged: true, state: 'closed', expectedState: 'merged' },
+    { thread: 'basehub-ai/vboard:issue:50', issue: true, draft: false, merged: false, state: 'closed', expectedState: 'closed' },
+  ])('fetches a titled root for an unseen $expectedState thread ($thread)', async ({ thread, issue, draft, merged, state, expectedState }) => {
+    const url = `https://github.com/basehub-ai/vboard/${issue ? 'issues' : 'pull'}/50`
+    const avatar = 'https://avatars.githubusercontent.com/u/42?v=4'
+    const get = vi.fn(async () => ({ data: {
+      number: 50, title: 'Root first', html_url: url, state, draft, merged,
+      user: { id: 42, login: 'julianbenegas', avatar_url: avatar },
+      labels: [{ name: 'bug' }], assignees: [{ login: 'ada' }],
+    } }))
+    const { board, s, g, webhook } = setup({ githubClient: { rest: { pulls: { get }, issues: { get } } } })
+    const julian = caller(board.fetch, await personToken())
+    const payload = { type: 'message', threadId: `github:${thread}`, id: 'c1', text: 'Building', user: '35613825', name: 'vercel[bot]', raw: { path: 'src/index.ts', line: 12 } }
+    await webhook('github', payload)
+    await webhook('github', payload)
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
+    const [root, comment] = await read(julian, 'prs')
+    expect(root).toMatchObject({
+      text: `${issue ? 'Issue' : 'PR'} #50: Root first\n${url}`, re: null, by: { actor: 'github:user:42' },
+      labels: { [issue ? 'issue' : 'pr']: 'basehub-ai/vboard#50', state: expectedState, 'tag.bug': 'bug', 'assignee.ada': 'ada' },
+    })
+    expect(comment).toMatchObject({ text: 'Building', re: root!.id, by: { actor: 'github:user:35613825' } })
+    const { body } = await julian('GET', `/messages/${root!.id}`)
+    expect(body.message.author.avatar).toBe(avatar)
+    expect(body.message.origin).toMatchObject({ thread: `github:basehub-ai/vboard:${issue ? 'issue:' : ''}50`, subthread: null, context: null })
+    expect(body.replies[0].origin).toMatchObject({ subthread: thread.endsWith(':rc:123') ? `github:${thread}` : null, context: 'src/index.ts:12' })
+    expect(get).toHaveBeenCalledExactlyOnceWith({ owner: 'basehub-ai', repo: 'vboard', [issue ? 'issue_number' : 'pull_number']: 50 })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.channelPosts).toHaveLength(1)
+    expect(s.channelPosts[0]!.text).toContain('Root first')
+    expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
+    expect(g.posts).toHaveLength(0)
+
+    await webhook('github', { action: 'opened', repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' },
+      [issue ? 'issue' : 'pull_request']: { number: 50, title: 'Root first', html_url: url, draft, labels: [{ name: 'bug' }], assignees: [{ login: 'ada' }] },
+    }, { 'x-github-event': issue ? 'issues' : 'pull_request', 'x-github-delivery': 'late-opened' })
+    await webhook('github', { ...payload, id: 'c2', text: 'Ready' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(3))
+    expect((await read(julian, 'prs')).filter((m) => m.re === null).map((m) => m.id)).toEqual([root!.id])
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(s.channelPosts).toHaveLength(1)
+  })
+
+  it('retries a failed GitHub root lookup without posting the comment as a root', async () => {
+    const get = vi.fn().mockRejectedValueOnce(new Error('GitHub unavailable')).mockResolvedValue({ data: {
+      number: 51, title: 'Try again', html_url: 'https://github.com/basehub-ai/vboard/pull/51', state: 'open', user: { id: 42, login: 'julianbenegas' },
+    } })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get } } } })
+      const julian = caller(board.fetch, await personToken())
+      await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:51', id: 'c1', text: 'Building', user: '35613825', name: 'vercel[bot]' })
+      await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+      expect(await read(julian, 'prs')).toHaveLength(0)
+      expect(s.channelPosts).toHaveLength(0)
+      await vi.waitFor(async () => {
+        await board.servers[1]!.drain('inbox:github:basehub-ai/vboard:pulls')
+        expect(await read(julian, 'prs')).toHaveLength(2)
+      })
+      const [root, comment] = await read(julian, 'prs')
+      expect(root!.text).toContain('PR #51: Try again')
+      expect(comment).toMatchObject({ text: 'Building', re: root!.id })
+      expect(get).toHaveBeenCalledTimes(2)
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('leaves unseen comments to repo functions without fetching a root', async () => {
+    const seen = vi.fn()
+    const get = vi.fn()
+    const { board, webhook } = setup({ repos: { 'basehub-ai/vboard': seen }, githubClient: { rest: { pulls: { get } } } })
+    const julian = caller(board.fetch, await personToken())
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:52', id: 'c1', text: 'Building', user: '35613825' })
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(1))
+    expect(await read(julian, 'prs')).toHaveLength(0)
+    expect(get).not.toHaveBeenCalled()
+  })
+
   it("sends a repo's PRs and issues to different channels", async () => {
     const { board, webhook } = setup({ repos: { 'basehub-ai/vboard': { pulls: 'prs', issues: 'issues' } } })
     const julian = caller(board.fetch, await personToken())
@@ -710,13 +818,14 @@ describe('sync', () => {
       'tag.priority-high': 'priority: high',
     })
 
-    // A draft PR has no thread yet; it starts with whatever labels it has when it's ready.
     const pr = { number: 11, title: 'Draft', html_url: 'https://github.com/x/pull/11', merged: false }
     await send('pull_request', { action: 'opened', pull_request: { ...pr, draft: true } })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const [draft] = await read(julian, 'prs')
+    expect(draft).toMatchObject({ text: 'PR #11: Draft\nhttps://github.com/x/pull/11', labels: { pr: 'basehub-ai/vboard#11', state: 'draft' } })
     await send('pull_request', { action: 'labeled', pull_request: { ...pr, draft: true, labels: [{ name: 'wip' }] }, label: { name: 'wip' } })
     await send('pull_request', { action: 'ready_for_review', pull_request: { ...pr, draft: false, labels: [{ name: 'wip' }] } })
-    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
-    expect((await read(julian, 'prs'))[0]!.labels).toMatchObject({ state: 'open', 'tag.wip': 'wip' })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]).toMatchObject({ id: draft!.id, labels: { state: 'open', 'tag.wip': 'wip' } }))
     const assigned = { ...pr, labels: [{ name: 'wip' }], assignees: [{ login: 'pi-bot[bot]' }] }
     await send('pull_request', { action: 'assigned', pull_request: assigned, assignee: { login: 'pi-bot[bot]' } })
     await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]!.labels['assignee.pi-bot-bot']).toBe('pi-bot[bot]'))
@@ -749,7 +858,8 @@ describe('sync', () => {
   })
 
   it("keeps GitHub's markdown and avatars, and posts markdown to platforms", async () => {
-    const { board, s, webhook } = setup()
+    const get = vi.fn(async () => ({ data: { number: 3, title: 'Deploy previews', html_url: 'https://github.com/basehub-ai/vboard/pull/3', state: 'open', user: { id: 42, login: 'julianbenegas' } } }))
+    const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get } } } })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const table = '| Project | Status |\n| --- | --- |\n| www | Ready |'
     await webhook('github', {
@@ -761,8 +871,11 @@ describe('sync', () => {
       name: 'vercel[bot]',
       raw: { comment: { body: table, user: { avatar_url: 'https://avatars.githubusercontent.com/in/8329?v=4' } } },
     })
-    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
-    expect((await read(julian, 'prs'))[0]!.text).toBe(table)
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
+    const [root, comment] = await read(julian, 'prs')
+    expect(root!.text).toBe('PR #3: Deploy previews\nhttps://github.com/basehub-ai/vboard/pull/3')
+    expect(comment).toMatchObject({ text: table, re: root!.id })
+    expect(get).toHaveBeenCalledExactlyOnceWith({ owner: 'basehub-ai', repo: 'vboard', pull_number: 3 })
     const { body } = await julian('GET', '/actors')
     expect(body.actors.find((a: { id: string }) => a.id === 'github:user:35613825')).toMatchObject({
       avatar: 'https://avatars.githubusercontent.com/in/8329?v=4',

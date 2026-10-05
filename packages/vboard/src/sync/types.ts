@@ -48,6 +48,8 @@ export type SyncPlatform = {
   channelOf?(thread: string): string
   /** Whether a message is its thread's first message. */
   isRoot(thread: string, messageId: string): boolean
+  /** Fetches a separate root for an unseen thread whose inbound messages are comments. */
+  fetchRoot?(thread: string): Promise<{ text: string; labels: Record<string, string>; author: ExternalAuthor }>
   /** Short context for a message, e.g. the file and line of a review comment. */
   context(message: ChatMessage): string | null
   /** A message's text as markdown, the board's format. */
