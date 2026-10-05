@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
+import { memory } from 'experimental-a2/store-memory'
 import { kapso } from '../src/sync/kapso.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
@@ -11,7 +12,8 @@ const NUMBER = '16315558151'
 const JANE = '15551234567'
 
 /** The real Kapso adapter, sending through a fake WhatsApp client that records what it sends. */
-function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'support' }) {
+function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'support' }, store?: ReturnType<typeof memory>) {
+  const reads: { phoneNumberId: string; messageId: string; typingIndicator?: { type: string } }[] = []
   const texts: { phoneNumberId: string; to: string; body: string }[] = []
   const reactions: { phoneNumberId: string; to: string; reaction: { messageId: string; emoji?: string } }[] = []
   const uploads: { phoneNumberId: string; type: string; fileName: string; bytes: number }[] = []
@@ -26,6 +28,10 @@ function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'su
       },
     },
     messages: {
+      markRead: async (input: (typeof reads)[number]) => {
+        reads.push(input)
+        return { success: true }
+      },
       sendImage: async (input: (typeof images)[number]) => {
         images.push(input)
         return { messages: [{ id: `wamid.img${images.length}` }] }
@@ -41,7 +47,7 @@ function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'su
     },
   }
   const adapter = createKapsoAdapter({ client: client as never, webhookSecret: SECRET, phoneNumberId: NUMBER })
-  const board = testBoard({ sync: { kapso: kapso({ adapter, numbers }) } })
+  const board = testBoard({ sync: { kapso: kapso({ adapter, numbers }) }, ...(store ? { store } : {}) })
 
   let next = 0
   /** A `whatsapp.message.received` delivery, signed as Kapso signs it. */
@@ -66,7 +72,7 @@ function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'su
   const text = (id: string, body: string, conversation?: string) =>
     receive({ id, type: 'text', text: { body } }, conversation ? { conversation } : {})
   const react = (id: string, target: string, emoji: string) => receive({ id, type: 'reaction', reaction: { message_id: target, emoji } })
-  return { board, texts, reactions, uploads, images, receive, text, react }
+  return { board, texts, reactions, uploads, images, reads, receive, text, react }
 }
 
 type Read = { id: number; text: string; re: number | null; from: string | null; reactions: Record<string, string[]>; by: { actor: string } }
@@ -185,5 +191,46 @@ describe('kapso sync', () => {
     await vi.waitFor(() => expect(texts.map((t) => t.to)).toEqual([JANE]))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("+1 631-555-8151 isn't a phone number ID"))
     warn.mockRestore()
+  })
+  it('shows typing on WhatsApp, marking the latest inbound message read', async () => {
+    const { board, reads, text } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await text('wamid.1', 'export is broken')
+    await text('wamid.2', 'since this morning')
+    await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(2))
+    const [root, reply] = await read(julian, 'support')
+
+    const before = (await julian('GET', '/channels')).body.cursor
+    // Any message in the thread will do: typing is for the whole thread.
+    const typed = await julian('POST', `/messages/${reply!.id}/typing`, {})
+    expect(typed).toMatchObject({ status: 200, body: { targets: [`kapso:${NUMBER}:${JANE}:conv_1`] } })
+    expect(reads).toEqual([{ phoneNumberId: NUMBER, messageId: 'wamid.2', typingIndicator: { type: 'text' } }])
+    // Nothing is written to the log.
+    expect((await julian('GET', '/channels')).body.cursor).toBe(before)
+    expect(root!.re).toBeNull()
+  })
+
+  it('shows typing from a fresh instance, which never saw the inbound webhook', async () => {
+    const store = memory()
+    const first = setup(undefined, store)
+    const julian = caller(first.board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await first.text('wamid.1', 'export is broken')
+    await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(1))
+    const [root] = await read(julian, 'support')
+
+    // Another serverless instance: its adapter has nothing in memory.
+    const second = setup(undefined, store)
+    const other = caller(second.board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    expect((await other('POST', `/messages/${root!.id}/typing`, {})).status).toBe(200)
+    expect(second.reads).toEqual([{ phoneNumberId: NUMBER, messageId: 'wamid.1', typingIndicator: { type: 'text' } }])
+  })
+
+  it("doesn't show typing on a thread that isn't synced", async () => {
+    const { board, reads } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const { body } = await julian('POST', '/messages', { channel: 'support', text: 'board only' })
+    expect(await julian('POST', `/messages/${body.message.id}/typing`, {})).toMatchObject({ status: 200, body: { targets: [] } })
+    expect(reads).toEqual([])
+    expect((await julian('POST', '/messages/9999/typing', {})).status).toBe(404)
   })
 })

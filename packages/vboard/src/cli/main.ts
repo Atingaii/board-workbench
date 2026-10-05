@@ -32,6 +32,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   delete <id>
   react <id> <emoji> [--remove]
   label <id> k=v... [--unset k]...
+  typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
@@ -323,6 +324,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw new UsageError('usage: vboard label <id> k=v... [--unset k]...')
       await client().label(id, { set, unset })
+      return 0
+    }
+
+    case 'typing': {
+      const id = messageId(args[0])
+      const targets = await client().typing(id)
+      if (flags.json) printJson({ targets })
       return 0
     }
 

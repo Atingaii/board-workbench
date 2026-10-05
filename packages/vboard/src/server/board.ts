@@ -15,6 +15,7 @@ import {
   routes,
   SyncBody,
   type Discovery,
+  type TypingResult,
   type Me,
   type RouteName,
 } from '../api/routes.ts'
@@ -94,6 +95,7 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'POST', name: 'react', pattern: /\/messages\/(\d+)\/reactions$/ },
   { method: 'POST', name: 'label', pattern: /\/messages\/(\d+)\/labels$/ },
   { method: 'POST', name: 'sync', pattern: /\/messages\/(\d+)\/sync$/ },
+  { method: 'POST', name: 'typing', pattern: /\/messages\/(\d+)\/typing$/ },
   { method: 'GET', name: 'message', pattern: /\/messages\/(\d+)$/ },
   { method: 'GET', name: 'messages', pattern: /\/messages$/ },
   { method: 'POST', name: 'post', pattern: /\/messages$/ },
@@ -131,7 +133,7 @@ function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
   return combined as BoardHandlers
 }
 
-const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'message'])
+const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message'])
 
 function route(method: string, pathname: string, basePath?: string): Match | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
@@ -421,6 +423,14 @@ export function board(options: BoardOptions = {}) {
           require(principal, 'sync')
           const body = SyncBody.parse(await readJson(request))
           return json(await writeAttach(writes, { identity, id: match.id!, target: body.target }))
+        }
+        case 'typing': {
+          require(principal, 'post')
+          const { state } = await session.state(messagesReducer)
+          const message = state.byId[match.id!]
+          if (!message || message.deleted) throw notFound(`message not found: #${match.id}`, 'message_not_found')
+          const body: TypingResult = { targets: engine ? await engine.typing(message.thread) : [] }
+          return json(body)
         }
         case 'inbox': {
           // Raw platform payloads: full access only.

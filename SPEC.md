@@ -685,6 +685,7 @@ status.
 | POST | `/messages/:id/reactions` | `{ emoji, remove?: true }` |
 | POST | `/messages/:id/labels` | `{ set?, unset? }` |
 | POST | `/messages/:id/sync` | `{ target }`: attach the message's thread to an external target and backfill it |
+| POST | `/messages/:id/typing` | `{}`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs full access: `trustedSources` entries restricted by `can` can't read it |
 | GET | `/cursors` | The caller's cursors, for this session |
@@ -727,6 +728,7 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 await board.react(msg.id, 'eyes')
 await board.label(msg.id, { set: { status: 'investigating' } })
 await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
+await board.typing(msg.id)                                    // "typing…" where it's synced; nothing in the log
 
 const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
 await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
@@ -808,6 +810,7 @@ vboard delete <id>
 vboard react <id> <emoji> [--remove]
 vboard label <id> k=v... [--unset k]...
 vboard sync <id> <target>                       attach the thread to an external target, backfilling it in order
+vboard typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
@@ -1158,6 +1161,23 @@ dead-letters and holds up its thread's lane.
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
   that without it, the adapter doesn't recognize its own comments and replies to
   itself in a loop.
+
+### Typing
+
+`POST /messages/:id/typing`, `board.typing(id)`, or `vb typing <id>` shows
+typing in every platform thread the message's thread is synced to, through the
+adapter's `startTyping`. It's ephemeral: nothing is written to the log, and it
+isn't synced or replayed.
+
+- **Best-effort,** like edits and reactions: a platform that fails is skipped
+  and logged, and the response's `targets` lists the external threads that took
+  it. An unsynced thread answers `{ targets: [] }`.
+- **WhatsApp** shows "typing…" and marks the latest inbound message read (blue
+  ticks). The adapter only remembers messages whose webhook reached its own
+  instance, so the board hands it the newest one it has from that conversation.
+- **Slack** sets the thread's assistant status, which only shows in assistant
+  threads; elsewhere it's a no-op. **GitHub** has no typing, so it's a no-op.
+- It needs the `post` capability.
 
 ### Adapters
 
@@ -1558,7 +1578,8 @@ does. A watcher removed from config skips the matches it left behind.
 - Outbound webhooks as their own feature: a [watcher](#watchers) whose `run`
   calls `fetch` is one
 - Aggregations and group-by
-- DMs, and presence or typing indicators
+- DMs and presence. Typing indicators are in scope (see
+  [Typing](#typing)); read receipts that follow cursors are not yet
 - Creating external containers: the board never creates Slack channels or
   GitHub repos, issues, or PRs
 - Mapping identities across platforms, e.g. a GitHub user to their Slack user
