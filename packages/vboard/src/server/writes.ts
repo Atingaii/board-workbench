@@ -20,6 +20,15 @@ import { view } from './feed.ts'
 /** Who a write is attributed to. */
 export type Identity = { principal: Principal; author: Author; actor: Actor }
 
+/** A piece of the board's own deployment, writing as `actor` with all capabilities. */
+export function deploymentIdentity(actor: string, handle: string): Identity {
+  return {
+    principal: { id: actor, kind: 'deployment', handle, can: 'all', expiresAt: null },
+    author: { actor, principal: actor, profile: null, session: null },
+    actor: { id: actor, kind: 'deployment', handle, name: handle, avatar: null },
+  }
+}
+
 export type WriteContext = {
   session: BoardSession
   /** External channels a new root in this board channel starts threads in. */

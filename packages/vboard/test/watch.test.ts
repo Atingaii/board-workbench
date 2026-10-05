@@ -195,3 +195,76 @@ describe('watchers', () => {
     expect(() => testBoard({ watch: { Triage: { tail: '', run } } })).toThrow('watch: ids use lowercase')
   })
 })
+
+describe('the in-process client', () => {
+  it('writes as `vboard:client:<name>`, and wakes watchers', async () => {
+    const report = recorder('firehose --label state=done')
+    const app = testBoard({ watch: { report: report.watcher } })
+    const julian = caller(app.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
+
+    const hook = app.client('v0-hook')
+    await hook.label(root.id, { set: { state: 'done' } })
+    const reply = await hook.reply(root.id, 'fixed in #31')
+
+    expect(reply.by).toMatchObject({ actor: 'vboard:client:v0-hook' })
+    await vi.waitFor(() => expect(report.types()).toEqual(['labels.changed', 'message.posted']))
+  })
+
+  it('posts once per key and order, so a redelivered webhook does not post twice', async () => {
+    const app = testBoard()
+    const julian = caller(app.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
+
+    const first = await app.client('v0-hook', { key: 'delivery-1' }).reply(root.id, 'fixed in #31')
+    const again = await app.client('v0-hook', { key: 'delivery-1' }).reply(root.id, 'fixed in #31')
+    const other = await app.client('v0-hook', { key: 'delivery-2' }).reply(root.id, 'fixed in #31')
+    const unkeyed = [await app.client('v0-hook').reply(root.id, 'a'), await app.client('v0-hook').reply(root.id, 'a')]
+
+    expect(again.id).toBe(first.id)
+    expect(other.id).not.toBe(first.id)
+    expect(unkeyed[0]!.id).not.toBe(unkeyed[1]!.id)
+  })
+
+  it('rejects a name a watcher id would reject', () => {
+    expect(() => testBoard().client('V0 Hook')).toThrow('client: names use lowercase letters')
+  })
+})
+
+describe('watchers that run when a message enters the view', () => {
+  it('run once per entry, not on later events that still match', async () => {
+    const done = recorder('--label state=done')
+    const { fetch } = testBoard({ watch: { done: { ...done.watcher, when: 'enters' } } })
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
+    await julian('POST', `/messages/${root.id}/labels`, { set: { state: 'done' } })
+    await julian('POST', `/messages/${root.id}/labels`, { set: { state: 'done', pr: '31' } })
+    await julian('POST', '/messages', { re: root.id, text: 'thanks' })
+    await julian('POST', `/messages/${root.id}/labels`, { unset: ['state'] })
+    await julian('POST', `/messages/${root.id}/labels`, { set: { state: 'done' } })
+
+    await vi.waitFor(() => expect(done.types()).toEqual(['labels.changed', 'labels.changed']))
+    expect(done.events.map((event) => event.payload)).toMatchObject([
+      { set: { state: 'done' } },
+      { set: { state: 'done' } },
+    ])
+  })
+
+  it('run on a new thread that matches, but not on replies in a thread already in view', async () => {
+    const urgent = recorder('firehose --label urgent')
+    const { fetch } = testBoard({ watch: { urgent: { ...urgent.watcher, when: 'enters' } } })
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'down', labels: { urgent: 'yes' } })).body.message
+    await julian('POST', '/messages', { re: root.id, text: 'on it' })
+
+    await vi.waitFor(() => expect(urgent.events.map((event) => event.message?.text)).toEqual(['down']))
+  })
+
+  it('need a filter to enter', () => {
+    expect(() => testBoard({ watch: { all: { tail: '', when: 'enters', run: () => {} } } })).toThrow(
+      'watch all: `when: enters` needs a filter to enter',
+    )
+  })
+})

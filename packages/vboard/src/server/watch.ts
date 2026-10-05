@@ -4,19 +4,31 @@ import type { BoardEventView } from '../api/routes.ts'
 import { parseTail } from '../api/tail.ts'
 import type { BoardClient } from '../client/client.ts'
 import { watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, messagesReducer } from '../contract/reducers.ts'
+import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
-import type { Identity } from './writes.ts'
+import { deploymentIdentity, type Identity } from './writes.ts'
+
+/** What a watcher's `run` gets. */
+export type WatcherContext = {
+  /** Exactly what `vb tail --json` prints. */
+  event: BoardEventView
+  /** Writes as this watcher. */
+  board: BoardClient
+}
 
 /** A `vb tail` the board runs for you: every event the tail would print, handed to `run`. */
 export type Watcher = {
   /** A `vb tail` expression without `vb tail`: `firehose --label status=needs-agent`. */
   tail: string
-  /** `event` is exactly what `vb tail --json` prints. `board` writes as this watcher. */
-  run: (args: { event: BoardEventView; board: BoardClient }) => unknown
+  /**
+   * `matches` (the default) runs on every event the tail prints. `enters` runs only when a
+   * message enters the view: it didn't match before the event and does after it.
+   */
+  when?: 'matches' | 'enters'
+  run: (context: WatcherContext) => unknown
 }
 
-const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
+export const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 /** The events a tail shows: each concerns a message, and carries its thread for the lane. Receipts are hidden. */
 const WATCHED = [
@@ -30,14 +42,7 @@ const WATCHED = [
 ] as const
 
 /** A watcher writes as itself, and its own writes never wake it. */
-function identityOf(id: string): Identity {
-  const actor = `vboard:watch:${id}`
-  return {
-    principal: { id: actor, kind: 'deployment', handle: id, can: 'all', expiresAt: null },
-    author: { actor, principal: actor, profile: null, session: null },
-    actor: { id: actor, kind: 'deployment', handle: id, name: id, avatar: null },
-  }
-}
+const identityOf = (id: string): Identity => deploymentIdentity(`vboard:watch:${id}`, id)
 
 /**
  * Watchers: a board-contract handler matches each event against every
@@ -58,7 +63,9 @@ export function createWatchers(options: {
       throw new Error(`watch ${id}: ${(error as Error).message}`)
     }
     if (filters.mentions === 'me') throw new Error(`watch ${id}: a watcher has no "me": use --mentions @handle`)
-    return { id, filters, criteria: hasCriteria(filters), identity: identityOf(id), run: watcher.run }
+    const criteria = hasCriteria(filters)
+    if (watcher.when === 'enters' && !criteria) throw new Error(`watch ${id}: \`when: enters\` needs a filter to enter`)
+    return { id, filters, criteria, enters: watcher.when === 'enters', identity: identityOf(id), run: watcher.run }
   })
   const byId = new Map(watchers.map((watcher) => [watcher.id, watcher]))
 
@@ -97,7 +104,8 @@ export function createWatchers(options: {
     for (const watcher of watchers) {
       if (by === watcher.identity.actor.id) continue
       const match = compileFilter(watcher.filters, { me: null, actors, messages })
-      if (!(watcher.criteria ? match(before) || match(after) : id !== null)) continue
+      if (watcher.enters ? !entered(match, before, after, messages) : !(watcher.criteria ? match(before) || match(after) : id !== null))
+        continue
       view ??= eventView(event, after, actors)
       await server.session(watchSession(watcher.id)).append({
         type: 'watch.matched',
@@ -105,6 +113,18 @@ export function createWatchers(options: {
         payload: { thread: (event.payload as { thread: string }).thread, event: view },
       })
     }
+  }
+
+  /** Didn't match before and does now; a new reply only counts if its thread wasn't already in view. */
+  function entered(
+    match: (message: Message | undefined) => boolean,
+    before: Message | undefined,
+    after: Message | undefined,
+    messages: MessagesState,
+  ) {
+    if (match(before) || !match(after)) return false
+    const root = before === undefined && after!.re !== null ? messages.byId[after!.re] : undefined
+    return !match(root)
   }
 
   const lane = ({ event }: { event: { payload: unknown } }) => `thread:${(event.payload as { thread: string }).thread}`
