@@ -1564,6 +1564,12 @@ export const { GET, POST, scheduler } = board({
   are authored by the watcher, `vboard:watch:<id>`, with IDs derived from the
   match, so a retried `run` doesn't post twice if it writes in the same order.
   They sync like any other write.
+- **`when: 'enters'` runs only when a message comes into view:** an existing
+  message changes from not matching to matching (a label is set, a text is
+  edited), or a new message matches and its thread wasn't already in view. So
+  `{ tail: '--label state=done', when: 'enters' }` runs once each time a thread
+  is marked done, not on its replies or on later label changes that keep it done.
+  It needs a filter to enter.
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.
 - **Ids** are lowercase letters, numbers, `-` and `_`. A bad id or expression
