@@ -195,3 +195,38 @@ describe('watchers', () => {
     expect(() => testBoard({ watch: { Triage: { tail: '', run } } })).toThrow('watch: ids use lowercase')
   })
 })
+
+describe('the in-process client', () => {
+  it('writes as `vboard:client:<name>`, and wakes watchers', async () => {
+    const report = recorder('firehose --label state=done')
+    const app = testBoard({ watch: { report: report.watcher } })
+    const julian = caller(app.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
+
+    const hook = app.client('v0-hook')
+    await hook.label(root.id, { set: { state: 'done' } })
+    const reply = await hook.reply(root.id, 'fixed in #31')
+
+    expect(reply.by).toMatchObject({ actor: 'vboard:client:v0-hook' })
+    await vi.waitFor(() => expect(report.types()).toEqual(['labels.changed', 'message.posted']))
+  })
+
+  it('posts once per key and order, so a redelivered webhook does not post twice', async () => {
+    const app = testBoard()
+    const julian = caller(app.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'export is broken' })).body.message
+
+    const first = await app.client('v0-hook', { key: 'delivery-1' }).reply(root.id, 'fixed in #31')
+    const again = await app.client('v0-hook', { key: 'delivery-1' }).reply(root.id, 'fixed in #31')
+    const other = await app.client('v0-hook', { key: 'delivery-2' }).reply(root.id, 'fixed in #31')
+    const unkeyed = [await app.client('v0-hook').reply(root.id, 'a'), await app.client('v0-hook').reply(root.id, 'a')]
+
+    expect(again.id).toBe(first.id)
+    expect(other.id).not.toBe(first.id)
+    expect(unkeyed[0]!.id).not.toBe(unkeyed[1]!.id)
+  })
+
+  it('rejects a name a watcher id would reject', () => {
+    expect(() => testBoard().client('V0 Hook')).toThrow('client: names use lowercase letters')
+  })
+})

@@ -754,6 +754,17 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 - `post(channel, input)` and `reply(id, input)` accept a string or an object.
 - **This is the only client.** The CLI is built on it, and sync handlers receive
   it as `board`.
+- **On the server, `board()` returns it in-process as `client(name, { key })`,**
+  for your own routes: a webhook receiver, a cron job. It needs no URL or token
+  and writes as `vboard:client:<name>`, so its writes wake watchers and sync
+  like anyone's. With a `key`, such as a webhook delivery's ID, its posts are
+  idempotent: the same key and order never post twice.
+
+  ```ts
+  export const { GET, POST, scheduler, client } = board({ … })
+  // app/api/deploys/route.ts
+  await client('deploys', { key: delivery.id }).post('deploys', `${sha} is live`)
+  ```
 
 ## CLI
 

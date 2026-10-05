@@ -6,7 +6,7 @@ import type { BoardClient } from '../client/client.ts'
 import { watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, messagesReducer } from '../contract/reducers.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
-import type { Identity } from './writes.ts'
+import { deploymentIdentity, type Identity } from './writes.ts'
 
 /** A `vb tail` the board runs for you: every event the tail would print, handed to `run`. */
 export type Watcher = {
@@ -16,7 +16,7 @@ export type Watcher = {
   run: (args: { event: BoardEventView; board: BoardClient }) => unknown
 }
 
-const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
+export const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 /** The events a tail shows: each concerns a message, and carries its thread for the lane. Receipts are hidden. */
 const WATCHED = [
@@ -30,14 +30,7 @@ const WATCHED = [
 ] as const
 
 /** A watcher writes as itself, and its own writes never wake it. */
-function identityOf(id: string): Identity {
-  const actor = `vboard:watch:${id}`
-  return {
-    principal: { id: actor, kind: 'deployment', handle: id, can: 'all', expiresAt: null },
-    author: { actor, principal: actor, profile: null, session: null },
-    actor: { id: actor, kind: 'deployment', handle: id, name: id, avatar: null },
-  }
-}
+const identityOf = (id: string): Identity => deploymentIdentity(`vboard:watch:${id}`, id)
 
 /**
  * Watchers: a board-contract handler matches each event against every

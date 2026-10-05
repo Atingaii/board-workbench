@@ -37,7 +37,7 @@ import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type Blob
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId } from './identity.ts'
-import { createWatchers, type Watcher } from './watch.ts'
+import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
   writeAttach,
   writeDelete,
@@ -45,6 +45,7 @@ import {
   writeLabels,
   writePost,
   writeReaction,
+  deploymentIdentity,
   type Identity,
   type WriteContext,
 } from './writes.ts'
@@ -245,8 +246,8 @@ export function board(options: BoardOptions = {}) {
     if (!allows(principal, capability)) throw forbidden(`this source may not ${capability}`)
   }
 
-  /** A client for inbound functions: in-process, writing as `identity`, idempotent per trigger. */
-  function clientAs(identity: Identity, trigger: string): BoardClient {
+  /** A client for inbound functions: in-process, writing as `identity`, its posts idempotent per trigger. */
+  function clientAs(identity: Identity, trigger: string | null): BoardClient {
     let writesMade = 0
     return createBoardClient({
       // Under the configured mount, so `route()` accepts the paths it builds.
@@ -254,7 +255,7 @@ export function board(options: BoardOptions = {}) {
       token: 'in-process',
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
         let request = new Request(input, init)
-        if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/messages')) {
+        if (trigger !== null && request.method === 'POST' && new URL(request.url).pathname.endsWith('/messages')) {
           const body = ((await request.json()) ?? {}) as Record<string, unknown>
           body.id ??= await idempotentId('vboard-inbound', trigger, 'client', String(writesMade++))
           request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
@@ -469,6 +470,16 @@ export function board(options: BoardOptions = {}) {
       : async () => toErrorResponse(notFound('this board has no scheduler')),
     /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
     servers,
+    /**
+     * An in-process client for your own server code, writing as `vboard:client:<name>`. With a
+     * `key` (a webhook delivery's ID, say), its posts are idempotent: the same key and order
+     * never post twice. Its writes wake watchers and sync like any other.
+     */
+    client(name: string, clientOptions: { key?: string } = {}): BoardClient {
+      if (!ID.test(name)) throw new Error(`client: names use lowercase letters, numbers, - and _, got: ${name}`)
+      const key = clientOptions.key === undefined ? null : `client:${name}:${clientOptions.key}`
+      return clientAs(deploymentIdentity(`vboard:client:${name}`, name), key)
+    },
     /** For tests and tools. */
     engine,
     session,
