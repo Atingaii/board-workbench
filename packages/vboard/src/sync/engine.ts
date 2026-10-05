@@ -17,6 +17,7 @@ import {
   isThreadTarget,
   messagesReducer,
   syncReducer,
+  type Actor,
   type ActorsState,
   type ExternalCopy,
   type Message,
@@ -36,6 +37,7 @@ import {
   type Identity,
   type WriteContext,
 } from '../server/writes.ts'
+import { replaceMentions } from '../contract/mentions.ts'
 import { externalAuthor, type SyncPlatform } from './types.ts'
 
 export type BoardBinding = {
@@ -153,6 +155,16 @@ export function createSyncEngine(options: {
     })
     resolved.set(key, entry)
     return entry.map
+  }
+
+  /** The first synced platform's user with this email, as a board actor. */
+  async function findByEmail(email: string): Promise<Actor | null> {
+    for (const platform of Object.values(entries)) {
+      const author = await platform.findByEmail?.(email).catch(() => null)
+      if (author)
+        return { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar }
+    }
+    return null
   }
 
   async function configTargets(channel: string): Promise<string[]> {
@@ -508,8 +520,23 @@ export function createSyncEngine(options: {
     return chat
   }
 
+  /**
+   * A message's text for a platform: each mention it resolved reads natively where the
+   * actor is the platform's own, and as their plain name anywhere else.
+   */
+  function textFor(platform: SyncPlatform, message: Message, actors: ActorsState): string {
+    const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
+    return replaceMentions(message.text, (token) => {
+      const actor =
+        token.kind === 'actor'
+          ? mentioned.find((candidate) => candidate.id === token.actor)
+          : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
+      return actor ? (platform.mention?.(actor) ?? actor.name) : null
+    })
+  }
+
   /** A board message as markdown for a platform, which converts it to its own format. */
-  function render(message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
+  function render(platform: SyncPlatform, message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
@@ -517,7 +544,7 @@ export function createSyncEngine(options: {
     const quoted = quote
       ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${quote.text.slice(0, 140).replace(/\n/g, ' ')}\n\n`
       : ''
-    return { markdown: `${quoted}**${name}**: ${message.text}` }
+    return { markdown: `${quoted}**${name}**: ${textFor(platform, message, actors)}` }
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
@@ -529,7 +556,7 @@ export function createSyncEngine(options: {
    * that takes no uploads, or one that refused them (`noted`).
    */
   const renderFor = (key: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
-    const { markdown } = render(message, actors, quote)
+    const { markdown } = render(platformOf(key), message, actors, quote)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadFiles || !options.blob)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown }
   }
@@ -801,6 +828,7 @@ export function createSyncEngine(options: {
     },
     configTargets,
     normalizeTarget,
+    findByEmail,
     handleWebhook,
     readInbox,
     typing,

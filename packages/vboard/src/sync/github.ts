@@ -203,6 +203,7 @@ export function github(options: {
     createChat: () => createChat(options.adapter),
     canStartThreads: false,
     mappings,
+    mention: (actor) => (actor.id.startsWith('github:user:') ? `@${actor.handle}` : null),
     resolveChannel: (key) => Promise.resolve(key),
     // Inline review threads (`owner/repo:12:rc:345`) belong to their PR (`owner/repo:12`).
     groupThread: (thread) => thread.replace(/:rc:[^:]+$/, ''),

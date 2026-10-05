@@ -1,7 +1,7 @@
-import { createClient } from "vboard/client";
 import { v0 } from "v0";
 import { generateText, Output } from "ai";
 import { z } from "zod";
+import { client } from "@/app/api/board/[[...path]]/route";
 
 // v0 calls this when a reply in a chat the board started finishes (a chat-scoped
 // webhook, registered in v0.ts). v0 doesn't sign deliveries, so the body is only a
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true });
   }
 
-  const board = createClient({ url: `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}/api/board` });
+  const board = client("v0-hook", { key: messageId });
   const [report] = (await board.messages({ channel: "feedback", label: { v0: chatId } })).messages;
   if (!report || report.labels.v0state === "done") return Response.json({ ok: true });
 
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
   if (output.state === "working") return Response.json({ ok: true });
   const pr = output.pr && /^https:\/\/github\.com\/vercel\/v0\/pull\/\d+$/.test(output.pr) ? output.pr : null;
   await board.label(report.id, {
-    set: { v0state: "done", summary: output.summary.slice(0, 300), ...(pr ? { pr } : {}), ...(output.owner ? { owner: output.owner } : {}) },
+    set: { v0state: "done", summary: output.summary.slice(0, 300), ...(pr ? { pr } : {}), ...(output.owner?.includes("@") ? { owner: output.owner } : {}) },
   });
   return Response.json({ ok: true });
 }

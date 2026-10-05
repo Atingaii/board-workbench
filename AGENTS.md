@@ -88,9 +88,10 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
   channels are private, so they're mapped by ID.
 - `triage` acks each new thread in `#feedback-v0-vboard`, decides with an LLM
   whether it's worth fixing, and if so starts a v0 chat and announces it in
-  `#feedback-v0-prs`. `report` replies in that announcement's thread once
-  `/api/v0-hook` has read v0's finished reply (with an LLM) and labelled the
-  report with the PR, a summary, and the likely owner.
+  `#feedback-v0-prs`. `/api/v0-hook` reads v0's finished reply (with an LLM)
+  and labels the report, writing through the board's in-process `client`; the
+  `report` watcher (`when: 'enters'`) then replies once in the announcement's
+  thread with the PR, a summary, and the likely owner, mentioned by email.
 - Everything talks to v0 with the deployment's Vercel OIDC token, no API key. The
   project is git-linked to `vercel/v0`, so each chat works on its own
   `v0/vboard-<chatId>` branch and `credentialAccess.github` lets its `gh` open
@@ -100,7 +101,8 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
   Build Step is `exit 0`: deploy with `vercel deploy --prod` from the repo root.
 - Production is behind Vercel Authentication. The CLI and v0's webhook get
   through with the automation bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`), and
-  `/api/v0-hook` also checks `V0_HOOK_KEY`.
+  `/api/v0-hook` also checks `V0_HOOK_KEY`. Tagging the owner in Slack needs the
+  Connect Slack app's `users:read.email` scope; without it the email shows as text.
 
 ## the inspector (`vb inspect`, `src/inspect/`)
 

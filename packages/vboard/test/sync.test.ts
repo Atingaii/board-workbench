@@ -888,6 +888,46 @@ describe('sync', () => {
     expect(posted.message.id).toBeGreaterThan(0)
   })
 
+  it('posts mentions natively: a Slack user as <@id>, anyone else as their name, code as written', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await julian('POST', '/messages', { channel: 'prs', text: 'hi' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C2:500', id: '500', text: 'hello', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(2))
+
+    await julian('POST', '/messages', { channel: 'firehose', text: '@[slack:user:U_ADA] and @julian, see \`@julian\`' })
+    await vi.waitFor(() => expect(s.channelPosts.some((p) => p.channelId === 'slack:C1')).toBe(true))
+    expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(
+      JSON.stringify({ markdown: '**julian**: <@U_ADA> and julian, see \`@julian\`' }),
+    )
+  })
+
+  it('turns @[email] into the Slack user with that email, and leaves an unknown one as text', async () => {
+    const lookupByEmail = vi.fn(async ({ email }: { email: string }) => {
+      if (email !== 'ada@vercel.com') throw new Error('users_not_found')
+      return { user: { id: 'U_ADA', name: 'ada', profile: { display_name: 'ada', real_name: 'Ada Lovelace' } } }
+    })
+    const conversations = { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }
+    const { board, s } = setup({ slackClient: { conversations, users: { info: async () => ({}), lookupByEmail } } })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    const { body } = await julian('POST', '/messages', {
+      channel: 'firehose',
+      text: 'owner: @[ada@vercel.com], cc @[nobody@vercel.com]',
+    })
+
+    expect(body.message).toMatchObject({
+      text: 'owner: @[slack:user:U_ADA], cc nobody@vercel.com',
+      mentions: ['slack:user:U_ADA'],
+    })
+    const actors = (await julian('GET', '/actors')).body.actors as { id: string; name: string }[]
+    expect(actors.find((actor) => actor.id === 'slack:user:U_ADA')).toMatchObject({ name: 'Ada Lovelace' })
+    await vi.waitFor(() => expect(s.channelPosts.some((p) => p.channelId === 'slack:C1')).toBe(true))
+    expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(
+      JSON.stringify({ markdown: '**julian**: owner: <@U_ADA>, cc nobody@vercel.com' }),
+    )
+  })
+
   it('attaches an existing thread to a new target and backfills it', async () => {
     const { board, s } = setup()
     const julian = caller(board.fetch, await personToken())
