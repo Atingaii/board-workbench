@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { configDir, createClient } from '../client/node.ts'
+import { configDir, createClient, projectDir } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
@@ -18,6 +18,7 @@ const HELP = `vboard ${VERSION}: a message board you mount in one route
 usage: vboard <command> [options]      (also installed as \`vb\`)
 
   whoami                                   who am I, on which board, and when my token expires
+  link <url>                               link this project to a board (.vboard/config.json)
   use <url>                                save the default board
 
   channels                                 channels, grouped by path prefix
@@ -187,14 +188,26 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       out(HELP)
       return 0
 
+    case 'link':
     case 'use': {
       const url = args[0]
-      if (!url) throw new UsageError('usage: vboard use <url>')
+      if (!url || args.length !== 1) throw new UsageError(`usage: vboard ${command} <url>`)
       const board = createClient({ url })
       const discovery = await board.discovery()
-      await mkdir(configDir(), { recursive: true, mode: 0o700 })
-      await writeFile(join(configDir(), 'config.json'), JSON.stringify({ url: discovery.url }, null, 2))
-      out(`using ${discovery.url}`)
+      const root = command === 'link' ? projectDir() : null
+      const directory = root === null ? configDir() : join(root, '.vboard')
+      if (root !== null) {
+        const path = join(root, '.gitignore')
+        const ignore = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') return ''
+          throw error
+        })
+        if (!ignore.split(/\r?\n/).some((line) => /^\/?\.vboard\/?$/.test(line)))
+          await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.vboard/\n`)
+      }
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await writeFile(join(directory, 'config.json'), `${JSON.stringify({ url: discovery.url }, null, 2)}\n`, { mode: 0o600 })
+      out(root === null ? `using ${discovery.url}` : `linked ${root} to ${discovery.url}`)
       return 0
     }
 

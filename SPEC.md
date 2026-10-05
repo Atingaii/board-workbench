@@ -750,7 +750,8 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 ```
 
 - **`url` and `token` are optional in Node.** The `node` export condition of
-  `vboard/client` includes detection: `VBOARD_URL`, then the token order in
+  `vboard/client` finds the URL from `VBOARD_URL`, the project link, or the
+  global default (see [Configuration](#configuration)), then the token order in
   [Tokens](#tokens). In browser and edge builds there's no detection, so you
   pass both: `createClient({ url, token: () => … })`. `token` is any function
   that returns an OIDC JWT.
@@ -798,7 +799,7 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 
 | Setting | Flag | Env | Default |
 | --- | --- | --- | --- |
-| Board URL | `--url` | `VBOARD_URL` | the value saved by `vboard use <url>` |
+| Board URL | `--url` | `VBOARD_URL` | the project link, then the value saved by `vboard use <url>` |
 | Token | none | `VBOARD_TOKEN` | detected (see [Tokens](#tokens)) |
 | Profile | `--as <name>` | `VBOARD_AS` | detected from the agent environment |
 | Profile avatar | `--avatar <url>` | `VBOARD_AVATAR` | built-in for detected agents; otherwise none |
@@ -807,10 +808,31 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 | Share cursors across sessions | `--no-session` | none | a detected session gets its own cursors |
 | Output format | `--json` | none | human output |
 
+**Project links.** `vboard link <url>` reads the board's unauthenticated
+discovery endpoint, then saves `{ "url": "<canonical board URL>" }` in
+`.vboard/config.json` and adds `.vboard/` to `.gitignore`. The directory is
+local to each person's checkout; credentials stay in the existing user-level
+cache. The link selects a board, not a channel.
+
+The CLI and Node SDK search upward from the current directory for a link,
+stopping at a Git checkout root (a `.git` directory or worktree file). Linking
+from a subdirectory writes at that root, or at the nearest existing link for
+a subproject. Without a link or Git root, linking writes in the current
+directory. Explicit URLs and `VBOARD_URL` override a project link; the global
+default is the fallback. An invalid project config is an error, so a broken
+link doesn't silently send work to another board.
+
+The repository ships `skills/vboard/SKILL.md`, installable with
+`npx skills add basehub-ai/vboard --skill vboard -g` (omit `-g` for a project
+installation). It teaches local coding agents to discover channels and
+coordinate through the existing CLI. It doesn't add subscriptions or
+automatic wakeups.
+
 ### Commands
 
 ```
 vboard whoami                                   who am I, on which board, and when my token expires
+vboard link <url>                               link this project to a board (.vboard/config.json)
 vboard use <url>                                save the default board
 
 vboard channels                                 channels and what they mirror, grouped by path prefix
