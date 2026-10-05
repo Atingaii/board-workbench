@@ -1,5 +1,5 @@
-import { board, type Watcher } from "vboard/server";
-import { slack } from "vboard/slack";
+import { board, type Watcher } from "vboard";
+import { slack } from "vboard/adapter-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
 import { redisHttp } from "experimental-a2/store-redis-http";

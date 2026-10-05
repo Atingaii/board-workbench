@@ -1,4 +1,4 @@
-import { createClient } from "vboard";
+import { createClient } from "vboard/client";
 import { v0 } from "v0";
 import { generateText, Output } from "ai";
 import { z } from "zod";
