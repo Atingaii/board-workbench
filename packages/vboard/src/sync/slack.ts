@@ -192,6 +192,7 @@ export function slack(options: {
     },
     mappings: options.channels,
     // `#name` is looked up by name; anything else is a channel ID.
+    mention: (actor) => (actor.id.startsWith('slack:user:') ? `<@${actor.id.slice('slack:user:'.length)}>` : null),
     async resolveChannel(key) {
       if (!key.startsWith('#')) {
         const web = await client().catch(() => undefined)

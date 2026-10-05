@@ -1,6 +1,7 @@
 import type { Adapter, Author as ChatAuthor, Chat, FileUpload, Message as ChatMessage } from 'chat'
 import type { BoardClient } from '../client/client.ts'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
+import type { Actor } from '../contract/reducers.ts'
 
 /** A lifecycle event read from a raw platform webhook, with its dedupe key. */
 export type InterceptedEvent = { event: ExternalEvent; raw: unknown; dedupe: string }
@@ -52,6 +53,8 @@ export type SyncPlatform = {
   fetchRoot?(thread: string): Promise<{ text: string; labels: Record<string, string>; author: ExternalAuthor }>
   /** Short context for a message, e.g. the file and line of a review comment. */
   context(message: ChatMessage): string | null
+  /** How a mentioned actor reads on this platform, when it's one of its own: `<@U0456>` in Slack. */
+  mention?(actor: Actor): string | null
   /** A message's text as markdown, the board's format. */
   markdown(message: ChatMessage): string
   /** Its author's avatar, when the platform can tell. Best effort: null otherwise. */
