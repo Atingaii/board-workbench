@@ -30,6 +30,10 @@ const env = process.env.VERCEL_ENV;
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
+const slackCredentials = connectSlackAdapter("slack/factory");
+const slackAdapter = createSlackAdapter(slackCredentials);
+const slackToken = slackCredentials.botToken;
+
 export const { GET, POST, scheduler } = board({
   store: env
     ? redisHttp({
@@ -45,9 +49,12 @@ export const { GET, POST, scheduler } = board({
   scheduler: vercelQueues({ topic: "vboard" }),
   sync: {
     slack: slack({
-      adapter: createSlackAdapter({
-        ...connectSlackAdapter("slack/factory"),
-      }),
+      adapter: slackAdapter,
+      client: async () =>
+        slackAdapter.withBotToken(
+          typeof slackToken === "function" ? await slackToken() : slackToken,
+          () => slackAdapter.webClient,
+        ),
       channels: {
         "#sf-prs": "prs",
         // #sf-firehose is private, and the app can't look up private channels by name.

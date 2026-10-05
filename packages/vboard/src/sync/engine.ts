@@ -36,7 +36,10 @@ import {
   type Identity,
   type WriteContext,
 } from '../server/writes.ts'
-import { externalAuthor, type SyncPlatform } from './types.ts'
+import { type SyncPlatform } from './types.ts'
+import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
+import type { ProviderMapping, ResolvedTarget, SyncClient, SyncContext } from './provider.ts'
+import { ChannelPath } from '../contract/schemas.ts'
 
 export type BoardBinding = {
   session: BoardSession
@@ -113,19 +116,19 @@ export function createSyncEngine(options: {
   /** `slack:C0123:1727.1` (Chat SDK) → `${key}:C0123:1727.1` (board). */
   const toExternal = (key: string, chatId: string) => {
     const id = chatId.slice(chatId.indexOf(':') + 1)
-    return `${key}:${platformOf(key).fromChatId?.(id) ?? id}`
+    return `${key}:${platformOf(key).transport.fromChatId?.(id) ?? id}`
   }
   /** The reverse: board external ID → Chat SDK ID. */
   const toChat = (external: string) => {
     const key = keyOf(external)
     const platform = platformOf(key)
     const id = external.slice(key.length + 1)
-    return `${platform.adapter.name}:${platform.toChatId?.(id) ?? id}`
+    return `${platform.adapter.name}:${platform.transport.toChatId?.(id) ?? id}`
   }
 
   // --- mappings ---------------------------------------------------------------
 
-  type Mapping = string | ((args: never) => unknown)
+  type Mapping = ProviderMapping
   /** How long a key that didn't resolve (say, a Slack channel that doesn't exist yet) waits before another try. */
   const RETRY_MS = 60_000
   const resolved = new Map<string, { map: Promise<Map<string, Mapping>>; complete: boolean; at: number }>()
@@ -155,29 +158,26 @@ export function createSyncEngine(options: {
     return entry.map
   }
 
-  async function configTargets(channel: string): Promise<string[]> {
-    const targets: string[] = []
+  async function configTargets(channel: string): Promise<ResolvedTarget[]> {
+    const targets: ResolvedTarget[] = []
     for (const [key, platform] of Object.entries(entries)) {
       if (!platform.canStartThreads) continue
-      for (const [external, target] of await mappings(key)) if (target === channel) targets.push(external)
+      for (const [external, target] of await mappings(key)) if (target.channel === channel) targets.push({ target: external, channel: external, kind: 'channel' })
     }
     return targets
   }
 
-  async function normalizeTarget(target: string): Promise<string> {
+  async function normalizeTarget(target: string): Promise<ResolvedTarget> {
     const at = target.indexOf(':')
     if (at <= 0) throw badRequest(`sync targets look like <key>:<channel or thread>, got: ${target}`)
     const key = target.slice(0, at)
-    const platform = entries[key]
-    if (!platform) throw badRequest(`no sync entry named ${key}`)
-    const rest = target.slice(at + 1)
-    if (rest.startsWith('#'))
-      try {
-        return `${key}:${await platform.resolveChannel(rest)}`
-      } catch (error) {
-        throw badRequest(`can't sync to ${target}: ${(error as Error).message}`)
-      }
-    return target
+    const platform = platformOf(key)
+    try {
+      const resolved = await platform.resolveTarget(target.slice(at + 1))
+      return { target: `${key}:${resolved.target}`, channel: `${key}:${resolved.channel}`, kind: resolved.kind }
+    } catch (error) {
+      throw badRequest(`can't sync to ${target}: ${(error as Error).message}`)
+    }
   }
 
   // --- inbound: platform → inbox --------------------------------------------------
@@ -200,8 +200,8 @@ export function createSyncEngine(options: {
     const precise = toExternal(key, chatThread)
     const platformThread = precise.slice(key.length + 1)
     const grouped = `${key}:${platform.groupThread(platformThread)}`
-    const channel = platform.channelOf
-      ? `${key}:${platform.channelOf(platformThread)}`
+    const channel = platform.transport.channelOf
+      ? `${key}:${platform.transport.channelOf(platformThread)}`
       : toExternal(key, platform.adapter.channelIdFromThreadId(chatThread))
     return { channel, thread: grouped, subthread: grouped === precise ? null : precise, platformThread }
   }
@@ -209,8 +209,8 @@ export function createSyncEngine(options: {
   for (const [key, platform] of Object.entries(entries)) {
     const chat = platform.createChat()
     const authorOf = async (message: ChatMessage) => {
-      const author = externalAuthor(platform.platform, message.author)
-      const avatar = await platform.avatar?.(message).catch(() => null)
+      const author = platform.author(message.author, message.raw)
+      const avatar = await platform.transport.avatar?.(message).catch(() => null)
       return avatar ? { ...author, avatar } : author
     }
     const onMessage = async (_thread: unknown, message: ChatMessage) => {
@@ -274,7 +274,7 @@ export function createSyncEngine(options: {
           message: event.messageId,
           emoji: emojiName(event.emoji?.name ?? event.rawEmoji),
           added: event.added,
-          author: externalAuthor(platform.platform, event.user),
+          author: platform.author(event.user, event.raw),
         },
         event.raw,
         `reaction:${where.subthread ?? where.thread}|${event.messageId}|${event.rawEmoji}|${event.user.userId}|${event.added}|${stamp}`,
@@ -288,7 +288,7 @@ export function createSyncEngine(options: {
     const platform = entries[key]
     const chat = chats.get(key)
     if (!platform || !chat) throw notFound(`no sync entry named ${key}`)
-    const body = platform.intercept ? await request.clone().text() : null
+    const body = platform.transport.intercept ? await request.clone().text() : null
     const tasks: Promise<unknown>[] = []
     const webhooks = chat.webhooks as Record<string, (r: Request, o: { waitUntil: (t: Promise<unknown>) => void }) => Promise<Response>>
     const response = await webhooks[platform.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
@@ -298,8 +298,8 @@ export function createSyncEngine(options: {
       console.error('[vboard] intake failed', (failed as PromiseRejectedResult).reason)
       return new Response('intake failed', { status: 500 })
     }
-    if (response.ok && platform.intercept && body !== null) {
-      for (const draft of platform.intercept(key, request.headers, body))
+    if (response.ok && platform.transport.intercept && body !== null) {
+      for (const draft of platform.transport.intercept(key, request.headers, body))
         await intake(key, draft.event, draft.raw, draft.dedupe)
     }
     return response
@@ -368,112 +368,167 @@ export function createSyncEngine(options: {
   }
 
   async function inbound(trigger: InboxEvent, attempt = 1) {
-    const { writes, session, clientAs } = bound()
+    const { session, clientAs } = bound()
     const { sync: key, event, raw } = trigger.payload
     const platform = platformOf(key)
-    const target = (await mappings(key)).get(event.channel)
+    const mapping = (await mappings(key)).get(event.channel)
+    const { state: sync } = await session.state(syncReducer)
+    if (event.kind === 'message') {
+      const copied = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
+      if (copied !== undefined) {
+        const { state: messages } = await session.state(messagesReducer)
+        const origin = messages.byId[copied]?.origin
+        if (!origin || origin.message !== event.message || (origin.subthread ?? origin.thread) !== (event.subthread ?? event.thread)) return
+      }
+    }
+    const linked = sync.byExternalThread[event.thread]
+    const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
+    const board = clientAs(externalIdentity(author), trigger.id)
+    let applied: Promise<SyncResult> | undefined
+    let active = true
+    const context: SyncContext = {
+      key, event, raw, board,
+      apply(channel, overrides = {}) {
+        if (!active) throw badRequest('the sync callback has finished')
+        if (applied) throw badRequest('an event can only be imported once per callback')
+        applied = applyIncoming(trigger, attempt, ChannelPath.parse(channel), SyncOverrides.parse(overrides))
+        return applied
+      },
+      client<E extends ProviderEvent>(publicEvent: E) {
+        function sync(id: number, target: string): ReturnType<BoardClient['sync']>
+        function sync(channel: string, event: E, overrides?: SyncOverrides): Promise<SyncResult>
+        async function sync(first: string | number, second: string | E, overrides?: SyncOverrides) {
+          if (!active) throw badRequest('the sync callback has finished')
+          if (typeof first === 'number' && typeof second === 'string') return board.sync(first, second)
+          if (typeof first !== 'string' || second !== publicEvent) throw badRequest('sync only accepts the current verified event')
+          return platform.sync(context, first, publicEvent, overrides)
+        }
+        return { ...board, sync }
+      },
+    }
+    try {
+      if (mapping?.run && (mapping.mode === 'all' || (!linked && (event.kind === 'message' || event.kind === 'lifecycle')))) {
+        await mapping.run(context)
+        return
+      }
+      const channel = mapping?.channel ?? (linked ? sync.threads[linked]?.channel : undefined)
+      if (channel) await platform.sync(context, channel, immutable(platform.event(context)))
+    } finally {
+      active = false
+    }
+  }
+
+  async function applyIncoming(trigger: InboxEvent, attempt: number, channel: string, overrides: SyncOverrides): Promise<SyncResult> {
+    const { writes, session } = bound()
+    const { sync: key, event } = trigger.payload
+    const platform = platformOf(key)
     const { state: sync } = await session.state(syncReducer)
     const threadKey = sync.byExternalThread[event.thread]
     const rootId = threadKey ? sync.threads[threadKey]?.root : undefined
     const writeId = (n: number) => idempotentId('vboard-inbound', trigger.id, String(n))
+    const result = (message: { id: number; re: number | null }): SyncResult => ({ root: message.re ?? message.id, message: message.id })
+    const labels = (defaults: Record<string, string> = {}) => {
+      const merged = { ...defaults, ...overrides.labels }
+      for (const key of overrides.unset ?? []) delete merged[key]
+      return merged
+    }
+    const rootDraft = (draft: SyncRoot) => {
+      if (!overrides.root) return draft
+      const patch = overrides.root(immutable(structuredClone(draft)))
+      if (patch && typeof patch === 'object' && 'then' in patch) throw badRequest('root overrides must be synchronous')
+      const checked = SyncOverrides.pick({ text: true, labels: true }).parse(patch)
+      return { ...draft, text: checked.text ?? draft.text, labels: { ...draft.labels, ...checked.labels } }
+    }
+    const setExtraLabels = async (identity: Identity, id: number) => {
+      if (!overrides.labels && !overrides.unset) return
+      const { state: messages } = await session.state(messagesReducer)
+      const root = messages.byId[id]
+      const set = Object.fromEntries(Object.entries(overrides.labels ?? {}).filter(([key, value]) => root?.labels[key] !== value))
+      const unset = (overrides.unset ?? []).filter((key) => root?.labels[key] !== undefined)
+      if (Object.keys(set).length || unset.length) await writeLabels(writes, { identity, id, set, unset })
+    }
 
     switch (event.kind) {
       case 'message': {
+        const existing = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
+        if (existing !== undefined) return { root: rootId ?? existing, message: existing }
         const identity = externalIdentity(event.author)
-        // Files only come over for a post: an inbound function gets the platform's event as is.
-        const posting = rootId !== undefined || typeof target === 'string'
-        const { attachments, notes } = posting && event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
-        const text = withNotes(event.text, notes)
+        const { attachments, notes } = event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
         const base = {
           identity,
-          text: clampText(text, attachments.length > 0),
+          text: clampText(withNotes(overrides.text ?? event.text, notes), attachments.length > 0),
           ...(attachments.length ? { attachments } : {}),
-          origin: { thread: event.thread, subthread: event.subthread, message: event.message, context: event.context },
+          origin: { channel: event.channel, thread: event.thread, subthread: event.subthread, message: event.message, context: event.context },
           from: key,
           lenientMentions: true,
           id: await writeId(0),
         }
-        if (rootId !== undefined) return void (await writePost(writes, { ...base, re: rootId }))
-        if (typeof target === 'string') {
-          if (!platform.fetchRoot) return void (await writePost(writes, { ...base, channel: target }))
-          const fetched = await platform.fetchRoot(event.thread.slice(key.length + 1))
-          const root = await writePost(writes, {
-            identity: externalIdentity(fetched.author),
-            channel: target,
-            text: clampText(fetched.text),
-            labels: fetched.labels,
-            origin: { thread: event.thread, subthread: null, message: `root:${trigger.id}`, context: null },
-            from: key,
-            lenientMentions: true,
-            id: await writeId(1),
-          })
-          return void (await writePost(writes, { ...base, re: root.id }))
+        if (rootId !== undefined) {
+          await setExtraLabels(identity, rootId)
+          return result(await writePost(writes, { ...base, re: rootId }))
         }
-        if (typeof target === 'function')
-          await (target as (args: unknown) => unknown)(platform.handlerArgs(event, raw, clientAs(identity, trigger.id)))
-        return
+        if (!platform.transport.fetchRoot) {
+          const draft = rootDraft({ text: event.text, labels: {}, author: event.author, raw: trigger.payload.raw })
+          return result(await writePost(writes, { ...base, channel, text: clampText(withNotes(overrides.text ?? draft.text, notes), attachments.length > 0), labels: labels(draft.labels) }))
+        }
+        const fetched = await platform.transport.fetchRoot(event.thread.slice(key.length + 1))
+        const draft = rootDraft({ ...fetched, raw: fetched.raw ?? null })
+        const root = await writePost(writes, {
+          identity: externalIdentity(fetched.author), channel,
+          text: clampText(draft.text), labels: labels(draft.labels),
+          origin: { channel: event.channel, thread: event.thread, subthread: null, message: `root:${trigger.id}`, context: null },
+          from: key, lenientMentions: true, id: await writeId(1),
+        })
+        return result(await writePost(writes, { ...base, re: root.id }))
       }
       case 'edited':
       case 'deleted':
       case 'reaction': {
         const id = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
-        if (id === undefined) return
-        if (event.kind === 'deleted') {
-          const system = externalIdentity({ id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null })
-          return void (await writeDelete(writes, { identity: system, id, from: key, asAuthor: false }))
-        }
-        const identity = externalIdentity(event.author)
-        if (event.kind === 'edited') {
-          // The platform's text never had the file notes, and a message with files may have none.
+        if (id === undefined) return { root: rootId ?? null, message: null }
+        const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
+        const identity = externalIdentity(author)
+        if (rootId !== undefined) await setExtraLabels(identity, rootId)
+        if (event.kind === 'deleted') await writeDelete(writes, { identity, id, from: key, asAuthor: false })
+        else if (event.kind === 'edited') {
           const { state: messages } = await session.state(messagesReducer)
           const stored = messages.byId[id]
-          const text = clampText(withNotes(event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
-          if (stored && stored.text === text) return
-          return void (await writeEdit(writes, { identity, id, text, from: key, asAuthor: false }))
+          const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
+          if (stored && stored.text !== text) await writeEdit(writes, { identity, id, text, from: key, asAuthor: false })
+        } else {
+          if (platform.singleReaction) {
+            const { state: messages } = await session.state(messagesReducer)
+            const emoji = canonicalEmoji(event.emoji)
+            for (const [held, actors] of Object.entries(messages.byId[id]?.reactions ?? {}))
+              if (actors.includes(identity.actor.id) && !(event.added && held === emoji))
+                await writeReaction(writes, { identity, id, emoji: held, remove: true, from: key })
+          }
+          if (!platform.singleReaction || event.added) await writeReaction(writes, { identity, id, emoji: event.emoji, remove: !event.added, from: key })
         }
-        if (platform.singleReaction) {
-          const { state: messages } = await session.state(messagesReducer)
-          const emoji = canonicalEmoji(event.emoji)
-          for (const [held, actors] of Object.entries(messages.byId[id]?.reactions ?? {}))
-            if (actors.includes(identity.actor.id) && !(event.added && held === emoji))
-              await writeReaction(writes, { identity, id, emoji: held, remove: true, from: key })
-          if (!event.added) return
-        }
-        return void (await writeReaction(writes, { identity, id, emoji: event.emoji, remove: !event.added, from: key }))
+        return { root: rootId ?? null, message: id }
       }
       case 'lifecycle': {
         const identity = externalIdentity(event.author)
         if (rootId !== undefined) {
-          // Only what changes: GitHub follows an issue opened with labels by a `labeled` for each.
           const { state: messages } = await session.state(messagesReducer)
           const root = messages.byId[rootId]
+          const desired = labels(event.labels)
           const owned = (key: string) => event.owns?.some((prefix) => key.startsWith(prefix)) ?? false
-          const set = Object.fromEntries(Object.entries(event.labels).filter(([key, value]) => root?.labels[key] !== value))
-          const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in event.labels) && (event.unset.includes(key) || owned(key)))
-          if (root && !root.deleted && (Object.keys(set).length > 0 || unset.length > 0))
-            await writeLabels(writes, { identity, id: rootId, set, unset })
-          if (event.reply)
-            await writePost(writes, { identity, re: rootId, text: clampText(event.reply), from: key, lenientMentions: true, id: await writeId(1) })
-          return
+          const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
+          const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
+          if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, id: rootId, set, unset })
+          if (event.reply) return result(await writePost(writes, { identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, id: await writeId(1) }))
+          return { root: rootId, message: null }
         }
-        if (typeof target === 'string' && event.createRoot) {
-          const root = await writePost(writes, {
-            identity,
-            channel: target,
-            text: clampText(event.url ? `${event.title}\n${event.url}` : event.title),
-            labels: event.labels,
-            origin: { thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
-            from: key,
-            lenientMentions: true,
-            id: await writeId(0),
-          })
-          if (event.reply)
-            await writePost(writes, { identity, re: root.id, text: clampText(event.reply), from: key, lenientMentions: true, id: await writeId(1) })
-          return
-        }
-        if (typeof target === 'function')
-          await (target as (args: unknown) => unknown)(platform.handlerArgs(event, raw, clientAs(identity, trigger.id)))
-        return
+        if (!event.createRoot) return { root: null, message: null }
+        const draft = rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw })
+        const root = await writePost(writes, {
+          identity, channel, text: clampText(overrides.text ?? draft.text), labels: labels(draft.labels),
+          origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
+          from: key, lenientMentions: true, id: await writeId(0),
+        })
+        if (event.reply) await writePost(writes, { identity, re: root.id, text: clampText(event.reply), from: key, lenientMentions: true, id: await writeId(1) })
+        return result(root)
       }
     }
   }
@@ -509,7 +564,7 @@ export function createSyncEngine(options: {
   }
 
   /** A board message as markdown for a platform, which converts it to its own format. */
-  function render(message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
+  function render(key: string, target: string, message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
@@ -517,7 +572,9 @@ export function createSyncEngine(options: {
     const quoted = quote
       ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${quote.text.slice(0, 140).replace(/\n/g, ' ')}\n\n`
       : ''
-    return { markdown: `${quoted}**${name}**: ${message.text}` }
+    const body = platformOf(key).render(immutable({ message: structuredClone(message), author: actor ? { ...actor } : null, label: name, target }))
+    if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
+    return { markdown: `${quoted}${body}` }
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
@@ -528,9 +585,10 @@ export function createSyncEngine(options: {
    * `render`, with a line per file where the files won't follow: on a platform
    * that takes no uploads, or one that refused them (`noted`).
    */
-  const renderFor = (key: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
-    const { markdown } = render(message, actors, quote)
-    const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadFiles || !options.blob)
+  const renderFor = (target: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
+    const key = keyOf(target)
+    const { markdown } = render(key, target, message, actors, quote)
+    const lines = message.attachments.length > 0 && (noted || !platformOf(key).transport.uploadFiles || !options.blob)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown }
   }
 
@@ -558,13 +616,34 @@ export function createSyncEngine(options: {
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
     const chat = await chatFor(keyOf(target))
-    const sent = await chat.thread(toChat(place)).post(renderFor(keyOf(target), message, state.actors, inSubthread ? undefined : replyTo))
-    const external = { thread: place, message: sent.id }
-    await ctx.session.append(`receipt:${message.id}:${target}`, {
-      type: 'message.synced',
-      payload: { id: message.id, thread: message.thread, target, external },
-    })
+    let body = renderFor(target, message, state.actors, inSubthread ? undefined : replyTo)
+    let files: string[] | null | undefined
+    let sentId: string
+    if (!body.markdown.trim() && message.attachments.length && options.blob && platformOf(keyOf(target)).transport.uploadFiles) {
+      try {
+        const sent = await uploadMessageFiles(message, target, place)
+        sentId = sent.message
+        files = sent.files
+      } catch (error) {
+        if (!platformOf(keyOf(target)).transport.refusesFiles?.(error)) throw error
+        body = renderFor(target, message, state.actors, inSubthread ? undefined : replyTo, true)
+        sentId = (await chat.thread(toChat(place)).post(body)).id
+        files = null
+      }
+    } else {
+      if (!body.markdown.trim()) throw badRequest('a renderer must return text unless the message has media')
+      sentId = (await chat.thread(toChat(place)).post(body)).id
+    }
+    const external = { thread: place, message: sentId, ...(files !== undefined ? { files } : {}) }
+    await recordDelivery(ctx, message, target, external)
     return external
+  }
+
+  async function recordDelivery(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy) {
+    await ctx.session.append(`delivery:${message.id}:${target}`,
+      { type: 'message.synced' as const, id: `receipt:${message.id}:${target}`, payload: { id: message.id, thread: message.thread, target, external: { thread: copy.thread, message: copy.message } } },
+      ...(copy.files !== undefined ? [{ type: 'message.files_synced' as const, id: `files:${message.id}:${target}`, payload: { id: message.id, thread: message.thread, target, files: copy.files } }] : []),
+    )
   }
 
   /**
@@ -572,23 +651,30 @@ export function createSyncEngine(options: {
    * receipt comes first, so a retry sends only what's missing. If the platform
    * refuses files, the text gets a line for each; any other failure retries.
    */
+  async function messageFiles(message: Message) {
+    return Promise.all(message.attachments.map(async (a) => ({
+      data: Buffer.from(await readAttachmentData(options.blob!, a.id)), filename: a.name, mimeType: a.type,
+    })))
+  }
+
+  async function uploadMessageFiles(message: Message, target: string, thread: string) {
+    return platformOf(keyOf(target)).transport.uploadFiles!(toChat(thread), await messageFiles(message))
+  }
+
   async function deliverFiles(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy, actors: ActorsState) {
     const platform = platformOf(keyOf(target))
     const blob = options.blob
-    if (!platform.uploadFiles || !blob || message.attachments.length === 0 || copy.files !== undefined) return
-    const files = await Promise.all(
-      message.attachments.map(async (a) => ({ data: Buffer.from(await readAttachmentData(blob, a.id)), filename: a.name, mimeType: a.type })),
-    )
+    if (!platform.transport.uploadFiles || !blob || message.attachments.length === 0 || copy.files !== undefined) return
     let ids: string[] | null
     try {
-      ids = await platform.uploadFiles(toChat(copy.thread), files)
+      ids = (await uploadMessageFiles(message, target, copy.thread)).files
     } catch (error) {
       // Retried, and if it gives up, `message.sync_failed` says it was the files: the text is there.
-      if (!platform.refusesFiles?.(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
+      if (!platform.transport.refusesFiles?.(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
       const adapter = (await chatFor(keyOf(target))).getAdapter(platform.adapter.name)
-      await adapter.editMessage(toChat(copy.thread), copy.message, renderFor(keyOf(target), message, actors, undefined, true)).catch((edit: unknown) =>
+      await adapter.editMessage(toChat(copy.thread), copy.message, renderFor(target, message, actors, undefined, true)).catch((edit: unknown) =>
         console.warn(`[vboard] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
@@ -629,7 +715,7 @@ export function createSyncEngine(options: {
 
   async function deliverThread(ctx: Ctx<'thread.synced'>) {
     const { thread, target } = ctx.event.payload
-    if (isThreadTarget(target)) return // joining: only messages written after the join are delivered
+    if ((ctx.event.payload.kind ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'thread') return // joining: only messages written after the join are delivered
     const state = await latest(ctx)
     const synced = state.sync.threads[thread]
     const root = synced ? state.messages.byId[synced.root] : undefined
@@ -638,13 +724,27 @@ export function createSyncEngine(options: {
     if (!externalThread) {
       try {
         const chat = await chatFor(keyOf(target))
-        const sent = await chat.channel(toChat(target)).post(renderFor(keyOf(target), root, state.actors))
+        const body = renderFor(target, root, state.actors)
+        const mediaOnly = !body.markdown.trim() && root.attachments.length > 0 && options.blob && platformOf(keyOf(target)).transport.uploadFiles
+        if (!body.markdown.trim() && !mediaOnly) throw badRequest('a renderer must return text unless the message has media')
+        let uploaded: string[] | null | undefined
+        const post = async () => {
+          if (!mediaOnly) return chat.channel(toChat(target)).post(body)
+          const files = await messageFiles(root)
+          try {
+            const sent = await chat.channel(toChat(target)).post({ ...body, files })
+            uploaded = platformOf(keyOf(target)).transport.fileIds?.(sent.raw) ?? []
+            return sent
+          } catch (error) {
+            if (!platformOf(keyOf(target)).transport.refusesFiles?.(error)) throw error
+            uploaded = null
+            return chat.channel(toChat(target)).post(renderFor(target, root, state.actors, undefined, true))
+          }
+        }
+        const sent = await post()
         externalThread = toExternal(keyOf(target), sent.threadId)
-        const external = { thread: externalThread, message: sent.id }
-        await ctx.session.append(`receipt:${root.id}:${target}`, {
-          type: 'message.synced',
-          payload: { id: root.id, thread, target, external },
-        })
+        const external = { thread: externalThread, message: sent.id, ...(uploaded !== undefined ? { files: uploaded } : {}) }
+        await recordDelivery(ctx, root, target, external)
         await deliverFiles(ctx, root, target, external, state.actors)
       } catch (error) {
         return settle(ctx, thread, [{ id: root.id, target, error }])
@@ -712,11 +812,11 @@ export function createSyncEngine(options: {
         const adapter = (await chatFor(keyOf(target))).getAdapter(platformOf(keyOf(target)).adapter.name)
         const chatThread = toChat(copy.thread)
         if (event.type === 'message.edited' && message)
-          await adapter.editMessage(chatThread, copy.message, renderFor(keyOf(target), message, state.actors, undefined, copy.files === null))
+          await adapter.editMessage(chatThread, copy.message, renderFor(target, message, state.actors, undefined, copy.files === null))
         else if (event.type === 'message.deleted') {
           await adapter.deleteMessage(chatThread, copy.message)
           // The files went as a message of their own.
-          if (copy.files?.length) await platformOf(keyOf(target)).deleteFiles?.(copy.files)
+          if (copy.files?.length) await platformOf(keyOf(target)).transport.deleteFiles?.(copy.files)
         }
         else if (event.type === 'reaction.added') await adapter.addReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
         else if (event.type === 'reaction.removed') await adapter.removeReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
@@ -745,14 +845,14 @@ export function createSyncEngine(options: {
           const platform = platformOf(key)
           const chat = await chatFor(key)
           const chatThread = toChat(external)
-          if (platform.startTyping) {
+          if (platform.transport.startTyping) {
             // The newest message that came from there, for platforms that mark it read (WhatsApp).
             let latest: string | null = null
             for (let i = ids.length - 1; i >= 0 && latest === null; i--) {
               const origin = messages.byId[ids[i]!]
               if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
             }
-            await platform.startTyping(chatThread, latest)
+            await platform.transport.startTyping(chatThread, latest)
           } else await chat.getAdapter(platform.adapter.name).startTyping(chatThread)
           return external
         } catch (error) {
@@ -778,7 +878,12 @@ export function createSyncEngine(options: {
 
   async function readInbox(key: string, channel: string | undefined, limit: number) {
     platformOf(key)
-    const channels = channel ? [await normalizeTarget(`${key}:${channel}`)] : [...(await mappings(key)).keys()]
+    let channels: string[]
+    try {
+      channels = channel ? [`${key}:${await platformOf(key).resolveChannel(channel)}`] : [...(await mappings(key)).keys()]
+    } catch (error) {
+      throw badRequest(`can't resolve inbox channel: ${(error as Error).message}`)
+    }
     const events = (
       await Promise.all(channels.map((c) => inboxServer.session(inboxSession(c)).history()))
     ).flat()

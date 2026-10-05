@@ -12,7 +12,7 @@ const NUMBER = '16315558151'
 const JANE = '15551234567'
 
 /** The real Kapso adapter, sending through a fake WhatsApp client that records what it sends. */
-function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'support' }, store?: ReturnType<typeof memory>) {
+function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'support' }, store?: ReturnType<typeof memory>, render?: import('../src/sync/kapso.ts').KapsoOptions['render']) {
   const reads: { phoneNumberId: string; messageId: string; typingIndicator?: { type: string } }[] = []
   const texts: { phoneNumberId: string; to: string; body: string }[] = []
   const reactions: { phoneNumberId: string; to: string; reaction: { messageId: string; emoji?: string } }[] = []
@@ -47,7 +47,7 @@ function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'su
     },
   }
   const adapter = createKapsoAdapter({ client: client as never, webhookSecret: SECRET, phoneNumberId: NUMBER })
-  const board = testBoard({ sync: { kapso: kapso({ adapter, numbers }) }, ...(store ? { store } : {}) })
+  const board = testBoard({ sync: { kapso: kapso({ adapter, numbers, render, markRead: (input) => client.messages.markRead(input) }) }, ...(store ? { store } : {}) })
 
   let next = 0
   /** A `whatsapp.message.received` delivery, signed as Kapso signs it. */
@@ -80,6 +80,30 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
   (await call('GET', `/messages?channel=${channel}`)).body.messages as Read[]
 
 describe('kapso sync', () => {
+
+  it('omits attribution without losing media-only replies or their receipts', async () => {
+    const { board, text, texts, images, uploads } = setup(undefined, undefined, ({ message }) => message.text)
+    const token = await personToken()
+    const call = caller(board.fetch, token)
+    await text('wamid.1', 'hello')
+    await vi.waitFor(async () => expect(await read(call, 'support')).toHaveLength(1))
+    const [root] = await read(call, 'support')
+    await call('POST', '/messages', { re: root!.id, text: 'plain reply' })
+    await vi.waitFor(() => expect(texts).toEqual([{ phoneNumberId: NUMBER, to: JANE, body: 'plain reply' }]))
+    const upload = await board.fetch(new Request(`${BOARD_URL}/attachments`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-board-filename': 'proof.png' }, body: PNG,
+    }))
+    const attachment = (await upload.json()).attachment
+    const posted = await call('POST', '/messages', { re: root!.id, text: '', attachments: [attachment.id] })
+    await vi.waitFor(() => expect(images).toHaveLength(1))
+    await vi.waitFor(async () => {
+      const events = (await call('GET', '/events?after=0&all=true')).body.events
+      expect(events.find((event: { type: string; payload: { id: number } }) => event.type === 'message.synced' && event.payload.id === posted.body.message.id)?.payload.external.message).toBe('wamid.img1')
+      expect(events.find((event: { type: string; payload: { id: number } }) => event.type === 'message.files_synced' && event.payload.id === posted.body.message.id)?.payload.files).toEqual(['wamid.img1'])
+    })
+    expect(texts).toHaveLength(1)
+    expect(uploads).toHaveLength(1)
+  })
   it('mirrors a WhatsApp conversation into the board, and board replies back to the contact', async () => {
     const { board, texts, text } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

@@ -50,7 +50,11 @@
       "types": "./dist/contract.d.mts",
       "default": "./dist/contract.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./sync": {
+      "types": "./dist/sync.d.mts",
+      "default": "./dist/sync.mjs"
+    }
   },
   "scripts": {
     "build": "tsdown",

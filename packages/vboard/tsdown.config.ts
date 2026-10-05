@@ -11,6 +11,7 @@ export default defineConfig([
       'adapter-kapso': 'src/sync/kapso.ts',
       'adapter-vercel-blob': 'src/blob/vercel.ts',
       contract: 'src/contract/index.ts',
+      sync: 'src/sync/index.ts',
       cli: 'src/cli/main.ts',
     },
     format: 'esm',

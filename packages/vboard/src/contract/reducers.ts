@@ -208,6 +208,7 @@ export type ExternalCopy = { thread: string; message: string; files?: string[] |
 export type SyncedThread = {
   root: number
   channel: string
+  kinds?: Record<string, 'channel' | 'thread'>
   /** External channels (start a thread there) and threads (joined), in sync order. */
   targets: string[]
   /** Target → the external thread it resolved to. A thread target resolves to itself. */
@@ -245,6 +246,7 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
       const thread = state.threads[payload.thread]
       if (thread && payload.re === null) {
         addTarget(thread, origin.thread)
+        ;(thread.kinds ??= {})[origin.thread] = 'thread'
         thread.external[origin.thread] = origin.thread
         state.byExternalThread[origin.thread] = payload.thread
       }
@@ -257,7 +259,8 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
       const thread = state.threads[event.payload.thread]
       if (!thread) return state
       addTarget(thread, event.payload.target)
-      if (isThreadTarget(event.payload.target)) {
+      if (event.payload.kind) (thread.kinds ??= {})[event.payload.target] = event.payload.kind
+      if ((event.payload.kind ?? (isThreadTarget(event.payload.target) ? 'thread' : 'channel')) === 'thread') {
         thread.external[event.payload.target] = event.payload.target
         state.byExternalThread[event.payload.target] = event.payload.thread
       }
@@ -273,7 +276,7 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
       ;(state.copies[id] ??= {})[target] = { ...external }
       state.byExternalMessage[externalMessageKey(external.thread, external.message)] = id
       const thread = state.threads[event.payload.thread]
-      if (thread && thread.root === id && !isThreadTarget(target)) {
+      if (thread && thread.root === id && (thread.kinds?.[target] ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'channel') {
         thread.external[target] = external.thread
         state.byExternalThread[external.thread] = event.payload.thread
       }

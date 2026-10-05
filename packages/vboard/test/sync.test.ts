@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { getEmoji, type Adapter, type Attachment, type AdapterPostableMessage, type ChatInstance, type WebhookOptions } from 'chat'
 import { createMockAdapter, createTestMessage } from '@chat-adapter/tests'
 import { slack } from '../src/sync/slack.ts'
+import { SyncProvider, type SyncContext, type EventMapping } from '../src/sync/provider.ts'
+import { envelope, eventSchema } from '../src/sync/events.ts'
+import { z } from 'zod'
 import { github } from '../src/sync/github.ts'
 import type { BoardOptions } from '../src/server/index.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
@@ -21,11 +24,12 @@ type WebhookPayload =
       /** Files on the message; their bytes are what `served` holds at each `url`. */
       files?: { name: string; mimeType: string; url: string; size?: number }[]
     }
+  | { type: 'delete'; threadId: string; id: string }
   | { type: 'edit'; threadId: string; id: string; text: string; user: string }
   | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
 
 /** A platform adapter driven by test payloads, recording everything posted to it. */
-function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => void = () => {}) {
+function fakePlatform(name: string, extend: (adapter: Adapter) => void = () => {}) {
   let chat!: ChatInstance
   let next = 0
   const posts: { threadId: string; text: string; id: string }[] = []
@@ -48,7 +52,9 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     handleWebhook: async (request: Request, options?: WebhookOptions) => {
       if (request.headers.get('x-github-event')) return new Response('ok')
       const body = (await request.json()) as WebhookPayload
-      if (body.type === 'edit')
+      if (body.type === 'delete')
+        await chat.processMessageDeleted({ adapter, threadId: body.threadId, channelId: adapter.channelIdFromThreadId(body.threadId), messageId: body.id, raw: {} }, options)
+      else if (body.type === 'edit')
         await chat.processMessageUpdated(
           { adapter, threadId: body.threadId, message: createTestMessage(body.id, body.text, { threadId: body.threadId, author: author(body.user) }) },
           options,
@@ -113,7 +119,8 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     postChannelMessage: async (channelId: string, message: AdapterPostableMessage) => {
       const id = `t${++next}`
       channelPosts.push({ channelId, text: textOf(message), id })
-      return { id, threadId: `${channelId}:${id}`, raw: {} }
+      const files = typeof message === 'object' && 'files' in message ? message.files ?? [] : []
+      return { id, threadId: `${channelId}:${id}`, raw: files.length ? { uploadedFileIds: files.map((file) => `F_${file.filename}`) } : {} }
     },
     // Like Slack's: rebuilds the download from what the attachment kept.
     rehydrateAttachment: (attachment: Attachment) => ({
@@ -140,6 +147,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
   extend(adapter)
   return { adapter, posts, channelPosts, reactions, edits, deletes, typing, served, fetches }
 }
+
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
 
@@ -186,6 +194,7 @@ function setup(
     sync: {
       slack: slack({
         adapter: s.adapter,
+        ...(options.slackClient ? { client: async () => options.slackClient as import('../src/sync/slack.ts').SlackClient } : {}),
         channels: { C1: 'firehose', C2: 'prs', ...(options.alerts ? { C3: options.alerts } : {}), ...options.channels },
       }),
       github: github({ adapter: g.adapter, repos: options.repos ?? { 'basehub-ai/vboard': 'prs' } }),
@@ -1016,5 +1025,209 @@ describe('sync', () => {
     const { body } = await julian('GET', '/inbox/slack')
     expect(body.events).toHaveLength(1)
     expect(body.events[0]).toMatchObject({ channel: 'slack:C1', sync: 'slack', event: { kind: 'message', text: 'hello' } })
+  })
+})
+
+describe('provider callbacks', () => {
+
+  it('resumes a failed callback after import without treating the retry as an echo', async () => {
+    const s = fakePlatform('slack')
+    let attempts = 0
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const board = testBoard({ sync: { slack: slack({
+        adapter: s.adapter, handlerMode: 'all',
+        channels: { C1: async ({ event, board }) => {
+          const imported = await board.sync('support', event)
+          await board.reply(imported.root!, 'ack')
+          if (++attempts === 1) throw new Error('interrupted after import')
+        } },
+      }) } })
+      const call = caller(board.fetch, await personToken())
+      await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U1' }) }))
+      await vi.waitFor(() => expect(attempts).toBe(1))
+      await vi.waitFor(async () => {
+        await board.servers[1]!.drain('inbox:slack:C1')
+        expect(attempts).toBe(2)
+      })
+      expect((await read(call, 'support')).map((m) => m.text)).toEqual(['hello', 'ack'])
+      await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    } finally {
+      error.mockRestore()
+    }
+  })
+  it('imports every Slack event through the verified sync client, retaining files and authorship', async () => {
+    const s = fakePlatform('slack')
+    const seen: string[] = []
+    const board = testBoard({ sync: { work: slack({
+      adapter: s.adapter, handlerMode: 'all',
+      channels: { C1: async ({ event, board }) => {
+        seen.push(event.type)
+        expect(event.platform).toBe('slack')
+        expect(event.key).toBe('work')
+        expect(Object.isFrozen(event)).toBe(true)
+        if (event.kind === 'message') expect(event.files?.[0]?.name).toBe('proof.png')
+        await board.sync('support', event, { labels: { area: 'support' }, text: 'text' in event ? `custom: ${event.text}` : undefined })
+      } },
+    }) } })
+    const call = caller(board.fetch, await personToken())
+    const receive = (payload: WebhookPayload) => board.fetch(new Request(`${BOARD_URL}/webhooks/work`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    }))
+    s.served.set('https://files.test/proof', new Uint8Array([1, 2, 3]))
+    const root = { type: 'message' as const, threadId: 'slack:C1:100', id: '100', user: 'U1', text: 'hello', files: [{ name: 'proof.png', mimeType: 'image/png', url: 'https://files.test/proof', size: 3 }] }
+    await receive(root)
+    await receive(root)
+    await vi.waitFor(async () => expect(await read(call, 'support')).toHaveLength(1))
+    const [imported] = await read(call, 'support')
+    expect(imported).toMatchObject({ text: 'custom: hello', labels: { area: 'support' }, by: { actor: 'slack:user:U1' } })
+    const view = await call('GET', `/messages/${imported!.id}`)
+    expect(view.body.message.attachments).toHaveLength(1)
+    await receive({ ...root, id: '101', files: root.files, text: 'reply' })
+    await vi.waitFor(async () => expect(await read(call, 'support')).toHaveLength(2))
+    await receive({ type: 'edit', threadId: root.threadId, id: '101', text: 'edited', user: 'U1' })
+    await vi.waitFor(async () => expect((await read(call, 'support'))[1]?.text).toBe('custom: edited'))
+    await receive({ type: 'reaction', threadId: root.threadId, messageId: '100', emoji: 'eyes', added: true, user: 'U2' })
+    await vi.waitFor(async () => expect((await read(call, 'support'))[0]?.reactions).toEqual({ eyes: ['slack:user:U2'] }))
+    await receive({ type: 'delete', threadId: root.threadId, id: '101' })
+    await vi.waitFor(() => expect(seen).toEqual(['message', 'message', 'message.edited', 'reaction.added', 'message.deleted']))
+    const reply = (await read(call, 'support'))[1]!
+    await vi.waitFor(async () => expect((await call('GET', `/messages/${reply.id}`)).body.replies.find((message: { id: number }) => message.id === reply.id).deleted).toBe(true))
+  })
+
+  it('rejects forged envelopes and calls after the callback, and skips an event without disconnecting', async () => {
+    const s = fakePlatform('slack')
+    let saved!: () => Promise<unknown>
+    const board = testBoard({ sync: { slack: slack({
+      adapter: s.adapter, handlerMode: 'all',
+      channels: { C1: async ({ event, board }) => {
+        await expect(board.sync('support', { ...event })).rejects.toThrow('current verified event')
+        saved = () => board.sync('support', event)
+        if (event.kind === 'message' && event.text === 'skip') return
+        await board.sync('support', event)
+        await expect(board.sync('support', event)).rejects.toThrow('only be imported once')
+      } },
+    }) } })
+    const call = caller(board.fetch, await personToken())
+    const send = (id: string, text: string) => board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id, text, user: 'U1' }) }))
+    await send('100', 'first')
+    await vi.waitFor(async () => expect(await read(call, 'support')).toHaveLength(1))
+    await expect(saved()).rejects.toThrow('callback has finished')
+    await send('101', 'skip')
+    await send('102', 'last')
+    await vi.waitFor(async () => expect((await read(call, 'support')).map((m) => m.text)).toEqual(['first', 'last']))
+    await call('POST', '/messages', { re: (await read(call, 'support'))[0]!.id, text: 'outgoing' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.posts[0]!.threadId).toBe('slack:C1:100')
+  })
+
+  it('keeps automatic reverse routing with a static channel and an all-event callback', async () => {
+    const s = fakePlatform('slack')
+    const run = vi.fn(async ({ event, board }: Parameters<import('../src/sync/provider.ts').SyncHandler<import('../src/sync/slack.ts').SlackEvent>>[0]) => {
+      await board.sync('support', event)
+    })
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, handlerMode: 'all', channels: { C1: { channel: 'support', run } } }) } })
+    const call = caller(board.fetch, await personToken())
+    const posted = await call('POST', '/messages', { channel: 'support', text: 'new board thread' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    const id = s.channelPosts[0]!.id
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: `slack:C1:${id}`, id, text: 'new board thread', user: 'B_BOARD' }) }))
+    expect(run).not.toHaveBeenCalled()
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: `slack:C1:${id}`, id: 'response', text: 'hello', user: 'U1' }) }))
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce())
+    await vi.waitFor(async () => expect((await read(call, 'support'))[1]?.re).toBe(posted.body.message.id))
+  })
+
+  it.each([true, false])('customizes a GitHub root consistently (opening first: %s) and identifies comment subjects', async (openingFirst) => {
+    const g = fakePlatform('github')
+    const item = { number: 70, title: 'Title', html_url: 'https://github.com/basehub-ai/vboard/pull/70', body: 'Description', draft: true, state: 'open', user: { id: 42, login: 'ada' } }
+    const get = vi.fn(async () => ({ data: item }))
+    Object.assign(g.adapter, { octokit: { rest: { pulls: { get } } } })
+    const seen: { type: string; subject: string }[] = []
+    const board = testBoard({ sync: { git: github({
+      adapter: g.adapter, handlerMode: 'all',
+      repos: { 'basehub-ai/vboard': async ({ event, board }) => {
+        seen.push({ type: event.type, subject: event.subject.type })
+        await board.sync(event.subject.type === 'pull_request' ? 'prs' : 'issues', event, {
+          labels: { area: 'vboard' },
+          root: ({ raw }) => {
+            const pr = (raw as { pull_request: typeof item }).pull_request
+            return { text: `${pr.title}\n\n${pr.body}`, labels: { kind: 'code' } }
+          },
+        })
+      } },
+    }) } })
+    const call = caller(board.fetch, await personToken())
+    const opened = () => board.fetch(new Request(`${BOARD_URL}/webhooks/git`, {
+      method: 'POST', headers: { 'x-github-event': 'pull_request', 'x-github-delivery': 'opened-70' },
+      body: JSON.stringify({ action: 'opened', repository: { full_name: 'basehub-ai/vboard' }, sender: item.user, pull_request: item }),
+    }))
+    const comment = () => board.fetch(new Request(`${BOARD_URL}/webhooks/git`, {
+      method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'github:basehub-ai/vboard:70:rc:12', id: 'c1', text: 'comment', user: '43', raw: { path: 'src/main.ts', line: 4 } }),
+    }))
+    if (openingFirst) { await opened(); await comment() } else { await comment(); await opened() }
+    await vi.waitFor(async () => expect(await read(call, 'prs')).toHaveLength(2))
+    const [root, reply] = await read(call, 'prs')
+    expect(root).toMatchObject({ text: 'Title\n\nDescription', labels: { state: 'draft', area: 'vboard', kind: 'code' } })
+    expect(reply?.re).toBe(root!.id)
+    expect(get).toHaveBeenCalledTimes(openingFirst ? 0 : 1)
+    expect(seen).toEqual(openingFirst ? [{ type: 'pr.opened', subject: 'pull_request' }, { type: 'comment', subject: 'pull_request' }] : [{ type: 'comment', subject: 'pull_request' }, { type: 'pr.opened', subject: 'pull_request' }])
+  })
+
+  it('does not fetch or import a skipped unknown GitHub conversation', async () => {
+    const g = fakePlatform('github')
+    const get = vi.fn()
+    Object.assign(g.adapter, { octokit: { rest: { pulls: { get } } } })
+    const seen = vi.fn()
+    const board = testBoard({ sync: { github: github({ adapter: g.adapter, handlerMode: 'all', repos: { 'basehub-ai/vboard': seen } }) } })
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/github`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'github:basehub-ai/vboard:99', id: 'c1', text: 'skip', user: '1' }) }))
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledOnce())
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('lets a fourth provider resolve opaque IDs without changing the core, preserving media fallback', async () => {
+    const nativeChannel = 'https://provider.test/team:inbox'
+    const Schema = eventSchema('opaque', 'message')
+    type OpaqueEvent = z.infer<typeof Schema>
+    class OpaqueProvider extends SyncProvider<OpaqueEvent> {
+      constructor(adapter: Adapter, mapping: EventMapping<OpaqueEvent>) {
+        super({
+          platform: 'opaque', adapter, canStartThreads: true,
+          author: (author) => ({ id: `opaque:tenant:sample:user:${author.userId}`, handle: author.userId, name: author.fullName || author.userId, avatar: null, isBot: author.isBot === true }),
+          resolveChannel: async () => nativeChannel,
+          resolveTarget: async (target) => ({ target: target === 'inbox' ? nativeChannel : target, channel: nativeChannel, kind: target === 'inbox' || target === nativeChannel ? 'channel' : 'thread' }),
+          channelOf: () => nativeChannel,
+        })
+        this.map('inbox', mapping)
+      }
+      override event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): OpaqueEvent {
+        return Schema.parse(envelope(this.platform, context.key, context.event, context.raw))
+      }
+    }
+    const p = fakePlatform('opaque')
+    const receive = p.adapter.handleWebhook.bind(p.adapter)
+    p.adapter.handleWebhook = (request, options) => request.headers.get('x-native-signature') === 'valid' ? receive(request, options) : Promise.resolve(new Response('invalid signature', { status: 401 }))
+    const provider = new OpaqueProvider(p.adapter, { channel: 'tickets', run: async ({ event, board }) => {
+      await board.sync('tickets', event)
+    } })
+    const board = testBoard({ sync: { tickets: provider } })
+    const call = caller(board.fetch, await personToken())
+    const posted = await call('POST', '/messages', { channel: 'tickets', text: 'opaque root' })
+    await vi.waitFor(() => expect(p.channelPosts).toHaveLength(1))
+    const thread = `opaque:${nativeChannel}:${p.channelPosts[0]!.id}`
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/tickets`, { method: 'POST', headers: { 'x-native-signature': 'valid' }, body: JSON.stringify({ type: 'message', threadId: thread, id: 'response', text: 'native reply', user: '42' }) }))
+    await vi.waitFor(async () => expect((await read(call, 'tickets'))[1]?.re).toBe(posted.body.message.id))
+    expect((await read(call, 'tickets'))[1]?.by.actor).toBe('opaque:tenant:sample:user:42')
+    expect((await board.fetch(new Request(`${BOARD_URL}/webhooks/tickets`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: thread, id: 'forged', text: 'forged', user: '42' }) }))).status).toBe(401)
+    const uploaded = await board.fetch(new Request(`${BOARD_URL}/attachments`, { method: 'POST', headers: { authorization: `Bearer ${await personToken()}`, 'content-type': 'image/png', 'x-board-filename': 'proof.png' }, body: new Uint8Array([1, 2, 3]) }))
+    const attachment = (await uploaded.json()).attachment
+    await call('POST', '/messages', { re: posted.body.message.id, text: 'reply', attachments: [attachment.id] })
+    await vi.waitFor(() => expect(p.posts).toHaveLength(1))
+    expect(p.posts[0]!.threadId).toBe(thread)
+    expect(p.posts[0]!.text).toContain('proof.png')
+    const other = await call('POST', '/messages', { channel: 'other', text: 'attach by alias' })
+    expect((await call('POST', `/messages/${other.body.message.id}/sync`, { target: 'tickets:inbox' })).body.attached).toBe(true)
+    await vi.waitFor(() => expect(p.channelPosts).toHaveLength(2))
+    expect(provider.platform).toBe('opaque')
   })
 })
