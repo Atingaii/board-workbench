@@ -1369,7 +1369,7 @@ the rest of the GitHub App's webhooks:
 
 | Event | Mirror behavior |
 | --- | --- |
-| `pr.opened` | A root, labeled `pr=owner/repo#123` and `state=open`, joined to the PR thread. Drafts post when marked ready for review |
+| `pr.opened` | A root, labeled `pr=owner/repo#123` and `state=open` or `state=draft`, joined to the PR thread |
 | `pr.ready`, `pr.draft`, `pr.reopened` | Updates `state` (`open`, `draft`, `open`) |
 | `issue.opened` | A root, labeled `issue=owner/repo#45` and `state=open` |
 | `issue.closed`, `issue.reopened` | Updates `state` (`closed`, `open`) |
@@ -1422,8 +1422,12 @@ vb read issues --label tag.bug                     # issues labeled bug
 
 - **A function receives `{ event, board }`,** with `event` typed as the union
   above. Every event carries `thread`.
-- **A comment on a PR the board hasn't seen** creates the root from the PR's
-  title, fetched through the adapter's `.octokit`.
+- **A comment on a PR or issue the board hasn't seen** fetches it through the
+  adapter's `.octokit`, creates a root from its title and URL with its author,
+  state, labels, and assignees, then posts the comment as a reply. Known threads
+  and repo functions need no such fetch. A failed fetch retries the inbound event.
+- **Drafts are mirrored immediately.** Watchers can filter by `state=open` if
+  they only want ready PRs.
 - **Roots never flow into GitHub.** A new board thread in a channel that a repo
   maps to doesn't open an issue.
 - **Not synced:** resolving review conversations.

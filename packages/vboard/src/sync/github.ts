@@ -42,6 +42,21 @@ const author = (user: User | undefined): ExternalAuthor => ({
 
 type Label = { name?: string }
 type Item = { labels?: Label[]; assignees?: User[] }
+type GitHubItem = Item & {
+  number: number
+  title: string
+  html_url: string
+  user?: User
+  state: string
+  draft?: boolean
+  merged?: boolean
+}
+type GitHubClient = {
+  rest: {
+    pulls: { get(args: { owner: string; repo: string; pull_number: number }): Promise<{ data: GitHubItem }> }
+    issues: { get(args: { owner: string; repo: string; issue_number: number }): Promise<{ data: GitHubItem }> }
+  }
+}
 
 /** `good first issue` → `good-first-issue`: the part of a label key a name gives. Empty when nothing's left. */
 const slug = (name: string) =>
@@ -99,7 +114,7 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
         return {
           number: pr.number,
           user: sender ?? {},
-          lifecycle: { ...base, type: 'pr.opened', labels: { ...pr_label, state: pr.draft ? 'draft' : 'open' }, reply: null, createRoot: !pr.draft },
+          lifecycle: { ...base, type: 'pr.opened', labels: { ...pr_label, state: pr.draft ? 'draft' : 'open' }, reply: null, createRoot: true },
         }
       case 'ready_for_review':
         return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.ready', labels: { ...pr_label, state: 'open' }, reply: null, createRoot: true } }
@@ -193,6 +208,24 @@ export function github(options: {
     groupThread: (thread) => thread.replace(/:rc:[^:]+$/, ''),
     channelOf,
     isRoot: () => false,
+    async fetchRoot(thread) {
+      const match = /^([^/]+)\/([^:]+):(issue:)?(\d+)$/.exec(thread)
+      if (!match) throw new Error(`invalid GitHub thread: ${thread}`)
+      const [, owner, repo, issue, number] = match
+      const client = (options.adapter as Adapter & { octokit: GitHubClient }).octokit.rest
+      const { data } = issue
+        ? await client.issues.get({ owner: owner!, repo: repo!, issue_number: Number(number) })
+        : await client.pulls.get({ owner: owner!, repo: repo!, pull_number: Number(number) })
+      return {
+        text: `${issue ? 'Issue' : 'PR'} #${data.number}: ${data.title}\n${data.html_url}`,
+        author: author(data.user),
+        labels: {
+          ...tagsOf(data),
+          [issue ? 'issue' : 'pr']: `${owner}/${repo}#${data.number}`,
+          state: issue ? data.state : data.merged ? 'merged' : data.state === 'closed' ? 'closed' : data.draft ? 'draft' : 'open',
+        },
+      }
+    },
     // GitHub's own markdown, tables and all; Chat SDK's text flattens it.
     markdown(message: ChatMessage) {
       const raw = message.raw as { body?: unknown; comment?: { body?: unknown } } | null
