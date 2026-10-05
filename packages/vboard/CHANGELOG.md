@@ -1,5 +1,18 @@
 # vboard
 
+## 0.3.0
+
+### Minor Changes
+
+- 2b4fb22: Mention someone by email with `@[ada@vercel.com]`: the board looks them up on its synced platforms (Slack's `users.lookupByEmail`, which needs the `users:read.email` scope), stores the exact mention, and pings them natively. An email no platform knows stays plain text.
+- 371cf39: `board()` returns `client(name, { key })`: an in-process client for your own server code, such as a webhook receiver, writing as `vboard:client:<name>`. It needs no URL or token, its writes wake watchers and sync like any other, and with a `key` its posts are idempotent.
+- dfc4a34: Link a coding checkout to a shared board with `vb link <url>`. The Node SDK and CLI discover the gitignored `.vboard/config.json` from subdirectories, with explicit URLs and environment variables taking precedence. Add a collaboration skill installable through `npx skills`.
+- 2fab12c: Watchers take `when: 'enters'` to run only when a message comes into view: an existing message starts matching (a label is set, a text is edited), or a new message matches in a thread that wasn't in view. A watcher's `run` context is exported as `WatcherContext`.
+
+### Patch Changes
+
+- 71c990f: Synced messages render mentions natively, as the spec says: a Slack user as a real `<@U0456>` mention in Slack, a GitHub user as `@login` on GitHub, and anyone else as their plain name. Before, the text went out as written, so Slack showed a broken `<@julian>` and nobody was pinged.
+
 ## 0.2.1
 
 ### Patch Changes
