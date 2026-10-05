@@ -34,6 +34,12 @@ export type SyncPlatform = {
   fromChatId?(id: string): string
   /** The reverse of `fromChatId`. */
   toChatId?(id: string): string
+  /**
+   * Shows typing in a thread (a Chat SDK thread ID), when the adapter's own
+   * `startTyping` needs help. `latest` is the newest platform message ID that
+   * came from that thread, as the board knows it, or null.
+   */
+  startTyping?(thread: string, latest: string | null): Promise<void>
   /** Each person keeps one reaction per message, as on WhatsApp: a new one replaces theirs, and a removal names none. */
   readonly singleReaction?: boolean
   /** Folds sub-threads into the thread a board thread maps to. */

@@ -58,6 +58,13 @@ export function kapso(options: {
     fromChatId: decode,
     toChatId: encode,
     singleReaction: true,
+    // The adapter marks the latest inbound message read with its typing indicator, but it only
+    // knows messages whose webhook reached this instance. The board knows them all.
+    async startTyping(thread, latest) {
+      const known = (options.adapter as unknown as { latestInboundMessageByThread?: Map<string, string> }).latestInboundMessageByThread
+      if (latest && known instanceof Map) known.set(thread, latest)
+      await options.adapter.startTyping(thread)
+    },
     groupThread: (thread) => thread,
     isRoot: () => false,
     context: () => null,

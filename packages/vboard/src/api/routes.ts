@@ -88,6 +88,7 @@ export const InboxQuery = z.object({
 
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
+export const TypingBody = z.object({}).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
 export const LabelBody = z
   .object({ set: Labels.optional(), unset: z.array(LabelKey).optional() })
@@ -147,6 +148,9 @@ export type MessagesPage = { messages: MessageView[]; cursor: number }
 export type ThreadView = { message: MessageView; replies: MessageView[]; cursor: number }
 export type EventsPage = { events: BoardEventView[]; cursor: number }
 
+/** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
+export type TypingResult = { targets: string[] }
+
 export type ApiError = { error: { code: string; message: string } }
 
 /** A raw platform event, as `GET /inbox/:key` returns it. */
@@ -173,6 +177,8 @@ export const routes = {
   react: { method: 'POST', path: '/messages/:id/reactions', body: ReactBody },
   label: { method: 'POST', path: '/messages/:id/labels', body: LabelBody },
   sync: { method: 'POST', path: '/messages/:id/sync', body: SyncBody },
+  /** Ephemeral: shows typing in the thread's synced platform threads, and writes nothing to the log. */
+  typing: { method: 'POST', path: '/messages/:id/typing', body: TypingBody },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
   webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },

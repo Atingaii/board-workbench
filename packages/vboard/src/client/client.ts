@@ -12,6 +12,7 @@ import type {
   MessagesQueryInput,
   MessageView,
   ThreadView,
+  TypingResult,
 } from '../api/routes.ts'
 import type { Actor } from '../contract/reducers.ts'
 import { typeOf } from '../contract/files.ts'
@@ -247,6 +248,12 @@ export function createBoardClient(options: ClientOptions) {
       }),
     label: (id: number, change: { set?: Record<string, string>; unset?: string[] }) =>
       call<{ ok: true }>('POST', `/messages/${id}/labels`, { body: change }),
+    /**
+     * Shows typing in the platform threads the message's thread is synced to
+     * (on WhatsApp, also marking the latest inbound message read). Ephemeral:
+     * nothing goes in the log. Answers the external threads that took it.
+     */
+    typing: async (id: number) => (await call<TypingResult>('POST', `/messages/${id}/typing`, { body: {} })).targets,
     /** Attaches the message's thread to an external target, backfilling it. Attaching twice is a no-op. */
     sync: (id: number, target: string) =>
       call<{ target: string; attached: boolean }>('POST', `/messages/${id}/sync`, { body: { target } }),

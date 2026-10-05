@@ -33,6 +33,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
   const reactions: { threadId: string; messageId: string; emoji: string; added: boolean }[] = []
   const edits: { threadId: string; messageId: string; text: string }[] = []
   const deletes: { threadId: string; messageId: string }[] = []
+  const typing: string[] = []
   /** What the platform hands over for a file URL: the bytes, or an error to throw. */
   const served = new Map<string, Uint8Array | Error>()
   const fetches: string[] = []
@@ -126,6 +127,9 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
         return Buffer.from(found)
       },
     }),
+    startTyping: async (threadId: string) => {
+      typing.push(threadId)
+    },
     addReaction: async (threadId: string, messageId: string, emoji: unknown) => {
       reactions.push({ threadId, messageId, emoji: String(emoji), added: true })
     },
@@ -134,7 +138,7 @@ function fakePlatform(name: 'slack' | 'github', extend: (adapter: Adapter) => vo
     },
   } as Partial<Adapter>)
   extend(adapter)
-  return { adapter, posts, channelPosts, reactions, edits, deletes, served, fetches }
+  return { adapter, posts, channelPosts, reactions, edits, deletes, typing, served, fetches }
 }
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
@@ -497,6 +501,26 @@ describe('sync', () => {
       expect(after!.reactions).toMatchObject({ eyes: ['vercel:user:u_julian'], check: ['slack:user:U_ADA'] })
     })
     expect(s.reactions).toHaveLength(1) // the Slack reaction isn't echoed back
+  })
+
+  it('shows typing in every platform thread a board thread is synced to, skipping one that fails', async () => {
+    const { board, s, g, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:200', id: '200', text: 'bug', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    await julian('POST', `/messages/${root!.id}/sync`, { target: 'github:basehub-ai/vboard:12' })
+
+    const typed = await julian('POST', `/messages/${root!.id}/typing`, {})
+    expect(typed).toMatchObject({ status: 200, body: { targets: ['slack:C1:200', 'github:basehub-ai/vboard:12'] } })
+    expect(s.typing).toEqual(['slack:C1:200'])
+    expect(g.typing).toEqual(['github:basehub-ai/vboard:12'])
+
+    s.adapter.startTyping = async () => {
+      throw new Error('missing_scope')
+    }
+    const partial = await julian('POST', `/messages/${root!.id}/typing`, {})
+    expect(partial).toMatchObject({ status: 200, body: { targets: ['github:basehub-ai/vboard:12'] } })
   })
 
   it('hands unsynced threads in a function-mapped channel to the function, once', async () => {

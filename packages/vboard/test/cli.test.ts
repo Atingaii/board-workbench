@@ -55,6 +55,8 @@ describe('cli', () => {
     const reply = await vb(['reply', id, '-', '--as', 'claude'], {}, 'rolled back to d4e5f6\n')
     expect(reply.code).toBe(0)
     expect((await vb(['react', id, '👀'])).code).toBe(0)
+    // This board syncs nowhere, so typing shows nowhere, and that's fine.
+    expect(await vb(['typing', id])).toMatchObject({ code: 0, stdout: '', stderr: '' })
     expect((await vb(['label', id, 'status=investigating'])).code).toBe(0)
 
     const read = await vb(['read', 'errors-www'])
@@ -134,6 +136,7 @@ describe('cli', () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
     expect(await vb(['post', 'x', '@nobody'])).toMatchObject({ code: 1, stderr: 'error: unknown mention @nobody\n' })
     expect((await vb(['react', '1', 'not an emoji'])).code).toBe(2)
+    expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)
     expect((await vb(['inspect', '--port', 'nope'])).code).toBe(2)
   })

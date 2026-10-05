@@ -712,6 +712,44 @@ export function createSyncEngine(options: {
     }
   }
 
+  /**
+   * Shows typing in every platform thread a board thread is synced to. It's
+   * ephemeral and best-effort: nothing goes in the log, and a platform that
+   * fails is skipped. Answers the external threads that took it.
+   */
+  async function typing(thread: string): Promise<string[]> {
+    const { session } = bound()
+    const [{ state: sync }, { state: messages }] = await Promise.all([session.state(syncReducer), session.state(messagesReducer)])
+    const synced = sync.threads[thread]
+    if (!synced) return []
+    const ids = [synced.root, ...(messages.replies[synced.root] ?? [])]
+    const externals = [...new Set(Object.values(synced.external))]
+    const done = await Promise.all(
+      externals.map(async (external) => {
+        const key = keyOf(external)
+        try {
+          const platform = platformOf(key)
+          const chat = await chatFor(key)
+          const chatThread = toChat(external)
+          if (platform.startTyping) {
+            // The newest message that came from there, for platforms that mark it read (WhatsApp).
+            let latest: string | null = null
+            for (let i = ids.length - 1; i >= 0 && latest === null; i--) {
+              const origin = messages.byId[ids[i]!]
+              if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
+            }
+            await platform.startTyping(chatThread, latest)
+          } else await chat.getAdapter(platform.adapter.name).startTyping(chatThread)
+          return external
+        } catch (error) {
+          console.warn(`[vboard] skipped typing on ${external}:`, describe(error))
+          return null
+        }
+      }),
+    )
+    return done.filter((external) => external !== null)
+  }
+
   const lane = ({ event }: { event: { payload: unknown } }) => `thread:${(event.payload as { thread: string }).thread}`
 
   /** Board-contract handlers for outbound delivery, one lane per thread. */
@@ -751,6 +789,7 @@ export function createSyncEngine(options: {
     normalizeTarget,
     handleWebhook,
     readInbox,
+    typing,
     /** For tests: the Chat SDK instance behind an entry. */
     chat: (key: string) => chats.get(key),
   }
