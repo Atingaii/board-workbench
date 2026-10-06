@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { boardUpdate, repoName } from '../src/cli/hooks.ts'
+import { boardUpdate, repoName, workOf } from '../src/cli/hooks.ts'
 
 describe('hooks', () => {
   it('finds the board update an agent ends its reply with', () => {
@@ -21,5 +25,12 @@ describe('hooks', () => {
     expect(repoName('https://github.com/basehub-ai/vboard')).toBe('basehub-ai/vboard')
     expect(repoName('https://gitlab.com/acme/app.git/')).toBe('acme/app')
     expect(repoName('')).toBeNull()
+  })
+
+  it('keys work by repo and branch, escaping the | that label filters split on', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'vboard-work-'))
+    execFileSync('git', ['init', '-q', '-b', 'fix|pipes'], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/app.git'], { cwd: repo })
+    expect(workOf(repo)).toEqual({ repo: 'acme/app', branch: 'fix|pipes', key: 'acme/app@fix%7Cpipes' })
   })
 })

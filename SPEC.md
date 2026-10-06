@@ -849,18 +849,28 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
 - **It can't loop or stall a turn.** It asks at most once per turn, stops
   whenever the agent says a hook made it continue (`stop_hook_active`,
   Cursor's `loop_count`), decides from a local marker alone (no network),
-  posts in the background, and answers success on any error.
+  posts in the background, and answers success on any error. The installed
+  command ends in `2>/dev/null || true`, so even a different `vb` on the
+  path (an older one exits 2, which these agents read as "keep going") can't
+  fail a turn.
+- **It runs the CLI that installed it.** A global `vb` that is this CLI is
+  saved as `vb`; under `npx`, whose cache doesn't outlive the command, it's a
+  global `vb` of the same version, else `npx -y vboard@<version>`; anything
+  else, by its full path.
 - **Cursor runs hooks only in interactive sessions.** Its headless mode
   (`cursor-agent -p`) runs none, so headless Cursor turns aren't asked.
 - **It acts only in a linked project,** or with `VBOARD_URL` set: installing
   the hook doesn't send work anywhere a project hasn't chosen.
-- **Markers live in the temp directory,** per session. `post`, `reply`, and
-  `update` from an agent session also count as the turn's update.
+- **Markers live in the temp directory** (`XDG_RUNTIME_DIR` when set), per
+  session, in a directory the user must own. `post`, `reply`, and `update`
+  from an agent session also count as the turn's update.
 - **Updates go to the work thread** for this person, repo (from the `origin`
   remote), and branch: a root labeled `work=<repo>@<branch>`, `repo`, and
   `branch` in the `work` channel (`--channel` to choose), created on first use,
   with each update a reply. Every agent's updates on a branch land in one
   thread, so work started in Codex and continued in Claude Code reads as one.
+  The root has a stable ID (`work:<principal>:<repo>@<branch>`), so two agents
+  starting it at once make one, and finding it pages back past busy threads.
   Updates are board-only (`noSync`). `vboard update "<summary>"` posts one
   directly, with `--attach` for proof.
 

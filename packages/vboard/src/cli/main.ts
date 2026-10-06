@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, delimiter, join } from 'node:path'
@@ -192,15 +192,39 @@ function wrote() {
   if (session) markPosted(session)
 }
 
-/** How an agent's hook should run this CLI: `vb` when that's this CLI, else its full path. */
-function cliCommand(): string {
-  const self = realpathSync(process.argv[1]!)
+const fromNpx = (path: string) => /[\\/]_npx[\\/]/.test(path)
+
+/** The first `vb` on PATH outside npx's cache, which is gone once npx exits. */
+function globalVb(): string | null {
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     const candidate = join(dir, 'vb')
-    if (existsSync(candidate) && realpathSync(candidate) === self) return 'vb'
+    if (existsSync(candidate) && !fromNpx(realpathSync(candidate))) return realpathSync(candidate)
   }
-  const quote = (part: string) => (/^[\w./-]+$/.test(part) ? part : `'${part.replace(/'/g, `'\\''`)}'`)
-  return [process.execPath, self].map(quote).join(' ')
+  return null
+}
+
+/**
+ * How an agent's hook should run this CLI, long after this command exits:
+ * `vb` when that's this CLI; under npx, a global `vb` of this version, else
+ * this version through npx; otherwise this CLI's full path.
+ */
+function cliCommand(): { command: string; note?: string } {
+  const self = realpathSync(process.argv[1]!)
+  const installed = globalVb()
+  if (!fromNpx(self)) {
+    if (installed === self) return { command: 'vb' }
+    const quote = (part: string) => (/^[\w./-]+$/.test(part) ? part : `'${part.replace(/'/g, `'\\''`)}'`)
+    return { command: [process.execPath, self].map(quote).join(' ') }
+  }
+  let version = ''
+  try {
+    version = installed ? execFileSync(installed, ['--version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() : ''
+  } catch {}
+  if (version === VERSION) return { command: 'vb' }
+  return {
+    command: `npx -y vboard@${VERSION}`,
+    note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g vboard\` makes it start faster`,
+  }
 }
 
 /**
@@ -211,15 +235,34 @@ async function postUpdate(board: ReturnType<typeof client>, content: string, fil
   const channel = flags.channel ?? 'work'
   const work = workOf(process.cwd())
   const me = await board.me()
-  const { messages } = await board.messages({ channel, label: { work: work.key }, limit: 500 })
-  const found = messages.filter((m) => m.re === null && !m.deleted && m.by.principal === me.principal).at(-1)
-  const root =
-    found ??
-    (await board.post(channel, {
+  // The label matches replies too, so a busy branch can push the root past one page: page back to it.
+  const find = async () => {
+    let before: number | undefined
+    for (let page = 0; page < 20; page++) {
+      const { messages } = await board.messages({ channel, label: { work: work.key }, limit: 500, ...(before ? { before } : {}) })
+      const root = messages.filter((m) => m.re === null && !m.deleted && m.by.principal === me.principal).at(-1)
+      if (root || messages.length < 500) return root
+      before = messages[0]!.id
+    }
+    return undefined
+  }
+  const create = () =>
+    board.post(channel, {
       text: `**${work.repo}** · \`${work.branch}\``,
       labels: { work: work.key, repo: work.repo, branch: work.branch },
       noSync: true,
-    }))
+      // One root per person and branch: a second agent creating it at the same moment gets a conflict, not a twin.
+      id: `work:${me.principal}:${work.key}`,
+    })
+  let root = await find()
+  if (!root)
+    try {
+      root = await create()
+    } catch (error) {
+      if (!(error instanceof BoardError && error.code === 'duplicate_id')) throw error
+      root = await find()
+    }
+  if (!root || root.deleted) throw new BoardError('no_work_thread', `couldn't find or start the work thread for ${work.key}`, 0)
   return board.reply(root.id, { text: content, noSync: true, ...(files.length ? { attachments: files } : {}) })
 }
 
@@ -421,12 +464,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 0
       }
       if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex]...')
-      const cli = cliCommand()
+      const { command: cli, note } = cliCommand()
       for (const agent of agents) {
         const changed = installHook(agent, cli, flags.channel ? ` --channel ${flags.channel}` : '')
         out(`${AGENTS[agent].name}: ${changed ? `added the turn-end hook to ${AGENTS[agent].file()}` : 'already installed'}`)
         if (agent === 'codex' && changed) out('  approve it once in Codex with /hooks')
       }
+      if (note) out(`Note: ${note}.`)
       out('It asks only in projects linked with `vb link <url>` (or with VBOARD_URL set), once per turn that didn\'t update the board.')
       return 0
     }

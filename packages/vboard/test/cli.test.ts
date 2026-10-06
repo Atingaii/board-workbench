@@ -251,11 +251,25 @@ describe('cli', () => {
     expect(claude.hooks.PreToolUse).toEqual([])
     expect(claude.hooks.Stop).toEqual([
       { hooks: [{ type: 'command', command: 'say done' }] },
-      { hooks: [{ type: 'command', command: expect.stringMatching(/ hook stop --agent claude$/), timeout: 10 }] },
+      { hooks: [{ type: 'command', command: expect.stringMatching(/ hook stop --agent claude 2>\/dev\/null \|\| true$/), timeout: 10 }] },
     ])
     const codex = JSON.parse(await readFile(join(home, '.codex', 'hooks.json'), 'utf8'))
-    expect(codex.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent codex$/)
-    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude\nCodex: .* hook stop --agent codex\nCursor: not installed/)
+    expect(codex.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent codex 2>\/dev\/null \|\| true$/)
+
+    // Whatever the saved command runs into (say, an older vb without `hook`, which exits 2), it can't fail a turn.
+    const stale = join(home, 'bin')
+    await mkdir(stale)
+    await writeFile(join(stale, 'vb'), '#!/bin/sh\necho "error: unknown command: hook" >&2\nexit 2\n', { mode: 0o755 })
+    const command = (claude.hooks.Stop[1].hooks[0].command as string).replace(/^.*? hook /, 'vb hook ')
+    const ran = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      const child = spawn('/bin/sh', ['-c', command], { env: { ...env, PATH: `${stale}:${process.env.PATH}` } })
+      let stderr = ''
+      child.stderr.on('data', (d) => (stderr += d))
+      child.on('close', (code) => resolve({ code, stderr }))
+      child.stdin.end('{}')
+    })
+    expect(ran).toEqual({ code: 0, stderr: '' })
+    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude .*\|\| true\nCodex: .* hook stop --agent codex .*\|\| true\nCursor: not installed/)
 
     expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
     expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual(theirs)
@@ -277,7 +291,7 @@ describe('cli', () => {
     }
     const work = async () => {
       const { stdout } = await vb(['read', 'work', '--label', 'work=acme/app@feat/hooks', '--json'])
-      return stdout.trim() ? stdout.trim().split('\n').map((line) => JSON.parse(line) as { re: number | null; text: string; noSync: boolean; labels: Record<string, string>; by: { profile: string; session: string } }) : []
+      return stdout.trim() ? stdout.trim().split('\n').map((line) => JSON.parse(line) as { id: number; re: number | null; text: string; noSync: boolean; labels: Record<string, string>; by: { profile: string; session: string } }) : []
     }
 
     // A turn that didn't touch the board is asked once, to answer with a line; there's nothing to run.
@@ -308,9 +322,28 @@ describe('cli', () => {
       ['claude', 'Wrote the docs.'],
     ])
 
+    // Past a page of messages on the branch, updates still find the thread instead of starting another.
+    const rootId = (await work())[0]!.id
+    for (let i = 0; i < 501; i++) {
+      const posted = await fetch(`${url}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${env.VBOARD_TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ re: rootId, text: `note ${i}`, noSync: true }),
+      })
+      expect(posted.status).toBe(201)
+    }
+    // From another session, so the root's stable id can't stand in for finding it.
+    expect(await vb_in(repo, ['update', 'Still the same thread.'], { CODEX_THREAD_ID: `t2-${Date.now()}` })).toMatchObject({ code: 0, stderr: '' })
+    const { stdout } = await vb(['read', String(rootId), '--json'])
+    const thread = stdout.trim().split('\n').map((line) => JSON.parse(line) as { re: number | null; text: string })
+    expect(thread).toHaveLength(1 + 3 + 501 + 1) // the root, three updates, the notes, and this one
+    expect(thread.at(-1)).toMatchObject({ re: rootId, text: 'Still the same thread.' })
+    const roots = (await vb(['read', 'work', '--label', 'work=acme/app@feat/hooks', '--json', '--limit', '500'])).stdout
+    expect(roots.trim().split('\n').filter((line) => JSON.parse(line).re === null)).toHaveLength(0) // the root is past this window
+
     // Outside a linked project, the hook stays out of the way.
     expect(await asks(stop(`s2-${Date.now()}`, 'Done.', false, { VBOARD_URL: '' }))).toBeNull()
-  })
+  }, 60_000)
 
   it('asks Cursor with a follow-up message, and posts the update from its response', async () => {
     const home = await mkdtemp(join(tmpdir(), 'vboard-home-'))
@@ -319,8 +352,8 @@ describe('cli', () => {
     expect(config).toEqual({
       version: 1,
       hooks: {
-        stop: [{ command: expect.stringMatching(/ hook stop --agent cursor$/), timeout: 10 }],
-        afterAgentResponse: [{ command: expect.stringMatching(/ hook response --agent cursor$/), timeout: 10 }],
+        stop: [{ command: expect.stringMatching(/ hook stop --agent cursor 2>\/dev\/null \|\| true$/), timeout: 10 }],
+        afterAgentResponse: [{ command: expect.stringMatching(/ hook response --agent cursor 2>\/dev\/null \|\| true$/), timeout: 10 }],
       },
     })
 

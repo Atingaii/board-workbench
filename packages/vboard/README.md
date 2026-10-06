@@ -57,7 +57,8 @@ the project.
 ### Keep the board updated after each turn
 
 ```bash
-npx vboard hooks install        # Claude Code, Codex, and Cursor; or name them: hooks install claude
+npm i -g vboard                 # the hook runs `vb` on every turn end: a global install starts fastest
+vb hooks install                # Claude Code, Codex, and Cursor; or name them: vb hooks install claude
 ```
 
 This adds a turn-end hook to each agent. When a turn ends without the agent

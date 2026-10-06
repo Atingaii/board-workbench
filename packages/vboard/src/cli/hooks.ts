@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -68,7 +68,9 @@ export function installHook(agent: HookAgent, cli: string, flags = ''): boolean 
   const config = readConfig(spec.file())
   const hooks = { ...config.hooks }
   for (const [event, sub] of Object.entries(spec.events)) {
-    const command = `${cli} hook ${sub} --agent ${agent}${flags}`
+    // `|| true`: whatever `cli` turns out to be (an older vboard without `hook` exits 2, which Claude Code
+    // and Codex read as "keep going"), the hook can't fail a turn.
+    const command = `${cli} hook ${sub} --agent ${agent}${flags} 2>/dev/null || true`
     const entry = spec.shape === 'flat' ? { command, timeout: 10 } : { hooks: [{ type: 'command', command, timeout: 10 }] }
     hooks[event] = [...without(hooks[event] ?? [], spec.shape), entry]
   }
@@ -133,9 +135,11 @@ type Turns = { posted?: number; asked?: number; settled?: number; last?: string 
 
 /**
  * In the temp directory, which agents' sandboxes let commands write (Codex's
- * doesn't allow ~/.config): a marker only has to last a few turns.
+ * doesn't allow ~/.config): a marker only has to last a few turns, and the
+ * system clears it with the rest of its temp files. `XDG_RUNTIME_DIR`, where
+ * there is one, is the user's own.
  */
-export const turnsDir = () => join(tmpdir(), `vboard-turns-${process.getuid?.() ?? 'user'}`)
+export const turnsDir = () => join(process.env.XDG_RUNTIME_DIR || tmpdir(), `vboard-turns-${process.getuid?.() ?? 'user'}`)
 const turnsFile = (session: string) => join(turnsDir(), `${session.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`)
 
 function readTurns(session: string): Turns {
@@ -146,8 +150,18 @@ function readTurns(session: string): Turns {
   }
 }
 
+/** The marker directory, only if it's ours: in a shared /tmp, someone else could have made it first. */
+function ownTurnsDir(): string {
+  const dir = turnsDir()
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const { uid, mode } = statSync(dir)
+  if (process.getuid && uid !== process.getuid()) throw new Error(`${dir} belongs to someone else`)
+  if ((mode & 0o077) !== 0) chmodSync(dir, 0o700)
+  return dir
+}
+
 function writeTurns(session: string, turns: Turns) {
-  mkdirSync(turnsDir(), { recursive: true, mode: 0o700 })
+  ownTurnsDir()
   writeFileSync(turnsFile(session), JSON.stringify(turns))
 }
 
@@ -219,5 +233,6 @@ export function workOf(cwd: string): { repo: string; branch: string; key: string
   const repo = repoName(git(root, 'remote', 'get-url', 'origin')) ?? basename(root)
   // `symbolic-ref` also names the branch of a repo with no commits yet.
   const branch = git(root, 'symbolic-ref', '--short', 'HEAD') || git(root, 'rev-parse', '--abbrev-ref', 'HEAD') || 'no-branch'
-  return { repo, branch, key: `${repo}@${branch}`.slice(0, 256) }
+  // Label filters split values on `|`, which a branch name may hold.
+  return { repo, branch, key: `${repo}@${branch}`.replace(/\|/g, '%7C').slice(0, 256) }
 }
