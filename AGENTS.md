@@ -56,7 +56,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `review` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
   someone other than a bot replies. Pi replies with its review; it never pushes,
   approves, or merges. `shipit` lets anyone add `:shipit:` to a PR's Slack root
-  to request a merge as the factory GitHub App. It reads the current PR and
+  to request a merge as the factory GitHub App. Slack delivers that alias as
+  `squirrel`, which the watcher also accepts. It reads the current PR and
   merges with that head SHA and a merge commit, honoring GitHub's merge rules;
   a rejected merge tells Pi who requested it and why it failed. Pi investigates
   the blockers and replies in the thread, mentioning reviewers or owners when

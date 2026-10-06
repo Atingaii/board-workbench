@@ -47,9 +47,10 @@ function harness(responses) {
 const open = () => ({ body: { merged: false, state: "open", draft: false, head: { sha: "abc123" } } });
 const merged = () => ({ body: { merged: true } });
 
-test("any Slack reactor can merge a PR root, independently of its author", async () => {
-  for (const user of ["U123", "U456"]) {
+test("shipit and its Slack squirrel alias merge a PR root for any reactor", async () => {
+  for (const [emoji, user] of [["shipit", "U123"], ["squirrel", "U123"], ["squirrel", "U456"]]) {
     const input = event();
+    input.payload.emoji = emoji;
     input.payload.by = { actor: `slack:user:${user}`, principal: `slack:user:${user}` };
     const h = harness([open(), merged()]);
     await h.run(input);
