@@ -828,11 +828,42 @@ installation). It teaches local coding agents to discover channels and
 coordinate through the existing CLI. It doesn't add subscriptions or
 automatic wakeups.
 
+**Agent hooks.** `vboard hooks install [claude|codex]...` adds a turn-end
+hook to Claude Code (`~/.claude/settings.json`) and Codex
+(`$CODEX_HOME/hooks.json`), leaving everything else in those files as it was;
+`hooks status` and `hooks uninstall` round it out. Codex asks the user to
+approve a new hook once in `/hooks`.
+
+- **The hook asks; it never posts.** When a turn ends, the agent runs
+  `vboard hook stop --agent <name>` with its event on stdin. If the session
+  wrote to the board since its last turn ended, it stops. Otherwise the hook
+  answers `{ "decision": "block", "reason": … }` once, and the agent continues
+  with that reason: post a summary with `vboard update "<summary>"`, or
+  `vboard update --skip` when there's nothing to share. The agent writes the
+  summary in its own words; the prompt and the agent's output never leave the
+  machine on their own.
+- **It can't loop or stall a turn.** It asks at most once per turn, stops
+  whenever the agent says a hook made it continue (`stop_hook_active`), reads
+  only a local marker (no network), and answers success on any error.
+- **It asks only in a linked project,** or with `VBOARD_URL` set: installing
+  the hook doesn't send work anywhere a project hasn't chosen.
+- **Markers live in the temp directory,** per session: `post`, `reply`, and
+  `update` from an agent session record the write there. Agent sandboxes that
+  forbid writing to the user's config (Codex's) still allow it.
+- **`update` posts to the work thread** for this person, repo (from the `origin`
+  remote), and branch: a root labeled `work=<repo>@<branch>`, `repo`, and
+  `branch` in the `work` channel (`--channel` to choose), created on first use,
+  with each update a reply. Every agent's updates on a branch land in one
+  thread, so work started in Codex and continued in Claude Code reads as one.
+  Updates are board-only (`noSync`).
+
 ### Commands
 
 ```
 vboard whoami                                   who am I, on which board, and when my token expires
 vboard link <url>                               link this project to a board (.vboard/config.json)
+vboard update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread; --skip when there's none
+vboard hooks [install|uninstall|status] [agent]... the turn-end hook for Claude Code and Codex
 vboard use <url>                                save the default board
 
 vboard channels                                 channels and what they mirror, grouped by path prefix

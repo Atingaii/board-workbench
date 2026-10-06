@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -44,6 +44,18 @@ function vb(args: string[], extra: NodeJS.ProcessEnv = {}, stdin?: string, cwd?:
     child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
     if (stdin !== undefined) child.stdin.end(stdin)
     else child.stdin.end()
+  })
+}
+
+function vb_in(cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
+  return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...env, ...extra } })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => (stdout += d))
+    child.stderr.on('data', (d) => (stderr += d))
+    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+    child.stdin.end()
   })
 }
 
@@ -221,6 +233,78 @@ describe('cli', () => {
     expect(await readFile(saved)).toEqual(Buffer.from([137, 80, 78, 71]))
     expect(await vb(['post', 'proofs', 'x', '--attach', join(dir, 'missing.png')])).toMatchObject({ code: 2, stderr: `error: no such file: ${join(dir, 'missing.png')}\n` })
   }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
+
+  it('installs turn-end hooks for Claude Code and Codex, keeping what else is there', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vboard-home-'))
+    const at = { HOME: home, CODEX_HOME: join(home, '.codex') }
+    await mkdir(join(home, '.claude'), { recursive: true })
+    const settings = join(home, '.claude', 'settings.json')
+    const theirs = { model: 'opus', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }], PreToolUse: [] } }
+    await writeFile(settings, JSON.stringify(theirs))
+
+    const installed = await vb(['hooks', 'install'], at)
+    expect(installed).toMatchObject({ code: 0, stderr: '' })
+    expect(installed.stdout).toContain('Codex: added the turn-end hook')
+    expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain('Claude Code: already installed')
+    const claude = JSON.parse(await readFile(settings, 'utf8'))
+    expect(claude.model).toBe('opus')
+    expect(claude.hooks.PreToolUse).toEqual([])
+    expect(claude.hooks.Stop).toEqual([
+      { hooks: [{ type: 'command', command: 'say done' }] },
+      { hooks: [{ type: 'command', command: expect.stringMatching(/ hook stop --agent claude$/), timeout: 10 }] },
+    ])
+    const codex = JSON.parse(await readFile(join(home, '.codex', 'hooks.json'), 'utf8'))
+    expect(codex.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent codex$/)
+    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude\nCodex: .* hook stop --agent codex/)
+
+    expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
+    expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual(theirs)
+    expect((await vb(['hooks', 'install', 'cursor'], at))).toMatchObject({ code: 2, stderr: 'error: unknown agent: cursor (known: claude, codex)\n' })
+  })
+
+  it("asks an agent once to update the board when its turn didn't, and posts updates to the branch's work thread", async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
+    execFileSync('git', ['init', '-q', '-b', 'feat/hooks'], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/app.git'], { cwd: repo })
+    // Markers live in the temp directory: fresh session IDs keep runs apart.
+    const s1 = `s1-${Date.now()}`
+    const stop = (session: string, continuing = false, extra: NodeJS.ProcessEnv = {}) =>
+      vb(['hook', 'stop', '--agent', 'claude'], extra, JSON.stringify({ session_id: session, cwd: repo, hook_event_name: 'Stop', stop_hook_active: continuing }))
+    const asks = async (result: Promise<{ stdout: string; code: number }>) => {
+      const { stdout, code } = await result
+      expect(code).toBe(0)
+      return stdout ? (JSON.parse(stdout) as { decision: string; reason: string }) : null
+    }
+
+    // A turn that didn't touch the board is asked once; the agent's follow-up stops freely.
+    const asked = await asks(stop(s1))
+    expect(asked).toMatchObject({ decision: 'block', reason: expect.stringContaining(' update "<summary>"') })
+    expect(asked!.reason).toContain('update --skip')
+    expect(await asks(stop(s1, true))).toBeNull()
+
+    // The agent updates: the next turn end doesn't ask. The one after, with no update, does.
+    const claude = { CLAUDE_CODE_SESSION_ID: s1 }
+    const first = await vb_in(repo, ['update', 'Added the hooks; tests next.'], claude)
+    expect(first).toMatchObject({ code: 0, stderr: '' })
+    expect(await asks(stop(s1))).toBeNull()
+    expect(await asks(stop(s1))).not.toBeNull()
+    expect(await asks(stop(s1))).toBeNull() // asked already this turn
+    await vb_in(repo, ['update', '--skip'], claude)
+    expect(await asks(stop(s1))).toBeNull()
+
+    // Another agent's update on the same branch joins the same thread.
+    await vb_in(repo, ['update', 'Picked it up in Codex; tests pass.'], { CODEX_THREAD_ID: 't1' })
+    const thread = await vb(['read', first.stdout.trim(), '--json'])
+    const [root, ...replies] = thread.stdout.trim().split('\n').map((line) => JSON.parse(line))
+    expect(root).toMatchObject({ channel: 'work', noSync: true, labels: { work: 'acme/app@feat/hooks', repo: 'acme/app', branch: 'feat/hooks' } })
+    expect(replies.map((r: { text: string; by: { profile: string; session: string } }) => [r.by.profile, r.by.session, r.text])).toEqual([
+      ['claude', s1, 'Added the hooks; tests next.'],
+      ['codex', 't1', 'Picked it up in Codex; tests pass.'],
+    ])
+
+    // Outside a linked project, the hook stays out of the way.
+    expect(await asks(stop(`s2-${Date.now()}`, false, { VBOARD_URL: '' }))).toBeNull()
+  })
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })

@@ -40,6 +40,14 @@ synced Slack, GitHub, or WhatsApp discussions. Publish within the user's
 requested collaboration scope; installing this skill or linking a project
 doesn't authorize unsolicited team messages.
 
+## Share what you did
+
+`update "<summary>"` posts to the work thread for the current repo and
+branch (one per person, in the `work` channel, board-only): 1–3 sentences on
+what changed and what's next, with `--attach <file>` for proof. If a turn-end
+hook asks you to update the board and nothing is worth sharing, run
+`update --skip`. Never paste the prompt, long output, or secrets.
+
 ## Check replies
 
 Read the thread again to check existing answers. To wait for activity after

@@ -54,6 +54,23 @@ or WhatsApp. Automatic wakeups and subscriptions aren't part of this skill.
 The skill installation is global per user with `-g`; omit it to install in
 the project.
 
+### Keep the board updated after each turn
+
+```bash
+npx vboard hooks install        # Claude Code and Codex; or name one: hooks install claude
+```
+
+This adds a turn-end hook to each agent. When a turn ends without the agent
+writing to the board, the hook asks it once to post a 1–3 sentence summary
+with `vb update "<summary>"`, or `vb update --skip` when there's nothing to
+share. Updates go to one thread per person, repo, and branch in the `work`
+channel (`--channel` picks another), so a task started in Codex and continued
+in Claude Code reads as one thread. They stay on the board: they don't sync to
+Slack or GitHub. The hook asks only in linked projects (or with `VBOARD_URL`
+set), never posts by itself, and never fails a turn. Codex asks you to approve
+the hook once in `/hooks`. `vb hooks status` and `vb hooks uninstall` manage
+it.
+
 The design lives in [SPEC.md](../../SPEC.md). Status: the board, SDK, CLI,
 inspector, Slack, GitHub, and WhatsApp (Kapso) sync, and watchers work;
 cursors are next.
