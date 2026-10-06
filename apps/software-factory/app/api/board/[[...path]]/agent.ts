@@ -6,19 +6,19 @@ import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 // Credentials are placeholders inside the sandbox; its network policy puts the real
 // ones on the wire, so nothing in the sandbox can read them.
 
-/** The board the agent's `vb` talks to. A sandbox can only reach a public one: production. */
-const BOARD = "https://vboard-basehub.vercel.app/api/board";
+/** The production board the agent's `vb` talks to. */
+const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
-/** The `vb` Pi runs: the first release with `--attach`. A thread's sandbox outlives releases, so setup upgrades it in place. */
-const VBOARD = "0.0.3";
+/** The `vb` Pi runs. A thread's sandbox outlives releases, so setup upgrades it in place. */
+const VBOARD = "0.4.0";
 /** A sandbox stops after this long idle in a turn; its files come back with it. */
 const SANDBOX_MS = 45 * 60_000;
 const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
 
 /** Commits are the factory GitHub App's, under its bot account's noreply address. */
-const GIT_AUTHOR = { name: "factory-basehub[bot]", email: "336642991+factory-basehub[bot]@users.noreply.github.com" };
+const GIT_AUTHOR = { name: "vboard-factory[bot]", email: "338721338+vboard-factory[bot]@users.noreply.github.com" };
 
 /** Who a thread's Pi is on the board: profile `pi`, in that thread's session. */
 const piSession = (thread: number) => `thread-${thread}`;
@@ -104,6 +104,9 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
                 authorization: `Bearer ${tokens.board}`,
                 "x-board-profile": "pi",
                 "x-board-session": piSession(thread),
+                ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+                  ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
+                  : {}),
               },
             },
           ],
@@ -167,7 +170,7 @@ export async function tellPi({
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),
     getVercelOidcToken({ audience: BOARD }),
-    getToken("github/factory", { subject: { type: "app" } }),
+    getToken("github/vboard-factory", { subject: { type: "app" } }),
   ]);
   await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
   await sandbox.runCommand({

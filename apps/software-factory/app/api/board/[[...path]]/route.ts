@@ -22,7 +22,7 @@ const PI_TASKS = {
 const PI_KINDS = Object.keys(PI_TASKS) as (keyof typeof PI_TASKS)[];
 const isPiKind = (kind: string): kind is keyof typeof PI_TASKS => kind in PI_TASKS;
 
-// The software factory: vboard running on its own repo and BaseHub's Slack. Locally
+// The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
 // files in .a2/attachments.
 const env = process.env.VERCEL_ENV;
@@ -30,7 +30,7 @@ const env = process.env.VERCEL_ENV;
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
-const slackCredentials = connectSlackAdapter("slack/factory");
+const slackCredentials = connectSlackAdapter("slack/vboard-factory");
 const slackAdapter = createSlackAdapter(slackCredentials);
 const slackToken = slackCredentials.botToken;
 
@@ -40,13 +40,13 @@ export const { GET, POST, scheduler } = board({
         url: process.env.KV_REST_API_URL!,
         token: process.env.KV_REST_API_TOKEN!,
         // One Redis serves every environment: a preview never touches production's log.
-        keyPrefix: env === "production" ? "vboard" : `vboard:${env}`,
+        keyPrefix: env === "production" ? "vboard-factory" : `vboard-factory:${env}`,
       })
     : undefined,
-  // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-attachments`.
+  // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
   // Every deployment shares it: a file's ID is random, and only its board can name it.
   blob: env ? vercelBlob() : undefined,
-  scheduler: vercelQueues({ topic: "vboard" }),
+  scheduler: vercelQueues({ topic: "vboard-factory" }),
   sync: {
     slack: slack({
       adapter: slackAdapter,
@@ -56,27 +56,25 @@ export const { GET, POST, scheduler } = board({
           () => slackAdapter.webClient,
         ),
       channels: {
-        "#sf-prs": "prs",
-        // #sf-firehose is private, and the app can't look up private channels by name.
-        C0C5WV6FZGD: "firehose",
+        C0C6MNT9LLC: "dev",
       },
     }),
     github: github({
       adapter: createGitHubAdapter({
-        ...connectGitHubAdapter("github/factory"),
-        // factory-basehub[bot]. Connect can't detect it, and without it the bot replies to itself.
-        botUserId: 336642991,
+        ...connectGitHubAdapter("github/vboard-factory"),
+        // Connect can't detect the bot's identity, so pin it to prevent echoes.
+        botUserId: 338721338,
       }),
       repos: {
-        "basehub-ai/vboard": { pulls: "prs", issues: "firehose" },
+        "basehub-ai/vboard": { pulls: "dev", issues: "dev" },
       },
     }),
   },
   watch: {
-    // Every firehose thread (Slack and GitHub issues) gets a kind, judged from all of it,
+    // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
     triage: {
-      tail: "firehose",
+      tail: "dev",
       run: async ({ event, board }) => {
         const message = event.message;
         if (
@@ -87,6 +85,9 @@ export const { GET, POST, scheduler } = board({
           return;
         }
         const thread = await board.thread(message.re ?? message.id);
+        if (thread.message.labels.pr) {
+          return;
+        }
         const { answers } = await evaluate({
           model: "typesafe-ai/jev",
           state: [thread.message, ...thread.replies].map((m) => ({
@@ -121,7 +122,7 @@ export const { GET, POST, scheduler } = board({
     // gets the thread once triage gives it one of those kinds, is told again if the kind
     // changes, and hears when anyone else replies, then reads what's new itself.
     pi: {
-      tail: `firehose --label kind=${PI_KINDS.join("|")}`,
+      tail: `dev --label kind=${PI_KINDS.join("|")}`,
       run: async ({ event }) => {
         const message = event.message;
         if (!message) {
@@ -149,12 +150,11 @@ export const { GET, POST, scheduler } = board({
         }
       },
     },
-    // Pi reviews PRs: a PR's thread opens in `prs` when it's opened or marked ready, and
+    // Pi reviews PRs: a PR's thread opens in `dev` when it's opened or marked ready, and
     // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there. Only PR
-    // threads: `--label pr` matches a reply by its root's labels too, so a hand-posted
-    // thread in `prs` never wakes Pi.
+    // threads: `--label pr` matches a reply by its root's labels too.
     review: {
-      tail: "prs --label pr",
+      tail: "dev --label pr",
       run: async ({ event }) => {
         const message = event.message;
         if (event.type !== "message.posted" || !message) {

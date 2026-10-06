@@ -25,31 +25,35 @@ while the repo is private). The CLI and the API read their version from
 
 ## the software factory (`apps/software-factory`)
 
-vboard running on itself: the board for `basehub-ai/vboard` PRs and BaseHub's
-Slack. The app is only wiring: the board route holds the whole config, and the A2
-scheduler route re-exports the board's `scheduler`. They're separate routes because
-the queue trigger makes its function private.
+vboard running on itself: the board for `basehub-ai/vboard` PRs and Vercel's
+Slack, on `vercel-internal-playground/vboard-factory`. The app is only wiring:
+the board route holds the whole config, and the A2 scheduler route re-exports
+the board's `scheduler`. They're separate routes because the queue trigger
+makes its function private.
 
 ```bash
 cd apps/software-factory
-vercel link --project vboard --scope basehub   # once; the board learns its project
+vercel link --project vboard-factory --scope vercel-internal-playground
 pnpm dev                                       # the board at /api/board
-VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
+VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  Private Slack channels are mapped by ID: the Connect Slack app can't look them
-  up by name.
-- Watchers do the work. `triage` labels each firehose thread's `kind` with jev,
+  The Redis namespace is `vboard-factory`, separate from the v0 feedback bot.
+  Slack channel `C0C6MNT9LLC`, GitHub PRs, and GitHub issues all mirror `dev`.
+  Connect uses `slack/vboard-factory` and
+  `github/vboard-factory`, with production triggers at
+  `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
+- Watchers do the work. `triage` labels each non-PR dev thread's `kind` with jev,
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
   `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
   reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
-  `review` hands each new `prs` thread to Pi to review the PR, and tells it when
+  `review` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
   someone other than a bot replies. Pi replies with its review; it never pushes,
   approves, or merges.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
@@ -58,13 +62,16 @@ VBOARD_URL=https://vboard-basehub.vercel.app/api/board pnpm exec vb inspect
   every message. The policy also pins who Pi is on the board (profile `pi`,
   session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
-- Attachments live in the project's private Blob store, `vboard-attachments`
-  (`BLOB_READ_WRITE_TOKEN`), shared by every deployment; locally they're files
-  in `.a2/attachments`. Pi attaches proof (test runs, screenshots) to the reply
+- Attachments live in the project's private Blob store, `vboard-factory-attachments`
+  (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
+  they're files in `.a2/attachments`. Pi attaches proof (test runs, screenshots) to the reply
   that links its PR. Its `vb` is pinned (`VBOARD` in `agent.ts`): bump it with
   each release Pi should use, since setup upgrades sandboxes to exactly that.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
-  (`vercel.json`). The board route must stay public: the CLI and webhooks call it.
+  (`vercel.json`), on topic `vboard-factory`. Production is behind Vercel
+  Authentication: the CLI needs `VERCEL_AUTOMATION_BYPASS_SECRET`, and Pi's
+  network policy injects it when calling the board. Connect forwards webhooks
+  through deployment protection.
 
 ## the v0 feedback bot (`apps/v0-feedback`)
 
