@@ -72,7 +72,7 @@ export const { GET, POST, scheduler } = board({
     }),
   },
   watch: {
-    shipit: shipit(),
+    shipit: shipit({ tellPi }),
     merged: {
       tail: "--label pr --label state=merged",
       when: "enters",

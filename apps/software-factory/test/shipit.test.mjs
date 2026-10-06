@@ -4,7 +4,9 @@ import { shipit } from "../app/api/board/[[...path]]/shipit.ts";
 
 function event() {
   return {
+    index: 71,
     type: "reaction.added",
+    actor: { id: "slack:user:U123", handle: "sam" },
     payload: {
       emoji: "shipit",
       from: "slack",
@@ -21,9 +23,10 @@ function event() {
 
 function harness(responses) {
   const requests = [];
-  const replies = [];
+  const notifications = [];
   let tokens = 0;
   const watcher = shipit({
+    tellPi: async input => { notifications.push(input); },
     token: async () => { tokens++; return "test-token"; },
     fetch: async (url, init) => {
       requests.push({ url, ...init, body: init.body ? JSON.parse(init.body) : undefined });
@@ -35,12 +38,9 @@ function harness(responses) {
   });
   return {
     requests,
-    replies,
+    notifications,
     tokens: () => tokens,
-    run: (input = event()) => watcher.run({
-      event: input,
-      board: { reply: async (id, text) => { replies.push({ id, text }); } },
-    }),
+    run: (input = event()) => watcher.run({ event: input }),
   };
 }
 
@@ -65,7 +65,7 @@ test("any Slack reactor can merge a PR root, independently of its author", async
       assert.equal(request.headers["x-github-api-version"], "2026-03-10");
       assert.ok(request.signal instanceof AbortSignal);
     }
-    assert.deepEqual(h.replies, []);
+    assert.deepEqual(h.notifications, []);
   }
 });
 
@@ -88,7 +88,7 @@ for (const [name, change] of [
     await h.run(input);
     assert.equal(h.tokens(), 0);
     assert.deepEqual(h.requests, []);
-    assert.deepEqual(h.replies, []);
+    assert.deepEqual(h.notifications, []);
   });
 }
 
@@ -97,7 +97,7 @@ test("a retried callback sees the merged PR and does not merge it again", async 
   await h.run();
   await h.run();
   assert.equal(h.requests.filter(r => r.method === "PUT").length, 1);
-  assert.deepEqual(h.replies, []);
+  assert.deepEqual(h.notifications, []);
 });
 
 for (const [name, body, reason] of [
@@ -105,11 +105,11 @@ for (const [name, body, reason] of [
   ["closed", { state: "closed", draft: false }, "The PR is closed."],
   ["missing head", { state: "open", draft: false }, "GitHub did not return the PR's head SHA."],
 ]) {
-  test(`reports a ${name} PR without attempting to merge it`, async () => {
+  test(`tells Pi the merge intent for a ${name} PR without attempting to merge it`, async () => {
     const h = harness([{ body }]);
     await h.run();
     assert.equal(h.requests.length, 1);
-    assert.deepEqual(h.replies, [{ id: 59, text: `Couldn't merge basehub-ai/vboard#53: ${reason}` }]);
+    assertIntent(h, reason);
   });
 }
 
@@ -122,18 +122,59 @@ for (const [status, message] of [
     const h = harness([open(), { status, body: { message } }]);
     await h.run();
     assert.equal(h.requests.length, 2);
-    assert.deepEqual(h.replies, [{ id: 59, text: `Couldn't merge basehub-ai/vboard#53: ${message}` }]);
+    assertIntent(h, message);
   });
 }
 
 test("reports an unsuccessful merge response", async () => {
   const h = harness([open(), { body: { merged: false, message: "Merge conflict." } }]);
   await h.run();
-  assert.deepEqual(h.replies, [{ id: 59, text: "Couldn't merge basehub-ai/vboard#53: Merge conflict." }]);
+  assertIntent(h, "Merge conflict.");
 });
 
-test("reports a connection failure in the thread", async () => {
+test("tells Pi the merge intent after a connection failure", async () => {
   const h = harness([new Error("fetch failed")]);
   await h.run();
-  assert.deepEqual(h.replies, [{ id: 59, text: "Couldn't merge basehub-ai/vboard#53: fetch failed" }]);
+  assertIntent(h, "fetch failed");
+});
+
+function assertIntent(h, reason, requester = "sam") {
+  assert.equal(h.notifications.length, 1);
+  const notification = h.notifications[0];
+  assert.equal(notification.task, "review");
+  assert.equal(notification.thread, 59);
+  assert.equal(notification.key, "shipit-71");
+  assert.ok(notification.message.includes(`${requester} (slack:user:U123)`));
+  assert.ok(notification.message.includes("request a merge of basehub-ai/vboard#53"));
+  assert.ok(notification.message.includes(reason));
+  assert.ok(notification.message.includes("checks, and reviews"));
+  assert.ok(notification.message.includes("Ping the appropriate reviewer or owner"));
+}
+
+test("uses the reactor's verified identity when its display name is unavailable", async () => {
+  const h = harness([{ body: { state: "open", draft: true } }]);
+  const input = event();
+  delete input.actor;
+  await h.run(input);
+  assertIntent(h, "The PR is still a draft.", "slack:user:U123");
+});
+
+test("a failed Pi handoff can retry with the same deduplication key", async () => {
+  const notifications = [];
+  let delivered = false;
+  const watcher = shipit({
+    token: async () => "test-token",
+    fetch: async () => Response.json({ state: "open", draft: true }),
+    tellPi: async input => {
+      notifications.push(input);
+      if (!delivered) {
+        delivered = true;
+        throw new Error("sandbox unavailable");
+      }
+    },
+  });
+  await assert.rejects(watcher.run({ event: event() }), /sandbox unavailable/);
+  await watcher.run({ event: event() });
+  assert.equal(notifications.length, 2);
+  assert.deepEqual(notifications[0], notifications[1]);
 });

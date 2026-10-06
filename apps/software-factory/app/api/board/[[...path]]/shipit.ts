@@ -1,14 +1,16 @@
 import type { Watcher } from "vboard";
 import { getToken } from "@vercel/connect";
+import type { tellPi } from "./agent";
 
 export function shipit(options: {
+  tellPi: typeof tellPi;
   token?: () => Promise<string>;
   fetch?: typeof fetch;
-} = {}): Watcher {
+}): Watcher {
   const request = options.fetch ?? globalThis.fetch;
   return {
     tail: "--label pr",
-    run: async ({ event, board }) => {
+    run: async ({ event }) => {
       const root = event.message;
       if (
         event.type !== "reaction.added" ||
@@ -46,7 +48,18 @@ export function shipit(options: {
         const result = await github(`${url}/merge`, { sha: pr.head.sha, merge_method: "merge" });
         if (!result.merged) throw new Error(result.message ?? "GitHub did not merge the PR.");
       } catch (error) {
-        await board.reply(root.id, `Couldn't merge ${root.labels.pr}: ${error instanceof Error ? error.message : String(error)}`);
+        const requester = event.actor?.handle ?? event.payload.by.actor;
+        const reason = error instanceof Error ? error.message : String(error);
+        await options.tellPi({
+          task: "review",
+          thread: root.id,
+          key: `shipit-${event.index}`,
+          message: [
+            `${requester} (${event.payload.by.actor}) reacted with :shipit: to request a merge of ${root.labels.pr} in board thread #${root.id}.`,
+            `The factory couldn't merge it: ${reason}`,
+            "Read the thread and inspect the PR's current state, checks, and reviews. Figure out what's blocking the requested merge and help unblock it within your review role. Ping the appropriate reviewer or owner in the thread when needed, and explain the next step to the person who requested the merge.",
+          ].join("\n"),
+        });
       }
     },
   };
