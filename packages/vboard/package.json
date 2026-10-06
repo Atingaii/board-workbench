@@ -54,6 +54,10 @@
     "./sync": {
       "types": "./dist/sync.d.mts",
       "default": "./dist/sync.mjs"
+    },
+    "./sync/chat": {
+      "types": "./dist/sync.chat.d.mts",
+      "default": "./dist/sync.chat.mjs"
     }
   },
   "scripts": {

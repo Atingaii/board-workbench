@@ -3,6 +3,7 @@ import { ExternalEvent, ExternalLocation } from '../contract/contract.ts'
 import { Labels, LabelKey } from '../contract/schemas.ts'
 
 export const EventBase = z.object({
+  id: z.string().min(1),
   platform: z.string().min(1),
   key: z.string().min(1),
   ...ExternalLocation.shape,
@@ -20,10 +21,10 @@ const eventTypes = {
   lifecycle: 'lifecycle',
 } as const
 
-export function envelope(platform: string, key: string, event: ExternalEvent, raw: unknown) {
+export function envelope(platform: string, key: string, event: ExternalEvent, raw: unknown, id: string) {
   return {
     ...event,
-    ...EventBase.parse({ platform, key, channel: event.channel, thread: event.thread, subthread: 'subthread' in event ? event.subthread : null, raw }),
+    ...EventBase.parse({ id, platform, key, channel: event.channel, thread: event.thread, subthread: 'subthread' in event ? event.subthread : null, raw }),
     type: event.kind === 'lifecycle' ? event.type : event.kind === 'reaction' && !event.added ? 'reaction.removed' : eventTypes[event.kind],
   }
 }

@@ -1,8 +1,9 @@
+import { ChatSyncProvider, type ChatInput } from './chat-provider.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { SyncProvider, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput } from './provider.ts'
+import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput } from './provider.ts'
 
 type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean }
 export type SlackClient = {
@@ -68,7 +69,7 @@ export function slack(options: SlackOptions): SlackProvider {
   return new SlackProvider(options)
 }
 
-export class SlackProvider extends SyncProvider<SlackEvent> {
+export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   constructor(options: SlackOptions) {
     let directClient: SlackClient | undefined
     if (!options.client) {
@@ -240,7 +241,14 @@ export class SlackProvider extends SyncProvider<SlackEvent> {
     for (const [key, value] of Object.entries(options.channels)) this.map(key, value)
   }
 
-  override event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): SlackEvent {
-    return SlackEvent.parse(envelope(this.platform, context.key, context.event, context.raw))
+  override eventId(key: string, input: ChatInput): string {
+    if (input.kind !== 'reaction') return super.eventId(key, input)
+    const reaction = input.reaction
+    const stamp = z.looseObject({ event_ts: z.string().min(1) }).parse(reaction.raw).event_ts
+    return `reaction:${key}:${this.toNative(reaction.threadId)}|${reaction.messageId}|${reaction.rawEmoji}|${reaction.user.userId}|${reaction.added}|${stamp}`
+  }
+
+  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): SlackEvent {
+    return SlackEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }

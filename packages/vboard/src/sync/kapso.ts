@@ -1,8 +1,9 @@
+import { ChatSyncProvider, type ChatInput } from './chat-provider.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { SyncProvider, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput } from './provider.ts'
+import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput } from './provider.ts'
 
 type Raw = { kapso?: { transcript?: { text?: unknown } } } | null
 type Sent = { responses?: { messages?: { id?: string }[] }[] } | null
@@ -35,7 +36,7 @@ export function kapso(options: KapsoOptions): KapsoProvider {
   return new KapsoProvider(options)
 }
 
-export class KapsoProvider extends SyncProvider<WhatsAppEvent> {
+export class KapsoProvider extends ChatSyncProvider<WhatsAppEvent> {
   constructor(options: KapsoOptions) {
     if (typeof options.markRead !== 'function') throw new Error('kapso requires a public markRead operation for cross-instance read and typing')
     const fileIds = (raw: unknown) => ((raw as Sent)?.responses ?? []).flatMap((response) => response.messages?.[0]?.id ?? [])
@@ -83,7 +84,14 @@ export class KapsoProvider extends SyncProvider<WhatsAppEvent> {
     for (const [key, value] of Object.entries(options.numbers)) this.map(key, value)
   }
 
-  override event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): WhatsAppEvent {
-    return WhatsAppEvent.parse(envelope(this.platform, context.key, context.event, context.raw))
+  override eventId(key: string, input: ChatInput): string {
+    if (input.kind !== 'reaction') return super.eventId(key, input)
+    const reaction = input.reaction
+    const stamp = z.looseObject({ id: z.string().min(1) }).parse(reaction.raw).id
+    return `reaction:${key}:${this.toNative(reaction.threadId)}|${reaction.messageId}|${reaction.rawEmoji}|${reaction.user.userId}|${reaction.added}|${stamp}`
+  }
+
+  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): WhatsAppEvent {
+    return WhatsAppEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }

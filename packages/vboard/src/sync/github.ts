@@ -1,9 +1,10 @@
+import { ChatSyncProvider } from './chat-provider.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { SyncProvider, type InterceptedEvent, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput } from './provider.ts'
+import type { ReceivedEvent, ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput } from './provider.ts'
 
 /** `owner/repo:12` (and its review threads) → `owner/repo:pulls`; `owner/repo:issue:3` → `owner/repo:issues`. */
 function channelOf(thread: string): string {
@@ -203,7 +204,7 @@ export function github(options: GitHubOptions): GitHubProvider {
   return new GitHubProvider(options)
 }
 
-export class GitHubProvider extends SyncProvider<GitHubEvent> {
+export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
   constructor(options: GitHubOptions) {
     super({
       render: options.render,
@@ -252,7 +253,7 @@ export class GitHubProvider extends SyncProvider<GitHubEvent> {
         const line = raw?.line ?? raw?.comment?.line
         return path ? (line ? `${path}:${line}` : path) : null
       },
-      intercept(key, headers, body): InterceptedEvent[] {
+      intercept(key, headers, body): ReceivedEvent[] {
         const name = headers.get('x-github-event') ?? ''
         if (!['pull_request', 'pull_request_review', 'issues'].includes(name)) return []
         let parsed: Record<string, unknown>
@@ -290,10 +291,10 @@ export class GitHubProvider extends SyncProvider<GitHubEvent> {
     }
   }
 
-  override event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): GitHubEvent {
+  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): GitHubEvent {
     const match = /^([^:]+):(issue:)?(\d+)/.exec(context.event.thread.slice(context.key.length + 1))
     if (!match) throw new Error(`invalid GitHub thread: ${context.event.thread}`)
-    const base = envelope(this.platform, context.key, context.event, context.raw ?? {})
+    const base = envelope(this.platform, context.key, context.event, context.raw ?? {}, context.id)
     return GitHubEvent.parse({
       ...base,
       type: context.event.kind === 'message' ? 'comment' : base.type,

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getEmoji, type Adapter, type Attachment, type AdapterPostableMessage, type ChatInstance, type WebhookOptions } from 'chat'
-import { createMockAdapter, createTestMessage } from '@chat-adapter/tests'
+import type { Adapter } from 'chat'
+import { fakePlatform, withSlackClient, type WebhookPayload } from './sync-fixtures.ts'
 import { slack } from '../src/sync/slack.ts'
-import { SyncProvider, type SyncContext, type EventMapping } from '../src/sync/provider.ts'
+import { ChatSyncProvider } from '../src/sync/chat-provider.ts'
+import type { SyncContext, EventMapping } from '../src/sync/provider.ts'
 import { envelope, eventSchema } from '../src/sync/events.ts'
 import { z } from 'zod'
 import { createServer } from 'experimental-a2/server'
@@ -12,179 +13,14 @@ import { github } from '../src/sync/github.ts'
 import type { BoardOptions } from '../src/server/index.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
-const textOf = (message: AdapterPostableMessage) =>
-  typeof message === 'string' ? message : JSON.stringify(message)
-
-type WebhookPayload =
-  | {
-      type: 'message'
-      threadId: string
-      id: string
-      text: string
-      user: string
-      name?: string
-      raw?: unknown
-      /** Files on the message; their bytes are what `served` holds at each `url`. */
-      files?: { name: string; mimeType: string; url: string; size?: number }[]
-    }
-  | { type: 'delete'; threadId: string; id: string }
-  | { type: 'edit'; threadId: string; id: string; text: string; user: string }
-  | { type: 'reaction'; threadId: string; messageId: string; emoji: string; added: boolean; user: string }
-
-/** A platform adapter driven by test payloads, recording everything posted to it. */
-function fakePlatform(name: string, extend: (adapter: Adapter) => void = () => {}) {
-  let chat!: ChatInstance
-  let next = 0
-  const posts: { threadId: string; text: string; id: string }[] = []
-  const channelPosts: { channelId: string; text: string; id: string }[] = []
-  const reactions: { threadId: string; messageId: string; emoji: string; added: boolean }[] = []
-  const edits: { threadId: string; messageId: string; text: string }[] = []
-  const deletes: { threadId: string; messageId: string }[] = []
-  const typing: string[] = []
-  /** What the platform hands over for a file URL: the bytes, or an error to throw. */
-  const served = new Map<string, Uint8Array | Error>()
-  const fetches: string[] = []
-  const author = (user: string, name = user) => ({ userId: user, userName: name, fullName: name, isBot: false, isMe: false })
-  const adapter: Adapter = createMockAdapter(name, {
-    name,
-    userName: 'vboard',
-    initialize: async (instance: ChatInstance) => {
-      chat = instance
-    },
-    channelIdFromThreadId: (threadId: string) => threadId.split(':').slice(0, 2).join(':'),
-    handleWebhook: async (request: Request, options?: WebhookOptions) => {
-      if (request.headers.get('x-github-event')) return new Response('ok')
-      const body = (await request.json()) as WebhookPayload
-      if (body.type === 'delete')
-        await chat.processMessageDeleted({ adapter, threadId: body.threadId, channelId: adapter.channelIdFromThreadId(body.threadId), messageId: body.id, raw: {} }, options)
-      else if (body.type === 'edit')
-        await chat.processMessageUpdated(
-          { adapter, threadId: body.threadId, message: createTestMessage(body.id, body.text, { threadId: body.threadId, author: author(body.user) }) },
-          options,
-        )
-      else if (body.type === 'message')
-        await chat.processMessage(
-          adapter,
-          body.threadId,
-          createTestMessage(body.id, body.text, {
-            threadId: body.threadId,
-            author: author(body.user, body.name),
-            ...(body.raw ? { raw: body.raw } : {}),
-            ...(body.files
-              ? {
-                  attachments: body.files.map((f) => ({
-                    type: f.mimeType.startsWith('image/') ? ('image' as const) : ('file' as const),
-                    name: f.name,
-                    mimeType: f.mimeType,
-                    url: f.url,
-                    ...(f.size !== undefined ? { size: f.size } : {}),
-                    fetchMetadata: { url: f.url },
-                    // The live closure doesn't survive the inbox: the board must use rehydrateAttachment.
-                    fetchData: async () => {
-                      throw new Error('stale fetchData called')
-                    },
-                  })),
-                }
-              : {}),
-          }),
-          options,
-        )
-      else
-        await chat.processReaction(
-          {
-            adapter,
-            threadId: body.threadId,
-            messageId: body.messageId,
-            emoji: getEmoji(body.emoji),
-            rawEmoji: body.emoji,
-            added: body.added,
-            user: author(body.user),
-            raw: { event_ts: `${next++}` },
-          },
-          options,
-        )
-      return new Response('ok')
-    },
-    postMessage: async (threadId: string, message: AdapterPostableMessage) => {
-      const id = `m${++next}`
-      posts.push({ threadId, text: textOf(message), id })
-      // Like Slack's adapter: files upload as their own message, and their IDs come back.
-      const files = typeof message === 'object' && 'files' in message ? (message.files ?? []) : []
-      return { id, threadId, raw: files.length ? { uploadedFileIds: files.map((f) => `F_${f.filename}`) } : {} }
-    },
-    editMessage: async (threadId: string, messageId: string, message: AdapterPostableMessage) => {
-      edits.push({ threadId, messageId, text: textOf(message) })
-      return { id: messageId, threadId, raw: {} }
-    },
-    deleteMessage: async (threadId: string, messageId: string) => {
-      deletes.push({ threadId, messageId })
-    },
-    postChannelMessage: async (channelId: string, message: AdapterPostableMessage) => {
-      const id = `t${++next}`
-      channelPosts.push({ channelId, text: textOf(message), id })
-      const files = typeof message === 'object' && 'files' in message ? message.files ?? [] : []
-      return { id, threadId: `${channelId}:${id}`, raw: files.length ? { uploadedFileIds: files.map((file) => `F_${file.filename}`) } : {} }
-    },
-    // Like Slack's: rebuilds the download from what the attachment kept.
-    rehydrateAttachment: (attachment: Attachment) => ({
-      ...attachment,
-      fetchData: async () => {
-        const url = attachment.fetchMetadata!.url!
-        fetches.push(url)
-        const found = served.get(url)
-        if (!found) throw new Error(`404 ${url}`)
-        if (found instanceof Error) throw found
-        return Buffer.from(found)
-      },
-    }),
-    startTyping: async (threadId: string) => {
-      typing.push(threadId)
-    },
-    addReaction: async (threadId: string, messageId: string, emoji: unknown) => {
-      reactions.push({ threadId, messageId, emoji: String(emoji), added: true })
-    },
-    removeReaction: async (threadId: string, messageId: string, emoji: unknown) => {
-      reactions.push({ threadId, messageId, emoji: String(emoji), added: false })
-    },
-  } as Partial<Adapter>)
-  extend(adapter)
-  return { adapter, posts, channelPosts, reactions, edits, deletes, typing, served, fetches }
-}
-
-
 type SlackChannels = Parameters<typeof slack>[0]['channels']
-
-/** Gives the fake Slack adapter a Web API client, optionally behind an async bot token as with Vercel Connect. */
-function withSlackClient(client: unknown, asyncToken: boolean) {
-  return (adapter: Adapter) => {
-    if (!asyncToken) return void Object.assign(adapter, { webClient: client })
-    let token: string | undefined
-    Object.defineProperty(adapter, 'webClient', {
-      get: () => {
-        if (!token) throw new Error('botToken is configured as an async resolver')
-        return client
-      },
-    })
-    Object.assign(adapter, {
-      getToken: async () => 'xoxb-test',
-      withBotToken: (bound: string, fn: () => unknown) => {
-        token = bound
-        try {
-          return fn()
-        } finally {
-          token = undefined
-        }
-      },
-    })
-  }
-}
 
 function setup(
   options: {
     alerts?: SlackChannels[string]
     channels?: SlackChannels
     slackClient?: unknown
-    slackRender?: import('../src/sync/provider.ts').SyncTransport['render']
+    slackRender?: import('../src/sync/provider.ts').ProviderOptions['render']
     asyncToken?: boolean
     githubClient?: unknown
     repos?: Parameters<typeof github>[0]['repos']
@@ -1077,6 +913,57 @@ describe('sync', () => {
 
 describe('provider callbacks', () => {
 
+  it.each([
+    { action: 'opened', existing: false, issue: false },
+    { action: 'reopened', existing: false, issue: false },
+    { action: 'reopened', existing: true, issue: false },
+    { action: 'opened', existing: false, issue: true },
+    { action: 'reopened', existing: false, issue: true },
+    { action: 'reopened', existing: true, issue: true },
+  ])('returns stable lifecycle results across retry ($action, existing: $existing, issue: $issue)', async ({ action, existing, issue }) => {
+    const g = fakePlatform('github')
+    const results: import('../src/sync/events.ts').SyncResult[] = []
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const board = testBoard({ sync: { github: github({
+        adapter: g.adapter,
+        repos: { 'basehub-ai/vboard': async ({ event, board }) => {
+          const selected = event.kind === 'lifecycle' && event.raw.action === action
+          const imported = await board.sync('prs', event, { root: () => ({ labels: { 'tag.custom': 'custom' } }) })
+          if (selected) {
+            results.push(imported)
+            await board.reply(imported.root!, 'ack')
+            if (results.length === 1) throw new Error('interrupted after lifecycle import')
+          }
+        } },
+      }) } })
+      const call = caller(board.fetch, await personToken())
+      const send = (action: string, delivery: string) => board.fetch(new Request(`${BOARD_URL}/webhooks/github`, {
+        method: 'POST', headers: { 'x-github-event': issue ? 'issues' : 'pull_request', 'x-github-delivery': delivery },
+        body: JSON.stringify({
+          action, repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'ada' },
+          [issue ? 'issue' : 'pull_request']: { number: 81, title: 'Lifecycle result', html_url: 'https://github.com/basehub-ai/vboard/pull/81', labels: [] },
+        }),
+      }))
+      if (existing) {
+        await send('opened', 'initial')
+        await vi.waitFor(async () => expect(await read(call, 'prs')).toHaveLength(1))
+      }
+      await send(action, 'selected')
+      await vi.waitFor(() => expect(error).toHaveBeenCalled())
+      await vi.waitFor(async () => {
+        await board.servers[1]!.drain(`inbox:github:basehub-ai/vboard:${issue ? 'issues' : 'pulls'}`)
+        expect(results).toHaveLength(2)
+      })
+      expect(results[1]).toEqual(results[0])
+      const messages = await read(call, 'prs')
+      expect(messages).toHaveLength(action === 'opened' ? 2 : 3)
+      expect(results[0]).toEqual({ root: messages[0]!.id, message: messages[action === 'opened' ? 0 : 1]!.id })
+      expect(messages[0]?.labels['tag.custom']).toBe(existing ? undefined : 'custom')
+      expect(messages.filter((message) => message.text === 'ack')).toHaveLength(1)
+    } finally { error.mockRestore() }
+  })
+
   it('preserves A2 receipt identities from the pre-refactor handler step', async () => {
     const { board, s, webhook } = setup()
     const call = caller(board.fetch, await personToken())
@@ -1332,7 +1219,7 @@ describe('provider callbacks', () => {
     const nativeChannel = 'https://provider.test/team:inbox'
     const Schema = eventSchema('opaque', 'message')
     type OpaqueEvent = z.infer<typeof Schema>
-    class OpaqueProvider extends SyncProvider<OpaqueEvent> {
+    class OpaqueProvider extends ChatSyncProvider<OpaqueEvent> {
       constructor(adapter: Adapter, mapping: EventMapping<OpaqueEvent>) {
         super({
           platform: 'opaque', adapter, canStartThreads: true,
@@ -1343,8 +1230,8 @@ describe('provider callbacks', () => {
         })
         this.map('inbox', mapping)
       }
-      override event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): OpaqueEvent {
-        return Schema.parse(envelope(this.platform, context.key, context.event, context.raw))
+      override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): OpaqueEvent {
+        return Schema.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
       }
     }
     const p = fakePlatform('opaque')

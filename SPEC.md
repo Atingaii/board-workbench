@@ -1026,12 +1026,21 @@ import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 
+const slackCredentials = connectSlackAdapter('slack/basehub')
+const slackAdapter = createSlackAdapter(slackCredentials)
+const acmeCredentials = connectSlackAdapter('slack/acme')
+const acmeAdapter = createSlackAdapter(acmeCredentials)
+
 export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
-      adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
+      adapter: slackAdapter,
+      client: async () => slackAdapter.withBotToken(
+        typeof slackCredentials.botToken === 'function' ? await slackCredentials.botToken() : slackCredentials.botToken,
+        () => slackAdapter.webClient,
+      ),
       channels: {
         '#errors-www': 'errors-www',
         '#firehose-www': 'firehose-www',
@@ -1044,7 +1053,11 @@ export const { GET, POST, scheduler } = board({
       },
     }),
     acme: slack({                                         // a second Slack workspace
-      adapter: createSlackAdapter({ ...connectSlackAdapter('slack/acme') }),
+      adapter: acmeAdapter,
+      client: async () => acmeAdapter.withBotToken(
+        typeof acmeCredentials.botToken === 'function' ? await acmeCredentials.botToken() : acmeCredentials.botToken,
+        () => acmeAdapter.webClient,
+      ),
       channels: { '#support': 'acme-support' },
     }),
     github: github({
@@ -1139,12 +1152,21 @@ thread-attachment meaning everywhere.
   already succeeded returns its existing message, allowing later callback work to
   resume. Callbacks adding external I/O must make it idempotent themselves.
 
-Envelopes share platform, sync key, channel, grouped thread, precise subthread,
+`board.sync` returns `{ root, message }`. `root` identifies the board thread's
+root; `message` identifies the imported message, the affected message for an
+edit/delete/reaction, or a generated lifecycle reply. A root-only lifecycle
+import returns its root as `message`; a label-only update returns `message: null`.
+An event that cannot be applied returns null IDs where no board message exists.
+Results stay the same when an import is retried after succeeding.
+
+Envelopes share a durable inbox event `id`, platform, sync key, channel, grouped thread, precise subthread,
 and raw payload fields, plus the complete normalized operation. Message text,
 authors, files, and reaction data belong to their applicable variants. GitHub
 adds `subject: { type: 'pull_request' | 'issue', repo, number }`, including on
 comments, edits, and reactions. Its lifecycle union narrows native PR/issue data
 by `type`. Envelopes are validated and frozen before application callbacks.
+`event.id` stays the same on callback retries and can serve as an idempotency key
+for the callback's own service calls.
 
 A bare function chooses a board channel at import time; the board cannot infer
 reverse routing for a new board-created thread from that function. A mapping may declare both a channel and a callback:
@@ -1173,7 +1195,12 @@ are converted to the destination's native form in the rendered body, after the
 custom renderer runs; code spans and quoted context retain their usual treatment.
 
 ```ts
-kapso({ adapter, numbers: { '16315558151': 'support' }, render: ({ message }) => message.text })
+kapso({
+  adapter,
+  markRead: (input) => client.messages.markRead(input),
+  numbers: { '16315558151': 'support' },
+  render: ({ message }) => message.text,
+})
 ```
 
 This omits author attribution from WhatsApp delivery. Rendering is used for roots,
@@ -1216,8 +1243,8 @@ including pending work and retries; they do not rewrite already delivered copies
 
 ### Inbound handling
 
-1. `POST /webhooks/:name` hands the request to the entry's Chat SDK adapter,
-   which authenticates it.
+1. `POST /webhooks/:name` calls the provider's `receive`, which authenticates
+   the request and emits normalized events. The built-in providers use Chat SDK.
 2. The board appends `external.received` to the inbox session for that external
    channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
    answers 200 right away. That's well inside Slack's 3-second retry window, and
@@ -1275,7 +1302,7 @@ dead-letters and holds up its thread's lane.
 ### Outbound handling
 
 - **On each board write in a synced thread**, the outbound handler calls the
-  entry's Chat SDK thread API: post, react, edit, or delete. It then records
+  provider's methods: post, react, edit, or delete. It then records
   `message.synced`, so later edits and reactions can find the platform's copy.
 - **Attachments go where a platform takes them.** Slack gets the files
   themselves: the text posts first, and its receipt is recorded, then the files
@@ -1403,35 +1430,64 @@ webhook: Connect's OIDC verifier, or the platform's own signature check.
 
 ### Sync providers
 
-`slack()`, `github()`, and `kapso()` construct provider classes sharing the
-`SyncProvider` contract. `vboard/sync` exports it, the shared schemas and types,
-and envelope helpers for custom Chat SDK providers. `SyncProvider` owns common
-callback dispatch; providers supply validated envelopes and default policies.
-The core keeps persistence, dedupe, thread ordering, and copy receipts.
+`vboard/sync` exports `SyncProvider`, shared schemas, and callback/import types.
+The engine calls the provider's methods; it does not access an SDK adapter or
+transport configuration. A provider can implement its own SDK integration or
+extend `ChatSyncProvider` from `vboard/sync/chat`. Slack, GitHub, and Kapso share
+that bridge. Importing the native contract does not load Chat SDK.
 
-A provider supplies a configured Chat SDK adapter and resolves channel names and
-explicit targets to `{ target, channel, kind: 'channel' | 'thread' }`. The server
-records the target kind in `thread.synced`; reducers do not interpret a new
-provider's ID syntax. Older events without a kind retain their legacy parsing.
-Inbound origins record their resolved channel so reverse routing also treats
-native IDs as opaque.
+```ts
+import { SyncProvider, type Receive } from 'vboard/sync'
+import { ChatSyncProvider, type ChatInput } from 'vboard/sync/chat'
+```
 
-Capabilities and quirks are explicit: starting threads, reaction cardinality,
-thread grouping, native author namespaces, recovering missing roots, uploads,
-file IDs, typing, and rendering. A custom provider implements `event()` and may
-override `sync(context, channel, overrides)` to change its defaults. The default
-method applies the already-validated internal event, without projecting a callback
-envelope. A subclass that needs its richer typed envelope can call `this.event(context)`
-explicitly. Callback envelopes are projected and validated only when handed to
-application callbacks.
-Its durable state belongs in A2, not in provider instance fields. SDK caches and
-credentials remain transport dependencies.
+The required methods are `receive(key, request, emit)`, `resolveChannel(key)`,
+`resolveTarget(target)`, `post(target, kind, body)`, and `event(context)`.
+`receive` authenticates the request before emitting normalized
+`{ event, raw, dedupe }` records. Incoming locations have the configured sync
+key prefix. Outgoing targets passed to provider methods are native IDs, without
+that prefix. `post` returns native `{ thread, message, files? }` receipt data.
+The engine validates incoming records, persists them before acknowledging,
+orders imports and delivery, handles retries and echo suppression, and records
+copy/file receipts. Intake failures answer 500 so the sender can retry.
 
-Extending the contract is tested with a fourth provider whose IDs are URL-like
-strings containing colons. It imports replies, starts and attaches threads,
-uses callbacks, and falls back to attachment notes without engine branches.
-Supporting a provider without a Chat SDK adapter still requires a transport
-bridge; this contract does not claim every SDK shares identical capabilities.
+The provider supplies stable occurrence identity in `dedupe`. Repeated delivery
+of the same occurrence must keep its ID, while a later identical action must
+have a different one. The Chat bridge's `eventId(key, input)` can be overridden
+for native delivery IDs; its default handles messages, edits, and deletes.
+Providers receiving reactions must supply their occurrence identity. Slack uses
+`event_ts`; Kapso uses the reaction message's `id`. There is no current-time
+fallback. Existing built-in inbox and receipt ID schemes are retained.
+
+Target resolution returns `{ target, channel, kind: 'channel' | 'thread' }`.
+The server records target kind in `thread.synced` and the resolved incoming
+origin channel; reducers and reverse routing do not interpret a new provider's
+ID syntax. Older records retain their legacy parsing. Channel attachment is
+rejected when `canStartThreads` is false; existing thread attachment still works.
+
+Optional methods provide missing-root recovery, file downloads/uploads, native
+mentions, email lookup, edits/deletes/reactions, and typing. Defaults for absent
+change/typing operations are no-ops. `uploadsFiles` declares upload support;
+otherwise files get board attachment notes. `refusesFiles` distinguishes a
+permanent upload refusal from a retryable failure. Providers also declare
+reaction cardinality. All of these operations can be overridden as class methods;
+Chat-specific hooks remain inside the bridge.
+
+`SyncProvider` owns common mapping dispatch. Its `sync(context, channel,
+overrides)` default applies the validated internal operation directly, without
+projecting a callback envelope. A subclass needing richer native data can call
+`this.event(context)` explicitly. Envelopes are projected, validated, and frozen
+only for application callbacks. Subclasses can override `render(input)` or pass
+a renderer in their constructor options. Durable state belongs in A2;
+SDK caches and credentials remain provider dependencies.
+
+The same provider contract tests run against a native implementation and a Chat
+SDK bridge implementation. They cover authentication, duplicate delivery,
+distinct add/remove/add occurrences, callback and outgoing retries, stable
+callback IDs, concurrent entry contexts, opaque URL-like targets, static reverse routing, unsupported
+channel creation, thread attachment, and file fallback. The existing built-in
+suites cover GitHub lifecycle results across retries, media receipts, native
+mentions, and cross-instance Kapso read/typing.
 
 ### Chat SDK configuration (internal)
 
@@ -1444,9 +1500,8 @@ vboard configures every Chat instance itself:
 - **One Chat instance per sync entry.** Chat SDK prefixes thread IDs with the
   adapter name, so two Slack entries in one instance would collide on `slack:`.
   vboard translates between Chat SDK IDs and its key-prefixed external IDs.
-- **State comes from the A2 store, not a separate state adapter.** This is an
-  internal adapter, `chatStateFromA2(store)`. It works because the board needs
-  almost nothing from Chat SDK's state:
+- **Chat state is ephemeral.** A2 provides durable inbox identity and sync
+  state; Chat SDK uses an in-memory state adapter for best-effort caches:
 
   | What Chat SDK uses state for | What replaces it |
   | --- | --- |
@@ -1596,7 +1651,7 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 
 ### WhatsApp (Kapso)
 
-`kapso({ adapter, numbers })`, with
+`kapso({ adapter, markRead, numbers })`, with
 [Kapso's Chat SDK adapter](https://chat-sdk.dev/adapters/vendor-official/kapso).
 Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
 the numbers themselves.

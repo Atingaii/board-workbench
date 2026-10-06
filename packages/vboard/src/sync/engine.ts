@@ -1,5 +1,4 @@
 import { canonicalEmoji } from '../contract/emoji.ts'
-import type { Attachment as ChatAttachment, Chat, Message as ChatMessage, ReactionEvent } from 'chat'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
 import type { BoardClient } from '../client/client.ts'
@@ -37,10 +36,10 @@ import {
   type Identity,
   type WriteContext,
 } from '../server/writes.ts'
-import { type SyncPlatform } from './types.ts'
+import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import type { ProviderMapping, ResolvedTarget, SyncClient, SyncContext } from './provider.ts'
+import { ReceivedEvent, ResolvedTarget, type ProviderMapping, type SyncClient, type SyncContext } from './provider.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 
 export type BoardBinding = {
@@ -55,16 +54,6 @@ const clampText = (text: string, files = false) => {
   const trimmed = text.trim() === '' ? (files ? '' : '(no text)') : text
   return trimmed.length > MESSAGE_TEXT_MAX ? `${trimmed.slice(0, MESSAGE_TEXT_MAX - 1)}…` : trimmed
 }
-
-/** A Chat SDK attachment as the inbox keeps it: what the adapter needs to fetch it again, without the bytes or the closure. */
-const externalFile = (a: ChatAttachment): ExternalFile => ({
-  type: a.type,
-  ...(a.name ? { name: a.name.slice(0, 1000) } : {}),
-  ...(a.mimeType ? { mimeType: a.mimeType.slice(0, 255) } : {}),
-  ...(typeof a.size === 'number' && Number.isInteger(a.size) && a.size >= 0 ? { size: a.size } : {}),
-  ...(a.url && a.url.length <= 4000 ? { url: a.url } : {}),
-  ...(a.fetchMetadata ? { fetchMetadata: a.fetchMetadata } : {}),
-})
 
 /** A platform file the board couldn't bring over gets a line in the text instead. */
 const fileNote = (file: ExternalFile, why: string) =>
@@ -88,15 +77,9 @@ const jsonSafe = (value: unknown): unknown => {
   }
 }
 
-const emojiName = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9_+-]/g, '_')
-    .slice(0, 64) || 'unknown'
-
-/** Two-way sync between the board and its platforms, one Chat SDK instance per entry. */
+/** Durable two-way sync between the board and its providers. */
 export function createSyncEngine(options: {
-  entries: Record<string, SyncPlatform>
+  entries: Record<string, SyncProvider>
   store?: A2Store | undefined
   scheduler?: A2Scheduler | undefined
   /** Where attachments' bytes are, for platforms that take uploads. */
@@ -109,24 +92,13 @@ export function createSyncEngine(options: {
     return binding
   }
 
-  const platformOf = (key: string): SyncPlatform => {
+  const platformOf = (key: string): SyncProvider => {
     const platform = entries[key]
     if (!platform) throw badRequest(`no sync entry named ${key}`)
     return platform
   }
   const keyOf = (target: string) => target.slice(0, target.indexOf(':'))
-  /** `slack:C0123:1727.1` (Chat SDK) → `${key}:C0123:1727.1` (board). */
-  const toExternal = (key: string, chatId: string) => {
-    const id = chatId.slice(chatId.indexOf(':') + 1)
-    return `${key}:${platformOf(key).transport.fromChatId?.(id) ?? id}`
-  }
-  /** The reverse: board external ID → Chat SDK ID. */
-  const toChat = (external: string) => {
-    const key = keyOf(external)
-    const platform = platformOf(key)
-    const id = external.slice(key.length + 1)
-    return `${platform.adapter.name}:${platform.transport.toChatId?.(id) ?? id}`
-  }
+  const native = (external: string) => external.slice(external.indexOf(':') + 1)
 
   // --- mappings ---------------------------------------------------------------
 
@@ -183,7 +155,8 @@ export function createSyncEngine(options: {
     const key = target.slice(0, at)
     const platform = platformOf(key)
     try {
-      const resolved = await platform.resolveTarget(target.slice(at + 1))
+      const resolved = ResolvedTarget.parse(await platform.resolveTarget(target.slice(at + 1)))
+      if (resolved.kind === 'channel' && !platform.canStartThreads) throw new Error(`${platform.platform} cannot start threads; use an existing thread`)
       return { target: `${key}:${resolved.target}`, channel: `${key}:${resolved.channel}`, kind: resolved.kind }
     } catch (error) {
       throw badRequest(`can't sync to ${target}: ${(error as Error).message}`)
@@ -192,127 +165,28 @@ export function createSyncEngine(options: {
 
   // --- inbound: platform → inbox --------------------------------------------------
 
-  const chats = new Map<string, Chat>()
-
-  async function intake(key: string, event: ExternalEvent, raw: unknown, dedupe: string) {
+  async function intake(key: string, received: ReceivedEvent) {
+    const { event, raw, dedupe } = ReceivedEvent.parse(received)
+    for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
+      if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
     const map = await mappings(key)
     const { state: sync } = await bound().session.state(syncReducer)
     if (!map.has(event.channel) && !sync.byExternalThread[event.thread]) return
     const id = await idempotentId('vboard-inbox', key, dedupe)
     await inboxServer.session(inboxSession(event.channel)).append({
-      type: 'external.received',
-      id,
-      payload: { sync: key, event, raw: jsonSafe(raw) },
+      type: 'external.received', id, payload: { sync: key, event, raw: jsonSafe(raw) },
     })
   }
 
-  function located(key: string, platform: SyncPlatform, chatThread: string) {
-    const precise = toExternal(key, chatThread)
-    const platformThread = precise.slice(key.length + 1)
-    const grouped = `${key}:${platform.groupThread(platformThread)}`
-    const channel = platform.transport.channelOf
-      ? `${key}:${platform.transport.channelOf(platformThread)}`
-      : toExternal(key, platform.adapter.channelIdFromThreadId(chatThread))
-    return { channel, thread: grouped, subthread: grouped === precise ? null : precise, platformThread }
-  }
-
-  for (const [key, platform] of Object.entries(entries)) {
-    const chat = platform.createChat()
-    const authorOf = async (message: ChatMessage) => {
-      const author = platform.author(message.author, message.raw)
-      const avatar = await platform.transport.avatar?.(message).catch(() => null)
-      return avatar ? { ...author, avatar } : author
-    }
-    const onMessage = async (_thread: unknown, message: ChatMessage) => {
-      const where = located(key, platform, message.threadId)
-      await intake(
-        key,
-        {
-          kind: 'message',
-          ...where,
-          message: message.id,
-          isRoot: platform.isRoot(where.platformThread, message.id),
-          text: platform.markdown(message),
-          context: platform.context(message),
-          author: await authorOf(message),
-          ...(message.attachments?.length ? { files: message.attachments.slice(0, 20).map(externalFile) } : {}),
-        },
-        message.raw,
-        `message:${where.subthread ?? where.thread}|${message.id}`,
-      )
-    }
-    chat.onNewMessage(/[\s\S]*/, onMessage)
-    chat.onNewMention(onMessage)
-    chat.onMessageUpdated(async (_thread, message) => {
-      const where = located(key, platform, message.threadId)
-      await intake(
-        key,
-        {
-          kind: 'edited',
-          channel: where.channel,
-          thread: where.thread,
-          subthread: where.subthread,
-          message: message.id,
-          text: platform.markdown(message),
-          author: await authorOf(message),
-        },
-        message.raw,
-        `edited:${where.subthread ?? where.thread}|${message.id}|${message.text}`,
-      )
-    })
-    chat.onMessageDeleted(async (event) => {
-      const where = located(key, platform, event.threadId)
-      await intake(
-        key,
-        { kind: 'deleted', channel: where.channel, thread: where.thread, subthread: where.subthread, message: event.messageId },
-        event.raw,
-        `deleted:${where.subthread ?? where.thread}|${event.messageId}`,
-      )
-    })
-    chat.onReaction(async (event: ReactionEvent) => {
-      const where = located(key, platform, event.threadId)
-      // Slack stamps a reaction event; WhatsApp sends each reaction as a message with its own ID.
-      const raw = event.raw as { event_ts?: string; id?: string } | null
-      const stamp = raw?.event_ts ?? raw?.id ?? String(Date.now())
-      await intake(
-        key,
-        {
-          kind: 'reaction',
-          channel: where.channel,
-          thread: where.thread,
-          subthread: where.subthread,
-          message: event.messageId,
-          emoji: emojiName(event.emoji?.name ?? event.rawEmoji),
-          added: event.added,
-          author: platform.author(event.user, event.raw),
-        },
-        event.raw,
-        `reaction:${where.subthread ?? where.thread}|${event.messageId}|${event.rawEmoji}|${event.user.userId}|${event.added}|${stamp}`,
-      )
-    })
-    chats.set(key, chat)
-  }
-
-  /** Platform ingress: the adapter verifies the request; intake failures answer 500 so the platform retries. */
   async function handleWebhook(key: string, request: Request): Promise<Response> {
     const platform = entries[key]
-    const chat = chats.get(key)
-    if (!platform || !chat) throw notFound(`no sync entry named ${key}`)
-    const body = platform.transport.intercept ? await request.clone().text() : null
-    const tasks: Promise<unknown>[] = []
-    const webhooks = chat.webhooks as Record<string, (r: Request, o: { waitUntil: (t: Promise<unknown>) => void }) => Promise<Response>>
-    const response = await webhooks[platform.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
-    const results = await Promise.allSettled(tasks)
-    const failed = results.find((result) => result.status === 'rejected')
-    if (failed) {
-      console.error('[vboard] intake failed', (failed as PromiseRejectedResult).reason)
+    if (!platform) throw notFound(`no sync entry named ${key}`)
+    try {
+      return await platform.receive(key, request, (received) => intake(key, received))
+    } catch (error) {
+      console.error('[vboard] intake failed', error)
       return new Response('intake failed', { status: 500 })
     }
-    if (response.ok && platform.transport.intercept && body !== null) {
-      for (const draft of platform.transport.intercept(key, request.headers, body))
-        await intake(key, draft.event, draft.raw, draft.dedupe)
-    }
-    return response
   }
 
   // --- inbound: inbox → board -------------------------------------------------------
@@ -333,7 +207,7 @@ export function createSyncEngine(options: {
    * platform refused) becomes a line in the text; a failed fetch retries the
    * message a few times first.
    */
-  async function importFiles(platform: SyncPlatform, files: ExternalFile[], attempt: number) {
+  async function importFiles(platform: SyncProvider, files: ExternalFile[], attempt: number) {
     const attachments: Attachment[] = []
     const notes: string[] = []
     const blob = options.blob
@@ -346,15 +220,14 @@ export function createSyncEngine(options: {
         notes.push(fileNote(file, `over ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`))
         continue
       }
-      const fetchData = platform.adapter.rehydrateAttachment?.({ ...file }).fetchData
-      if (!fetchData) {
-        notes.push(fileNote(file, `${platform.platform} can't hand it over`))
-        continue
-      }
       let data: Uint8Array
       try {
-        const fetched = await fetchData()
-        data = fetched instanceof ArrayBuffer ? new Uint8Array(fetched) : new Uint8Array(fetched.buffer, fetched.byteOffset, fetched.byteLength)
+        const fetched = await platform.fetchFile(file)
+        if (fetched === null) {
+          notes.push(fileNote(file, `${platform.platform} can't hand it over`))
+          continue
+        }
+        data = fetched
       } catch (error) {
         if (attempt < FILE_ATTEMPTS) throw error
         console.warn(`[vboard] couldn't fetch ${file.name ?? 'a file'} from ${platform.platform}:`, describe(error))
@@ -397,7 +270,7 @@ export function createSyncEngine(options: {
     let applied: Promise<SyncResult> | undefined
     let active = true
     const context: SyncContext = {
-      key, event, raw, board,
+      id: trigger.id, key, event, raw, board,
       apply(channel, overrides = {}) {
         if (!active) throw badRequest('the sync callback has finished')
         if (applied) throw badRequest('an event can only be imported once per callback')
@@ -477,11 +350,11 @@ export function createSyncEngine(options: {
           await setExtraLabels(identity, rootId)
           return result(await writePost(writes, { ...base, re: rootId }))
         }
-        if (!platform.transport.fetchRoot) {
+        const fetched = await platform.fetchRoot(native(event.thread))
+        if (fetched === null) {
           const draft = rootDraft({ text: event.text, labels: {}, author: event.author, raw: trigger.payload.raw })
           return result(await writePost(writes, { ...base, channel, text: clampText(withNotes(overrides.text ?? draft.text, notes), attachments.length > 0), labels: labels(draft.labels) }))
         }
-        const fetched = await platform.transport.fetchRoot(event.thread.slice(key.length + 1))
         const draft = rootDraft({ ...fetched, raw: fetched.raw ?? null })
         const root = await writePost(writes, {
           identity: externalIdentity(fetched.author), channel,
@@ -522,13 +395,15 @@ export function createSyncEngine(options: {
         if (rootId !== undefined) {
           const { state: messages } = await session.state(messagesReducer)
           const root = messages.byId[rootId]
-          const desired = labels(event.labels)
+          const createdHere = root?.origin?.message === `lifecycle:${trigger.id}`
+          const draft = createdHere ? rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw }) : null
+          const desired = labels(draft?.labels ?? event.labels)
           const owned = (key: string) => event.owns?.some((prefix) => key.startsWith(prefix)) ?? false
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
           if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, id: rootId, set, unset })
           if (event.reply) return result(await writePost(writes, { identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, id: await writeId(1) }))
-          return { root: rootId, message: null }
+          return { root: rootId, message: createdHere ? rootId : null }
         }
         if (!event.createRoot) return { root: null, message: null }
         const draft = rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw })
@@ -537,7 +412,7 @@ export function createSyncEngine(options: {
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(0),
         })
-        if (event.reply) await writePost(writes, { identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, id: await writeId(1) })
+        if (event.reply) return result(await writePost(writes, { identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, id: await writeId(1) }))
         return result(root)
       }
     }
@@ -559,32 +434,18 @@ export function createSyncEngine(options: {
 
   // --- outbound: board → platforms --------------------------------------------------
 
-  const initialized = new Map<string, Promise<void>>()
-  const chatFor = async (key: string) => {
-    const chat = chats.get(key)
-    if (!chat) throw badRequest(`no sync entry named ${key}`)
-    let ready = initialized.get(key)
-    if (!ready) {
-      ready = chat.initialize()
-      ready.catch(() => initialized.delete(key))
-      initialized.set(key, ready)
-    }
-    await ready
-    return chat
-  }
-
   /**
    * A message's text for a platform: each mention it resolved reads natively where the
    * actor is the platform's own, and as their plain name anywhere else.
    */
-  function textFor(platform: SyncPlatform, message: Message, actors: ActorsState, text = message.text): string {
+  function textFor(platform: SyncProvider, message: Message, actors: ActorsState, text = message.text): string {
     const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
     return replaceMentions(text, (token) => {
       const actor =
         token.kind === 'actor'
           ? mentioned.find((candidate) => candidate.id === token.actor)
           : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
-      return actor ? (platform.mention?.(actor) ?? actor.name) : null
+      return actor ? (platform.mention(actor) ?? actor.name) : null
     })
   }
 
@@ -613,7 +474,7 @@ export function createSyncEngine(options: {
   const renderFor = (target: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
     const key = keyOf(target)
     const { markdown } = render(key, target, message, actors, quote)
-    const lines = message.attachments.length > 0 && (noted || !platformOf(key).transport.uploadFiles || !options.blob)
+    const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles || !options.blob)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown }
   }
 
@@ -640,24 +501,24 @@ export function createSyncEngine(options: {
     // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere it quotes it.
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
-    const chat = await chatFor(keyOf(target))
+    const platform = platformOf(keyOf(target))
     let body = renderFor(target, message, state.actors, inSubthread ? undefined : replyTo)
     let files: string[] | null | undefined
     let sentId: string
-    if (!body.markdown.trim() && message.attachments.length && options.blob && platformOf(keyOf(target)).transport.uploadFiles) {
+    if (!body.markdown.trim() && message.attachments.length && options.blob && platformOf(keyOf(target)).uploadsFiles) {
       try {
         const sent = await uploadMessageFiles(message, target, place)
         sentId = sent.message
         files = sent.files
       } catch (error) {
-        if (!platformOf(keyOf(target)).transport.refusesFiles?.(error)) throw error
+        if (!platformOf(keyOf(target)).refusesFiles(error)) throw error
         body = renderFor(target, message, state.actors, inSubthread ? undefined : replyTo, true)
-        sentId = (await chat.thread(toChat(place)).post(body)).id
+        sentId = (await platform.post(native(place), 'thread', body)).message
         files = null
       }
     } else {
       if (!body.markdown.trim()) throw badRequest('a renderer must return text unless the message has media')
-      sentId = (await chat.thread(toChat(place)).post(body)).id
+      sentId = (await platform.post(native(place), 'thread', body)).message
     }
     const external = { thread: place, message: sentId, ...(files !== undefined ? { files } : {}) }
     await recordDelivery(ctx, message, target, external)
@@ -683,23 +544,22 @@ export function createSyncEngine(options: {
   }
 
   async function uploadMessageFiles(message: Message, target: string, thread: string) {
-    return platformOf(keyOf(target)).transport.uploadFiles!(toChat(thread), await messageFiles(message))
+    return platformOf(keyOf(target)).uploadFiles(native(thread), await messageFiles(message))
   }
 
   async function deliverFiles(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy, actors: ActorsState) {
     const platform = platformOf(keyOf(target))
     const blob = options.blob
-    if (!platform.transport.uploadFiles || !blob || message.attachments.length === 0 || copy.files !== undefined) return
+    if (!platform.uploadsFiles || !blob || message.attachments.length === 0 || copy.files !== undefined) return
     let ids: string[] | null
     try {
       ids = (await uploadMessageFiles(message, target, copy.thread)).files
     } catch (error) {
       // Retried, and if it gives up, `message.sync_failed` says it was the files: the text is there.
-      if (!platform.transport.refusesFiles?.(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
+      if (!platform.refusesFiles(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
-      const adapter = (await chatFor(keyOf(target))).getAdapter(platform.adapter.name)
-      await adapter.editMessage(toChat(copy.thread), copy.message, renderFor(target, message, actors, undefined, true)).catch((edit: unknown) =>
+      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, undefined, true)).catch((edit: unknown) =>
         console.warn(`[vboard] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
@@ -748,27 +608,27 @@ export function createSyncEngine(options: {
     let externalThread = synced.external[target]
     if (!externalThread) {
       try {
-        const chat = await chatFor(keyOf(target))
+        const platform = platformOf(keyOf(target))
         const body = renderFor(target, root, state.actors)
-        const mediaOnly = !body.markdown.trim() && root.attachments.length > 0 && options.blob && platformOf(keyOf(target)).transport.uploadFiles
+        const mediaOnly = !body.markdown.trim() && root.attachments.length > 0 && options.blob && platformOf(keyOf(target)).uploadsFiles
         if (!body.markdown.trim() && !mediaOnly) throw badRequest('a renderer must return text unless the message has media')
         let uploaded: string[] | null | undefined
         const post = async () => {
-          if (!mediaOnly) return chat.channel(toChat(target)).post(body)
+          if (!mediaOnly) return platform.post(native(target), 'channel', body)
           const files = await messageFiles(root)
           try {
-            const sent = await chat.channel(toChat(target)).post({ ...body, files })
-            uploaded = platformOf(keyOf(target)).transport.fileIds?.(sent.raw) ?? []
+            const sent = await platform.post(native(target), 'channel', { ...body, files })
+            uploaded = sent.files ?? []
             return sent
           } catch (error) {
-            if (!platformOf(keyOf(target)).transport.refusesFiles?.(error)) throw error
+            if (!platformOf(keyOf(target)).refusesFiles(error)) throw error
             uploaded = null
-            return chat.channel(toChat(target)).post(renderFor(target, root, state.actors, undefined, true))
+            return platform.post(native(target), 'channel', renderFor(target, root, state.actors, undefined, true))
           }
         }
         const sent = await post()
-        externalThread = toExternal(keyOf(target), sent.threadId)
-        const external = { thread: externalThread, message: sent.id, ...(uploaded !== undefined ? { files: uploaded } : {}) }
+        externalThread = `${keyOf(target)}:${sent.thread}`
+        const external = { thread: externalThread, message: sent.message, ...(uploaded !== undefined ? { files: uploaded } : {}) }
         await recordDelivery(ctx, root, target, external)
         await deliverFiles(ctx, root, target, external, state.actors)
       } catch (error) {
@@ -834,17 +694,17 @@ export function createSyncEngine(options: {
     for (const [target, copy] of Object.entries(copies)) {
       if (event.payload.from !== null && keyOf(target) === event.payload.from) continue
       try {
-        const adapter = (await chatFor(keyOf(target))).getAdapter(platformOf(keyOf(target)).adapter.name)
-        const chatThread = toChat(copy.thread)
+        const platform = platformOf(keyOf(target))
+        const thread = native(copy.thread)
         if (event.type === 'message.edited' && message)
-          await adapter.editMessage(chatThread, copy.message, renderFor(target, message, state.actors, undefined, copy.files === null))
+          await platform.edit(thread, copy.message, renderFor(target, message, state.actors, undefined, copy.files === null))
         else if (event.type === 'message.deleted') {
-          await adapter.deleteMessage(chatThread, copy.message)
+          await platform.delete(thread, copy.message)
           // The files went as a message of their own.
-          if (copy.files?.length) await platformOf(keyOf(target)).transport.deleteFiles?.(copy.files)
+          if (copy.files?.length) await platform.deleteFiles(copy.files)
         }
-        else if (event.type === 'reaction.added') await adapter.addReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
-        else if (event.type === 'reaction.removed') await adapter.removeReaction(chatThread, copy.message, canonicalEmoji(event.payload.emoji))
+        else if (event.type === 'reaction.added') await platform.react(thread, copy.message, canonicalEmoji(event.payload.emoji), true)
+        else if (event.type === 'reaction.removed') await platform.react(thread, copy.message, canonicalEmoji(event.payload.emoji), false)
       } catch (error) {
         console.warn(`[vboard] skipped ${event.type} on ${target}:`, (error as Error).message)
       }
@@ -868,17 +728,12 @@ export function createSyncEngine(options: {
         const key = keyOf(external)
         try {
           const platform = platformOf(key)
-          const chat = await chatFor(key)
-          const chatThread = toChat(external)
-          if (platform.transport.startTyping) {
-            // The newest message that came from there, for platforms that mark it read (WhatsApp).
-            let latest: string | null = null
-            for (let i = ids.length - 1; i >= 0 && latest === null; i--) {
-              const origin = messages.byId[ids[i]!]
-              if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
-            }
-            await platform.transport.startTyping(chatThread, latest)
-          } else await chat.getAdapter(platform.adapter.name).startTyping(chatThread)
+          let latest: string | null = null
+          for (let i = ids.length - 1; i >= 0 && latest === null; i--) {
+            const origin = messages.byId[ids[i]!]
+            if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
+          }
+          await platform.startTyping(native(external), latest)
           return external
         } catch (error) {
           console.warn(`[vboard] skipped typing on ${external}:`, describe(error))
@@ -935,8 +790,6 @@ export function createSyncEngine(options: {
     handleWebhook,
     readInbox,
     typing,
-    /** For tests: the Chat SDK instance behind an entry. */
-    chat: (key: string) => chats.get(key),
   }
 }
 

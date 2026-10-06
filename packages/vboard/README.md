@@ -83,6 +83,8 @@ still attaches a thread; the event-taking overload is not a remote SDK API.
 
 Providers also accept `render: ({ message }) => message.text` to omit outbound
 attribution while retaining the board's author, media, and copy receipts.
-`vboard/sync` exports shared event schemas and `SyncProvider` for custom Chat SDK
-providers. See the [sync contract](../../SPEC.md#event-callbacks-and-default-imports)
+`vboard/sync` exports shared event schemas and the native `SyncProvider`
+contract. `vboard/sync/chat` adds `ChatSyncProvider` for Chat SDK integrations.
+Providers own stable native event identity; callbacks receive a durable `event.id`
+for their own idempotency. See the [sync contract](../../SPEC.md#event-callbacks-and-default-imports)
 for callback lifecycle, required SDK client operations, and extension examples.
