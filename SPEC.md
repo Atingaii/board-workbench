@@ -401,6 +401,12 @@ board({
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
   bold. `vb inspect` renders it, dropping raw HTML.
+- **Known bot messages show in a readable form.** A Vercel for GitHub
+  deployment comment (it starts with `[vc]: #…`) shows as one line per
+  deployment: status, project, preview link, and when it was updated. That form
+  appears in `vb read`, `vb tail`, `vb inspect`, and the copies sync posts to
+  other platforms (`src/contract/bots.ts`). The board stores what the bot
+  wrote, and `--json` and the API return it unchanged.
 
 ### Attachments
 
@@ -1237,7 +1243,8 @@ connection; these callbacks do not run for every outgoing message.
 ### Outgoing presentation
 
 Each provider accepts a synchronous `render` function, or a subclass can override
-its `render` method. It receives immutable copies of the board message and actor,
+its `render` method. It receives immutable copies of the board message (its text in the readable
+form for known bot messages) and actor,
 the default author label, and the actual resolved destination. It returns the
 message body as markdown; vboard still adds quoted context and attachment notes.
 The board's stored message and verified author are unchanged. Resolved mentions

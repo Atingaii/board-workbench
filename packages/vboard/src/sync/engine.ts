@@ -41,6 +41,7 @@ import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
 import { ReceivedEvent, ResolvedTarget, type ProviderMapping, type SyncClient, type SyncContext } from './provider.ts'
 import { ChannelPath } from '../contract/schemas.ts'
+import { displayText } from '../contract/bots.ts'
 
 export type BoardBinding = {
   session: BoardSession
@@ -456,9 +457,9 @@ export function createSyncEngine(options: {
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
     if (message.from) name = `${name} (${platformOf(message.from).platform})`
     const quoted = quote
-      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${quote.text.slice(0, 140).replace(/\n/g, ' ')}\n\n`
+      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${displayText(quote.text).slice(0, 140).replace(/\n/g, ' ')}\n\n`
       : ''
-    const body = platformOf(key).render(immutable({ message: structuredClone(message), author: actor ? { ...actor } : null, label: name, target }))
+    const body = platformOf(key).render(immutable({ message: { ...structuredClone(message), text: displayText(message.text) }, author: actor ? { ...actor } : null, label: name, target }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     return { markdown: `${quoted}${textFor(platformOf(key), message, actors, body)}` }
   }

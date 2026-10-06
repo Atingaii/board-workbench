@@ -183,8 +183,19 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     }
 
     const fileIds = (raw: unknown) => ((raw as { uploadedFileIds?: string[] } | null)?.uploadedFileIds ?? []).filter(Boolean)
+    // Slack tags each file with its event's team, and the adapter fetches a tagged
+    // file with that team's installed token, which a single-workspace app (one bot
+    // token, as Vercel Connect gives it) never stores: "Installation not found".
+    // Without the tag, the adapter uses its bot token.
+    const internals = options.adapter as Adapter & { defaultBotTokenProvider?: unknown; installationProvider?: unknown }
+    const singleWorkspace = !!internals.defaultBotTokenProvider && !internals.installationProvider
     super({
       fileIds,
+      fileToFetch(file) {
+        if (!singleWorkspace || !file.fetchMetadata) return file
+        const { teamId: _team, enterpriseId: _enterprise, isEnterpriseInstall: _install, ...rest } = file.fetchMetadata
+        return { ...file, fetchMetadata: rest }
+      },
       render: options.render,
       platform: 'slack',
       adapter: options.adapter,
