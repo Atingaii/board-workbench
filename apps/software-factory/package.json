@@ -29,6 +29,7 @@
     "next": "^16.3.8",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "vboard": "workspace:*"
+    "vboard": "workspace:*",
+    "zod": "^4.6.5"
   }
 }

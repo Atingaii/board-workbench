@@ -46,7 +46,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   Connect uses `slack/vboard-factory` and
   `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
-- Watchers do the work. `triage` labels each non-PR dev thread's `kind` with jev,
+- Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
+  GPT-6 Luna's structured output,
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
   `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
