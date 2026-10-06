@@ -47,3 +47,23 @@ export function extractMentions(text: string): MentionToken[] {
     .filter(({ key }) => !seen.has(key) && seen.add(key))
     .map(({ token }) => token)
 }
+
+/**
+ * Rewrites each mention in prose with `replace`; one it returns null for stays as written.
+ * Code is left alone, as in `extractMentions`.
+ */
+export function replaceMentions(text: string, replace: (token: MentionToken) => string | null): string {
+  const prose = proseOnly(text)
+  const found: { index: number; length: number; token: MentionToken }[] = []
+  for (const match of prose.matchAll(EXACT))
+    found.push({ index: match.index, length: match[0].length, token: { kind: 'actor', actor: match[1]! } })
+  for (const match of prose.replace(EXACT, (m) => ' '.repeat(m.length)).matchAll(MENTION))
+    found.push({ index: match.index, length: match[0].length, token: { kind: 'handle', handle: match[1]!.toLowerCase() } })
+  let out = ''
+  let at = 0
+  for (const { index, length, token } of found.sort((a, b) => a.index - b.index)) {
+    out += text.slice(at, index) + (replace(token) ?? text.slice(index, index + length))
+    at = index + length
+  }
+  return out + text.slice(at)
+}

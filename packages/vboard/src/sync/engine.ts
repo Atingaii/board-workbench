@@ -17,6 +17,7 @@ import {
   isThreadTarget,
   messagesReducer,
   syncReducer,
+  type Actor,
   type ActorsState,
   type ExternalCopy,
   type Message,
@@ -37,6 +38,7 @@ import {
   type WriteContext,
 } from '../server/writes.ts'
 import { type SyncPlatform } from './types.ts'
+import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
 import type { ProviderMapping, ResolvedTarget, SyncClient, SyncContext } from './provider.ts'
 import { ChannelPath } from '../contract/schemas.ts'
@@ -156,6 +158,14 @@ export function createSyncEngine(options: {
     })
     resolved.set(key, entry)
     return entry.map
+  }
+
+  async function findByEmail(email: string): Promise<Actor | null> {
+    for (const platform of Object.values(entries)) {
+      const author = await platform.findByEmail(email).catch(() => null)
+      if (author) return { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar }
+    }
+    return null
   }
 
   async function configTargets(channel: string): Promise<ResolvedTarget[]> {
@@ -563,6 +573,21 @@ export function createSyncEngine(options: {
     return chat
   }
 
+  /**
+   * A message's text for a platform: each mention it resolved reads natively where the
+   * actor is the platform's own, and as their plain name anywhere else.
+   */
+  function textFor(platform: SyncPlatform, message: Message, actors: ActorsState, text = message.text): string {
+    const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
+    return replaceMentions(text, (token) => {
+      const actor =
+        token.kind === 'actor'
+          ? mentioned.find((candidate) => candidate.id === token.actor)
+          : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
+      return actor ? (platform.mention?.(actor) ?? actor.name) : null
+    })
+  }
+
   /** A board message as markdown for a platform, which converts it to its own format. */
   function render(key: string, target: string, message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
     const actor = actors.byId[message.by.actor]
@@ -574,7 +599,7 @@ export function createSyncEngine(options: {
       : ''
     const body = platformOf(key).render(immutable({ message: structuredClone(message), author: actor ? { ...actor } : null, label: name, target }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    return { markdown: `${quoted}${body}` }
+    return { markdown: `${quoted}${textFor(platformOf(key), message, actors, body)}` }
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
@@ -906,6 +931,7 @@ export function createSyncEngine(options: {
     },
     configTargets,
     normalizeTarget,
+    findByEmail,
     handleWebhook,
     readInbox,
     typing,

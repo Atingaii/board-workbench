@@ -39,6 +39,8 @@ export type FileDelivery = { message: string; files: string[] }
 export type SyncTransport = {
   platform: string
   adapter: Adapter
+  findByEmail?(email: string): Promise<ExternalAuthor | null>
+  mention?(actor: Actor): string | null
   author?(author: ChatAuthor, raw: unknown): ExternalAuthor
   render?(input: RenderInput): string
   canStartThreads?: boolean
@@ -76,6 +78,14 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     this.adapter = transport.adapter
     this.canStartThreads = transport.canStartThreads ?? false
     this.singleReaction = transport.singleReaction ?? false
+  }
+
+  async findByEmail(email: string): Promise<ExternalAuthor | null> {
+    return this.transport.findByEmail?.(email) ?? null
+  }
+
+  mention(actor: Actor): string | null {
+    return this.transport.mention?.(actor) ?? null
   }
 
   author(author: ChatAuthor, raw: unknown) {

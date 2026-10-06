@@ -222,6 +222,7 @@ export function board(options: BoardOptions = {}) {
   const writes: WriteContext = {
     session,
     configTargets: engine ? engine.configTargets : async () => [],
+    ...(engine ? { findByEmail: engine.findByEmail } : {}),
     normalizeTarget: engine
       ? engine.normalizeTarget
       : async () => {

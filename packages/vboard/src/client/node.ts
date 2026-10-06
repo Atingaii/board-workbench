@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { decodeJwt } from 'jose'
 import { exchangeVercelOidcToken, getVercelOidcToken, getVercelToken } from '@vercel/oidc'
@@ -29,6 +29,33 @@ export function savedUrl(): string | undefined {
   } catch {
     return undefined
   }
+}
+
+export function projectDir(cwd = process.cwd()): string {
+  let directory = resolve(cwd)
+  while (true) {
+    if (existsSync(join(directory, '.vboard', 'config.json')) || existsSync(join(directory, '.git')))
+      return directory
+    const parent = dirname(directory)
+    if (parent === directory) return resolve(cwd)
+    directory = parent
+  }
+}
+
+export function projectUrl(): string | undefined {
+  const path = join(projectDir(), '.vboard', 'config.json')
+  let contents: string
+  try {
+    contents = readFileSync(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+  try {
+    const { url } = JSON.parse(contents)
+    if (typeof url === 'string' && ['http:', 'https:'].includes(new URL(url).protocol)) return url
+  } catch {}
+  throw new BoardError('invalid_config', `invalid board link at ${path}: expected an http(s) url`, 0)
 }
 
 export type DetectedAgent = { profile: string; session: string | null }
@@ -181,14 +208,14 @@ async function githubActionsToken(audience: string): Promise<string> {
 export type NodeClientOptions = Partial<ClientOptions>
 
 /**
- * A client with Node defaults: the URL from `VBOARD_URL` (or the saved
- * board), and a token from `VBOARD_TOKEN`, GitHub Actions, the Vercel
+ * A client with Node defaults: the URL from `VBOARD_URL`, the project link,
+ * or the saved board, and a token from `VBOARD_TOKEN`, GitHub Actions, the Vercel
  * runtime, or your Vercel CLI login, in that order.
  */
 export function createClient(options: NodeClientOptions = {}): BoardClient {
-  const url = (options.url ?? process.env.VBOARD_URL ?? savedUrl())?.replace(/\/+$/, '')
+  const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
   if (!url)
-    throw new BoardError('no_board', 'no board URL: set VBOARD_URL or run `vboard use <url>`', 0)
+    throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, or run `vboard use <url>`', 0)
   const doFetch = options.fetch ?? globalThis.fetch
 
   let discovery: Promise<Discovery> | undefined

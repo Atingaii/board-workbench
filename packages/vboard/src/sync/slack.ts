@@ -14,8 +14,19 @@ export type SlackClient = {
     info(args: { channel: string }): Promise<{ channel?: SlackChannel }>
     join(args: { channel: string }): Promise<unknown>
   }
-  users?: { info(args: { user: string }): Promise<{ user?: { profile?: { image_72?: string; image_48?: string } } }> }
+  users?: {
+    info(args: { user: string }): Promise<{ user?: { profile?: { image_72?: string; image_48?: string } } }>
+    lookupByEmail?(args: { email: string }): Promise<{ user?: SlackUser }>
+  }
   files?: { delete(args: { file: string }): Promise<unknown> }
+}
+
+type SlackUser = {
+  id?: string
+  name?: string
+  real_name?: string
+  is_bot?: boolean
+  profile?: { display_name?: string; real_name?: string; image_72?: string; image_48?: string }
 }
 
 /** Slack's answers that mean "no files from this app", not "try again". */
@@ -188,6 +199,19 @@ export class SlackProvider extends SyncProvider<SlackEvent> {
         for (const file of ids)
           await web?.files?.delete({ file }).catch((error: unknown) => console.warn(`[vboard] slack: couldn't delete file ${file} (${slackError(error)})`))
       },
+      async findByEmail(email) {
+        const web = await client()
+        const user = (await web?.users?.lookupByEmail?.({ email }).catch(() => undefined))?.user
+        if (!user?.id) return null
+        const handle = user.profile?.display_name || user.name || user.id
+        return {
+          id: `slack:user:${user.id}`, handle,
+          name: user.profile?.real_name || user.real_name || handle,
+          avatar: user.profile?.image_72 ?? user.profile?.image_48 ?? null,
+          isBot: user.is_bot === true,
+        }
+      },
+      mention: (actor) => actor.id.startsWith('slack:user:') ? `<@${actor.id.slice('slack:user:'.length)}>` : null,
       // `#name` is looked up by name; anything else is a channel ID.
       async resolveChannel(key) {
         if (!key.startsWith('#')) {

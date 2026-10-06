@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -7,6 +8,7 @@ import { serve } from './http.ts'
 import { personToken, testBoard } from './harness.ts'
 
 const CLI = join(import.meta.dirname, '../src/cli/main.ts')
+const TEMP = realpathSync(tmpdir())
 
 let server: Awaited<ReturnType<typeof serve>>
 let url: string
@@ -32,9 +34,9 @@ beforeAll(async () => {
 })
 afterAll(() => server.close())
 
-function vb(args: string[], extra: NodeJS.ProcessEnv = {}, stdin?: string) {
+function vb(args: string[], extra: NodeJS.ProcessEnv = {}, stdin?: string, cwd?: string) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...env, ...extra } })
+    const child = spawn(process.execPath, [CLI, ...args], { env: { ...env, ...extra }, cwd })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d) => (stdout += d))
@@ -46,6 +48,94 @@ function vb(args: string[], extra: NodeJS.ProcessEnv = {}, stdin?: string) {
 }
 
 describe('cli', () => {
+  it('links a checkout from a subdirectory, ignores the link, and reads it from other subdirectories', async () => {
+    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const directory = join(root, 'packages', 'app')
+    const global = await mkdtemp(join(tmpdir(), 'vboard-global-'))
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(root, '.git'), 'gitdir: /worktree')
+    await writeFile(join(root, '.gitignore'), 'node_modules')
+    await mkdir(join(global, 'vboard'))
+    await writeFile(join(global, 'vboard', 'config.json'), JSON.stringify({ url: 'http://global.invalid/api/board' }))
+    const local = { VBOARD_URL: undefined, XDG_CONFIG_HOME: global }
+
+    expect(await vb(['link', `${url}/`], local, undefined, directory)).toMatchObject({
+      code: 0, stderr: '', stdout: `linked ${root} to ${url}\n`,
+    })
+    expect(JSON.parse(await readFile(join(root, '.vboard', 'config.json'), 'utf8'))).toEqual({ url })
+    expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules\n.vboard/\n')
+    expect(JSON.parse(await readFile(join(global, 'vboard', 'config.json'), 'utf8'))).toEqual({ url: 'http://global.invalid/api/board' })
+    expect(await vb(['whoami', '--json'], local, undefined, directory)).toMatchObject({ code: 0, stderr: '' })
+
+    expect((await vb(['link', url], local, undefined, root)).code).toBe(0)
+    expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules\n.vboard/\n')
+  }, 20_000)
+
+  it('links a directory without Git in place', async () => {
+    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
+    expect(JSON.parse(await readFile(join(root, '.vboard', 'config.json'), 'utf8'))).toEqual({ url })
+    expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('.vboard/\n')
+  })
+
+  it('lets explicit and environment URLs override the project link', async () => {
+    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    await mkdir(join(root, '.vboard'))
+    await writeFile(join(root, '.vboard', 'config.json'), JSON.stringify({ url: 'http://project.invalid/api/board' }))
+    const fromEnv = await vb(['whoami', '--json'], {}, undefined, root)
+    expect(fromEnv.code).toBe(0)
+    expect(JSON.parse(fromEnv.stdout).board).toBe(url)
+    const explicit = await vb(['whoami', '--url', url, '--json'], { VBOARD_URL: 'http://env.invalid/api/board' }, undefined, root)
+    expect(explicit.code).toBe(0)
+    expect(JSON.parse(explicit.stdout).board).toBe(url)
+  }, 20_000)
+
+  it('stops at a nested Git checkout and falls back to the global board', async () => {
+    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const nested = join(root, 'other-project')
+    const global = await mkdtemp(join(tmpdir(), 'vboard-global-'))
+    await mkdir(join(root, '.vboard'))
+    await writeFile(join(root, '.vboard', 'config.json'), JSON.stringify({ url: 'http://parent.invalid/api/board' }))
+    await mkdir(join(nested, '.git'), { recursive: true })
+    const local = { VBOARD_URL: undefined, XDG_CONFIG_HOME: global }
+    expect((await vb(['use', url], local, undefined, nested)).code).toBe(0)
+    const me = await vb(['whoami', '--json'], local, undefined, nested)
+    expect(me.code).toBe(0)
+    expect(JSON.parse(me.stdout).board).toBe(url)
+  }, 20_000)
+
+  it('reports a malformed project link instead of using the global board', async () => {
+    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const global = await mkdtemp(join(tmpdir(), 'vboard-global-'))
+    await mkdir(join(root, '.vboard'))
+    const local = { VBOARD_URL: undefined, XDG_CONFIG_HOME: global }
+    expect((await vb(['use', url], local, undefined, root)).code).toBe(0)
+    for (const contents of ['{', '{"url":12}', '{"url":"ftp://board.test"}']) {
+      await writeFile(join(root, '.vboard', 'config.json'), contents)
+      expect(await vb(['whoami'], local, undefined, root)).toMatchObject({
+        code: 1,
+        stderr: `error: invalid board link at ${join(root, '.vboard', 'config.json')}: expected an http(s) url\n`,
+      })
+    }
+    expect((await vb(['whoami', '--url', url], local, undefined, root)).code).toBe(0)
+  }, 20_000)
+
+  it('keeps the link when discovery fails and rejects missing or extra arguments', async () => {
+    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
+    const path = join(root, '.vboard', 'config.json')
+    const before = await readFile(path, 'utf8')
+    const unavailable = await serve(async () => new Response('unavailable', { status: 503 }))
+    try {
+      expect((await vb(['link', unavailable.origin], {}, undefined, root)).code).toBe(1)
+    } finally {
+      await unavailable.close()
+    }
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await vb(['link'], {}, undefined, root)).toMatchObject({ code: 2, stderr: 'error: usage: vboard link <url>\n' })
+    expect(await vb(['link', url, 'dev'], {}, undefined, root)).toMatchObject({ code: 2, stderr: 'error: usage: vboard link <url>\n' })
+  }, 20_000)
+
   it('posts, replies, reacts, labels, and reads a thread', async () => {
     const posted = await vb(['post', 'errors-www', 'deploy failed on a1b2c3', '--label', 'status=open'])
     expect(posted).toMatchObject({ code: 0, stderr: '' })

@@ -1,4 +1,4 @@
-import { board, type Watcher } from "vboard";
+import { board, type WatcherContext } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
@@ -20,7 +20,7 @@ const slackCredentials = connectSlackAdapter("slack/vboard");
 const slackAdapter = createSlackAdapter(slackCredentials);
 const slackToken = slackCredentials.botToken;
 
-export const { GET, POST, scheduler } = board({
+export const { GET, POST, scheduler, client } = board({
   store: env
     ? redisHttp({
         url: process.env.KV_REST_API_URL!,
@@ -47,12 +47,12 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     triage: { tail: "feedback", run: triage },
-    report: { tail: "feedback --label v0state=done", run: report },
+    report: { tail: "feedback --label v0state=done", when: "enters", run: report },
   },
 });
 
 /** Acks a new thread, decides whether it's worth addressing, and hands the ones that are to v0. */
-async function triage({ event, board }: Parameters<Watcher["run"]>[0]) {
+async function triage({ event, board }: WatcherContext) {
   const message = event.message;
   if (event.type !== "message.posted" || !message || message.re !== null) return;
   await board.react(message.id, "ack");
@@ -87,24 +87,19 @@ async function triage({ event, board }: Parameters<Watcher["run"]>[0]) {
   await board.label(message.id, { set: { announcement: String(announcement.id) } });
 }
 
-/** v0 finished (labelled by /api/v0-hook): reply in the announcement's thread with what it did. */
-async function report({ event, board }: Parameters<Watcher["run"]>[0]) {
-  const message = event.message;
-  const set = (event.payload as { set?: Record<string, string> }).set;
-  if (event.type !== "labels.changed" || set?.v0state !== "done" || !message) return;
-  // v0 can report a turn finished more than once; watchers run one at a time per
-  // thread, so checking the thread as it is now keeps this to one reply.
-  const { labels } = (await board.thread(message.id)).message;
-  const announcement = Number(labels.announcement);
-  if (!announcement || labels.reported) return;
+/** v0 finished (labelled by /api/v0-hook): reply once in the announcement's thread with what it did. */
+async function report({ event, board }: WatcherContext) {
+  const labels = event.message?.labels;
+  const announcement = Number(labels?.announcement);
+  if (!labels || !announcement) return;
   const { pr, owner, summary } = labels;
   const text = [
     pr ? `v0 opened a draft PR: ${pr}` : `v0 finished without a PR: https://v0.app/chat/${labels.v0}`,
     summary,
-    owner ? `likely owner: ${owner}` : null,
+    // A mention by email pings them in Slack when they're there, and reads as the email otherwise.
+    owner ? `likely owner: @[${owner}]` : null,
   ].filter(Boolean).join("\n");
   await board.reply(announcement, text);
-  await board.label(message.id, { set: { reported: "yes" } });
 }
 
 /** `slack:C0123:1727.1234` → a Slack permalink. */
