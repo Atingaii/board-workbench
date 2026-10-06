@@ -55,7 +55,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   (asking first when they're not), and answers questions in the thread.
   `review` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
   someone other than a bot replies. Pi replies with its review; it never pushes,
-  approves, or merges.
+  approves, or merges. `merged` adds `:merged:` to a PR's root when its state
+  becomes `merged`, once per transition, through the board's reaction sync.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
