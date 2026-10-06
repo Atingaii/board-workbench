@@ -43,7 +43,9 @@ export function fakePlatform(name: string, extend: (adapter: Adapter) => void = 
     channelIdFromThreadId: (threadId: string) => threadId.split(':').slice(0, 2).join(':'),
     handleWebhook: async (request: Request, options?: WebhookOptions) => {
       if (request.headers.get('x-github-event')) return new Response('ok')
-      const body = (await request.json()) as WebhookPayload
+      const body = (await request.json()) as WebhookPayload | { type: 'event_callback' }
+      // Slack's own event shape: Chat SDK has nothing to do with it here, the provider's `intercept` does.
+      if (body.type === 'event_callback') return new Response('ok')
       if (body.type === 'delete')
         await chat.processMessageDeleted({ adapter, threadId: body.threadId, channelId: adapter.channelIdFromThreadId(body.threadId), messageId: body.id, raw: {} }, options)
       else if (body.type === 'edit')

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { idempotentId } from 'experimental-a2'
-import type { BoardEvent, Origin } from '../contract/contract.ts'
+import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
 import {
   actorsReducer,
   foldMessages,
@@ -81,6 +81,8 @@ export type PostInput = {
   lenientMentions?: boolean
   /** Files the board stored, as it recorded them. */
   attachments?: Attachment[]
+  /** Platform messages it links to. */
+  links?: Link[]
 }
 
 export async function writePost(ctx: WriteContext, input: PostInput) {
@@ -150,6 +152,7 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
         origin: input.origin ?? null,
         from: input.from ?? null,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.links?.length ? { links: input.links } : {}),
       },
     },
     ...synced,
@@ -198,6 +201,16 @@ export async function writeEdit(
       by: input.identity.author,
       from: input.from ?? null,
     },
+  })
+}
+
+/** A message's links, replaced: a platform edit or unfurl changed what it links to. */
+export async function writeLinks(ctx: WriteContext, input: { identity: Identity; id: number; links: Link[]; from: string | null }) {
+  const message = await liveMessage(ctx, input.id)
+  if (message.deleted) return
+  await ctx.session.append({
+    type: 'message.linked',
+    payload: { id: message.id, thread: message.thread, links: input.links, by: input.identity.author, from: input.from },
   })
 }
 

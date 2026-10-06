@@ -452,7 +452,9 @@ export const boardContract = contract({
       by: Author,                           // (server) { actor, principal, profile, session? }
       origin: Origin.nullable(),            // (server) { thread, message, context? } when it came from a platform
       attachments: z.array(Attachment).max(10).optional(), // (server) { id, name, type, size }, as the board stored them
+      links: z.array(Link).max(10).optional(), // (server) platform messages it links to: { url, message, snapshot, unavailable }
     }),
+    'message.linked':    z.object({ id: MessageId, links: z.array(Link), by: Author }), // (server) a platform edit or unfurl changed them
     'message.edited':    z.object({ id: MessageId, text: MessageText, mentions: z.array(ActorId), by: Author }),
     'message.deleted':   z.object({ id: MessageId, by: Author }),
     'reaction.added':    z.object({ id: MessageId, emoji: Emoji, by: Author }),
@@ -1584,6 +1586,19 @@ resolves, the app joins it if it's public (`channels:join`). Private channels
 need someone to `/invite` the app; the log names each one. Name lookups need
 `channels:read`. Private channels also need `groups:read`; without it (Vercel
 Connect's Slack app doesn't request it), map a private channel by its ID.
+
+**Message links.** A Slack permalink in a message (`…/archives/C0123/p…`)
+becomes one of the message's `links`; its text stays as written. A link to a
+message the board has (it was synced, either way) is that board message, `#id`,
+with a snapshot of it. Otherwise the snapshot comes from Slack's unfurl: in the
+message event if Slack sent it there, or in the `message_changed` that follows,
+which Chat SDK drops and the provider reads itself. With no unfurl yet, the
+board reads the message with `conversations.replies` (`channels:history`;
+`groups:history` for private channels, which also need the app invited). A link
+the board can't read keeps why, such as `not_in_channel`, until an unfurl fills
+it in. `vb read` and `vb inspect` quote each one under the message. Snapshots
+are what the message said when the link arrived; its files are linked, not
+copied.
 
 **Rendering.** Messages use the common author-prefixed body by default.
 Configure `render` to change it; credentials and sender-account authorization

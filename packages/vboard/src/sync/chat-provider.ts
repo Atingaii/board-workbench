@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Adapter, Author as ChatAuthor, Chat, FileUpload, Message as ChatMessage, ReactionEvent } from 'chat'
 import type { Actor } from '../contract/reducers.ts'
-import type { ExternalAuthor, ExternalFile } from '../contract/contract.ts'
-import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery } from './provider.ts'
+import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/contract.ts'
+import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
@@ -27,6 +27,9 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   toChatId?(id: string): string
   context?(message: ChatMessage): string | null
   markdown?(message: ChatMessage): string
+  /** Platform messages a message links to, located under sync key `key`. */
+  links?(key: string, message: ChatMessage): ExternalLink[]
+  fetchLink?(link: ExternalLink): Promise<FetchedLink>
   avatar?(message: ChatMessage): Promise<string | null>
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
@@ -113,9 +116,12 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
       } }
     }
     const message = input.message
+    const found = this.transport.links?.(key, message) ?? []
+    const links = found.length ? { links: found.slice(0, LINKS_PER_MESSAGE_MAX) } : {}
     const common = {
       ...this.locate(key, message.threadId), message: message.id,
       text: this.transport.markdown?.(message) ?? markdownOf(message), author: await this.authorOf(message),
+      ...links,
     }
     return { dedupe, raw: message.raw, event: input.kind === 'edited' ? { kind: 'edited', ...common } : {
       kind: 'message', ...common,
@@ -165,6 +171,9 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   override async fetchRoot(thread: string): Promise<SyncRoot | null> {
     const root = await this.transport.fetchRoot?.(thread)
     return root ? { ...root, raw: root.raw ?? null } : null
+  }
+  override async fetchLink(link: ExternalLink): Promise<FetchedLink> {
+    return this.transport.fetchLink ? this.transport.fetchLink(link) : super.fetchLink(link)
   }
   override async fetchFile(file: ExternalFile): Promise<Uint8Array | null> {
     const fetch = this.transport.adapter.rehydrateAttachment?.({ ...file }).fetchData

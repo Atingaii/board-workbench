@@ -13,6 +13,7 @@ import {
   Labels,
   MessageId,
   MessageText,
+  MESSAGE_TEXT_MAX,
 } from './schemas.ts'
 
 /**
@@ -31,6 +32,30 @@ export const Origin = z.object({
   message: z.string().min(1).max(300),
   context: z.string().max(300).nullable(),
 })
+
+/** What a linked message said, as the board saw it when the link arrived. */
+export const LinkSnapshot = z.object({
+  author: z.string().min(1).max(256),
+  text: z.string().max(MESSAGE_TEXT_MAX),
+  /** When it was written, if the platform said. */
+  createdAt: z.string().max(64).nullable(),
+  /** Its files, linked rather than copied. */
+  files: z.array(z.object({ name: z.string().min(1).max(1000), url: z.string().max(4000).nullable() })).max(20),
+})
+
+/**
+ * A platform message linked from a message (a Slack permalink): the board message
+ * it was synced to, if any, and a snapshot of it, or why the board couldn't read it.
+ */
+export const Link = z.object({
+  url: z.string().min(1).max(4000),
+  message: MessageId.nullable(),
+  snapshot: LinkSnapshot.nullable(),
+  /** Why there's no snapshot: `not_in_channel`, `channel_not_found`. */
+  unavailable: z.string().max(300).nullable(),
+})
+export type Link = z.infer<typeof Link>
+export const LINKS_PER_MESSAGE_MAX = 10
 
 /** The sync key a write came from, or null when it was written on the board. */
 const From = z.string().nullable()
@@ -59,7 +84,11 @@ export const boardContract = contract({
       from: From,
       /** Files on the message. Events written before attachments have none. */
       attachments: z.array(Attachment).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+      /** Platform messages it links to. Events written before links have none. */
+      links: z.array(Link).max(LINKS_PER_MESSAGE_MAX).optional(),
     }),
+    /** A message's links changed: an edit linked something new, or the platform sent what a link says. */
+    'message.linked': z.object({ id: MessageId, thread: ThreadKey, links: z.array(Link).max(LINKS_PER_MESSAGE_MAX), by: Author, from: From }),
     'message.edited': z.object({
       id: MessageId,
       thread: ThreadKey,
@@ -150,6 +179,19 @@ export const ExternalFile = z.object({
 })
 export type ExternalFile = z.infer<typeof ExternalFile>
 
+/**
+ * A platform message a platform message links to, at intake: where it lives
+ * (`thread`, with the sync key prefix, and `message`), and what it said when the
+ * platform sent that along (Slack's unfurl).
+ */
+export const ExternalLink = z.object({
+  url: z.string().min(1).max(4000),
+  thread: ExternalTarget,
+  message: z.string().min(1).max(300),
+  snapshot: LinkSnapshot.nullable(),
+})
+export type ExternalLink = z.infer<typeof ExternalLink>
+
 export const ExternalLocation = z.object({ channel: ExternalTarget, thread: ExternalTarget, subthread: ExternalTarget.nullable() })
 
 /** A platform event, normalized at intake. Thread IDs are external IDs with the sync key prefix. */
@@ -164,6 +206,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     author: ExternalAuthor,
     /** Files on the message, fetched when it lands on the board. Older events have none. */
     files: z.array(ExternalFile).max(20).optional(),
+    /** Platform messages it links to. Older events have none. */
+    links: z.array(ExternalLink).max(LINKS_PER_MESSAGE_MAX).optional(),
   }),
   z.object({
     kind: z.literal('edited'),
@@ -171,6 +215,9 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     message: z.string(),
     text: z.string(),
     author: ExternalAuthor,
+    links: z.array(ExternalLink).max(LINKS_PER_MESSAGE_MAX).optional(),
+    /** Only the links changed (the platform sent what they say), so `text` isn't news. */
+    linksOnly: z.boolean().optional(),
   }),
   z.object({
     kind: z.literal('deleted'),

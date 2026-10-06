@@ -81,6 +81,35 @@ export const Text = memo(function Text({ text, edited = false }: { text: string;
   )
 })
 
+/**
+ * The platform messages a message links to (Slack permalinks), quoted under it:
+ * what each said when the link arrived, or why the board couldn't read it.
+ */
+export function Links({ items }: { items: MessageView['links'] }) {
+  if (!items?.length) return null
+  return (
+    <div className="links">
+      {items.map((link) => (
+        <div key={link.url} className="link-embed">
+          <div className="link-meta" {...nativeMenu}>
+            {link.snapshot && <span className="author">{link.snapshot.author}</span>}
+            {link.message !== null && <span className="faint">#{link.message}</span>}
+            <a href={link.url} target="_blank" rel="noreferrer">{link.snapshot ? 'open' : link.url}</a>
+            {!link.snapshot && <span className="faint">couldn't read it: {link.unavailable ?? 'unknown'}</span>}
+          </div>
+          {link.snapshot?.text && <Text text={link.snapshot.text} />}
+          {link.snapshot?.files.map((file, i) => (
+            <div key={i} className="link-file">
+              <FileText size={12} strokeWidth={1.75} />
+              {file.url ? <a href={file.url} target="_blank" rel="noreferrer">{file.name}</a> : <span>{file.name}</span>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 const IMAGE = /^image\/(png|jpeg|gif|webp|avif)$/
 const VIDEO = /^video\/(mp4|webm)$/
 
@@ -318,6 +347,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             <>
               {m.text && <Text text={m.text} edited={m.editedAt !== null} />}
               <Attachments items={m.attachments ?? []} />
+              <Links items={m.links} />
             </>
           )}
           {(Object.keys(m.labels).length > 0 || Object.keys(m.reactions).length > 0) && (

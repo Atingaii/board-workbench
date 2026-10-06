@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { Message, Actor } from '../contract/reducers.ts'
 import type { BoardClient } from '../client/client.ts'
-import { ExternalEvent, type ExternalAuthor, type ExternalFile } from '../contract/contract.ts'
+import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
 import { immutable, type ProviderEvent, type SyncOverrides, type SyncResult, type SyncRoot } from './events.ts'
 
 export const ResolvedTarget = z.object({ target: z.string().min(1), channel: z.string().min(1), kind: z.enum(['channel', 'thread']) }).strict()
@@ -32,6 +32,9 @@ export type RenderInput = { message: Readonly<Message>; author: Readonly<Actor> 
 export type EventMapping<E extends ProviderEvent> = string | SyncHandler<E> | { channel: string; run: SyncHandler<E> }
 
 export type FileDelivery = { message: string; files: string[] }
+
+/** What a linked message said, or why the platform wouldn't say. */
+export type FetchedLink = Pick<Link, 'snapshot' | 'unavailable'>
 
 export type ProviderFile = { data: Buffer; filename: string; mimeType?: string }
 export type ProviderPost = { markdown: string; files?: ProviderFile[] }
@@ -73,6 +76,8 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   mention(_actor: Actor): string | null { return null }
   async fetchRoot(_thread: string): Promise<SyncRoot | null> { return null }
   async fetchFile(_file: ExternalFile): Promise<Uint8Array | null> { return null }
+  /** A linked message the platform didn't describe, read from the platform. */
+  async fetchLink(_link: ExternalLink): Promise<FetchedLink> { return { snapshot: null, unavailable: `${this.platform} can't read it` } }
   async edit(_thread: string, _message: string, _body: ProviderPost): Promise<void> {}
   async delete(_thread: string, _message: string): Promise<void> {}
   async react(_thread: string, _message: string, _emoji: string, _added: boolean): Promise<void> {}

@@ -8,6 +8,8 @@ import {
   type BoardEvents,
   type ExternalEvent,
   type ExternalFile,
+  Link,
+  type ExternalLink,
   type InboxEvent,
 } from '../contract/contract.ts'
 import {
@@ -31,6 +33,7 @@ import {
   writeDelete,
   writeEdit,
   writeLabels,
+  writeLinks,
   writePost,
   writeReaction,
   type Identity,
@@ -65,6 +68,9 @@ const withNotes = (text: string, notes: string[]) =>
 
 /** The file notes in a message's text, so a platform edit (which only knows the text it shows) keeps them. */
 const notesIn = (text: string) => text.split('\n').filter((line) => /^📎 .* didn't come over: /u.test(line))
+
+/** Whether two link lists say the same, whatever order their keys were written in. */
+const sameLinks = (a: Link[], b: Link[]) => JSON.stringify(a.map((link) => Link.parse(link))) === JSON.stringify(b.map((link) => Link.parse(link)))
 
 /** Tries per file before it's noted instead: a retry repeats the whole message, so keep it short. */
 const FILE_ATTEMPTS = 3
@@ -198,6 +204,46 @@ export function createSyncEngine(options: {
       author: { actor: author.id, principal: author.id, profile: null, session: null },
       actor: { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar },
     }
+  }
+
+  /**
+   * What a platform message's links point to. A linked message the board has
+   * (it was synced) is that board message; otherwise it's what the platform sent
+   * about it (Slack's unfurl), what an earlier version of this message had, or
+   * what the platform says when asked. A link nobody can read says why.
+   */
+  async function resolveLinks(platform: SyncProvider, links: ExternalLink[], previous: Link[] = []): Promise<Link[]> {
+    if (links.length === 0) return []
+    const { session } = bound()
+    const [{ state: sync }, { state: messages }, { state: actors }] = await Promise.all([
+      session.state(syncReducer), session.state(messagesReducer), session.state(actorsReducer),
+    ])
+    const resolved: Link[] = []
+    for (const link of links) {
+      if (resolved.some((done) => done.url === link.url)) continue
+      const id = sync.byExternalMessage[externalMessageKey(link.thread, link.message)]
+      const copy = id === undefined ? undefined : messages.byId[id]
+      if (copy && !copy.deleted) {
+        resolved.push({ url: link.url, message: copy.id, unavailable: null, snapshot: {
+          author: actors.byId[copy.by.actor]?.name ?? copy.by.actor,
+          text: copy.text, createdAt: copy.createdAt,
+          files: copy.attachments.map((file) => ({ name: file.name, url: null })),
+        } })
+        continue
+      }
+      if (link.snapshot) {
+        resolved.push({ url: link.url, message: null, snapshot: link.snapshot, unavailable: null })
+        continue
+      }
+      const kept = previous.find((earlier) => earlier.url === link.url && earlier.snapshot)
+      if (kept) {
+        resolved.push(kept)
+        continue
+      }
+      const fetched = await platform.fetchLink(link).catch((error: unknown) => ({ snapshot: null, unavailable: describe(error) }))
+      resolved.push({ url: link.url, message: null, snapshot: fetched.snapshot, unavailable: fetched.snapshot ? null : (fetched.unavailable ?? 'unknown').slice(0, 300) })
+    }
+    return resolved
   }
 
   /**
@@ -337,7 +383,9 @@ export function createSyncEngine(options: {
         if (existing !== undefined) return { root: rootId ?? existing, message: existing }
         const identity = externalIdentity(event.author)
         const { attachments, notes } = event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
+        const links = await resolveLinks(platform, event.links ?? [])
         const base = {
+          ...(links.length ? { links } : {}),
           identity,
           text: clampText(withNotes(overrides.text ?? event.text, notes), attachments.length > 0),
           ...(attachments.length ? { attachments } : {}),
@@ -377,7 +425,9 @@ export function createSyncEngine(options: {
           const { state: messages } = await session.state(messagesReducer)
           const stored = messages.byId[id]
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
-          if (stored && stored.text !== text) await writeEdit(writes, { identity, id, text, from: key, asAuthor: false })
+          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { identity, id, text, from: key, asAuthor: false })
+          const links = stored ? await resolveLinks(platform, event.links ?? [], stored.links) : []
+          if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, id, links, from: key })
         } else {
           if (platform.singleReaction) {
             const { state: messages } = await session.state(messagesReducer)

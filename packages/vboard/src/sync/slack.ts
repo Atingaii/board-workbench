@@ -3,7 +3,10 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput } from './provider.ts'
+import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, ReceivedEvent, FetchedLink } from './provider.ts'
+import { stringifyMarkdown } from 'chat'
+import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
+import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 
 type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean }
 export type SlackClient = {
@@ -14,9 +17,11 @@ export type SlackClient = {
     }>
     info(args: { channel: string }): Promise<{ channel?: SlackChannel }>
     join(args: { channel: string }): Promise<unknown>
+    /** Reads a linked message; needs `channels:history` (`groups:history` for private channels). */
+    replies?(args: { channel: string; ts: string; oldest: string; latest: string; inclusive: boolean; limit: number }): Promise<{ messages?: SlackMessage[] }>
   }
   users?: {
-    info(args: { user: string }): Promise<{ user?: { profile?: { image_72?: string; image_48?: string } } }>
+    info(args: { user: string }): Promise<{ user?: SlackUser }>
     lookupByEmail?(args: { email: string }): Promise<{ user?: SlackUser }>
   }
   files?: { delete(args: { file: string }): Promise<unknown> }
@@ -28,6 +33,68 @@ type SlackUser = {
   real_name?: string
   is_bot?: boolean
   profile?: { display_name?: string; real_name?: string; image_72?: string; image_48?: string }
+}
+
+type SlackFile = { name?: string; title?: string; permalink?: string }
+type SlackMessage = {
+  ts?: string
+  text?: string
+  user?: string
+  username?: string
+  bot_profile?: { name?: string }
+  files?: SlackFile[]
+}
+/** What Slack attaches to a message that links another: `is_msg_unfurl` marks a message link's. */
+type SlackAttachment = {
+  is_msg_unfurl?: boolean
+  from_url?: string
+  original_url?: string
+  channel_id?: string
+  ts?: string
+  author_id?: string
+  author_name?: string
+  author_subname?: string
+  text?: string
+  files?: SlackFile[]
+}
+
+/**
+ * Slack message permalinks in mrkdwn: `https://acme.slack.com/archives/C0123/p1727000000123456`,
+ * with `?thread_ts=…` for a reply. Slack escapes `&` in text as `&amp;`.
+ */
+const PERMALINK = /https:\/\/[a-z0-9-]+(?:\.enterprise)?\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})((?:\?|&amp;|&)[^\s|>]*)?/g
+
+/** `1727000000.123456` → its ISO time. */
+const tsTime = (ts: string | undefined) => {
+  const seconds = Number(ts)
+  return ts && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null
+}
+
+const filesOf = (files: SlackFile[] | undefined) =>
+  (files ?? []).slice(0, 20).map((file) => ({ name: (file.name || file.title || 'file').slice(0, 1000), url: file.permalink?.slice(0, 4000) ?? null }))
+
+/** Every Slack message a message's mrkdwn links to, in order, with the unfurls Slack attached for them. */
+export function slackLinks(key: string, text: string, attachments: SlackAttachment[] = [], markdown: (mrkdwn: string) => string = (t) => t): ExternalLink[] {
+  const links: ExternalLink[] = []
+  for (const match of text.matchAll(PERMALINK)) {
+    const [, channel, seconds, micros, query] = match
+    const url = match[0].replaceAll('&amp;', '&')
+    if (links.some((link) => link.url === url) || url.length > 4000) continue
+    const ts = `${seconds}.${micros}`
+    const thread = /[?&]thread_ts=(\d+\.\d+)/.exec(query?.replaceAll('&amp;', '&') ?? '')?.[1] ?? ts
+    const unfurl = attachments.find((att) => att.is_msg_unfurl && ((att.channel_id === channel && att.ts === ts) || att.from_url?.replaceAll('&amp;', '&') === url))
+    links.push({
+      url, thread: `${key}:${channel}:${thread}`, message: ts,
+      snapshot: unfurl ? {
+        author: (unfurl.author_subname || unfurl.author_name || unfurl.author_id || 'someone').slice(0, 256),
+        text: markdown(unfurl.text ?? '').slice(0, MESSAGE_TEXT_MAX),
+        createdAt: tsTime(unfurl.ts ?? ts),
+        files: filesOf(unfurl.files),
+      } : null,
+    })
+    if (links.length === LINKS_PER_MESSAGE_MAX) break
+  }
+  return links
 }
 
 /** Slack's answers that mean "no files from this app", not "try again". */
@@ -182,6 +249,30 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       return promise
     }
 
+    // Slack's own mrkdwn → markdown, the way Chat SDK reads every Slack message.
+    const converter = (options.adapter as { formatConverter?: { toAst(text: string): Parameters<typeof stringifyMarkdown>[0] } }).formatConverter
+    const mrkdwn = (text: string) => {
+      try {
+        return converter ? stringifyMarkdown(converter.toAst(text)).trim() : text
+      } catch {
+        return text
+      }
+    }
+    const names = new Map<string, Promise<string>>()
+    function nameOf(user: string): Promise<string> {
+      let promise = names.get(user)
+      if (!promise) {
+        promise = client()
+          .then(async (web) => {
+            const found = (await web?.users?.info({ user }))?.user
+            return found?.profile?.real_name || found?.real_name || found?.profile?.display_name || found?.name || user
+          })
+          .catch(() => user)
+        names.set(user, promise)
+      }
+      return promise
+    }
+
     const fileIds = (raw: unknown) => ((raw as { uploadedFileIds?: string[] } | null)?.uploadedFileIds ?? []).filter(Boolean)
     super({
       fileIds,
@@ -227,6 +318,55 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         return channel.id
       },
       markdown: markdownOf,
+      links(key, message) {
+        const raw = message.raw as { text?: unknown; attachments?: SlackAttachment[] } | null
+        return slackLinks(key, typeof raw?.text === 'string' ? raw.text : message.text, Array.isArray(raw?.attachments) ? raw.attachments : [], mrkdwn)
+      },
+      // A link Slack didn't unfurl, read with the app's token: public channels it joins itself.
+      async fetchLink(link): Promise<FetchedLink> {
+        const [, channel, thread] = link.thread.split(':')
+        const web = await client()
+        if (!web?.conversations.replies || !channel || !thread) return { snapshot: null, unavailable: 'no Slack client to read it with' }
+        await join(web, channel)
+        let found: SlackMessage | undefined
+        try {
+          const { messages } = await web.conversations.replies({ channel, ts: thread, oldest: link.message, latest: link.message, inclusive: true, limit: 1 })
+          found = messages?.find((m) => m.ts === link.message)
+        } catch (error) {
+          return { snapshot: null, unavailable: slackError(error) }
+        }
+        if (!found) return { snapshot: null, unavailable: 'message_not_found' }
+        const author = found.user ? await nameOf(found.user) : found.bot_profile?.name || found.username || 'someone'
+        return { unavailable: null, snapshot: {
+          author: author.slice(0, 256), text: mrkdwn(found.text ?? '').slice(0, MESSAGE_TEXT_MAX),
+          createdAt: tsTime(found.ts), files: filesOf(found.files),
+        } }
+      },
+      // Slack unfurls a message link a moment later, as a `message_changed` that keeps the text.
+      // Chat SDK drops those (nothing it shows changed), so they come here.
+      intercept(key, _headers, body): ReceivedEvent[] {
+        let event: { type?: string; subtype?: string; channel?: string; message?: SlackMessage & { thread_ts?: string; attachments?: SlackAttachment[] }; previous_message?: { text?: string } } | undefined
+        try {
+          event = (JSON.parse(body) as { event?: typeof event }).event
+        } catch {
+          return []
+        }
+        const inner = event?.message
+        if (event?.type !== 'message' || event.subtype !== 'message_changed' || !event.channel || !inner?.ts) return []
+        if (!inner.attachments?.some((att) => att.is_msg_unfurl) || inner.text !== event.previous_message?.text) return []
+        const links = slackLinks(key, inner.text ?? '', inner.attachments, mrkdwn).filter((link) => link.snapshot)
+        if (links.length === 0) return []
+        const thread = `${key}:${event.channel}:${inner.thread_ts ?? inner.ts}`
+        return [{
+          dedupe: `unfurl:${thread}|${inner.ts}|${links.map((link) => link.message).join(',')}`,
+          raw: event,
+          event: {
+            kind: 'edited', channel: `${key}:${event.channel}`, thread, subthread: null, message: inner.ts,
+            text: inner.text ?? '', linksOnly: true, links,
+            author: { id: 'slack:system', handle: 'slack', name: 'Slack', avatar: null, isBot: true },
+          },
+        }]
+      },
       avatar: (message: ChatMessage) => (message.author.userId ? avatarOf(message.author.userId) : Promise.resolve(null)),
       groupThread: (thread) => thread,
       // A Slack thread is named by its root message's ts.

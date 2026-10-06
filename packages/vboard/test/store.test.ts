@@ -25,6 +25,7 @@ function message(id: number, overrides: Partial<MessageView> = {}): MessageView 
     deleted: false,
     undelivered: {},
     attachments: [],
+    links: [],
     author: { kind: 'person', handle: 'julian', name: 'julian', avatar: null },
     ...overrides,
   }
