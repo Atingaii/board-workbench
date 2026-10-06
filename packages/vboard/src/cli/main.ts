@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, delimiter, join } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -13,7 +13,19 @@ import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { formatEvent, formatThreads, who } from './format.ts'
-import { AGENTS, decideStop, installedHook, installHook, markPosted, reminder, uninstallHook, workOf, type HookAgent } from './hooks.ts'
+import {
+  AGENTS,
+  decideStop,
+  installedHook,
+  installHook,
+  markPosted,
+  REMINDER,
+  takeUpdate,
+  turnsDir,
+  uninstallHook,
+  workOf,
+  type HookAgent,
+} from './hooks.ts'
 
 const HELP = `vboard ${VERSION}: a message board you mount in one route
 
@@ -41,7 +53,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
 
   update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread (channel \`work\`); --skip if there's none
-  hooks [install|uninstall|status] [claude|codex]...
+  hooks [install|uninstall|status] [claude|codex|cursor]...
                                            after a turn that didn't update the board, the agent is asked to (linked projects only)
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -189,6 +201,37 @@ function cliCommand(): string {
   }
   const quote = (part: string) => (/^[\w./-]+$/.test(part) ? part : `'${part.replace(/'/g, `'\\''`)}'`)
   return [process.execPath, self].map(quote).join(' ')
+}
+
+/**
+ * One thread per person, repo, and branch, in `work` (or `--channel`): every
+ * agent's updates on a branch land together. Created on first use; board-only.
+ */
+async function postUpdate(board: ReturnType<typeof client>, content: string, files: Attachment[] = []) {
+  const channel = flags.channel ?? 'work'
+  const work = workOf(process.cwd())
+  const me = await board.me()
+  const { messages } = await board.messages({ channel, label: { work: work.key }, limit: 500 })
+  const found = messages.filter((m) => m.re === null && !m.deleted && m.by.principal === me.principal).at(-1)
+  const root =
+    found ??
+    (await board.post(channel, {
+      text: `**${work.repo}** · \`${work.branch}\``,
+      labels: { work: work.key, repo: work.repo, branch: work.branch },
+      noSync: true,
+    }))
+  return board.reply(root.id, { text: content, noSync: true, ...(files.length ? { attachments: files } : {}) })
+}
+
+/** Posts an agent's `Board update:` line in a process of its own, so the agent's turn never waits on the board. */
+function postInBackground(agent: string, session: string, cwd: string, update: string) {
+  const child = spawn(process.execPath, [realpathSync(process.argv[1]!), 'hook', 'post', '--agent', agent, ...(flags.channel ? ['--channel', flags.channel] : [])], {
+    cwd,
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, VBOARD_HOOK_SESSION: session, VBOARD_HOOK_UPDATE: update },
+  })
+  child.unref()
 }
 
 async function readStdin(): Promise<string> {
@@ -359,21 +402,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       const board = client()
       const content = args[0] === undefined && flags.attach?.length ? '' : await text(args[0])
-      const channel = flags.channel ?? 'work'
-      const work = workOf(process.cwd())
-      const me = await board.me()
-      // One thread per person, repo, and branch: every agent's turns on it land together.
-      const { messages } = await board.messages({ channel, label: { work: work.key }, limit: 500 })
-      const found = messages.filter((m) => m.re === null && !m.deleted && m.by.principal === me.principal).at(-1)
-      const files = await attachments(board)
-      const root =
-        found ??
-        (await board.post(channel, {
-          text: `**${work.repo}** · \`${work.branch}\``,
-          labels: { work: work.key, repo: work.repo, branch: work.branch },
-          noSync: true,
-        }))
-      const message = await board.reply(root.id, { text: content, noSync: true, ...(files.length ? { attachments: files } : {}) })
+      const message = await postUpdate(board, content, await attachments(board))
       wrote()
       printMessage(message)
       return 0
@@ -394,8 +423,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex]...')
       const cli = cliCommand()
       for (const agent of agents) {
-        const command = `${cli} hook stop --agent ${agent}${flags.channel ? ` --channel ${flags.channel}` : ''}`
-        const changed = installHook(agent, command)
+        const changed = installHook(agent, cli, flags.channel ? ` --channel ${flags.channel}` : '')
         out(`${AGENTS[agent].name}: ${changed ? `added the turn-end hook to ${AGENTS[agent].file()}` : 'already installed'}`)
         if (agent === 'codex' && changed) out('  approve it once in Codex with /hooks')
       }
@@ -403,15 +431,53 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    // What an agent's turn-end hook runs. It must never break the agent's turn: any failure lets it stop.
+    // What an agent's hooks run. They must never break the agent's turn: any failure lets it stop.
     case 'hook': {
-      if (args[0] !== 'stop') throw new UsageError('usage: vboard hook stop --agent <agent>   (run by an agent\'s turn-end hook)')
+      const [event] = args
+      const agent = flags.agent ?? 'agent'
+      if (event === 'post') {
+        // The background half of a `Board update:` line: as the agent, in its session.
+        try {
+          const board = createClient({ ...(flags.url ? { url: flags.url } : {}), profile: agent, session: process.env.VBOARD_HOOK_SESSION ?? null })
+          await postUpdate(board, process.env.VBOARD_HOOK_UPDATE ?? '')
+        } catch (error) {
+          try {
+            mkdirSync(turnsDir(), { recursive: true, mode: 0o700 })
+            appendFileSync(join(turnsDir(), 'hooks.log'), `${new Date().toISOString()} ${agent}: couldn't post an update: ${(error as Error).message}\n`)
+          } catch {}
+        }
+        return 0
+      }
+      if (event !== 'stop' && event !== 'response')
+        throw new UsageError("usage: vboard hook stop|response --agent <agent>   (run by an agent's hooks)")
       try {
-        const payload = JSON.parse(await readStdin()) as { session_id?: string; cwd?: string; stop_hook_active?: boolean }
-        if (payload.cwd && existsSync(payload.cwd)) process.chdir(payload.cwd)
-        if (!payload.session_id || !(process.env.VBOARD_URL || projectUrl())) return 0
-        if (decideStop(payload.session_id, payload.stop_hook_active === true) === 'ask')
-          printJson({ decision: 'block', reason: reminder(cliCommand(), flags.channel ?? 'work') })
+        // Claude Code and Codex send `session_id`, `cwd`, `stop_hook_active`, and the reply; Cursor sends
+        // `conversation_id`, `workspace_roots`, and `loop_count`, with the reply in its own `afterAgentResponse` event.
+        const payload = JSON.parse(await readStdin()) as {
+          session_id?: string
+          conversation_id?: string
+          cwd?: string
+          workspace_roots?: string[]
+          stop_hook_active?: boolean
+          loop_count?: number
+          status?: string
+          last_assistant_message?: string
+          text?: string
+        }
+        const session = payload.session_id ?? payload.conversation_id
+        const cwd = payload.cwd ?? payload.workspace_roots?.[0]
+        if (cwd && existsSync(cwd)) process.chdir(cwd)
+        if (!session || !(process.env.VBOARD_URL || projectUrl())) return 0
+        const reply = event === 'response' ? payload.text : payload.last_assistant_message
+        if (reply) {
+          const { found, post } = takeUpdate(session, reply, event === 'stop')
+          if (post) postInBackground(agent, session, process.cwd(), post)
+          if (found || event === 'response') return 0
+        } else if (event === 'response') return 0
+        if (payload.status && payload.status !== 'completed') return 0
+        const continuing = payload.stop_hook_active === true || (payload.loop_count ?? 0) > 0
+        if (decideStop(session, continuing) === 'ask')
+          printJson(agent === 'cursor' ? { followup_message: REMINDER } : { decision: 'block', reason: REMINDER })
       } catch {}
       return 0
     }

@@ -2,8 +2,8 @@ import { execFileSync, spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { basename, join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard } from './harness.ts'
 
@@ -242,7 +242,7 @@ describe('cli', () => {
     const theirs = { model: 'opus', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }], PreToolUse: [] } }
     await writeFile(settings, JSON.stringify(theirs))
 
-    const installed = await vb(['hooks', 'install'], at)
+    const installed = await vb(['hooks', 'install', 'claude', 'codex'], at)
     expect(installed).toMatchObject({ code: 0, stderr: '' })
     expect(installed.stdout).toContain('Codex: added the turn-end hook')
     expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain('Claude Code: already installed')
@@ -255,55 +255,97 @@ describe('cli', () => {
     ])
     const codex = JSON.parse(await readFile(join(home, '.codex', 'hooks.json'), 'utf8'))
     expect(codex.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent codex$/)
-    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude\nCodex: .* hook stop --agent codex/)
+    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude\nCodex: .* hook stop --agent codex\nCursor: not installed/)
 
     expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
     expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual(theirs)
-    expect((await vb(['hooks', 'install', 'cursor'], at))).toMatchObject({ code: 2, stderr: 'error: unknown agent: cursor (known: claude, codex)\n' })
+    expect((await vb(['hooks', 'install', 'gemini'], at))).toMatchObject({ code: 2, stderr: 'error: unknown agent: gemini (known: claude, codex, cursor)\n' })
   })
 
-  it("asks an agent once to update the board when its turn didn't, and posts updates to the branch's work thread", async () => {
+  it("asks an agent once to update the board when its turn didn't, and posts the line it answers with", async () => {
     const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
     execFileSync('git', ['init', '-q', '-b', 'feat/hooks'], { cwd: repo })
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/app.git'], { cwd: repo })
     // Markers live in the temp directory: fresh session IDs keep runs apart.
     const s1 = `s1-${Date.now()}`
-    const stop = (session: string, continuing = false, extra: NodeJS.ProcessEnv = {}) =>
-      vb(['hook', 'stop', '--agent', 'claude'], extra, JSON.stringify({ session_id: session, cwd: repo, hook_event_name: 'Stop', stop_hook_active: continuing }))
+    const stop = (session: string, reply: string, continuing = false, extra: NodeJS.ProcessEnv = {}) =>
+      vb(['hook', 'stop', '--agent', 'claude'], extra, JSON.stringify({ session_id: session, cwd: repo, hook_event_name: 'Stop', stop_hook_active: continuing, last_assistant_message: reply }))
     const asks = async (result: Promise<{ stdout: string; code: number }>) => {
       const { stdout, code } = await result
       expect(code).toBe(0)
       return stdout ? (JSON.parse(stdout) as { decision: string; reason: string }) : null
     }
+    const work = async () => {
+      const { stdout } = await vb(['read', 'work', '--label', 'work=acme/app@feat/hooks', '--json'])
+      return stdout.trim() ? stdout.trim().split('\n').map((line) => JSON.parse(line) as { re: number | null; text: string; noSync: boolean; labels: Record<string, string>; by: { profile: string; session: string } }) : []
+    }
 
-    // A turn that didn't touch the board is asked once; the agent's follow-up stops freely.
-    const asked = await asks(stop(s1))
-    expect(asked).toMatchObject({ decision: 'block', reason: expect.stringContaining(' update "<summary>"') })
-    expect(asked!.reason).toContain('update --skip')
-    expect(await asks(stop(s1, true))).toBeNull()
+    // A turn that didn't touch the board is asked once, to answer with a line; there's nothing to run.
+    const asked = await asks(stop(s1, 'Added the hooks.'))
+    expect(asked).toMatchObject({ decision: 'block', reason: expect.stringContaining('"Board update:"') })
+    expect(asked!.reason).toContain("Don't run any command")
 
-    // The agent updates: the next turn end doesn't ask. The one after, with no update, does.
-    const claude = { CLAUDE_CODE_SESSION_ID: s1 }
-    const first = await vb_in(repo, ['update', 'Added the hooks; tests next.'], claude)
-    expect(first).toMatchObject({ code: 0, stderr: '' })
-    expect(await asks(stop(s1))).toBeNull()
-    expect(await asks(stop(s1))).not.toBeNull()
-    expect(await asks(stop(s1))).toBeNull() // asked already this turn
-    await vb_in(repo, ['update', '--skip'], claude)
-    expect(await asks(stop(s1))).toBeNull()
+    // Its answer is posted in the background, as the agent, to the branch's work thread.
+    expect(await asks(stop(s1, 'Added the hooks.\n\nBoard update: Added the turn-end hook; tests next.', true))).toBeNull()
+    await vi.waitFor(async () => expect(await work()).toHaveLength(2), { timeout: 10_000, interval: 200 })
+    const [root, first] = await work()
+    expect(root).toMatchObject({ re: null, noSync: true, labels: { work: 'acme/app@feat/hooks', repo: 'acme/app', branch: 'feat/hooks' } })
+    expect(first).toMatchObject({ text: 'Added the turn-end hook; tests next.', noSync: true, by: { profile: 'claude', session: s1 } })
 
-    // Another agent's update on the same branch joins the same thread.
-    await vb_in(repo, ['update', 'Picked it up in Codex; tests pass.'], { CODEX_THREAD_ID: 't1' })
-    const thread = await vb(['read', first.stdout.trim(), '--json'])
-    const [root, ...replies] = thread.stdout.trim().split('\n').map((line) => JSON.parse(line))
-    expect(root).toMatchObject({ channel: 'work', noSync: true, labels: { work: 'acme/app@feat/hooks', repo: 'acme/app', branch: 'feat/hooks' } })
-    expect(replies.map((r: { text: string; by: { profile: string; session: string } }) => [r.by.profile, r.by.session, r.text])).toEqual([
-      ['claude', s1, 'Added the hooks; tests next.'],
-      ['codex', 't1', 'Picked it up in Codex; tests pass.'],
+    // The next turn is asked again; once asked, it stops; `skip` and `vb update` count as updates.
+    expect(await asks(stop(s1, 'Looked at the tests.'))).not.toBeNull()
+    expect(await asks(stop(s1, 'Still looking.'))).toBeNull()
+    expect(await asks(stop(s1, 'Read the file.\nBoard update: skip'))).toBeNull()
+    expect(await asks(stop(s1, 'Asked a question.'))).not.toBeNull()
+    expect(await asks(stop(s1, 'Asked a question.', true))).toBeNull()
+    const ran = await vb_in(repo, ['update', 'Picked it up in Codex; tests pass.'], { CODEX_THREAD_ID: 't1' })
+    expect(ran).toMatchObject({ code: 0, stderr: '' })
+    await vb_in(repo, ['update', 'Wrote the docs.'], { CLAUDE_CODE_SESSION_ID: s1 })
+    expect(await asks(stop(s1, 'Wrote the docs.'))).toBeNull()
+    expect((await work()).slice(1).map((m) => [m.by.profile, m.text])).toEqual([
+      ['claude', 'Added the turn-end hook; tests next.'],
+      ['codex', 'Picked it up in Codex; tests pass.'],
+      ['claude', 'Wrote the docs.'],
     ])
 
     // Outside a linked project, the hook stays out of the way.
-    expect(await asks(stop(`s2-${Date.now()}`, false, { VBOARD_URL: '' }))).toBeNull()
+    expect(await asks(stop(`s2-${Date.now()}`, 'Done.', false, { VBOARD_URL: '' }))).toBeNull()
+  })
+
+  it('asks Cursor with a follow-up message, and posts the update from its response', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vboard-home-'))
+    expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor: added the turn-end hook')
+    const config = JSON.parse(await readFile(join(home, '.cursor', 'hooks.json'), 'utf8'))
+    expect(config).toEqual({
+      version: 1,
+      hooks: {
+        stop: [{ command: expect.stringMatching(/ hook stop --agent cursor$/), timeout: 10 }],
+        afterAgentResponse: [{ command: expect.stringMatching(/ hook response --agent cursor$/), timeout: 10 }],
+      },
+    })
+
+    const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
+    execFileSync('git', ['init', '-q', '-b', 'feat/cursor'], { cwd: repo })
+    const conversation = `c-${Date.now()}`
+    const hook = (event: 'stop' | 'response', payload: Record<string, unknown>) =>
+      vb(['hook', event, '--agent', 'cursor'], {}, JSON.stringify({ conversation_id: conversation, workspace_roots: [repo], ...payload }))
+
+    expect((await hook('response', { hook_event_name: 'afterAgentResponse', text: 'Renamed the helper.' })).stdout).toBe('')
+    expect(JSON.parse((await hook('stop', { hook_event_name: 'stop', status: 'completed', loop_count: 0 })).stdout)).toEqual({
+      followup_message: expect.stringContaining('"Board update:"'),
+    })
+    await hook('response', { hook_event_name: 'afterAgentResponse', text: 'Board update: Renamed the helper; nothing else changed.' })
+    expect((await hook('stop', { hook_event_name: 'stop', status: 'completed', loop_count: 1 })).stdout).toBe('')
+    await vi.waitFor(
+      async () => {
+        const { stdout } = await vb(['read', 'work', '--label', `work=${basename(repo)}@feat/cursor`, '--json'])
+        const replies = stdout.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((m) => m.re !== null)
+        expect(replies.map((m: { by: { profile: string }; text: string }) => [m.by.profile, m.text])).toEqual([['cursor', 'Renamed the helper; nothing else changed.']])
+      },
+      { timeout: 10_000, interval: 200 },
+    )
+    // An aborted turn isn't asked.
+    expect((await hook('stop', { hook_event_name: 'stop', status: 'aborted', loop_count: 0 })).stdout).toBe('')
   })
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {

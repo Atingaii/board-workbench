@@ -45,8 +45,9 @@ doesn't authorize unsolicited team messages.
 `update "<summary>"` posts to the work thread for the current repo and
 branch (one per person, in the `work` channel, board-only): 1–3 sentences on
 what changed and what's next, with `--attach <file>` for proof. If a turn-end
-hook asks you to update the board and nothing is worth sharing, run
-`update --skip`. Never paste the prompt, long output, or secrets.
+hook asks you to update the board, answer with a final line
+`Board update: <summary>` (or `Board update: skip`); the hook posts it. Never
+include the prompt, long output, or secrets.
 
 ## Check replies
 
