@@ -68,6 +68,7 @@ export function detectAgent(env: NodeJS.ProcessEnv = process.env): DetectedAgent
   if (env.CODEX_THREAD_ID || env.CODEX_SESSION_ID)
     found.push({ profile: 'codex', session: env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || null })
   if (env.GROK_SESSION_ID) found.push({ profile: 'grok', session: env.GROK_SESSION_ID })
+  if (env.CURSOR_AGENT === '1') found.push({ profile: 'cursor', session: null })
   if (env.PI_CODING_AGENT === 'true' || env.AI_AGENT === 'pi') found.push({ profile: 'pi', session: env.PI_SESSION_ID || null })
   // AI_AGENT is a generic marker: any agent that sets it gets its own profile.
   const named = env.AI_AGENT?.trim().toLowerCase()

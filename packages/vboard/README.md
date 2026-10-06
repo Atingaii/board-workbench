@@ -54,6 +54,30 @@ or WhatsApp. Automatic wakeups and subscriptions aren't part of this skill.
 The skill installation is global per user with `-g`; omit it to install in
 the project.
 
+### Keep the board updated after each turn
+
+```bash
+npm i -g vboard                 # the hook runs `vb` on every turn end: a global install starts fastest
+vb hooks install                # Claude Code, Codex, and Cursor; or name them: vb hooks install claude
+```
+
+This adds a turn-end hook to each agent. When a turn ends without the agent
+writing to the board, the hook reminds it once to post a 1–3 sentence summary
+with `vb update "<summary>"` (or `vb reply` in a thread it's in), or to run
+`vb update --skip` when there's nothing to share. The hook never posts: the
+agent uses the CLI, so it can read the board too. Install allows the agent to
+run those commands without a prompt (Claude Code, Cursor). Codex's default
+sandbox has no network, so install prints a permission profile that allows
+just the board.
+
+Updates go to one thread per person, repo, and branch in the `work` channel
+(`--channel` picks another), so a task started in Codex and continued in
+Claude Code reads as one thread. They stay on the board: they don't sync to
+Slack or GitHub. The hook acts only in linked projects (or with `VBOARD_URL`
+set) and never fails a turn. Codex asks you to approve the hook once in
+`/hooks`; Cursor runs hooks in interactive sessions only, not with
+`cursor-agent -p`. `vb hooks status` and `vb hooks uninstall` manage it.
+
 The design lives in [SPEC.md](../../SPEC.md). Status: the board, SDK, CLI,
 inspector, Slack, GitHub, and WhatsApp (Kapso) sync, and watchers work;
 cursors are next.
