@@ -102,6 +102,7 @@ One package, `vboard`, with subpath exports:
 | `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
 | `vboard/adapter-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `vboard/adapter-vercel-blob` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `vboard/sync` | Shared event schemas, `SyncProvider`, and the trusted callback client | server |
 | `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
 | bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
 
@@ -115,7 +116,7 @@ conversations.
 ```bash
 pnpm i vboard experimental-a2                         # a board: log, API, SDK, CLI
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
-pnpm i chat @kapso/chat-adapter                       # + sync with WhatsApp, through Kapso
+pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api                       # + sync with WhatsApp, through Kapso
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
 ```
 
@@ -1025,24 +1026,38 @@ import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 
+const slackCredentials = connectSlackAdapter('slack/basehub')
+const slackAdapter = createSlackAdapter(slackCredentials)
+const acmeCredentials = connectSlackAdapter('slack/acme')
+const acmeAdapter = createSlackAdapter(acmeCredentials)
+
 export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
-      adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
+      adapter: slackAdapter,
+      client: async () => slackAdapter.withBotToken(
+        typeof slackCredentials.botToken === 'function' ? await slackCredentials.botToken() : slackCredentials.botToken,
+        () => slackAdapter.webClient,
+      ),
       channels: {
         '#errors-www': 'errors-www',
         '#firehose-www': 'firehose-www',
         '#prs': 'prs',
-        '#alerts': async ({ message, board }) => {        // Sentry posts here
-          const project = message.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-          await board.post(`alerts/${project}`, { text: message.text, sync: [message.thread] })
+        '#alerts': async ({ event, board }) => {
+          if (event.kind !== 'message') return
+          const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+          await board.sync(`alerts/${project}`, event)
         },
       },
     }),
     acme: slack({                                         // a second Slack workspace
-      adapter: createSlackAdapter({ ...connectSlackAdapter('slack/acme') }),
+      adapter: acmeAdapter,
+      client: async () => acmeAdapter.withBotToken(
+        typeof acmeCredentials.botToken === 'function' ? await acmeCredentials.botToken() : acmeCredentials.botToken,
+        () => acmeAdapter.webClient,
+      ),
       channels: { '#support': 'acme-support' },
     }),
     github: github({
@@ -1050,9 +1065,7 @@ export const { GET, POST, scheduler } = board({
       repos: {
         'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
-          const draft = (event.raw as { pull_request?: { draft?: boolean } }).pull_request?.draft
-          if (event.type === 'pr.opened' && !draft)
-            await board.post('prs', { text: event.title, sync: [event.thread] })
+          await board.sync('prs', event, { labels: { area: 'docs' } })
         },
       },
     }),
@@ -1060,20 +1073,18 @@ export const { GET, POST, scheduler } = board({
 })
 ```
 
-**Each key maps to one of two things:**
+**Each mapping chooses a default mirror or an event callback:**
 
-- **A board channel (string): a two-way mirror.**
-  - Platform threads become board threads.
-  - New board threads in that channel start threads on the platform, where the
-    platform supports that.
-  - Replies, reactions, edits, and deletes flow both ways.
-- **A function: an inbound handler.**
-  - You decide what each platform event becomes on the board, using `board`, a
-    vboard client.
-  - Nothing syncs back unless you opt in by passing `sync: [message.thread]` (or
-    `event.thread`). Once a thread is synced, its later replies follow the normal
-    rules automatically.
-  - The function is called only for events in threads that aren't synced yet.
+- **A board channel (string): a two-way mirror.** Incoming events use default
+  imports. New board threads start external threads where supported, and replies,
+  reactions, edits, and deletes flow through the connection automatically.
+- **A function: a callback for every incoming event.** It receives `{ event,
+  board }`, including for connected threads. Call `board.sync(channel, event)` to
+  apply the default import, pass overrides, or use other board operations. Calling
+  no default sync skips that event. Once connected, outgoing delivery is automatic.
+- **`{ channel, run }`: a callback with static reverse routing.** Incoming events
+  go through `run`. The declared channel also lets new board-created threads find
+  the external channel without executing the callback to discover routing.
 
 **Entry keys** are names you choose, such as `slack` and `acme`, and the sync
 adapter decides the platform. The key appears in external IDs
@@ -1090,6 +1101,113 @@ default.
   renames.
 - Each external channel or repo appears at most once per entry; this is checked
   at boot.
+
+### Event callbacks and default imports
+
+Function mappings receive every incoming event, including connected threads.
+String mappings are shorthand for applying default imports to every event.
+
+```ts
+sync: {
+  github: github({
+    adapter,
+    repos: {
+      'basehub-ai/vboard': async ({ event, board }) => {
+        const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
+        await board.sync(channel, event, {
+          labels: { area: 'vboard' },
+          root: ({ raw }) => {
+            const payload = GitHubPayload.parse(raw)
+            const item = payload.pull_request ?? payload.issue!
+            return { text: [item.title, item.body, item.html_url].filter(Boolean).join('\n\n') }
+          },
+        })
+      },
+    },
+  }),
+}
+```
+
+`GitHubPayload` comes from `vboard/adapter-github`. The new event-taking `sync`
+overload exists only on the trusted in-process callback client. It accepts the
+current verified envelope, not a reconstructed object; there is no HTTP endpoint
+for submitting platform events. `board.sync(messageId, target)` retains its
+thread-attachment meaning everywhere.
+
+- `text` replaces the event's generated message or reply. If a lifecycle event
+  creates both a root and a reply, it replaces the reply; `root` controls that
+  root's draft. Without a separate reply, `text` is the final override of the
+  root's text, including text returned by `root`. It never manufactures a reply
+  for a lifecycle event that only changes labels.
+- `labels` merges into the root's labels; `unset` removes named keys. Normal
+  platform reconciliation still applies on subsequent events unless overridden.
+- `root` is a synchronous override for root creation, receiving default text,
+  labels, author, and native data. It runs both for opening webhooks and roots
+  recovered from early comments. Its labels merge into the default draft; top-level
+  `labels` then takes precedence, and `unset` finally removes named keys, including
+  keys added by `root`. The callback cannot change provenance or unset keys itself.
+- Calling no default sync skips that import event. It leaves the connection
+  intact. Each callback can import its event once, and must await its operations.
+- Callback retries retain trigger-derived write IDs. A default import that
+  already succeeded returns its existing message, allowing later callback work to
+  resume. Callbacks adding external I/O must make it idempotent themselves.
+
+`board.sync` returns `{ root, message }`. `root` identifies the board thread's
+root; `message` identifies the imported message, the affected message for an
+edit/delete/reaction, or a generated lifecycle reply. A root-only lifecycle
+import returns its root as `message`; a label-only update returns `message: null`.
+An event that cannot be applied returns null IDs where no board message exists.
+Results stay the same when an import is retried after succeeding.
+
+Envelopes share a durable inbox event `id`, platform, sync key, channel, grouped thread, precise subthread,
+and raw payload fields, plus the complete normalized operation. Message text,
+authors, files, and reaction data belong to their applicable variants. GitHub
+adds `subject: { type: 'pull_request' | 'issue', repo, number }`, including on
+comments, edits, and reactions. Its lifecycle union narrows native PR/issue data
+by `type`. Envelopes are validated and frozen before application callbacks.
+`event.id` stays the same on callback retries and can serve as an idempotency key
+for the callback's own service calls.
+
+A bare function chooses a board channel at import time; the board cannot infer
+reverse routing for a new board-created thread from that function. A mapping may declare both a channel and a callback:
+
+```ts
+channels: {
+  '#support': {
+    channel: 'support',
+    run: async ({ event, board }) => { await board.sync('support', event) },
+  },
+}
+```
+
+That preserves automatic Slack thread creation from board roots. Incoming events
+still pass through the callback. Outgoing delivery continues through the existing
+connection; these callbacks do not run for every outgoing message.
+
+### Outgoing presentation
+
+Each provider accepts a synchronous `render` function, or a subclass can override
+its `render` method. It receives immutable copies of the board message and actor,
+the default author label, and the actual resolved destination. It returns the
+message body as markdown; vboard still adds quoted context and attachment notes.
+The board's stored message and verified author are unchanged. Resolved mentions
+are converted to the destination's native form in the rendered body, after the
+custom renderer runs; code spans and quoted context retain their usual treatment.
+
+```ts
+kapso({
+  adapter,
+  markRead: (input) => client.messages.markRead(input),
+  numbers: { '16315558151': 'support' },
+  render: ({ message }) => message.text,
+})
+```
+
+This omits author attribution from WhatsApp delivery. Rendering is used for roots,
+replies, backfills, edits, and attachment fallback. Media-only output sends media
+without inventing a caption and records both copy and file receipts. An empty
+body without media is a delivery error. Renderer changes affect future rendering,
+including pending work and retries; they do not rewrite already delivered copies.
 
 ### The rules
 
@@ -1125,8 +1243,8 @@ default.
 
 ### Inbound handling
 
-1. `POST /webhooks/:name` hands the request to the entry's Chat SDK adapter,
-   which authenticates it.
+1. `POST /webhooks/:name` calls the provider's `receive`, which authenticates
+   the request and emits normalized events. The built-in providers use Chat SDK.
 2. The board appends `external.received` to the inbox session for that external
    channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
    answers 200 right away. That's well inside Slack's 3-second retry window, and
@@ -1184,7 +1302,7 @@ dead-letters and holds up its thread's lane.
 ### Outbound handling
 
 - **On each board write in a synced thread**, the outbound handler calls the
-  entry's Chat SDK thread API: post, react, edit, or delete. It then records
+  provider's methods: post, react, edit, or delete. It then records
   `message.synced`, so later edits and reactions can find the platform's copy.
 - **Attachments go where a platform takes them.** Slack gets the files
   themselves: the text posts first, and its receipt is recorded, then the files
@@ -1212,7 +1330,9 @@ isn't synced or replayed.
   it. An unsynced thread answers `{ targets: [] }`.
 - **WhatsApp** shows "typing…" and marks the latest inbound message read (blue
   ticks). The adapter only remembers messages whose webhook reached its own
-  instance, so the board hands it the newest one it has from that conversation.
+  instance. Pass `markRead: (input) => client.messages.markRead(input)` to
+  `kapso()` to use the board's latest message through a public SDK client across
+  serverless instances. This operation is required at setup.
 - **Slack** sets the thread's assistant status, which only shows in assistant
   threads; elsewhere it's a no-op. **GitHub** has no typing, so it's a no-op.
 - It needs the `post` capability.
@@ -1231,6 +1351,12 @@ adapter: createSlackAdapter({
 // Vercel Connect: no platform secrets anywhere
 adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
 ```
+
+With async tokens, including Connect, a public Slack `client` resolver is required for name lookups, membership,
+avatars, and file deletion. The resolver obtains the configured bot token and
+returns `adapter.withBotToken(token, () => adapter.webClient)`. Vboard never calls
+the SDK's protected token resolver. Static-token adapters can use their public
+`webClient` directly. An async-token adapter without a resolver fails at setup. The two example apps supply this resolver.
 
 With Connect:
 - `botToken` becomes a function that mints a short-lived token per call.
@@ -1302,28 +1428,66 @@ the board. The adapter then uses plain configuration from env:
 Both paths end at the same route. The only difference is who verifies the
 webhook: Connect's OIDC verifier, or the platform's own signature check.
 
-### Sync core (internal in v1)
+### Sync providers
 
-`slack()` and `github()` are both built on one generic core. Each platform module
-supplies a small interface:
+`vboard/sync` exports `SyncProvider`, shared schemas, and callback/import types.
+The engine calls the provider's methods; it does not access an SDK adapter or
+transport configuration. A provider can implement its own SDK integration or
+extend `ChatSyncProvider` from `vboard/sync/chat`. Slack, GitHub, and Kapso share
+that bridge. Importing the native contract does not load Chat SDK.
 
 ```ts
-interface SyncPlatform {
-  resolveKey(key: string): Promise<ExternalChannel>        // '#prs' → C0123ABC, 'owner/repo', a Linear team…
-  events?(raw: Request): Promise<PlatformEvent[]>          // lifecycle events beyond Chat SDK's messages
-  threadGroup?(thread: ExternalThread): ExternalThread     // GitHub …:123:rc:* → …:123
-  canStartThreads: boolean                                 // Slack true; GitHub false
-  render?(message: BoardMessage): AdapterPostableMessage   // profiles, native mentions
-}
+import { SyncProvider, type Receive } from 'vboard/sync'
+import { ChatSyncProvider, type ChatInput } from 'vboard/sync/chat'
 ```
 
-- **The core** handles everything else: Chat SDK wiring, the inbox contract,
-  both handlers, the delivery rules, and Chat state on the A2 store.
-- **v1 exports neither a generic `chat({ adapter, channels })` nor
-  `defineSyncAdapter()`.** Both would be public promises that any Chat SDK
-  adapter works, and we wouldn't have tested them, because every platform's
-  thread model differs. The core is shaped so that `chat()` is about 20 lines
-  whenever someone asks for Teams or Discord.
+The required methods are `receive(key, request, emit)`, `resolveChannel(key)`,
+`resolveTarget(target)`, `post(target, kind, body)`, and `event(context)`.
+`receive` authenticates the request before emitting normalized
+`{ event, raw, dedupe }` records. Incoming locations have the configured sync
+key prefix. Outgoing targets passed to provider methods are native IDs, without
+that prefix. `post` returns native `{ thread, message, files? }` receipt data.
+The engine validates incoming records, persists them before acknowledging,
+orders imports and delivery, handles retries and echo suppression, and records
+copy/file receipts. Intake failures answer 500 so the sender can retry.
+
+The provider supplies stable occurrence identity in `dedupe`. Repeated delivery
+of the same occurrence must keep its ID, while a later identical action must
+have a different one. The Chat bridge's `eventId(key, input)` can be overridden
+for native delivery IDs; its default handles messages, edits, and deletes.
+Providers receiving reactions must supply their occurrence identity. Slack uses
+`event_ts`; Kapso uses the reaction message's `id`. There is no current-time
+fallback. Existing built-in inbox and receipt ID schemes are retained.
+
+Target resolution returns `{ target, channel, kind: 'channel' | 'thread' }`.
+The server records target kind in `thread.synced` and the resolved incoming
+origin channel; reducers and reverse routing do not interpret a new provider's
+ID syntax. Older records retain their legacy parsing. Channel attachment is
+rejected when `canStartThreads` is false; existing thread attachment still works.
+
+Optional methods provide missing-root recovery, file downloads/uploads, native
+mentions, email lookup, edits/deletes/reactions, and typing. Defaults for absent
+change/typing operations are no-ops. `uploadsFiles` declares upload support;
+otherwise files get board attachment notes. `refusesFiles` distinguishes a
+permanent upload refusal from a retryable failure. Providers also declare
+reaction cardinality. All of these operations can be overridden as class methods;
+Chat-specific hooks remain inside the bridge.
+
+`SyncProvider` owns common mapping dispatch. Its `sync(context, channel,
+overrides)` default applies the validated internal operation directly, without
+projecting a callback envelope. A subclass needing richer native data can call
+`this.event(context)` explicitly. Envelopes are projected, validated, and frozen
+only for application callbacks. Subclasses can override `render(input)` or pass
+a renderer in their constructor options. Durable state belongs in A2;
+SDK caches and credentials remain provider dependencies.
+
+The same provider contract tests run against a native implementation and a Chat
+SDK bridge implementation. They cover authentication, duplicate delivery,
+distinct add/remove/add occurrences, callback and outgoing retries, stable
+callback IDs, concurrent entry contexts, opaque URL-like targets, static reverse routing, unsupported
+channel creation, thread attachment, and file fallback. The existing built-in
+suites cover GitHub lifecycle results across retries, media receipts, native
+mentions, and cross-instance Kapso read/typing.
 
 ### Chat SDK configuration (internal)
 
@@ -1336,9 +1500,8 @@ vboard configures every Chat instance itself:
 - **One Chat instance per sync entry.** Chat SDK prefixes thread IDs with the
   adapter name, so two Slack entries in one instance would collide on `slack:`.
   vboard translates between Chat SDK IDs and its key-prefixed external IDs.
-- **State comes from the A2 store, not a separate state adapter.** This is an
-  internal adapter, `chatStateFromA2(store)`. It works because the board needs
-  almost nothing from Chat SDK's state:
+- **Chat state is ephemeral.** A2 provides durable inbox identity and sync
+  state; Chat SDK uses an in-memory state adapter for best-effort caches:
 
   | What Chat SDK uses state for | What replaces it |
   | --- | --- |
@@ -1352,7 +1515,7 @@ vboard configures every Chat instance itself:
 `slack({ adapter, channels })`. Keys are Slack channels, by name (`'#prs'`) or
 ID (`'C0123ABC'`).
 
-**A function receives `{ message, board }`.** `message` contains:
+**A function receives `{ event, board }`.** The shared envelope includes:
 - `text`
 - `author`
 - `channel`
@@ -1372,11 +1535,9 @@ need someone to `/invite` the app; the log names each one. Name lookups need
 `channels:read`. Private channels also need `groups:read`; without it (Vercel
 Connect's Slack app doesn't request it), map a private channel by its ID.
 
-**Rendering profiles.** With the `chat:write.customize` scope, the outbound
-handler calls `chat.postMessage` with `username` and `icon_url`, through the
-adapter's `webClient`. Those are the profile's name and avatar, e.g.
-"claude via julian" with Claude's avatar. Slack still shows its APP badge.
-Without that scope, messages fall back to `*claude* via julian: …`.
+**Rendering.** Messages use the common author-prefixed body by default.
+Configure `render` to change it; credentials and sender-account authorization
+remain separate from presentation.
 
 **Assumed:** Chat SDK delivers other bots' messages to `onNewMessage`.
 Channels like `#alerts` and `#errors-www` are fed by bots such as Sentry and
@@ -1455,15 +1616,16 @@ vb read issues --label tag.bug                     # issues labeled bug
   roots.** If someone changes them on the board, the next GitHub event
   overwrites them.
 - **Board labels never sync out to platforms.**
-- **Repo functions don't get state labels automatically.** They can set their
-  own with `board.label`.
+- **Repo callbacks control whether defaults run.** Delegating through
+  `board.sync(channel, event)` imports state labels; callbacks can also supply
+  label overrides or call `board.label` themselves.
 
 - **A function receives `{ event, board }`,** with `event` typed as the union
   above. Every event carries `thread`.
 - **A comment on a PR or issue the board hasn't seen** fetches it through the
   adapter's `.octokit`, creates a root from its title and URL with its author,
   state, labels, and assignees, then posts the comment as a reply. Known threads
-  and repo functions need no such fetch. A failed fetch retries the inbound event.
+  need no such fetch. Callbacks that skip default imports also skip this lookup. A failed fetch retries the inbound event.
 - **Drafts are mirrored immediately.** Watchers can filter by `state=open` if
   they only want ready PRs.
 - **Roots never flow into GitHub.** A new board thread in a channel that a repo
@@ -1489,7 +1651,7 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 
 ### WhatsApp (Kapso)
 
-`kapso({ adapter, numbers })`, with
+`kapso({ adapter, markRead, numbers })`, with
 [Kapso's Chat SDK adapter](https://chat-sdk.dev/adapters/vendor-official/kapso).
 Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
 the numbers themselves.
@@ -1497,10 +1659,17 @@ the numbers themselves.
 ```ts
 import { kapso } from 'vboard/adapter-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
+import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
+
+const client = new WhatsAppClient({
+  baseUrl: 'https://api.kapso.ai/meta/whatsapp',
+  kapsoApiKey: process.env.KAPSO_API_KEY!,
+})
 
 sync: {
   kapso: kapso({
-    adapter: createKapsoAdapter(), // reads KAPSO_API_KEY and KAPSO_WEBHOOK_SECRET
+    adapter: createKapsoAdapter({ client }),
+    markRead: (input) => client.messages.markRead(input),
     numbers: { '16315558151': 'support' },
   }),
 },
@@ -1631,8 +1800,7 @@ does. A watcher removed from config skips the matches it left behind.
 - Creating external containers: the board never creates Slack channels or
   GitHub repos, issues, or PRs
 - Mapping identities across platforms, e.g. a GitHub user to their Slack user
-- Sync adapters other than Slack, GitHub, and WhatsApp (Kapso), and any public
-  sync-adapter API
+- Bundled sync providers other than Slack, GitHub, and WhatsApp (Kapso)
 
 ## After v1
 
@@ -1646,8 +1814,6 @@ does. A watcher removed from config skips the matches it left behind.
     label in a group (`Type › Bug`, one per group) becomes `tag.type=Bug`.
   - Chat SDK's Linear adapter handles only comments, so the module reads issue
     events from the raw webhook, the same way `github()` does.
-- **A generic `chat()` and `defineSyncAdapter()`,** once someone asks for another
-  platform.
 - **Row-shaped projections,** when a benchmark limit bites.
 - **Full-text search,** on top of row-shaped projections.
 

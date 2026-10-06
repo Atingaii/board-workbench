@@ -17,6 +17,7 @@ import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
 import { badRequest, forbidden, notFound } from './errors.ts'
 import { view } from './feed.ts'
+import type { ResolvedTarget } from '../sync/provider.ts'
 
 /** Who a write is attributed to. */
 export type Identity = { principal: Principal; author: Author; actor: Actor }
@@ -33,9 +34,9 @@ export function deploymentIdentity(actor: string, handle: string): Identity {
 export type WriteContext = {
   session: BoardSession
   /** External channels a new root in this board channel starts threads in. */
-  configTargets: (channel: string) => Promise<string[]>
+  configTargets: (channel: string) => Promise<ResolvedTarget[]>
   /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
-  normalizeTarget: (target: string) => Promise<string>
+  normalizeTarget: (target: string) => Promise<ResolvedTarget>
   /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
   findByEmail?: (email: string) => Promise<Actor | null>
 }
@@ -107,15 +108,15 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
     thread = id!
   }
 
-  const targets: { target: string; cause: 'config' | 'request' }[] = []
+  const targets: { target: string; kind: 'channel' | 'thread'; cause: 'config' | 'request' }[] = []
   if (re === null) {
-    const originChannel = input.origin ? channelOf(input.origin.thread) : null
+    const originChannel = input.origin ? input.origin.channel ?? channelOf(input.origin.thread) : null
     if (!input.noSync)
       for (const target of await ctx.configTargets(channel!))
-        if (target !== originChannel) targets.push({ target, cause: 'config' })
+        if (target.target !== originChannel) targets.push({ target: target.target, kind: target.kind, cause: 'config' })
     for (const requested of input.sync ?? []) {
       const target = await ctx.normalizeTarget(requested)
-      if (!targets.some((t) => t.target === target)) targets.push({ target, cause: 'request' })
+      if (!targets.some((t) => t.target === target.target)) targets.push({ target: target.target, kind: target.kind, cause: 'request' })
     }
   }
 
@@ -124,10 +125,10 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
   const mentions = resolveMentions(text, knownWith(actors, found), seen ? identity.actor : undefined, input.lenientMentions ?? false)
   const synced = await Promise.all(
-    targets.map(async ({ target, cause }) => ({
+    targets.map(async ({ target, kind, cause }) => ({
       type: 'thread.synced' as const,
       id: await idempotentId('vboard', thread, 'sync', target),
-      payload: { thread, target, cause, by: identity.author },
+      payload: { thread, target, kind, cause, by: identity.author },
     })),
   )
   const rows = await ctx.session.append(
@@ -260,13 +261,13 @@ export async function writeAttach(
   input: { identity: Identity; id: number; target: string },
 ) {
   const message = await liveMessage(ctx, input.id)
-  const target = await ctx.normalizeTarget(input.target)
+  const { target, kind } = await ctx.normalizeTarget(input.target)
   const { state: sync } = await ctx.session.state(syncReducer)
   if (sync.threads[message.thread]?.targets.includes(target)) return { target, attached: false }
   await ctx.session.append({
     type: 'thread.synced',
     id: await idempotentId('vboard', message.thread, 'sync', target),
-    payload: { thread: message.thread, target, cause: 'request', by: input.identity.author },
+    payload: { thread: message.thread, target, kind, cause: 'request', by: input.identity.author },
   })
   return { target, attached: true }
 }

@@ -11,6 +11,8 @@ export default defineConfig([
       'adapter-kapso': 'src/sync/kapso.ts',
       'adapter-vercel-blob': 'src/blob/vercel.ts',
       contract: 'src/contract/index.ts',
+      sync: 'src/sync/index.ts',
+      'sync.chat': 'src/sync/chat-provider.ts',
       cli: 'src/cli/main.ts',
     },
     format: 'esm',

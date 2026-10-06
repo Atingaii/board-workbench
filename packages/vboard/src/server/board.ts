@@ -21,7 +21,7 @@ import {
 } from '../api/routes.ts'
 import { createBoardClient, type BoardClient } from '../client/client.ts'
 import { createSyncEngine } from '../sync/engine.ts'
-import type { SyncPlatform } from '../sync/types.ts'
+import type { SyncProvider } from '../sync/provider.ts'
 import { VERSION } from '../version.ts'
 import {
   allows,
@@ -58,7 +58,7 @@ export type BoardOptions = {
   /** Machines outside this project that may call the board. */
   trustedSources?: readonly TrustedSource[]
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
-  sync?: Record<string, SyncPlatform>
+  sync?: Record<string, SyncProvider>
   /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
   watch?: Record<string, Watcher>
   /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */

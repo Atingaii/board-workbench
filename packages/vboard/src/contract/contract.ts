@@ -24,6 +24,7 @@ export const ExternalTarget = z.string().min(3).max(300)
 
 /** Where a message came from on a platform. `thread` is grouped (GitHub review threads fold into their PR). */
 export const Origin = z.object({
+  channel: ExternalTarget.optional(),
   thread: ExternalTarget,
   /** The exact platform thread, when it differs from `thread`. */
   subthread: ExternalTarget.nullable(),
@@ -82,6 +83,7 @@ export const boardContract = contract({
       thread: ThreadKey,
       target: ExternalTarget,
       cause: z.enum(['config', 'request']),
+      kind: z.enum(['channel', 'thread']).optional(),
       by: Author,
     }),
     /** An outbound delivery receipt: board message `id` exists on the platform as `external`. */
@@ -148,13 +150,13 @@ export const ExternalFile = z.object({
 })
 export type ExternalFile = z.infer<typeof ExternalFile>
 
+export const ExternalLocation = z.object({ channel: ExternalTarget, thread: ExternalTarget, subthread: ExternalTarget.nullable() })
+
 /** A platform event, normalized at intake. Thread IDs are external IDs with the sync key prefix. */
 export const ExternalEvent = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('message'),
-    channel: ExternalTarget,
-    thread: ExternalTarget,
-    subthread: ExternalTarget.nullable(),
+    ...ExternalLocation.shape,
     message: z.string(),
     isRoot: z.boolean(),
     text: z.string(),
@@ -165,25 +167,19 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('edited'),
-    channel: ExternalTarget,
-    thread: ExternalTarget,
-    subthread: ExternalTarget.nullable(),
+    ...ExternalLocation.shape,
     message: z.string(),
     text: z.string(),
     author: ExternalAuthor,
   }),
   z.object({
     kind: z.literal('deleted'),
-    channel: ExternalTarget,
-    thread: ExternalTarget,
-    subthread: ExternalTarget.nullable(),
+    ...ExternalLocation.shape,
     message: z.string(),
   }),
   z.object({
     kind: z.literal('reaction'),
-    channel: ExternalTarget,
-    thread: ExternalTarget,
-    subthread: ExternalTarget.nullable(),
+    ...ExternalLocation.shape,
     message: z.string(),
     emoji: z.string(),
     added: z.boolean(),
@@ -192,8 +188,7 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
   z.object({
     /** A platform lifecycle event: a PR opening, closing, being reviewed. */
     kind: z.literal('lifecycle'),
-    channel: ExternalTarget,
-    thread: ExternalTarget,
+    ...ExternalLocation.omit({ subthread: true }).shape,
     type: z.string(),
     title: z.string(),
     url: z.string().nullable(),
