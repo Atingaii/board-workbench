@@ -12,6 +12,7 @@ import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { experimental_evaluate as evaluate } from "ai";
 import { byPi, tellPi } from "./agent";
+import { shipit } from "./shipit";
 
 /** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
 const PI_TASKS = {
@@ -71,6 +72,7 @@ export const { GET, POST, scheduler } = board({
     }),
   },
   watch: {
+    shipit: shipit(),
     merged: {
       tail: "--label pr --label state=merged",
       when: "enters",
