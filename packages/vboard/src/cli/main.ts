@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -260,7 +261,8 @@ async function postUpdate(board: ReturnType<typeof client>, content: string, fil
       labels: { work: work.key, repo: work.repo, branch: work.branch },
       noSync: true,
       // One root per person and branch: a second agent creating it at the same moment gets a conflict, not a twin.
-      id: `work:${me.principal}:${work.key}`,
+      // Hashed, since ids are at most 200 characters and a principal and branch can be longer.
+      id: `work:${createHash('sha256').update(`${me.principal}\n${work.key}`).digest('base64url')}`,
     })
   let root = await find()
   if (!root)

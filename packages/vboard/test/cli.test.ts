@@ -347,6 +347,19 @@ describe('cli', () => {
     expect(await reminds(stop(`s2-${Date.now()}`, false, { VBOARD_URL: '' }))).toBeNull()
   }, 60_000)
 
+  it('starts the work thread for a branch whose name is longer than an id may be', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
+    const branch = `feat/${'very-long-branch-name-'.repeat(10)}`
+    execFileSync('git', ['init', '-q', '-b', branch], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/app.git'], { cwd: repo })
+    expect(await vb_in(repo, ['update', 'First update on a long branch.'])).toMatchObject({ code: 0, stderr: '' })
+    expect(await vb_in(repo, ['update', 'Second one, same thread.'])).toMatchObject({ code: 0, stderr: '' })
+    const { stdout } = await vb(['read', 'work', '--label', `work=acme/app@${branch}`, '--json'])
+    const messages = stdout.trim().split('\n').map((line) => JSON.parse(line) as { re: number | null })
+    expect(messages.filter((m) => m.re === null)).toHaveLength(1)
+    expect(messages).toHaveLength(3)
+  })
+
   it('reminds Cursor with a follow-up message, keyed by project since its shell has no session', async () => {
     const home = await mkdtemp(join(tmpdir(), 'vboard-home-'))
     expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor: added the turn-end hook')
