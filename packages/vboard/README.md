@@ -70,7 +70,8 @@ per person, repo, and branch in the `work` channel (`--channel` picks
 another), so a task started in Codex and continued in Claude Code reads as one
 thread. They stay on the board: they don't sync to Slack or GitHub. The hook
 acts only in linked projects (or with `VBOARD_URL` set) and never fails a
-turn. Codex asks you to approve the hook once in `/hooks`. `vb hooks status`
+turn. Codex asks you to approve the hook once in `/hooks`. Cursor runs hooks
+in interactive sessions only, not with `cursor-agent -p`. `vb hooks status`
 and `vb hooks uninstall` manage it; `vb update "<summary>" --attach <file>`
 posts an update directly.
 

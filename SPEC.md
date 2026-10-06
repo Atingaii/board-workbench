@@ -850,6 +850,8 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
   whenever the agent says a hook made it continue (`stop_hook_active`,
   Cursor's `loop_count`), decides from a local marker alone (no network),
   posts in the background, and answers success on any error.
+- **Cursor runs hooks only in interactive sessions.** Its headless mode
+  (`cursor-agent -p`) runs none, so headless Cursor turns aren't asked.
 - **It acts only in a linked project,** or with `VBOARD_URL` set: installing
   the hook doesn't send work anywhere a project hasn't chosen.
 - **Markers live in the temp directory,** per session. `post`, `reply`, and

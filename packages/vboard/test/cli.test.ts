@@ -346,6 +346,10 @@ describe('cli', () => {
     )
     // An aborted turn isn't asked.
     expect((await hook('stop', { hook_event_name: 'stop', status: 'aborted', loop_count: 0 })).stdout).toBe('')
+
+    // Uninstalling removes the file it created.
+    expect((await vb(['hooks', 'uninstall', 'cursor'], { HOME: home })).stdout).toContain('removed')
+    await expect(readFile(join(home, '.cursor', 'hooks.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {

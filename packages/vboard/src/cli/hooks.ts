@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -88,7 +88,10 @@ export function uninstallHook(agent: HookAgent): boolean {
     if (kept.length > 0) hooks[event] = kept
     else delete hooks[event]
   }
-  writeConfig(spec.file(), { ...config, hooks })
+  // A file that held only our hooks (Cursor's, which we created) goes away with them.
+  const rest = Object.keys(config).filter((key) => key !== 'hooks' && key !== 'version')
+  if (rest.length === 0 && Object.keys(hooks).length === 0) unlinkSync(spec.file())
+  else writeConfig(spec.file(), { ...config, hooks })
   return true
 }
 
