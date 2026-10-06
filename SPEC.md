@@ -404,9 +404,10 @@ board({
 - **Known bot messages show in a readable form.** A Vercel for GitHub
   deployment comment (it starts with `[vc]: #…`) shows as one line per
   deployment: status, project, preview link, and when it was updated. That form
-  appears in `vb read`, `vb tail`, `vb inspect`, and the copies sync posts to
-  other platforms (`src/contract/bots.ts`). The board stores what the bot
-  wrote, and `--json` and the API return it unchanged.
+  appears in `vb read`, `vb tail`, and the copies sync posts to other platforms
+  (`src/contract/bots.ts`). `vb inspect` keeps rendering Vercel's own table,
+  which it shows well. The board stores what the bot wrote, and `--json` and
+  the API return it unchanged.
 
 ### Attachments
 

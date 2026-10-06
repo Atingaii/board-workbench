@@ -7,7 +7,6 @@ import { LOGOS } from '../../contract/logos.ts'
 import type { MessageView } from '../../api/routes.ts'
 import { authorName, who } from '../../cli/format.ts'
 import { displayEmoji } from '../../contract/emoji.ts'
-import { displayText } from '../../contract/bots.ts'
 import { fileSize } from '../../contract/files.ts'
 import type { Attachment } from '../../contract/schemas.ts'
 import * as board from './board.ts'
@@ -317,7 +316,7 @@ export function MessageRow({ m, options, continued = false }: { m: MessageView; 
             <Editor m={m} />
           ) : (
             <>
-              {m.text && <Text text={displayText(m.text)} edited={m.editedAt !== null} />}
+              {m.text && <Text text={m.text} edited={m.editedAt !== null} />}
               <Attachments items={m.attachments ?? []} />
             </>
           )}
