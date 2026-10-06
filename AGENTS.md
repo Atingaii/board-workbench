@@ -46,22 +46,26 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   Connect uses `slack/vboard-factory` and
   `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
-- Watchers do the work. `triage` labels each non-PR dev thread's `kind` with jev,
+- Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
+  GPT-6 Luna's structured output,
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
   `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
   reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
-  `review` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
-  someone other than a bot replies. Pi replies with its review; it never pushes,
-  approves, or merges. `shipit` lets anyone add `:shipit:` to a PR's Slack root
+  `review-pi` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
+  someone other than a bot replies. Review is its initial task; people can redirect
+  Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
+  `shipit` lets anyone add `:shipit:` to a PR's Slack root
   to request a merge as the factory GitHub App. Slack delivers that alias as
   `squirrel`, which the watcher also accepts. It reads the current PR and
   merges with that head SHA and a merge commit, honoring GitHub's merge rules;
-  a rejected merge tells Pi who requested it and why it failed. Pi investigates
-  the blockers and replies in the thread, mentioning reviewers or owners when
-  needed. `merged` adds `:merged:` to a PR's root when its state becomes
+  a rejected merge tells Pi who requested it and why it failed. Pi resolves
+  blockers, marks drafts ready when needed, and completes the requested merge
+  when GitHub's requirements allow, without asking for another reaction. It
+  mentions reviewers or owners when their action is needed. `merged` adds
+  `:merged:` to a PR's root when its state becomes
   `merged`, once per transition, through the board's reaction sync.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that

@@ -10,8 +10,8 @@ import {
 } from "@vercel/connect/chat";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { experimental_evaluate as evaluate } from "ai";
 import { byPi, tellPi } from "./agent";
+import { classifyThread } from "./classify";
 import { shipit } from "./shipit";
 
 /** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
@@ -84,7 +84,7 @@ export const { GET, POST, scheduler } = board({
     },
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
-    triage: {
+    "triage-gpt": {
       tail: "dev",
       run: async ({ event, board }) => {
         const message = event.message;
@@ -99,27 +99,12 @@ export const { GET, POST, scheduler } = board({
         if (thread.message.labels.pr) {
           return;
         }
-        const { answers } = await evaluate({
-          model: "typesafe-ai/jev",
-          state: [thread.message, ...thread.replies].map((m) => ({
+        const kind = await classifyThread(
+          [thread.message, ...thread.replies].map((m) => ({
             from: m.author?.name ?? m.by.actor,
             text: m.text,
           })),
-          questions: {
-            kind: {
-              type: "choice",
-              instructions:
-                "A conversation with the team that builds vboard, a message board library and CLI. What is it, as a whole?",
-              criteria: {
-                bug: "Something in vboard is broken or behaves wrongly",
-                feature: "A request for something vboard doesn't do yet",
-                question: "Someone asking how something works",
-                noise: "Chatter, an announcement, or nothing to act on",
-              },
-            },
-          },
-        });
-        const kind = answers.kind.choice;
+        );
         if (thread.message.labels.kind === kind) {
           return;
         }
@@ -164,7 +149,7 @@ export const { GET, POST, scheduler } = board({
     // Pi reviews PRs: a PR's thread opens in `dev` when it's opened or marked ready, and
     // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there. Only PR
     // threads: `--label pr` matches a reply by its root's labels too.
-    review: {
+    "review-pi": {
       tail: "dev --label pr",
       run: async ({ event }) => {
         const message = event.message;
