@@ -3,44 +3,41 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, w
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
-// Coding agents end each turn with a hook. `vb hooks install` adds one that asks
-// the agent, once, to update the board when its turn didn't: it ends its reply
-// with a `Board update: <summary>` line, which the hook posts to the branch's
-// work thread. The agent runs nothing, so no sandbox or permission prompt gets
-// in the way; the hook runs outside both. Deciding reads only a local marker,
-// and the post itself happens in the background, so a turn never waits on it.
+// Coding agents end each turn with a hook. `vb hooks install` adds one that
+// reminds the agent, once, to update the board when its turn didn't: it runs
+// `vb update` (or `vb reply` in a thread it's in), or `vb update --skip` to stay
+// quiet. The hook only reminds; the agent uses the CLI for everything, reading
+// included. Deciding reads only a local marker, so a turn never waits on it.
 
 type Shape = 'nested' | 'flat'
 
 /**
- * Where each agent keeps hooks, and which of its events run which of ours.
- * Claude Code and Codex read `{ hooks: { Stop: [{ hooks: [entry] }] } }`;
- * Cursor reads `{ version: 1, hooks: { stop: [entry] } }`.
+ * Where each agent keeps hooks, and which of its events run ours. Claude Code
+ * and Codex read `{ hooks: { Stop: [{ hooks: [entry] }] } }`; Cursor reads
+ * `{ version: 1, hooks: { stop: [entry] } }`, and its stop can't block, so it's
+ * reminded with a follow-up message instead.
  */
 export const AGENTS = {
-  claude: { name: 'Claude Code', shape: 'nested', events: { Stop: 'stop' }, file: () => join(homedir(), '.claude', 'settings.json') },
-  codex: {
-    name: 'Codex',
-    shape: 'nested',
-    events: { Stop: 'stop' },
-    file: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'hooks.json'),
-  },
-  // Cursor's stop event has no reply text, and its response event can't ask for more: one of each.
-  cursor: { name: 'Cursor', shape: 'flat', events: { stop: 'stop', afterAgentResponse: 'response' }, file: () => join(homedir(), '.cursor', 'hooks.json') },
-} as const satisfies Record<string, { name: string; shape: Shape; events: Record<string, string>; file: () => string }>
+  claude: { name: 'Claude Code', shape: 'nested', event: 'Stop', file: () => join(homedir(), '.claude', 'settings.json') },
+  codex: { name: 'Codex', shape: 'nested', event: 'Stop', file: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'hooks.json') },
+  cursor: { name: 'Cursor', shape: 'flat', event: 'stop', file: () => join(homedir(), '.cursor', 'hooks.json') },
+} as const satisfies Record<string, { name: string; shape: Shape; event: string; file: () => string }>
 
 export type HookAgent = keyof typeof AGENTS
 
 type HookEntry = { type?: string; command: string; timeout?: number }
 type Group = { matcher?: string; hooks?: HookEntry[] }
 type Entries = (Group | HookEntry)[]
-type HookConfig = { version?: number; hooks?: Record<string, Entries> } & Record<string, unknown>
+type Config = { version?: number; hooks?: Record<string, Entries>; permissions?: { allow?: string[] } & Record<string, unknown> } & Record<
+  string,
+  unknown
+>
 
-const ours = (entry: { command?: string }) => / hook (stop|response) --agent /.test(entry.command ?? '')
+const ours = (entry: { command?: string }) => / hook stop --agent /.test(entry.command ?? '')
 
-function readConfig(path: string): HookConfig {
+function readConfig(path: string): Config {
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as HookConfig
+    return JSON.parse(readFileSync(path, 'utf8')) as Config
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
     throw new Error(`can't read ${path}: ${(error as Error).message}`)
@@ -48,7 +45,7 @@ function readConfig(path: string): HookConfig {
 }
 
 /** Written to a sibling, then renamed: a crash never leaves an agent's settings half-written. */
-function writeConfig(path: string, config: HookConfig) {
+function writeConfig(path: string, config: Config) {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(`${path}.vboard-tmp`, `${JSON.stringify(config, null, 2)}\n`)
   renameSync(`${path}.vboard-tmp`, path)
@@ -62,76 +59,108 @@ function without(entries: Entries, shape: Shape): Entries {
     .filter((group) => group.hooks.length > 0)
 }
 
-/** Adds our hooks, replacing earlier ones of ours; everything else in the file stays. Answers whether it changed. */
+/** Adds our hook, replacing an earlier one of ours; everything else in the file stays. Answers whether it changed. */
 export function installHook(agent: HookAgent, cli: string, flags = ''): boolean {
   const spec = AGENTS[agent]
   const config = readConfig(spec.file())
-  const hooks = { ...config.hooks }
-  for (const [event, sub] of Object.entries(spec.events)) {
-    // `|| true`: whatever `cli` turns out to be (an older vboard without `hook` exits 2, which Claude Code
-    // and Codex read as "keep going"), the hook can't fail a turn.
-    const command = `${cli} hook ${sub} --agent ${agent}${flags} 2>/dev/null || true`
-    const entry = spec.shape === 'flat' ? { command, timeout: 10 } : { hooks: [{ type: 'command', command, timeout: 10 }] }
-    hooks[event] = [...without(hooks[event] ?? [], spec.shape), entry]
-  }
+  // `|| true`: whatever `cli` turns out to be (an older vboard without `hook` exits 2, which Claude Code
+  // and Codex read as "keep going"), the hook can't fail a turn.
+  const command = `${cli} hook stop --agent ${agent}${flags} 2>/dev/null || true`
+  const entry = spec.shape === 'flat' ? { command, timeout: 10 } : { hooks: [{ type: 'command', command, timeout: 10 }] }
+  const hooks = { ...config.hooks, [spec.event]: [...without(config.hooks?.[spec.event] ?? [], spec.shape), entry] }
   const next = { ...(spec.shape === 'flat' ? { version: 1 } : {}), ...config, hooks }
   if (JSON.stringify(next) === JSON.stringify(config)) return false
   writeConfig(spec.file(), next)
   return true
 }
 
+/** Removes our hook. A file that held only it (Cursor's, which we created) goes away with it. */
 export function uninstallHook(agent: HookAgent): boolean {
   const spec = AGENTS[agent]
   if (installedHook(agent) === null) return false
   const config = readConfig(spec.file())
   const hooks = { ...config.hooks }
-  for (const event of Object.keys(spec.events)) {
-    const kept = without(hooks[event] ?? [], spec.shape)
-    if (kept.length > 0) hooks[event] = kept
-    else delete hooks[event]
-  }
-  // A file that held only our hooks (Cursor's, which we created) goes away with them.
+  const kept = without(hooks[spec.event] ?? [], spec.shape)
+  if (kept.length > 0) hooks[spec.event] = kept
+  else delete hooks[spec.event]
   const rest = Object.keys(config).filter((key) => key !== 'hooks' && key !== 'version')
   if (rest.length === 0 && Object.keys(hooks).length === 0) unlinkSync(spec.file())
   else writeConfig(spec.file(), { ...config, hooks })
   return true
 }
 
-/** The command our turn-end hook runs for `agent`, if it's installed. */
+/** The command our hook runs for `agent`, if it's installed. */
 export function installedHook(agent: HookAgent): string | null {
   const spec = AGENTS[agent]
-  const config = readConfig(spec.file())
-  const entries = Object.keys(spec.events).flatMap((event) => config.hooks?.[event] ?? [])
+  const entries = readConfig(spec.file()).hooks?.[spec.event] ?? []
   const commands = spec.shape === 'flat' ? (entries as HookEntry[]) : entries.flatMap((group) => (group as Group).hooks ?? [])
-  return commands.find((entry) => ours(entry) && / hook stop /.test(entry.command))?.command ?? null
+  return commands.find(ours)?.command ?? null
 }
 
-// --- what the agent says ------------------------------------------------------------
+/** The CLI an installed hook runs: everything before ` hook stop`. */
+export const cliOf = (command: string) => command.slice(0, command.indexOf(' hook stop '))
 
-/** The line an agent ends a reply with to update the board. */
-export const UPDATE_LINE = 'Board update:'
+// --- what the agent may run without asking -----------------------------------------
 
 /**
- * The update an agent wrote: everything after the last `Board update:` that
- * starts a line (bold or quoted is fine), `skip` when it has nothing to share,
- * or null when the reply has none.
+ * The reminder asks the agent to run `vb update`, `vb reply`, and `vb read`;
+ * where the agent keeps an allowlist, those run without a permission prompt.
+ * Claude Code matches command prefixes; Cursor matches a command's name, so it
+ * can allow only a `vb` on PATH. Codex has no command allowlist: its sandbox
+ * decides (see `codexNetwork`).
  */
-export function boardUpdate(reply: string): string | 'skip' | null {
-  const last = [...reply.matchAll(/(?:^|\n)[ \t>*_`-]*board update[*_`]*[ \t]*:[*_`]*[ \t]*/gi)].at(-1)
-  if (!last) return null
-  const text = reply
-    .slice(last.index! + last[0].length)
-    .trim()
-    .replace(/[*_`]+$/, '')
-    .trim()
-  if (!text) return null
-  return /^skip\.?$/i.test(text) ? 'skip' : text.slice(0, 1500)
+export function allowRules(agent: HookAgent, cli: string): { file: string; rules: string[] } | null {
+  if (agent === 'claude') return { file: AGENTS.claude.file(), rules: ['update', 'reply', 'read'].map((sub) => `Bash(${cli} ${sub}:*)`) }
+  if (agent === 'cursor' && cli === 'vb') return { file: join(homedir(), '.cursor', 'cli-config.json'), rules: ['Shell(vb)'] }
+  return null
+}
+
+/** Adds the rules a file doesn't have yet. Answers the ones it added. */
+export function allow(file: string, rules: string[]): string[] {
+  const config = readConfig(file)
+  const allowed = config.permissions?.allow ?? []
+  const added = rules.filter((rule) => !allowed.includes(rule))
+  if (added.length > 0) writeConfig(file, { ...config, permissions: { ...config.permissions, allow: [...allowed, ...added] } })
+  return added
+}
+
+export function disallow(file: string, rules: string[]) {
+  const config = readConfig(file)
+  const allowed = config.permissions?.allow
+  if (!allowed?.some((rule) => rules.includes(rule))) return
+  writeConfig(file, { ...config, permissions: { ...config.permissions, allow: allowed.filter((rule) => !rules.includes(rule)) } })
+}
+
+/**
+ * Codex's default sandbox has no network, so `vb` can't reach the board. A
+ * permission profile can allow just the board, and Vercel's API for its token.
+ * In TOML a key after a `[table]` belongs to it, so `default_permissions` goes
+ * at the top; the tables go anywhere (`[features]` merged into one that's there).
+ */
+export function codexNetwork(boardHost: string | null): { top: string; tables: string } {
+  const hosts = [boardHost ?? '<your board host>', 'api.vercel.com']
+  return {
+    top: 'default_permissions = "vboard"',
+    tables: [
+      '[features]',
+      'network_proxy = true',
+      '',
+      '[permissions.vboard]',
+      'extends = ":workspace"',
+      '',
+      '[permissions.vboard.network]',
+      'enabled = true',
+      '',
+      '[permissions.vboard.network.domains]',
+      ...hosts.map((host) => `"${host}" = "allow"`),
+    ].join('\n'),
+  }
 }
 
 // --- one session's turns -----------------------------------------------------------
 
-/** When the session last wrote to the board, last asked to, and last finished a turn; and what it last posted. */
-type Turns = { posted?: number; asked?: number; settled?: number; last?: string }
+/** When the session last wrote to the board, last was reminded to, and last finished a turn. */
+type Turns = { posted?: number; asked?: number; settled?: number }
 
 /**
  * In the temp directory, which agents' sandboxes let commands write (Codex's
@@ -173,24 +202,10 @@ export function markPosted(session: string, now = Date.now()) {
 }
 
 /**
- * A reply with a `Board update:` line: the text to post, once (null for
- * `skip`, or for the one already posted). Either way, the turn is accounted
- * for; at the turn's end (`ending`), it's also over.
- */
-export function takeUpdate(session: string, reply: string, ending: boolean, now = Date.now()): { found: boolean; post: string | null } {
-  const update = boardUpdate(reply)
-  if (update === null) return { found: false, post: null }
-  const turns = readTurns(session)
-  const post = update === 'skip' || update === turns.last ? null : update
-  writeTurns(session, { ...turns, posted: now, ...(ending ? { settled: now } : {}), ...(post ? { last: post } : {}) })
-  return { found: true, post }
-}
-
-/**
- * The turn-end decision: let the agent stop, or ask it once to update the
+ * The turn-end decision: let the agent stop, or remind it once to update the
  * board. It stops freely when it wrote to the board since its last turn
- * ended, when it was already asked this turn, or when the agent says a hook
- * made it continue (`continuing`), so it can never loop.
+ * ended, when it was already reminded this turn, or when the agent says a
+ * hook made it continue (`continuing`), so it can never loop.
  */
 export function decideStop(session: string, continuing: boolean, now = Date.now()): 'stop' | 'ask' {
   const turns = readTurns(session)
@@ -203,13 +218,15 @@ export function decideStop(session: string, continuing: boolean, now = Date.now(
   return 'ask'
 }
 
-/** What the agent is asked. It answers in its reply: there's nothing to run. */
-export const REMINDER = [
-  "You didn't update the team's board (vboard) this turn.",
-  `Finish with one last line, starting with "${UPDATE_LINE}", that sums up for teammates what you did and what's next in 1–3 sentences.`,
-  `If there's nothing worth sharing (a quick question, no changes), make it "${UPDATE_LINE} skip".`,
-  "Don't run any command for it, and don't include the prompt, long output, or secrets.",
-].join(' ')
+/** The reminder, with the exact commands to run. */
+export function reminder(cli: string, channel: string): string {
+  const flag = channel === 'work' ? '' : ` --channel ${channel}`
+  return [
+    "You didn't update the team's board (vboard) this turn.",
+    `If you changed anything or made progress, post a 1–3 sentence summary of what you did and what's next: ${cli} update${flag} "<summary>", or ${cli} reply <id> "<text>" in a board thread you're working in. Add --attach <file> for proof, like a test log.`,
+    `Only if this turn changed nothing (say, you just answered a question), run ${cli} update --skip instead. Don't include the prompt, long output, or secrets. Then finish.`,
+  ].join(' ')
+}
 
 // --- where an update goes ----------------------------------------------------------
 

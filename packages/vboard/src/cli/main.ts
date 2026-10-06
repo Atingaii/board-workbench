@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, delimiter, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
@@ -15,13 +16,16 @@ import { VERSION } from '../version.ts'
 import { formatEvent, formatThreads, who } from './format.ts'
 import {
   AGENTS,
+  allow,
+  allowRules,
+  cliOf,
+  codexNetwork,
   decideStop,
+  disallow,
   installedHook,
   installHook,
   markPosted,
-  REMINDER,
-  takeUpdate,
-  turnsDir,
+  reminder,
   uninstallHook,
   workOf,
   type HookAgent,
@@ -54,7 +58,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 
   update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread (channel \`work\`); --skip if there's none
   hooks [install|uninstall|status] [claude|codex|cursor]...
-                                           after a turn that didn't update the board, the agent is asked to (linked projects only)
+                                           after a turn that didn't update the board, remind the agent to (linked projects only)
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
   wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
@@ -183,13 +187,17 @@ function client() {
   })
 }
 
-/** The session of the agent running this command, unless it's writing as a person. */
-const agentSession = () => (flags.human ? null : (detectAgent()?.session ?? null))
+/**
+ * What names an agent's turns, for the turn-end hook: its session, or for
+ * Cursor, whose shell has no session ID, the project it works in.
+ */
+const turnKey = (agent: string, session: string | null) => session ?? (agent === 'cursor' ? `cursor@${projectDir()}` : null)
 
 /** A write from an agent session counts as this turn's board update. */
 function wrote() {
-  const session = agentSession()
-  if (session) markPosted(session)
+  const detected = flags.human ? null : detectAgent()
+  const key = detected ? turnKey(detected.profile, detected.session) : null
+  if (key) markPosted(key)
 }
 
 const fromNpx = (path: string) => /[\\/]_npx[\\/]/.test(path)
@@ -264,17 +272,6 @@ async function postUpdate(board: ReturnType<typeof client>, content: string, fil
     }
   if (!root || root.deleted) throw new BoardError('no_work_thread', `couldn't find or start the work thread for ${work.key}`, 0)
   return board.reply(root.id, { text: content, noSync: true, ...(files.length ? { attachments: files } : {}) })
-}
-
-/** Posts an agent's `Board update:` line in a process of its own, so the agent's turn never waits on the board. */
-function postInBackground(agent: string, session: string, cwd: string, update: string) {
-  const child = spawn(process.execPath, [realpathSync(process.argv[1]!), 'hook', 'post', '--agent', agent, ...(flags.channel ? ['--channel', flags.channel] : [])], {
-    cwd,
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, VBOARD_HOOK_SESSION: session, VBOARD_HOOK_UPDATE: update },
-  })
-  child.unref()
 }
 
 async function readStdin(): Promise<string> {
@@ -459,44 +456,53 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 0
       }
       if (action === 'uninstall') {
-        for (const agent of agents)
+        for (const agent of agents) {
+          const installed = installedHook(agent)
+          const rules = installed ? allowRules(agent, cliOf(installed)) : null
+          if (rules) disallow(rules.file, rules.rules)
           out(`${AGENTS[agent].name}: ${uninstallHook(agent) ? `removed the turn-end hook from ${AGENTS[agent].file()}` : 'not installed'}`)
+        }
         return 0
       }
-      if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex]...')
+      if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex|cursor]...')
       const { command: cli, note } = cliCommand()
       for (const agent of agents) {
         const changed = installHook(agent, cli, flags.channel ? ` --channel ${flags.channel}` : '')
         out(`${AGENTS[agent].name}: ${changed ? `added the turn-end hook to ${AGENTS[agent].file()}` : 'already installed'}`)
-        if (agent === 'codex' && changed) out('  approve it once in Codex with /hooks')
+        // The reminder asks for `vb update`, `vb reply`, and `vb read`: no permission prompt for each.
+        const rules = allowRules(agent, cli)
+        const added = rules ? allow(rules.file, rules.rules) : []
+        if (added.length > 0) out(`  allowed ${added.join(', ')} in ${rules!.file}`)
+        if (agent === 'cursor' && !rules) out('  install vb globally (npm i -g vboard) to let Cursor run it without asking')
+        if (agent === 'codex') {
+          if (changed) out('  approve it once in Codex with /hooks')
+          let host: string | null = null
+          try {
+            const url = process.env.VBOARD_URL || projectUrl()
+            host = url ? new URL(url).hostname : null
+          } catch {}
+          const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
+          const profile = codexNetwork(host)
+          out("  Codex's sandbox has no network by default, so vb can't reach the board from it. To allow just the board")
+          out(`  (permission profiles are beta), put this at the top of ${config}, before any [table]:\n`)
+          out(`    ${profile.top}\n`)
+          out('  and these tables anywhere in it (merge [features] into yours if you have one):\n')
+          out(profile.tables.replace(/^/gm, '    '))
+          out('')
+        }
       }
       if (note) out(`Note: ${note}.`)
-      out('It asks only in projects linked with `vb link <url>` (or with VBOARD_URL set), once per turn that didn\'t update the board.')
+      out('It reminds only in projects linked with `vb link <url>` (or with VBOARD_URL set), once per turn that didn\'t update the board.')
       return 0
     }
 
-    // What an agent's hooks run. They must never break the agent's turn: any failure lets it stop.
+    // What an agent's turn-end hook runs. It must never break the agent's turn: any failure lets it stop.
     case 'hook': {
-      const [event] = args
+      if (args[0] !== 'stop') throw new UsageError("usage: vboard hook stop --agent <agent>   (run by an agent's turn-end hook)")
       const agent = flags.agent ?? 'agent'
-      if (event === 'post') {
-        // The background half of a `Board update:` line: as the agent, in its session.
-        try {
-          const board = createClient({ ...(flags.url ? { url: flags.url } : {}), profile: agent, session: process.env.VBOARD_HOOK_SESSION ?? null })
-          await postUpdate(board, process.env.VBOARD_HOOK_UPDATE ?? '')
-        } catch (error) {
-          try {
-            mkdirSync(turnsDir(), { recursive: true, mode: 0o700 })
-            appendFileSync(join(turnsDir(), 'hooks.log'), `${new Date().toISOString()} ${agent}: couldn't post an update: ${(error as Error).message}\n`)
-          } catch {}
-        }
-        return 0
-      }
-      if (event !== 'stop' && event !== 'response')
-        throw new UsageError("usage: vboard hook stop|response --agent <agent>   (run by an agent's hooks)")
       try {
-        // Claude Code and Codex send `session_id`, `cwd`, `stop_hook_active`, and the reply; Cursor sends
-        // `conversation_id`, `workspace_roots`, and `loop_count`, with the reply in its own `afterAgentResponse` event.
+        // Claude Code and Codex send `session_id`, `cwd`, and `stop_hook_active`; Cursor sends
+        // `conversation_id`, `workspace_roots`, `status`, and `loop_count`.
         const payload = JSON.parse(await readStdin()) as {
           session_id?: string
           conversation_id?: string
@@ -505,23 +511,17 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           stop_hook_active?: boolean
           loop_count?: number
           status?: string
-          last_assistant_message?: string
-          text?: string
         }
-        const session = payload.session_id ?? payload.conversation_id
         const cwd = payload.cwd ?? payload.workspace_roots?.[0]
         if (cwd && existsSync(cwd)) process.chdir(cwd)
+        const session = turnKey(agent, agent === 'cursor' ? null : (payload.session_id ?? null))
         if (!session || !(process.env.VBOARD_URL || projectUrl())) return 0
-        const reply = event === 'response' ? payload.text : payload.last_assistant_message
-        if (reply) {
-          const { found, post } = takeUpdate(session, reply, event === 'stop')
-          if (post) postInBackground(agent, session, process.cwd(), post)
-          if (found || event === 'response') return 0
-        } else if (event === 'response') return 0
         if (payload.status && payload.status !== 'completed') return 0
         const continuing = payload.stop_hook_active === true || (payload.loop_count ?? 0) > 0
-        if (decideStop(session, continuing) === 'ask')
-          printJson(agent === 'cursor' ? { followup_message: REMINDER } : { decision: 'block', reason: REMINDER })
+        if (decideStop(session, continuing) === 'ask') {
+          const text = reminder(cliCommand().command, flags.channel ?? 'work')
+          printJson(agent === 'cursor' ? { followup_message: text } : { decision: 'block', reason: text })
+        }
       } catch {}
       return 0
     }

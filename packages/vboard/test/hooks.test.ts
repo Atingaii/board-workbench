@@ -3,21 +3,23 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { boardUpdate, repoName, workOf } from '../src/cli/hooks.ts'
+import { codexNetwork, reminder, repoName, workOf } from '../src/cli/hooks.ts'
 
 describe('hooks', () => {
-  it('finds the board update an agent ends its reply with', () => {
-    expect(boardUpdate('Done.\n\nBoard update: Added label sync; reconcile next.')).toBe('Added label sync; reconcile next.')
-    expect(boardUpdate('Done.\n**Board update:** Fixed the flaky test.')).toBe('Fixed the flaky test.')
-    expect(boardUpdate('> board update: shipped #18\n')).toBe('shipped #18')
-    expect(boardUpdate('Board update: first\nmore\n\nBoard update: the last one wins')).toBe('the last one wins')
-    expect(boardUpdate('Board update: skip')).toBe('skip')
-    expect(boardUpdate('**Board update:** Skip.')).toBe('skip')
-    // Only at the start of a line, and only with something after it.
-    expect(boardUpdate('I will post a board update: later.')).toBeNull()
-    expect(boardUpdate('Board update:')).toBeNull()
-    expect(boardUpdate('All done.')).toBeNull()
-    expect(boardUpdate(`Board update: ${'x'.repeat(2000)}`)).toHaveLength(1500)
+  it('reminds with the exact commands, and keeps going quiet possible', () => {
+    const text = reminder('vb', 'work')
+    expect(text).toContain('vb update "<summary>"')
+    expect(text).toContain('vb reply <id> "<text>"')
+    expect(text).toContain('vb update --skip')
+    expect(reminder('vb', 'eng/work')).toContain('vb update --channel eng/work "<summary>"')
+  })
+
+  it('suggests a Codex profile that allows only the board and Vercel', () => {
+    const { top, tables } = codexNetwork('board.example.com')
+    expect(top).toBe('default_permissions = "vboard"') // a top-level key: it can't follow a [table]
+    expect(tables).toContain('"board.example.com" = "allow"\n"api.vercel.com" = "allow"')
+    expect(tables).toContain('extends = ":workspace"')
+    expect(tables).not.toContain('default_permissions')
   })
 
   it('names the repo from its origin remote', () => {
