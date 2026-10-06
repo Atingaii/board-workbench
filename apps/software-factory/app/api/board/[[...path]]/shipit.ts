@@ -14,7 +14,7 @@ export function shipit(options: {
       const root = event.message;
       if (
         event.type !== "reaction.added" ||
-        event.payload.emoji !== "shipit" ||
+        (event.payload.emoji !== "shipit" && event.payload.emoji !== "squirrel") ||
         event.payload.from !== "slack" ||
         !event.payload.by.principal.startsWith("slack:user:") ||
         root?.re !== null
