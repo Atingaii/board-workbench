@@ -57,7 +57,7 @@ export function shipit(options: {
           message: [
             `${requester} (${event.payload.by.actor}) reacted with :shipit: to request a merge of ${root.labels.pr} in board thread #${root.id}.`,
             `The factory couldn't merge it: ${reason}`,
-            "Read the thread and inspect the PR's current state, checks, and reviews. Figure out what's blocking the requested merge and help unblock it within your review role. Ping the appropriate reviewer or owner in the thread when needed, and explain the next step to the person who requested the merge.",
+            "Read the thread and inspect the PR's current state, checks, and reviews. Carry out the requested merge: resolve the blockers you can, mark a draft ready if needed, and merge when GitHub's requirements allow. Ping the appropriate reviewer or owner in the thread when needed, and explain what is still blocking it. The merge request remains active; don't require another :shipit: reaction.",
           ].join("\n"),
         });
       }
