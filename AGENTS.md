@@ -54,7 +54,7 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
-  `review` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
+  `review-pi` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
   someone other than a bot replies. Review is its initial task; people can redirect
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
   `shipit` lets anyone add `:shipit:` to a PR's Slack root

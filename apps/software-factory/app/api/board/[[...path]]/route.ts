@@ -149,7 +149,7 @@ export const { GET, POST, scheduler } = board({
     // Pi reviews PRs: a PR's thread opens in `dev` when it's opened or marked ready, and
     // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there. Only PR
     // threads: `--label pr` matches a reply by its root's labels too.
-    review: {
+    "review-pi": {
       tail: "dev --label pr",
       run: async ({ event }) => {
         const message = event.message;
