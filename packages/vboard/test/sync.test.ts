@@ -5,6 +5,9 @@ import { slack } from '../src/sync/slack.ts'
 import { SyncProvider, type SyncContext, type EventMapping } from '../src/sync/provider.ts'
 import { envelope, eventSchema } from '../src/sync/events.ts'
 import { z } from 'zod'
+import { createServer } from 'experimental-a2/server'
+import { memory } from 'experimental-a2/store-memory'
+import { boardContract } from '../src/contract/contract.ts'
 import { github } from '../src/sync/github.ts'
 import type { BoardOptions } from '../src/server/index.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
@@ -1030,6 +1033,97 @@ describe('sync', () => {
 })
 
 describe('provider callbacks', () => {
+
+  it('preserves A2 receipt identities from the pre-refactor handler step', async () => {
+    const { board, s, webhook } = setup()
+    const call = caller(board.fetch, await personToken())
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'root', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(call, 'firehose')).toHaveLength(1))
+    const [root] = await read(call, 'firehose')
+    const posted = await call('POST', '/messages', { re: root!.id, text: 'reply' })
+    const session = board.servers[0]!.session('board')
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    const history = await session.history()
+    const trigger = history.find((event) => event.type === 'message.posted' && event.index === posted.body.message.id)
+    const receipt = history.find((event) => event.type === 'message.synced' && event.payload.id === posted.body.message.id)
+    if (!trigger || trigger.type !== 'message.posted' || !receipt || receipt.type !== 'message.synced') throw new Error('missing delivery history')
+    const reference = createServer({
+      contract: boardContract, store: memory(),
+      handlers: {
+        'message.posted': { handler: async (ctx) => {
+          await ctx.session.append(`receipt:${posted.body.message.id}:${receipt.payload.target}`, { type: 'message.synced', payload: receipt.payload })
+        } },
+      },
+    })
+    const old = reference.session('board')
+    await old.append({ id: trigger.id, type: 'message.posted', payload: trigger.payload })
+    await vi.waitFor(async () => {
+      const expected = (await old.history()).find((event) => event.type === 'message.synced')
+      expect(expected?.id).toBe(receipt.id)
+    })
+  })
+
+  it('keeps callback payload requirements out of a default GitHub mirror', async () => {
+    const g = fakePlatform('github')
+    const provider = github({ adapter: g.adapter, repos: { 'basehub-ai/vboard': 'prs' } })
+    const project = vi.spyOn(provider, 'event')
+    const board = testBoard({ sync: { github: provider } })
+    const call = caller(board.fetch, await personToken())
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await board.fetch(new Request(`${BOARD_URL}/webhooks/github`, {
+        method: 'POST', headers: { 'x-github-event': 'pull_request', 'x-github-delivery': 'trimmed-pr' },
+        body: JSON.stringify({
+          action: 'opened', repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'ada' },
+          pull_request: { number: 72, title: 'Trimmed metadata', html_url: 'https://github.com/basehub-ai/vboard/pull/72', base: {} },
+        }),
+      }))
+      await vi.waitFor(async () => expect((await read(call, 'prs'))[0]?.text).toBe('PR #72: Trimmed metadata\nhttps://github.com/basehub-ai/vboard/pull/72'))
+      expect(project).not.toHaveBeenCalled()
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it.each([
+    { action: 'opened', existing: false, rootText: 'event text' },
+    { action: 'reopened', existing: false, rootText: 'root draft' },
+    { action: 'reopened', existing: true, rootText: 'PR #73: Original\nhttps://github.com/basehub-ai/vboard/pull/73' },
+  ])('defines text/root precedence for $action (existing: $existing)', async ({ action, existing, rootText }) => {
+    const g = fakePlatform('github')
+    const board = testBoard({ sync: { github: github({
+      adapter: g.adapter,
+      repos: { 'basehub-ai/vboard': async ({ event, board }) => {
+        const selected = event.kind === 'lifecycle' && event.raw.action === action
+        await board.sync('prs', event, selected ? {
+          text: 'event text',
+          root: () => ({ text: 'root draft', labels: { temporary: 'yes' } }),
+          unset: ['temporary', 'tag.bug'],
+        } : undefined)
+      } },
+    }) } })
+    const call = caller(board.fetch, await personToken())
+    const send = (action: string, delivery: string) => board.fetch(new Request(`${BOARD_URL}/webhooks/github`, {
+      method: 'POST', headers: { 'x-github-event': 'pull_request', 'x-github-delivery': delivery },
+      body: JSON.stringify({
+        action, repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'ada' },
+        pull_request: { number: 73, title: 'Original', html_url: 'https://github.com/basehub-ai/vboard/pull/73', labels: [{ name: 'bug' }] },
+      }),
+    }))
+    if (existing) {
+      await send('opened', 'initial')
+      await vi.waitFor(async () => expect(await read(call, 'prs')).toHaveLength(1))
+    }
+    await send(action, 'selected')
+    await vi.waitFor(async () => {
+      const messages = await read(call, 'prs')
+      expect(messages).toHaveLength(action === 'reopened' ? 2 : 1)
+      expect(messages[0]?.text).toBe(rootText)
+      expect(messages[0]?.labels).not.toHaveProperty('temporary')
+      expect(messages[0]?.labels).not.toHaveProperty('tag.bug')
+      if (action === 'reopened') expect(messages[1]?.text).toBe('event text')
+    })
+  })
   it('requires a public client resolver for async-token Slack adapters at setup', () => {
     const adapter = fakePlatform('slack', withSlackClient({}, true)).adapter
     expect(() => slack({ adapter, channels: { C1: 'support' } })).toThrow('public client resolver')

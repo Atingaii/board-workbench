@@ -1094,13 +1094,18 @@ current verified envelope, not a reconstructed object; there is no HTTP endpoint
 for submitting platform events. `board.sync(messageId, target)` retains its
 thread-attachment meaning everywhere.
 
-- `text` replaces the text the current operation would generate. It does not
-  manufacture a reply for a lifecycle event that only changes labels.
+- `text` replaces the event's generated message or reply. If a lifecycle event
+  creates both a root and a reply, it replaces the reply; `root` controls that
+  root's draft. Without a separate reply, `text` is the final override of the
+  root's text, including text returned by `root`. It never manufactures a reply
+  for a lifecycle event that only changes labels.
 - `labels` merges into the root's labels; `unset` removes named keys. Normal
   platform reconciliation still applies on subsequent events unless overridden.
 - `root` is a synchronous override for root creation, receiving default text,
   labels, author, and native data. It runs both for opening webhooks and roots
-  recovered from early comments. It may change text and labels, never provenance.
+  recovered from early comments. Its labels merge into the default draft; top-level
+  `labels` then takes precedence, and `unset` finally removes named keys, including
+  keys added by `root`. The callback cannot change provenance or unset keys itself.
 - Calling no default sync skips that import event. It leaves the connection
   intact. Each callback can import its event once, and must await its operations.
 - Callback retries retain trigger-derived write IDs. A default import that
@@ -1385,7 +1390,11 @@ native IDs as opaque.
 Capabilities and quirks are explicit: starting threads, reaction cardinality,
 thread grouping, native author namespaces, recovering missing roots, uploads,
 file IDs, typing, and rendering. A custom provider implements `event()` and may
-override `sync()` to change its defaults, using the supplied trusted context.
+override `sync(context, channel, overrides)` to change its defaults. The default
+method applies the already-validated internal event, without projecting a callback
+envelope. A subclass that needs its richer typed envelope can call `this.event(context)`
+explicitly. Callback envelopes are projected and validated only when handed to
+application callbacks.
 Its durable state belongs in A2, not in provider instance fields. SDK caches and
 credentials remain transport dependencies.
 

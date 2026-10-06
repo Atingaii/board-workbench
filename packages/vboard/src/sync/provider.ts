@@ -112,7 +112,7 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
 
   abstract event(context: Pick<SyncContext, 'key' | 'event' | 'raw'>): E
 
-  sync(context: SyncContext, channel: string, _event: E, overrides?: SyncOverrides): Promise<SyncResult> {
+  sync(context: SyncContext, channel: string, overrides?: SyncOverrides): Promise<SyncResult> {
     return context.apply(channel, overrides)
   }
 

@@ -401,7 +401,7 @@ export function createSyncEngine(options: {
           if (!active) throw badRequest('the sync callback has finished')
           if (typeof first === 'number' && typeof second === 'string') return board.sync(first, second)
           if (typeof first !== 'string' || second !== publicEvent) throw badRequest('sync only accepts the current verified event')
-          return platform.sync(context, first, publicEvent, overrides)
+          return platform.sync(context, first, overrides)
         }
         return { ...board, sync }
       },
@@ -412,7 +412,7 @@ export function createSyncEngine(options: {
         return
       }
       const channel = mapping?.channel ?? (linked ? sync.threads[linked]?.channel : undefined)
-      if (channel) await platform.sync(context, channel, immutable(platform.event(context)))
+      if (channel) await platform.sync(context, channel)
     } finally {
       active = false
     }
@@ -523,11 +523,11 @@ export function createSyncEngine(options: {
         if (!event.createRoot) return { root: null, message: null }
         const draft = rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw })
         const root = await writePost(writes, {
-          identity, channel, text: clampText(overrides.text ?? draft.text), labels: labels(draft.labels),
+          identity, channel, text: clampText(event.reply ? draft.text : overrides.text ?? draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(0),
         })
-        if (event.reply) await writePost(writes, { identity, re: root.id, text: clampText(event.reply), from: key, lenientMentions: true, id: await writeId(1) })
+        if (event.reply) await writePost(writes, { identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, id: await writeId(1) })
         return result(root)
       }
     }
@@ -640,9 +640,9 @@ export function createSyncEngine(options: {
   }
 
   async function recordDelivery(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy) {
-    await ctx.session.append(`delivery:${message.id}:${target}`,
-      { type: 'message.synced' as const, id: `receipt:${message.id}:${target}`, payload: { id: message.id, thread: message.thread, target, external: { thread: copy.thread, message: copy.message } } },
-      ...(copy.files !== undefined ? [{ type: 'message.files_synced' as const, id: `files:${message.id}:${target}`, payload: { id: message.id, thread: message.thread, target, files: copy.files } }] : []),
+    await ctx.session.append(`receipt:${message.id}:${target}`,
+      { type: 'message.synced' as const, payload: { id: message.id, thread: message.thread, target, external: { thread: copy.thread, message: copy.message } } },
+      ...(copy.files !== undefined ? [{ type: 'message.files_synced' as const, payload: { id: message.id, thread: message.thread, target, files: copy.files } }] : []),
     )
   }
 
