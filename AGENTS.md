@@ -63,7 +63,7 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `taskMessage` puts in Pi's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
-  `review-pi` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
+  `review-pi` hands each new `dev --label pr` thread to Pi to review the PR (Pi wears `:looking-bunny:` on the PR root while it reviews), and tells it when
   someone other than a bot replies. Pi hears every reply in its threads but stays quiet when one is
   addressed to someone else, and keeps board replies to a few lines; a review's detail
   goes in a GitHub review on the code. Review is its initial task; people can redirect
