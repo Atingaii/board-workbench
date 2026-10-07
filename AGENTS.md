@@ -88,8 +88,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   can reach.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
-  they're files in `.a2/attachments`. Pi attaches proof (test runs, screenshots) to the reply
-  that links its PR. Its `vb` is pinned (`VBOARD` in `agent.ts`): bump it with
+  they're files in `.a2/attachments`. Pi attaches a screenshot to the reply
+  that links its PR when the change is visible (no test-run logs). Its `vb` is pinned (`VBOARD` in `agent.ts`): bump it with
   each release Pi should use, since setup upgrades sandboxes to exactly that.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`), on topic `vboard-factory`. Production is behind Vercel
