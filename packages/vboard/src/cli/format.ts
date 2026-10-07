@@ -146,5 +146,6 @@ export function formatSourceRead(key: string, read: SourceRead, now = Date.now()
       ...message.files.map((file) => `${pad}📎 ${file.name}${file.url ? ` ${file.url}` : ''}`),
     ].join('\n')
   })
-  return [where, ...blocks].join('\n')
+  const more = read.more ? [`(${read.thread ? 'later replies' : 'older messages'} not shown: raise --limit, up to 200)`] : []
+  return [where, ...blocks, ...more].join('\n')
 }

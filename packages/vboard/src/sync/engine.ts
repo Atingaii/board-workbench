@@ -853,13 +853,22 @@ export function createSyncEngine(options: {
       }))
   }
 
+  /** The status for what a platform wouldn't read: the caller's mistake, missing, refused, or the platform failing. */
+  const unreadableStatus = (code: string) => {
+    if (code === 'unsupported' || code === 'invalid_target') return 400
+    if (code === 'channel_not_found') return 404
+    if (code === 'ratelimited') return 429
+    if (['no_client', 'list_failed', 'internal_error', 'fatal_error', 'service_unavailable', 'request_timeout'].includes(code)) return 502
+    return 403
+  }
+
   /** A platform channel or thread, read for the caller: nothing is synced, stored, or joined. */
   async function readSource(key: string, target: string, limit: number) {
     const platform = platformOf(key)
     try {
       return await platform.read(target, { limit })
     } catch (error) {
-      if (error instanceof UnreadableError) throw new HttpError(error.code === 'unsupported' || error.code === 'invalid_target' ? 400 : 403, error.code, error.message)
+      if (error instanceof UnreadableError) throw new HttpError(unreadableStatus(error.code), error.code, error.message)
       throw badRequest(`can't read ${target} from ${key}: ${describe(error)}`, 'platform_error')
     }
   }

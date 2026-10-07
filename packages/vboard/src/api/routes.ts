@@ -182,6 +182,8 @@ export type SourceRead = {
   /** Set when a thread was read. */
   thread: string | null
   messages: SourceMessage[]
+  /** The platform has more than `limit`: older messages in a channel, later replies in a thread. */
+  more: boolean
 }
 
 export type ApiError = { error: { code: string; message: string } }

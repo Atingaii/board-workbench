@@ -445,7 +445,7 @@ export function board(options: BoardOptions = {}) {
         }
         case 'sourceRead': {
           // The app's token reads what the app can, not what the caller can: full access only.
-          if (principal.can !== 'all') throw forbidden('reading a platform needs full access')
+          if (principal.can !== 'all') throw forbidden('reading a source needs full access')
           if (!engine) throw notFound('this board has no sync configured')
           const query = SourceReadQuery.parse(queryObject(url))
           return json(await engine.readSource(match.param!, query.target, query.limit ?? 50))

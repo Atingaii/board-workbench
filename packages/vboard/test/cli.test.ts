@@ -534,6 +534,18 @@ describe('cli', () => {
     expect(unsynced.stderr).toContain('no sync configured')
   })
 
+  it("says so when the board is older than `sources read`, instead of crashing on its discovery document", async () => {
+    // An old board answers any unknown GET with its discovery document, 200.
+    const old = await serve(async () => Response.json({ version: '0.4.0', sync: [] }))
+    try {
+      const read = await vb(['sources', 'slack', 'read', '#general'], { VBOARD_URL: `${old.origin}/api/board` })
+      expect(read.code).toBe(1)
+      expect(read.stderr).toContain("this board can't read sources yet")
+    } finally {
+      await old.close()
+    }
+  })
+
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
     expect(await vb(['post', 'x', '@nobody'])).toMatchObject({ code: 1, stderr: 'error: unknown mention @nobody\n' })

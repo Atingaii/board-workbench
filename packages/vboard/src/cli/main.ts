@@ -625,7 +625,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (sub !== 'read' || !target) throw new UsageError('usage: vboard sources <key> read <channel|thread|link> [--limit N]')
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
-      if (flags.json) return read.messages.forEach(printJson), 0
+      // A board older than this CLI answers an unknown path with its discovery document.
+      if (!Array.isArray((read as { messages?: unknown }).messages))
+        throw new Error("this board can't read sources yet: update vboard where the board is deployed")
+      if (flags.json) return printJson(read), 0
       return out(formatSourceRead(key, read)), 0
     }
 

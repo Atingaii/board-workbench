@@ -9,11 +9,12 @@ const ROOT = '1791389583.493629'
 const REPLY = '1791393976.415219'
 const PERMALINK = `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}?thread_ts=${ROOT}&cid=CKIT`
 
-type Channel = { id: string; name: string; is_member: boolean; is_private?: boolean }
+type Channel = { id: string; name: string; is_member: boolean; is_private?: boolean; is_ext_shared?: boolean }
 const CHANNELS: Record<string, Channel> = {
   CKIT: { id: 'CKIT', name: 'project-vercel-kit', is_member: true },
   CPRIV: { id: 'CPRIV', name: 'secret', is_member: true, is_private: true },
   COUT: { id: 'COUT', name: 'elsewhere', is_member: false },
+  CEXT: { id: 'CEXT', name: 'shared-with-acme', is_member: true, is_ext_shared: true },
 }
 
 function setup() {
@@ -22,18 +23,26 @@ function setup() {
       { ts: '1791399999.000002', user: 'U_JB', text: 'latest' },
       { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 2, thread_ts: ROOT, files: [{ name: 'map.png', permalink: 'https://vercel.slack.com/files/map' }] },
     ].slice(0, limit),
+    has_more: limit < 2,
   }))
-  const replies = vi.fn(async () => ({
-    messages: [
-      { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 1, thread_ts: ROOT },
-      { ts: REPLY, bot_profile: { name: 'pi' }, text: 'nice', thread_ts: ROOT },
-    ],
-  }))
+  // Like Slack: a reply's ts reads only that reply; the root's reads the thread.
+  const replies = vi.fn(async ({ ts }: { channel: string; ts: string; limit: number }) => ts === REPLY
+    ? { messages: [{ ts: REPLY, bot_profile: { name: 'pi' }, text: 'nice', thread_ts: ROOT }], has_more: false }
+    : {
+        messages: [
+          { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 1, thread_ts: ROOT },
+          { ts: REPLY, bot_profile: { name: 'pi' }, text: 'nice', thread_ts: ROOT },
+        ],
+        has_more: false,
+      })
   const join = vi.fn(async () => ({}))
   const web = {
     conversations: {
       list: async () => ({ channels: Object.values(CHANNELS) }),
-      info: async ({ channel }: { channel: string }) => ({ channel: CHANNELS[channel] }),
+      info: async ({ channel }: { channel: string }) => {
+        if (channel === 'CBUSY') throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } })
+        return { channel: CHANNELS[channel] }
+      },
       join, history, replies,
     },
     users: { info: async ({ user }: { user: string }) => ({ user: { id: user, real_name: user === 'U_ADA' ? 'Ada Lovelace' : 'Julian' } }) },
@@ -63,8 +72,11 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
         { id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada Lovelace', text: 'kit maps slack users to vercel ids', createdAt: new Date(Number(ROOT) * 1000).toISOString(), replies: 2, files: [{ name: 'map.png', url: 'https://vercel.slack.com/files/map' }] },
         { id: '1791399999.000002', thread: 'CKIT:1791399999.000002', author: 'Julian', text: 'latest', createdAt: new Date(1791399999.000002 * 1000).toISOString(), replies: 0, files: [] },
       ],
+      more: false,
     })
-    expect((await read(julian, 'CKIT', 1)).body.messages.map((m: { id: string }) => m.id)).toEqual(['1791399999.000002'])
+    const newest = (await read(julian, 'CKIT', 1)).body
+    expect(newest.messages.map((m: { id: string }) => m.id)).toEqual(['1791399999.000002'])
+    expect(newest.more).toBe(true)
     expect(history).toHaveBeenLastCalledWith({ channel: 'CKIT', limit: 1 })
     expect(join).not.toHaveBeenCalled()
   })
@@ -77,6 +89,34 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     expect(body.thread).toBe(ROOT)
     expect(body.messages.map((m: { author: string; text: string }) => `${m.author}: ${m.text}`)).toEqual(['Ada Lovelace: kit maps slack users to vercel ids', 'pi: nice'])
     expect((await read(julian, `CKIT:${ROOT}`)).body.thread).toBe(ROOT)
+  })
+
+  it("reads the whole thread from a reply's ts, or a reply permalink without thread_ts", async () => {
+    const { board, replies } = setup()
+    const julian = caller(board.fetch, await personToken())
+    for (const target of [`CKIT:${REPLY}`, `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}`]) {
+      const { body } = await read(julian, target)
+      expect(body.thread).toBe(ROOT)
+      expect(body.messages.map((m: { id: string }) => m.id)).toEqual([ROOT, REPLY])
+    }
+    expect(replies).toHaveBeenLastCalledWith({ channel: 'CKIT', ts: ROOT, limit: 50 })
+  })
+
+  it("answers what it can't read with a status that says why", async () => {
+    const { board } = setup()
+    const julian = caller(board.fetch, await personToken())
+    const unknownName = await read(julian, '#nope')
+    expect(unknownName.status).toBe(404)
+    expect(unknownName.body.error.code).toBe('channel_not_found')
+    const unknownId = await read(julian, 'CNOPE')
+    expect(unknownId.status).toBe(404)
+    expect(unknownId.body.error.code).toBe('channel_not_found')
+    const busy = await read(julian, 'CBUSY')
+    expect(busy.status).toBe(429)
+    expect(busy.body.error.code).toBe('ratelimited')
+    const shared = await read(julian, '#shared-with-acme')
+    expect(shared.status).toBe(403)
+    expect(shared.body.error.code).toBe('shared_channel')
   })
 
   it("won't read private channels or channels the app isn't in, and never joins", async () => {
@@ -119,6 +159,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     const channel = formatSourceRead('slack', {
       channel: 'CKIT', name: 'project-vercel-kit', thread: null,
       messages: [{ id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada', text: 'kit maps users\nto vercel ids', createdAt: new Date(Number(ROOT) * 1000).toISOString(), replies: 2, files: [{ name: 'map.png', url: null }] }],
+      more: true,
     }, now)
     expect(channel.split('\n')).toEqual([
       'slack:CKIT (#project-vercel-kit)',
@@ -126,6 +167,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
       '      kit maps users',
       '      to vercel ids',
       '      📎 map.png',
+      '(older messages not shown: raise --limit, up to 200)',
     ])
     const thread = formatSourceRead('slack', {
       channel: 'CKIT', name: null, thread: ROOT,
@@ -133,6 +175,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
         { id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada', text: 'root', createdAt: null, replies: 1, files: [] },
         { id: REPLY, thread: `CKIT:${ROOT}`, author: 'pi', text: 'nice', createdAt: null, replies: 0, files: [] },
       ],
+      more: false,
     })
     expect(thread.split('\n')).toEqual([`slack:CKIT, thread ${ROOT}`, `${ROOT}  Ada`, '      root', `  ↳ ${REPLY}  pi`, '    nice'])
   })
