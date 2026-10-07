@@ -33,6 +33,13 @@ test("a changeset outside core lands, and the changeset README or a removed chan
   assert.equal(decide(review(), pr(), [core, file(".changeset/old.md", "removed")], green).would, true);
 });
 
+test("the package's manifest and build config count as core", () => {
+  for (const path of ["packages/vboard/package.json", "packages/vboard/tsdown.config.ts"]) {
+    const files = [file(path), file(".changeset/x.md", "added")];
+    assert.deepEqual(decide(review(), pr(), files, green), { would: false, why: "user-facing change to vboard core" });
+  }
+});
+
 test("core tests and docs aren't core source", () => {
   const files = [file("packages/vboard/test/a.test.ts"), file("packages/vboard/README.md"), file(".changeset/x.md", "added")];
   assert.equal(decide(review(), pr(), files, green).would, true);
@@ -94,8 +101,12 @@ function harness(routes) {
       return Response.json(body.json ?? body, { status: body.status ?? 200 });
     },
   });
-  const board = { label: async (id, change) => { labels.push({ id, ...change }); } };
-  return { requests, labels, run: (input = event()) => watcher.run({ event: input, board }) };
+  const reactions = [];
+  const board = {
+    label: async (id, change) => { labels.push({ id, ...change }); },
+    react: async (id, emoji, opts = {}) => { reactions.push({ id, emoji, ...opts }); },
+  };
+  return { requests, labels, reactions, run: (input = event()) => watcher.run({ event: input, board }) };
 }
 
 const routes = (files = [file("apps/a.ts")]) => ({
@@ -148,4 +159,29 @@ test("when GitHub fails, it says no and why", async () => {
   const h = harness({ "/pulls/53": { status: 404, json: { message: "Not Found" } } });
   await h.run();
   assert.deepEqual(h.labels[0].set, { autoland: "no", "autoland.why": "couldn't read the PR: Not Found" });
+});
+
+const withVerdict = (autoland) => event({ message: { ...event().message, labels: { ...event().message.labels, autoland } } });
+
+test("a PR that would land gets :stamp-hammer: on its root", async () => {
+  const h = harness(routes());
+  await h.run();
+  assert.deepEqual(h.reactions, [{ id: 59, emoji: "stamp-hammer", remove: false }]);
+});
+
+test("the stamp comes off when the verdict flips to no", async () => {
+  const h = harness(routes([file("packages/vboard/src/a.ts"), file(".changeset/x.md", "added")]));
+  await h.run(withVerdict("would"));
+  assert.deepEqual(h.labels[0].set.autoland, "no");
+  assert.deepEqual(h.reactions, [{ id: 59, emoji: "stamp-hammer", remove: true }]);
+});
+
+test("the stamp is left alone when the verdict doesn't change", async () => {
+  const stays = harness(routes());
+  await stays.run(withVerdict("would"));
+  assert.equal(stays.labels[0].set.autoland, "would");
+  const never = harness({ "/pulls/53": { status: 404, json: { message: "Not Found" } } });
+  await never.run();
+  await never.run(withVerdict("no"));
+  assert.deepEqual([...stays.reactions, ...never.reactions], []);
 });

@@ -82,8 +82,10 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   fix and no caveats or tradeoffs. Only that Pi's label counts. The watcher
   then checks the rest on GitHub (a factory PR, still open, no commits since
   the review, CI `check` green on the head, and not a user-facing change to
-  vboard core, meaning `packages/vboard/src` together with a changeset) and
-  labels the root `autoland=would|no` with `autoland.why`.
+  vboard core, meaning `packages/vboard/src`, its `package.json`, or
+  `tsdown.config.ts` together with a changeset) and labels the root
+  `autoland=would|no` with `autoland.why`. A `would` root also wears
+  `:stamp-hammer:`, added and removed as the verdict flips, so Slack shows it.
   `security` (`security.ts`) lets anyone add `:security:` to a PR's Slack root
   to have Pi run a deepsec review of its diff, in a fresh `git worktree` outside
   its clone (deepsec only fails on net-new findings, so reused state could look

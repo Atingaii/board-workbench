@@ -9,8 +9,11 @@ import { BOT, github, prNumber, type GitHubOptions } from "./github.ts";
 
 /** The CI job a PR's head must pass (`.github/workflows/check.yml`). */
 const CHECK = "check";
-/** vboard core: the published package's source. */
-const CORE = "packages/vboard/src/";
+/** vboard core: what the published package ships, its source and the files that shape it. */
+const isCore = (path: string) =>
+  path.startsWith("packages/vboard/src/") || path === "packages/vboard/package.json" || path === "packages/vboard/tsdown.config.ts";
+/** The reaction a PR root wears while it would auto-land, so Slack shows the verdict at a glance. */
+export const STAMP = "stamp-hammer";
 /** A user-facing change gets a changeset; the folder's README isn't one. */
 const isChangeset = (path: string) => /^\.changeset\/[^/]+\.md$/.test(path) && path !== ".changeset/README.md";
 
@@ -31,7 +34,7 @@ export function decide(review: Review, pr: PullRequest, files: ChangedFile[], ch
     return no(`CI \`${CHECK}\` ${check ? (check.conclusion ?? check.status) : "hasn't run"}`);
   }
   const live = files.filter((file) => file.status !== "removed");
-  const core = files.some((file) => file.filename.startsWith(CORE));
+  const core = files.some((file) => isCore(file.filename));
   const userFacing = live.some((file) => isChangeset(file.filename));
   if (core && userFacing) return no("user-facing change to vboard core");
   return { would: true, why: core ? "internal change to vboard core" : "outside vboard core" };
@@ -77,9 +80,12 @@ export function autoland(options: GitHubOptions = {}): Watcher {
       } catch (error) {
         decision = { would: false, why: `couldn't read the PR: ${error instanceof Error ? error.message : String(error)}` };
       }
+      // The verdict before this one: the stamp follows the label, so it's added or removed only when that flips.
+      const stamped = root.labels.autoland === "would";
       await board.label(root.id, {
         set: { autoland: decision.would ? "would" : "no", "autoland.why": clip(decision.why) },
       });
+      if (decision.would !== stamped) await board.react(root.id, STAMP, { remove: !decision.would });
     },
   };
 }
