@@ -9,6 +9,11 @@ import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 /** The production board the agent's `vb` talks to. */
 const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
+/**
+ * Pi's mark, served from `public/`. The board's built-in `/avatars/pi` is an SVG, which Slack
+ * won't use as a message's icon, so Pi's Slack messages would show the app's instead.
+ */
+export const PI_AVATAR = `${new URL(BOARD).origin}/avatars/pi.png`;
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
 /** The `vb` Pi runs. A thread's sandbox outlives releases, so setup upgrades it in place. */
@@ -172,8 +177,8 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
               headers: {
                 authorization: `Bearer ${tokens.board}`,
                 "x-board-profile": piName(thread),
-                // A named profile has no built-in avatar: keep Pi's mark.
-                "x-board-avatar": `${BOARD}/avatars/pi`,
+                // A named profile has no built-in avatar: keep Pi's mark, as a PNG Slack can show.
+                "x-board-avatar": PI_AVATAR,
                 "x-board-session": piSession(thread),
                 ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
                   ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INSTRUCTIONS, byPi, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { INSTRUCTIONS, PI_AVATAR, byPi, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
 for (const task of ["thread", "review"]) {
   test(`${task}: Pi stays out of messages meant for someone else`, () => {
@@ -111,4 +111,13 @@ test("thread: Pi says it's on it before long work, then posts updates as it goes
 test("review: no on-it or milestone lines, so a review doesn't comment on every PR", () => {
   assert.doesNotMatch(INSTRUCTIONS.review, /several replies in one turn/);
   assert.doesNotMatch(INSTRUCTIONS.review, /a line when you reach a milestone/);
+});
+
+test("PI_AVATAR: a PNG this app serves, since Slack won't show the board's SVG avatars", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const url = new URL(PI_AVATAR);
+  assert.equal(url.protocol, "https:");
+  assert.match(url.pathname, /\.png$/);
+  const png = await readFile(new URL(`../public${url.pathname}`, import.meta.url));
+  assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
 });
