@@ -37,6 +37,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   fileIds?(raw: unknown): string[]
   refusesFiles?(error: unknown): boolean
   deleteFiles?(ids: string[]): Promise<void>
+  /** What the adapter needs to fetch a file again, if not everything the event carried. */
+  fileToFetch?(file: ExternalFile): ExternalFile
   startTyping?(thread: string, latest: string | null): Promise<void>
 }
 
@@ -176,7 +178,9 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     return this.transport.fetchLink ? this.transport.fetchLink(link) : super.fetchLink(link)
   }
   override async fetchFile(file: ExternalFile): Promise<Uint8Array | null> {
-    const fetch = this.transport.adapter.rehydrateAttachment?.({ ...file }).fetchData
+    // Ready first: an adapter may resolve a file's credentials from its Chat state.
+    const adapter = await this.ready()
+    const fetch = adapter.rehydrateAttachment?.({ ...(this.transport.fileToFetch?.(file) ?? file) }).fetchData
     if (!fetch) return null
     const data = await fetch()
     return data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)

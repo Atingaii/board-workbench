@@ -1,6 +1,7 @@
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
+import { displayText } from '../contract/bots.ts'
 
 /** "claude via julian" for a profile, the name otherwise. */
 /** "claude via julian" for a profile, the name otherwise. */
@@ -65,7 +66,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
   }${labels(message)}`
-  const body = message.deleted ? `${pad}(message removed)` : indent(message.text, pad)
+  const body = message.deleted ? `${pad}(message removed)` : indent(displayText(message.text, message.by.actor), pad)
   const files = (message.attachments ?? []).map((a) => `${pad}📎 ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))
   const reacted = reactions(message, options.names ?? new Map())
@@ -102,10 +103,10 @@ export function formatEvent(event: BoardEventView): string {
   switch (event.type) {
     case 'message.posted': {
       const files = (message.attachments ?? []).map((a) => `  📎 ${a.name}`).join('')
-      return `#${message.id}  ${where}  ${who}: ${message.text}${files}`
+      return `#${message.id}  ${where}  ${who}: ${displayText(message.text, message.by.actor)}${files}`
     }
     case 'message.edited':
-      return `#${message.id}  ${where}  ${who} (edited): ${message.text}`
+      return `#${message.id}  ${where}  ${who} (edited): ${displayText(message.text, message.by.actor)}`
     case 'message.deleted':
       return `#${message.id}  ${where}  (message removed)`
     case 'message.linked':

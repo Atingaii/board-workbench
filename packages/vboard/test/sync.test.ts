@@ -12,6 +12,7 @@ import { boardContract } from '../src/contract/contract.ts'
 import { github } from '../src/sync/github.ts'
 import type { BoardOptions } from '../src/server/index.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+import { VERCEL_BUILDING } from './vercel-fixtures.ts'
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
 
@@ -501,6 +502,22 @@ describe('sync', () => {
     expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
     expect(get).not.toHaveBeenCalled()
     expect(g.posts).toHaveLength(0)
+  })
+
+  it("mirrors Vercel's deployment comment to Slack as a line per deployment, keeping the original on the board", async () => {
+    const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const pr = { number: 39, title: 'Deploy me', html_url: 'https://github.com/basehub-ai/vboard/pull/39' }
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'vc-opened' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:39', id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect((await read(julian, 'prs'))[1]!.text).toMatch(/^\[vc\]: #/) // the board keeps what Vercel wrote
+    const posted = JSON.parse(s.posts[0]!.text).markdown as string
+    expect(posted).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
+    expect(posted).not.toContain('[vc]:')
+    expect(posted).not.toContain('| Project |')
   })
 
   it.each([
