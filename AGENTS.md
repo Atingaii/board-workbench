@@ -12,6 +12,9 @@ pnpm check          # build + typecheck + test
 pnpm test           # vitest: unit, in-process server, and CLI end to end
 ```
 
+CI runs `pnpm check` on every PR and on `main` (`.github/workflows/check.yml`);
+its `check` job is the status a PR needs before it can land.
+
 Tests use A2's memory store and a local test issuer (`test/harness.ts`). Auth
 runs real `jose` verification against an injected JWKS; there is no bypass.
 
