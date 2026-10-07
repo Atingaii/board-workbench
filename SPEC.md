@@ -1379,6 +1379,10 @@ dead-letters and holds up its thread's lane.
   the board deletes the files on Slack too. If Slack refuses files (say, the
   app lacks `files:write`), the text is edited to add a line per file
   (`📎 after.png (17 KB, on the board: #812)`), and later edits keep them.
+  Slack picks a file's type from its extension and shows any it doesn't know
+  (`.log`, `.ndjson`, none) as a binary download. So a text file with such a
+  name goes to Slack with `.txt` appended (`deepsec.log.txt`), which Slack
+  previews; the board keeps the file's own name.
   GitHub has no upload API, so it always gets those lines.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
