@@ -86,6 +86,15 @@ export const InboxQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+/**
+ * What to read from a platform without syncing it: a channel (`#name` or an ID),
+ * a thread (`C0123:1727000000.123456`), or a message permalink (its thread).
+ */
+export const SourceReadQuery = z.object({
+  target: z.string().min(1).max(4000),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+})
+
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
 export const TypingBody = z.object({}).optional()
@@ -151,6 +160,32 @@ export type EventsPage = { events: BoardEventView[]; cursor: number }
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
 export type TypingResult = { targets: string[] }
 
+/** A platform message read on demand: nothing about it is stored on the board. */
+export type SourceMessage = {
+  /** The platform's message ID (Slack's `ts`). */
+  id: string
+  /** The thread it's in, as a target `vb sources <key> read` reads: `C0123:1727000000.123456`. */
+  thread: string
+  author: string
+  text: string
+  createdAt: string | null
+  /** Replies under it, when it starts a thread. */
+  replies: number
+  files: { name: string; url: string | null }[]
+}
+
+/** A channel or thread read from a platform, oldest message first. */
+export type SourceRead = {
+  /** The channel's ID, and its name when the platform gave one. */
+  channel: string
+  name: string | null
+  /** Set when a thread was read. */
+  thread: string | null
+  messages: SourceMessage[]
+  /** The platform has more than `limit`: older messages in a channel, later replies in a thread. */
+  more: boolean
+}
+
 export type ApiError = { error: { code: string; message: string } }
 
 /** A raw platform event, as `GET /inbox/:key` returns it. */
@@ -180,6 +215,8 @@ export const routes = {
   /** Ephemeral: shows typing in the thread's synced platform threads, and writes nothing to the log. */
   typing: { method: 'POST', path: '/messages/:id/typing', body: TypingBody },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
+  /** Reads a platform channel or thread on demand, without syncing or storing it. Full access only. */
+  sourceRead: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },
   webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },
   avatar: { method: 'GET', path: '/avatars/:name' },

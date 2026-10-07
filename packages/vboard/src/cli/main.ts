@@ -14,7 +14,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { formatEvent, formatThreads, who } from './format.ts'
+import { formatEvent, formatSourceRead, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -55,6 +55,10 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
+  sources                                  the board's sources (its sync entries: slack, github, …)
+  sources <key> read <channel|thread|link> [--limit N]
+                                           read a source's channel, thread, or message link without syncing it,
+                                           e.g. sources slack read '#general', or a Slack permalink (full access only)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
 
   update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread (channel \`work\`); --skip if there's none
@@ -608,6 +612,24 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`${entry.createdAt}  ${entry.channel}  ${event.kind}  ${event.author?.handle ?? ''}  ${detail.split('\n')[0]}`)
       }
       return 0
+    }
+
+    case 'sources': {
+      const [key, sub, target] = args
+      if (!key) {
+        const { sync } = await client().discovery()
+        if (flags.json) return sync.forEach(printJson), 0
+        if (sync.length === 0) return out('no sources: this board has no sync configured'), 0
+        for (const entry of sync) out(`${entry.key}  ${entry.platform}`)
+        return 0
+      }
+      if (sub !== 'read' || !target) throw new UsageError('usage: vboard sources <key> read <channel|thread|link> [--limit N]')
+      const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
+      // A board older than this CLI answers an unknown path with its discovery document.
+      if (!Array.isArray((read as { messages?: unknown }).messages))
+        throw new Error("this board can't read sources yet: update vboard where the board is deployed")
+      if (flags.json) return printJson(read), 0
+      return out(formatSourceRead(key, read)), 0
     }
 
     case 'tail': {

@@ -912,6 +912,8 @@ vboard sync <id> <target>                       attach the thread to an external
 vboard typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+vboard sources                                 the board's sources (sync entries) and their platforms
+vboard sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
 
 vboard tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -1615,6 +1617,24 @@ board can't read keeps why (`private_channel`, `not_in_channel`) until an
 unfurl fills it in; an unfurl of one link keeps the others as they were. `vb read` and `vb inspect` quote each one under the message. Snapshots
 are what the message said when the link arrived; its files are linked, not
 copied.
+
+**Reading on demand.** `vb sources slack read <target>` (`GET /sources/:key/read`)
+reads a channel (`#name` or `C0123`, newest 50 by default, shown oldest first),
+a thread (`C0123:1727000000.123456`, or a reply's ts, which reads the thread
+it's in), or the thread a message permalink is in, for research and references:
+an agent can read a channel the board doesn't sync. `more` says the platform had
+more than `limit` (older messages in a channel, later replies in a thread). It
+has the same limits as reading a link: public channels the app is already in,
+through `conversations.history` and `conversations.replies`
+(`channels:history`). Private channels and DMs answer 403 `private_channel`,
+and Slack Connect channels (shared with another organization) 403
+`shared_channel`; a channel the app isn't in answers 403 `not_in_channel`, and
+the app doesn't join it, so someone adds it on purpose. A channel that doesn't
+exist, by name or ID, is 404 `channel_not_found`; Slack rate-limiting is 429
+`ratelimited`, and Slack failing is 502. Nothing is stored, and reading a channel doesn't
+make the board listen to it: inbound events still only come from configured
+channels and synced threads. Because the app's token reads more than the caller
+might, it needs full access, like `vb inbox`.
 
 **Rendering.** Messages use the common author-prefixed body by default.
 Configure `render` to change it; credentials and sender-account authorization

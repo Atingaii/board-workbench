@@ -4,6 +4,7 @@ import type { Actor } from '../contract/reducers.ts'
 import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/contract.ts'
 import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
+import type { SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
 export { externalAuthor } from './types.ts'
@@ -30,6 +31,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   /** Platform messages a message links to, located under sync key `key`. */
   links?(key: string, message: ChatMessage): ExternalLink[]
   fetchLink?(link: ExternalLink): Promise<FetchedLink>
+  /** A channel or thread, read on demand without syncing it. */
+  read?(target: string, options: { limit: number }): Promise<SourceRead>
   avatar?(message: ChatMessage): Promise<string | null>
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
@@ -177,6 +180,10 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
   override async fetchLink(link: ExternalLink): Promise<FetchedLink> {
     return this.transport.fetchLink ? this.transport.fetchLink(link) : super.fetchLink(link)
+  }
+
+  override async read(target: string, options: { limit: number }): Promise<SourceRead> {
+    return this.transport.read ? this.transport.read(target, options) : super.read(target, options)
   }
   override async fetchFile(file: ExternalFile): Promise<Uint8Array | null> {
     // Ready first: an adapter may resolve a file's credentials from its Chat state.
