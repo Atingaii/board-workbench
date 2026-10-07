@@ -1593,10 +1593,13 @@ message the board has (it was synced, either way) is that board message, `#id`,
 with a snapshot of it. Otherwise the snapshot comes from Slack's unfurl: in the
 message event if Slack sent it there, or in the `message_changed` that follows,
 which Chat SDK drops and the provider reads itself. With no unfurl yet, the
-board reads the message with `conversations.replies` (`channels:history`;
-`groups:history` for private channels, which also need the app invited). A link
-the board can't read keeps why, such as `not_in_channel`, until an unfurl fills
-it in. `vb read` and `vb inspect` quote each one under the message. Snapshots
+board reads the message with `conversations.replies` (`channels:history`), but
+only from a public channel the app is already in. The app's token reads what the
+app can, not what the person who posted the link can, and every board reader
+sees the snapshot, so private channels and DMs are left to Slack's unfurl, which
+checks the poster. The app doesn't join a channel to read a link. A link the
+board can't read keeps why (`private_channel`, `not_in_channel`) until an
+unfurl fills it in; an unfurl of one link keeps the others as they were. `vb read` and `vb inspect` quote each one under the message. Snapshots
 are what the message said when the link arrived; its files are linked, not
 copied.
 

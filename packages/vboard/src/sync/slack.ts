@@ -8,7 +8,7 @@ import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 
-type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean }
+type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean; is_im?: boolean; is_mpim?: boolean }
 export type SlackClient = {
   conversations: {
     list(args: Record<string, unknown>): Promise<{
@@ -322,14 +322,21 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const raw = message.raw as { text?: unknown; attachments?: SlackAttachment[] } | null
         return slackLinks(key, typeof raw?.text === 'string' ? raw.text : message.text, Array.isArray(raw?.attachments) ? raw.attachments : [], mrkdwn)
       },
-      // A link Slack didn't unfurl, read with the app's token: public channels it joins itself.
+      // A link Slack didn't unfurl, read with the app's token, but only from a public channel
+      // the app is already in. The token reads what the app can, not what the person who
+      // posted the link can, and every board reader would see the snapshot: private
+      // channels and DMs are left to Slack's unfurl, which checks the poster. Nor does it
+      // join a channel someone linked, which would announce the app there.
       async fetchLink(link): Promise<FetchedLink> {
         const [, channel, thread] = link.thread.split(':')
         const web = await client()
         if (!web?.conversations.replies || !channel || !thread) return { snapshot: null, unavailable: 'no Slack client to read it with' }
-        await join(web, channel)
         let found: SlackMessage | undefined
         try {
+          const info = (await web.conversations.info({ channel })).channel
+          if (!info) return { snapshot: null, unavailable: 'channel_not_found' }
+          if (info.is_private || info.is_im || info.is_mpim) return { snapshot: null, unavailable: 'private_channel' }
+          if (!info.is_member) return { snapshot: null, unavailable: 'not_in_channel' }
           const { messages } = await web.conversations.replies({ channel, ts: thread, oldest: link.message, latest: link.message, inclusive: true, limit: 1 })
           found = messages?.find((m) => m.ts === link.message)
         } catch (error) {
@@ -354,11 +361,14 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const inner = event?.message
         if (event?.type !== 'message' || event.subtype !== 'message_changed' || !event.channel || !inner?.ts) return []
         if (!inner.attachments?.some((att) => att.is_msg_unfurl) || inner.text !== event.previous_message?.text) return []
-        const links = slackLinks(key, inner.text ?? '', inner.attachments, mrkdwn).filter((link) => link.snapshot)
-        if (links.length === 0) return []
+        // Every link, unfurled or not: the event replaces the message's links, and the board
+        // keeps what it already knew about the ones Slack didn't unfurl.
+        const links = slackLinks(key, inner.text ?? '', inner.attachments, mrkdwn)
+        const unfurled = links.filter((link) => link.snapshot)
+        if (unfurled.length === 0) return []
         const thread = `${key}:${event.channel}:${inner.thread_ts ?? inner.ts}`
         return [{
-          dedupe: `unfurl:${thread}|${inner.ts}|${links.map((link) => link.message).join(',')}`,
+          dedupe: `unfurl:${thread}|${inner.ts}|${unfurled.map((link) => link.message).join(',')}`,
           raw: event,
           event: {
             kind: 'edited', channel: `${key}:${event.channel}`, thread, subthread: null, message: inner.ts,
