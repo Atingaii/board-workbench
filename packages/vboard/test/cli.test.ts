@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -8,7 +8,11 @@ import { serve } from './http.ts'
 import { personToken, testBoard } from './harness.ts'
 
 const CLI = join(import.meta.dirname, '../src/cli/main.ts')
-const TEMP = realpathSync(tmpdir())
+// Every directory a test makes lives under one root, which holds an empty `.git`
+// (as stray ones in `~` or `/tmp` do): it isn't a checkout, so nothing links there.
+const TEMP = realpathSync(mkdtempSync(join(tmpdir(), 'vboard-cli-')))
+mkdirSync(join(TEMP, '.git'))
+const tmp = (prefix: string) => mkdtemp(join(TEMP, prefix))
 
 let server: Awaited<ReturnType<typeof serve>>
 let url: string
@@ -29,7 +33,8 @@ beforeAll(async () => {
     VBOARD_URL: url,
     VBOARD_TOKEN: await personToken('u_julian', url),
     VBOARD_HANDLE: 'julian',
-    XDG_CONFIG_HOME: await mkdtemp(join(tmpdir(), 'vboard-')),
+    HOME: await tmp('vboard-home-'),
+    XDG_CONFIG_HOME: await tmp('vboard-'),
   }
 })
 afterAll(() => server.close())
@@ -61,9 +66,9 @@ function vb_in(cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
 
 describe('cli', () => {
   it('links a checkout from a subdirectory, ignores the link, and reads it from other subdirectories', async () => {
-    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const root = await tmp('vboard-link-')
     const directory = join(root, 'packages', 'app')
-    const global = await mkdtemp(join(tmpdir(), 'vboard-global-'))
+    const global = await tmp('vboard-global-')
     await mkdir(directory, { recursive: true })
     await writeFile(join(root, '.git'), 'gitdir: /worktree')
     await writeFile(join(root, '.gitignore'), 'node_modules')
@@ -84,14 +89,64 @@ describe('cli', () => {
   }, 20_000)
 
   it('links a directory without Git in place', async () => {
-    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const root = await tmp('vboard-link-')
     expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
     expect(JSON.parse(await readFile(join(root, '.vboard', 'config.json'), 'utf8'))).toEqual({ url })
     expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('.vboard/\n')
   })
 
+  it('treats only a real .git as a checkout root: a HEAD inside, or a gitdir: file', async () => {
+    const parent = await tmp('vboard-link-')
+    const child = join(parent, 'child')
+    await mkdir(join(parent, '.git'))
+    await mkdir(child)
+    expect(await vb(['link', url], {}, undefined, child)).toMatchObject({ code: 0, stdout: `linked ${child} to ${url}\n` })
+    await writeFile(join(parent, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    const other = join(parent, 'other')
+    await mkdir(other)
+    expect(await vb(['link', url], {}, undefined, other)).toMatchObject({ code: 0, stdout: `linked ${parent} to ${url}\n` })
+    const worktree = await tmp('vboard-link-')
+    await writeFile(join(worktree, '.git'), 'gitdir: /repo/.git/worktrees/x\n')
+    await mkdir(join(worktree, 'src'))
+    expect(await vb(['link', url], {}, undefined, join(worktree, 'src'))).toMatchObject({ code: 0, stdout: `linked ${worktree} to ${url}\n` })
+    const stray = await tmp('vboard-link-')
+    await writeFile(join(stray, '.git'), 'not a pointer')
+    await mkdir(join(stray, 'src'))
+    expect(await vb(['link', url], {}, undefined, join(stray, 'src'))).toMatchObject({ code: 0, stdout: `linked ${join(stray, 'src')} to ${url}\n` })
+  }, 20_000)
+
+  it('says a board is behind Vercel Deployment Protection, and passes the bypass secret', async () => {
+    const board = testBoard({ url: undefined })
+    const walls = {
+      redirect: () => new Response(null, { status: 302, headers: { location: 'https://vercel.com/sso-api?url=x' } }),
+      html: () => new Response('<!DOCTYPE html><html></html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }),
+    }
+    for (const [kind, wall] of Object.entries(walls)) {
+      const seen: (string | null)[] = []
+      const protectedBoard = await serve(async (request) => {
+        seen.push(request.headers.get('x-vercel-protection-bypass'))
+        return request.headers.get('x-vercel-protection-bypass') === 's3cret' ? board.fetch(request) : wall()
+      })
+      const at = `${protectedBoard.origin}/api/board`
+      const line = `error: ${at} is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)\n`
+      try {
+        expect(await vb(['whoami'], { VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at) }), kind).toEqual({ code: 1, stdout: '', stderr: line })
+        // Discovery, without a token yet.
+        const root = await tmp('vboard-link-')
+        expect(await vb(['link', at], {}, undefined, root), kind).toEqual({ code: 1, stdout: '', stderr: line })
+        seen.length = 0
+        const ok = await vb(['whoami', '--json'], { VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at), VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
+        expect(ok, kind).toMatchObject({ code: 0, stderr: '' })
+        expect(seen.length).toBeGreaterThan(0)
+        expect(seen.every((header) => header === 's3cret')).toBe(true)
+      } finally {
+        await protectedBoard.close()
+      }
+    }
+  }, 30_000)
+
   it('lets explicit and environment URLs override the project link', async () => {
-    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const root = await tmp('vboard-link-')
     await mkdir(join(root, '.vboard'))
     await writeFile(join(root, '.vboard', 'config.json'), JSON.stringify({ url: 'http://project.invalid/api/board' }))
     const fromEnv = await vb(['whoami', '--json'], {}, undefined, root)
@@ -103,12 +158,13 @@ describe('cli', () => {
   }, 20_000)
 
   it('stops at a nested Git checkout and falls back to the global board', async () => {
-    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const root = await tmp('vboard-link-')
     const nested = join(root, 'other-project')
-    const global = await mkdtemp(join(tmpdir(), 'vboard-global-'))
+    const global = await tmp('vboard-global-')
     await mkdir(join(root, '.vboard'))
     await writeFile(join(root, '.vboard', 'config.json'), JSON.stringify({ url: 'http://parent.invalid/api/board' }))
     await mkdir(join(nested, '.git'), { recursive: true })
+    await writeFile(join(nested, '.git', 'HEAD'), 'ref: refs/heads/main\n')
     const local = { VBOARD_URL: undefined, XDG_CONFIG_HOME: global }
     expect((await vb(['use', url], local, undefined, nested)).code).toBe(0)
     const me = await vb(['whoami', '--json'], local, undefined, nested)
@@ -117,8 +173,8 @@ describe('cli', () => {
   }, 20_000)
 
   it('reports a malformed project link instead of using the global board', async () => {
-    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
-    const global = await mkdtemp(join(tmpdir(), 'vboard-global-'))
+    const root = await tmp('vboard-link-')
+    const global = await tmp('vboard-global-')
     await mkdir(join(root, '.vboard'))
     const local = { VBOARD_URL: undefined, XDG_CONFIG_HOME: global }
     expect((await vb(['use', url], local, undefined, root)).code).toBe(0)
@@ -133,7 +189,7 @@ describe('cli', () => {
   }, 20_000)
 
   it('keeps the link when discovery fails and rejects missing or extra arguments', async () => {
-    const root = await mkdtemp(join(TEMP, 'vboard-link-'))
+    const root = await tmp('vboard-link-')
     expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
     const path = join(root, '.vboard', 'config.json')
     const before = await readFile(path, 'utf8')
@@ -215,7 +271,7 @@ describe('cli', () => {
   })
 
   it('attaches files, shows them, and downloads them', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'vboard-files-'))
+    const dir = await tmp('vboard-files-')
     const shot = join(dir, 'after.png')
     await writeFile(shot, Buffer.from([137, 80, 78, 71]))
     const posted = await vb(['post', 'proofs', '--attach', shot])
@@ -235,7 +291,7 @@ describe('cli', () => {
   }, 20_000) // five CLI runs: a cold start right after install can pass the default 5s
 
   it('installs turn-end hooks, and the permissions their reminder needs, keeping what else is there', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'vboard-home-'))
+    const home = await tmp('vboard-home-')
     const at = { HOME: home, CODEX_HOME: join(home, '.codex') }
     await mkdir(join(home, '.claude'), { recursive: true })
     const settings = join(home, '.claude', 'settings.json')
@@ -284,8 +340,24 @@ describe('cli', () => {
     expect((await vb(['hooks', 'install', 'gemini'], at))).toMatchObject({ code: 2, stderr: 'error: unknown agent: gemini (known: claude, codex, cursor)\n' })
   })
 
+  it('installs the Claude Code hook in CLAUDE_CONFIG_DIR when it is set', async () => {
+    const home = await tmp('vboard-home-')
+    const config = await tmp('vboard-claude-')
+    const at = { HOME: home, CLAUDE_CONFIG_DIR: config }
+    expect(await vb(['hooks', 'install', 'claude'], at)).toMatchObject({ code: 0, stderr: '' })
+    const settings = JSON.parse(await readFile(join(config, 'settings.json'), 'utf8'))
+    expect(settings.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent claude /)
+    expect(settings.permissions.allow).toHaveLength(3)
+    expect(readdirSync(home)).toEqual([])
+    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude /)
+    expect((await vb(['hooks', 'status'], { HOME: home })).stdout).toMatch(/Claude Code: not installed/)
+    expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
+    expect(JSON.parse(await readFile(join(config, 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: [] } })
+    expect(readdirSync(home)).toEqual([])
+  }, 20_000)
+
   it("reminds an agent once when its turn didn't update the board, and the agent updates with vb", async () => {
-    const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
+    const repo = await tmp('vboard-repo-')
     execFileSync('git', ['init', '-q', '-b', 'feat/hooks'], { cwd: repo })
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/app.git'], { cwd: repo })
     // Markers live in the temp directory: fresh session IDs keep runs apart.
@@ -348,7 +420,7 @@ describe('cli', () => {
   }, 60_000)
 
   it('starts the work thread for a branch whose name is longer than an id may be', async () => {
-    const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
+    const repo = await tmp('vboard-repo-')
     const branch = `feat/${'very-long-branch-name-'.repeat(10)}`
     execFileSync('git', ['init', '-q', '-b', branch], { cwd: repo })
     execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:acme/app.git'], { cwd: repo })
@@ -361,14 +433,14 @@ describe('cli', () => {
   })
 
   it('reminds Cursor with a follow-up message, keyed by project since its shell has no session', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'vboard-home-'))
+    const home = await tmp('vboard-home-')
     expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor: added the turn-end hook')
     expect(JSON.parse(await readFile(join(home, '.cursor', 'hooks.json'), 'utf8'))).toEqual({
       version: 1,
       hooks: { stop: [{ command: expect.stringMatching(/ hook stop --agent cursor 2>\/dev\/null \|\| true$/), timeout: 10 }] },
     })
 
-    const repo = await mkdtemp(join(tmpdir(), 'vboard-repo-'))
+    const repo = await tmp('vboard-repo-')
     execFileSync('git', ['init', '-q', '-b', 'feat/cursor'], { cwd: repo })
     const stop = (payload: Record<string, unknown>) =>
       vb(['hook', 'stop', '--agent', 'cursor'], {}, JSON.stringify({ conversation_id: `c-${Date.now()}`, workspace_roots: [repo], hook_event_name: 'stop', ...payload }))

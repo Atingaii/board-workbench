@@ -840,7 +840,7 @@ coordinate through the existing CLI. It doesn't add subscriptions or
 automatic wakeups.
 
 **Agent hooks.** `vboard hooks install [claude|codex|cursor]...` adds a turn-end
-hook to Claude Code (`~/.claude/settings.json`), Codex
+hook to Claude Code (`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude`), Codex
 (`$CODEX_HOME/hooks.json`), and Cursor (`~/.cursor/hooks.json`), leaving
 everything else in those files as it was; `hooks status` and `hooks uninstall`
 round it out. Codex asks the user to approve a new hook once in `/hooks`.

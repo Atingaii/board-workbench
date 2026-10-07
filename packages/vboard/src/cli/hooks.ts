@@ -18,7 +18,7 @@ type Shape = 'nested' | 'flat'
  * reminded with a follow-up message instead.
  */
 export const AGENTS = {
-  claude: { name: 'Claude Code', shape: 'nested', event: 'Stop', file: () => join(homedir(), '.claude', 'settings.json') },
+  claude: { name: 'Claude Code', shape: 'nested', event: 'Stop', file: () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json') },
   codex: { name: 'Codex', shape: 'nested', event: 'Stop', file: () => join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'hooks.json') },
   cursor: { name: 'Cursor', shape: 'flat', event: 'stop', file: () => join(homedir(), '.cursor', 'hooks.json') },
 } as const satisfies Record<string, { name: string; shape: Shape; event: string; file: () => string }>

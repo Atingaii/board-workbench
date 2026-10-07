@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -31,10 +31,24 @@ export function savedUrl(): string | undefined {
   }
 }
 
+/**
+ * A Git checkout's root: `.git` is a directory with a `HEAD`, or a worktree's
+ * `gitdir:` file. A stray empty `.git` (say, in `~` or `/tmp`) isn't one.
+ */
+function isCheckout(directory: string): boolean {
+  const git = join(directory, '.git')
+  try {
+    if (statSync(git).isDirectory()) return existsSync(join(git, 'HEAD'))
+    return readFileSync(git, 'utf8').startsWith('gitdir:')
+  } catch {
+    return false
+  }
+}
+
 export function projectDir(cwd = process.cwd()): string {
   let directory = resolve(cwd)
   while (true) {
-    if (existsSync(join(directory, '.vboard', 'config.json')) || existsSync(join(directory, '.git')))
+    if (existsSync(join(directory, '.vboard', 'config.json')) || isCheckout(directory))
       return directory
     const parent = dirname(directory)
     if (parent === directory) return resolve(cwd)
@@ -217,7 +231,7 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
   const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
   if (!url)
     throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, or run `vboard use <url>`', 0)
-  const doFetch = options.fetch ?? globalThis.fetch
+  const doFetch = guarded(url, options.fetch ?? globalThis.fetch)
 
   let discovery: Promise<Discovery> | undefined
   const discover = () =>
@@ -296,6 +310,40 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
 }
 
 export { BoardError, type BoardClient, type ClientOptions, type ProfileOption } from './client.ts'
+
+/**
+ * A board's fetch that recognizes Vercel Deployment Protection: a redirect to
+ * `/sso-api`, or an HTML page where the board answers JSON (on SAML teams, the
+ * redirects end at the IdP's login page with a 200). Other redirects of a GET
+ * are followed. Attachments, which may be HTML, come with a `content-disposition`.
+ */
+function guarded(url: string, doFetch: typeof fetch): typeof fetch {
+  const wall = (status: number) =>
+    new BoardError(
+      'protected',
+      `${url} is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)`,
+      status,
+    )
+  return async (input, init = {}) => {
+    let target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+    for (let hops = 0; ; hops++) {
+      const response = await doFetch(hops === 0 ? input : target, { ...init, redirect: 'manual' })
+      const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null
+      if (location) {
+        const next = new URL(location, target)
+        if (next.pathname.startsWith('/sso-api')) throw wall(response.status)
+        if ((method === 'GET' || method === 'HEAD') && hops < 10) {
+          target = next.href
+          continue
+        }
+      }
+      if (/^text\/html\b/i.test(response.headers.get('content-type') ?? '') && !response.headers.has('content-disposition'))
+        throw wall(response.status)
+      return response
+    }
+  }
+}
 
 /** Gets past Vercel Deployment Protection on a protected board. */
 function bypassHeaders(): Record<string, string> {
