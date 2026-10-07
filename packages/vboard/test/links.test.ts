@@ -1,0 +1,165 @@
+import { describe, expect, it, vi } from 'vitest'
+import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
+import { slack, slackLinks, type SlackClient } from '../src/sync/slack.ts'
+import { formatMessage } from '../src/cli/format.ts'
+import type { MessageView } from '../src/api/routes.ts'
+import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+
+/** The thread #321 was in: a Slack root's permalink and its ts. */
+const TS = '1791322095.443859'
+/** A public channel the app is in: the only kind it reads links from itself. */
+const joined = async ({ channel }: { channel: string }) => ({ channel: { id: channel, is_member: true } })
+const permalink = (channel: string, ts = TS) => `https://acme.slack.com/archives/${channel}/p${ts.replace('.', '')}`
+
+function setup(client?: Partial<SlackClient['conversations']>, users?: SlackClient['users']) {
+  const web = client ? { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}), ...client }, users } : undefined
+  const s = fakePlatform('slack', web ? withSlackClient(web, false) : undefined)
+  const board = testBoard({
+    sync: {
+      slack: slack({ adapter: s.adapter, ...(web ? { client: async () => web as SlackClient } : {}), channels: { C1: 'firehose' } }),
+    },
+  })
+  const webhook = (body: unknown) =>
+    board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+  return { board, s, webhook }
+}
+
+type Read = { id: number; text: string; editedAt: string | null; links: MessageView['links'] }
+const messages = async (call: ReturnType<typeof caller>) =>
+  (await call('GET', '/messages?channel=firehose')).body.messages as Read[]
+
+/** A Slack message whose mrkdwn links `url`, with whatever Slack attached. */
+const linking = (id: string, url: string, attachments: unknown[] = []) => ({
+  type: 'message', threadId: `slack:C1:${id}`, id, text: `see ${url}`, user: 'U_JB',
+  raw: { type: 'message', ts: id, text: `see <${url}>`, attachments },
+})
+
+describe('slack message links', () => {
+  it('finds permalinks in mrkdwn, replies included, and the unfurl Slack sent for each', () => {
+    const reply = `${permalink('C9', '1791322585.618629')}?thread_ts=${TS}&amp;cid=C9`
+    const links = slackLinks('slack', `<${permalink('C1')}|this> and <${reply}> and <${permalink('C1')}>`, [
+      { is_msg_unfurl: true, channel_id: 'C1', ts: TS, author_name: 'Julian Benegas', text: 'export is broken', files: [{ name: 'shot.png', permalink: 'https://acme.slack.com/files/shot' }] },
+    ])
+    expect(links).toEqual([
+      { url: permalink('C1'), thread: `slack:C1:${TS}`, message: TS, snapshot: {
+        author: 'Julian Benegas', text: 'export is broken', createdAt: new Date(Number(TS) * 1000).toISOString(),
+        files: [{ name: 'shot.png', url: 'https://acme.slack.com/files/shot' }],
+      } },
+      { url: reply.replace('&amp;', '&'), thread: `slack:C9:${TS}`, message: '1791322585.618629', snapshot: null },
+    ])
+  })
+
+  it('links a synced message to its board copy', async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook({ type: 'message', threadId: `slack:C1:${TS}`, id: TS, text: 'export is broken', user: 'U_ADA', name: 'Ada' })
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    await webhook(linking('1791322999.000001', permalink('C1')))
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(2))
+    const [target, linker] = await messages(julian)
+    expect(linker!.text).toBe(`see <${permalink('C1')}>`) // the text stays as written
+    expect(linker!.links).toEqual([{ url: permalink('C1'), message: target!.id, unavailable: null, snapshot: expect.objectContaining({ author: 'Ada', text: 'export is broken' }) }])
+  })
+
+  it("snapshots an unsynced message from Slack's unfurl, without asking Slack", async () => {
+    const replies = vi.fn()
+    const { board, webhook } = setup({ replies })
+    const julian = caller(board.fetch, await personToken())
+    await webhook(linking('1791322999.000002', permalink('C9'), [{ is_msg_unfurl: true, channel_id: 'C9', ts: TS, author_subname: 'Ada', text: 'deploys are *down*' }]))
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    const [linker] = await messages(julian)
+    expect(linker!.links).toEqual([{ url: permalink('C9'), message: null, unavailable: null, snapshot: expect.objectContaining({ author: 'Ada', text: 'deploys are *down*' }) }])
+    expect(replies).not.toHaveBeenCalled()
+  })
+
+  it('reads an unsynced message from Slack when no unfurl came', async () => {
+    const replies = vi.fn(async () => ({ messages: [{ ts: TS, user: 'U_ADA', text: 'the root, in <#C9>' }] }))
+    const users = { info: vi.fn(async () => ({ user: { real_name: 'Ada Lovelace' } })) }
+    const { board, webhook } = setup({ replies, info: joined }, users)
+    const julian = caller(board.fetch, await personToken())
+    await webhook(linking('1791322999.000003', permalink('C9')))
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    expect(replies).toHaveBeenCalledWith({ channel: 'C9', ts: TS, oldest: TS, latest: TS, inclusive: true, limit: 1 })
+    const [linker] = await messages(julian)
+    expect(linker!.links).toEqual([{ url: permalink('C9'), message: null, unavailable: null, snapshot: expect.objectContaining({ author: 'Ada Lovelace', text: 'the root, in <#C9>' }) }])
+  })
+
+  it("says why it couldn't read a link, then fills it in when Slack's unfurl arrives", async () => {
+    const replies = vi.fn(async () => { throw Object.assign(new Error('An API error occurred: not_in_channel'), { data: { error: 'not_in_channel' } }) })
+    const { board, webhook } = setup({ replies, info: joined })
+    const julian = caller(board.fetch, await personToken())
+    const id = '1791322999.000004'
+    await webhook(linking(id, permalink('C9')))
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    expect((await messages(julian))[0]!.links).toEqual([{ url: permalink('C9'), message: null, snapshot: null, unavailable: 'not_in_channel' }])
+
+    const text = `see <${permalink('C9')}>`
+    const unfurled = { type: 'event_callback', event: {
+      type: 'message', subtype: 'message_changed', channel: 'C1',
+      message: { type: 'message', ts: id, user: 'U_JB', text, attachments: [{ is_msg_unfurl: true, channel_id: 'C9', ts: TS, author_name: 'Ada', text: 'private thoughts' }] },
+      previous_message: { type: 'message', ts: id, user: 'U_JB', text },
+    } }
+    expect((await webhook(unfurled)).status).toBe(200)
+    await webhook(unfurled) // Slack retries: once is enough
+    await vi.waitFor(async () => expect((await messages(julian))[0]!.links[0]!.snapshot).toMatchObject({ author: 'Ada', text: 'private thoughts' }))
+    const [linker] = await messages(julian)
+    expect(linker).toMatchObject({ text: `see <${permalink('C9')}>`, editedAt: null }) // links changed, the text didn't
+    const events = (await julian('GET', '/events?channel=firehose&after=0')).body.events as { type: string }[]
+    expect(events.map((e) => e.type)).toEqual(['message.posted', 'message.linked'])
+  })
+
+  it("never reads a private channel, a DM, or a channel it isn't in with the app's token: only Slack's unfurl can", async () => {
+    const channels: Record<string, object> = {
+      CPRIV: { id: 'CPRIV', is_private: true, is_member: true },
+      D0DM: { id: 'D0DM', is_im: true },
+      COUT: { id: 'COUT', is_member: false },
+    }
+    const replies = vi.fn(async () => ({ messages: [{ ts: TS, user: 'U_ADA', text: 'layoffs friday' }] }))
+    const join = vi.fn(async () => ({}))
+    const { board, webhook } = setup({ replies, join, info: async ({ channel }) => ({ channel: channels[channel] }) })
+    const julian = caller(board.fetch, await personToken())
+    await webhook(linking('1791322999.000005', permalink('CPRIV')))
+    await webhook(linking('1791322999.000006', permalink('D0DM')))
+    await webhook(linking('1791322999.000007', permalink('COUT')))
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(3))
+    expect((await messages(julian)).map((m) => m.links[0])).toEqual([
+      { url: permalink('CPRIV'), message: null, snapshot: null, unavailable: 'private_channel' },
+      { url: permalink('D0DM'), message: null, snapshot: null, unavailable: 'private_channel' },
+      { url: permalink('COUT'), message: null, snapshot: null, unavailable: 'not_in_channel' },
+    ])
+    expect(replies).not.toHaveBeenCalled()
+    expect(join).not.toHaveBeenCalled() // joining a channel someone linked would announce the app there
+  })
+
+  it('keeps the links Slack did not unfurl when it unfurls the others', async () => {
+    const replies = vi.fn(async () => ({ messages: [{ ts: TS, user: 'U_ADA', text: 'public root' }] }))
+    const { board, webhook } = setup({ replies, info: async ({ channel }) => ({ channel: { id: channel, is_member: true, is_private: channel === 'CPRIV' } }) })
+    const julian = caller(board.fetch, await personToken())
+    const id = '1791322999.000008'
+    const text = `see <${permalink('C9')}> and <${permalink('CPRIV')}>`
+    await webhook({ type: 'message', threadId: `slack:C1:${id}`, id, text: `see ${permalink('C9')} and ${permalink('CPRIV')}`, user: 'U_JB', raw: { ts: id, text } })
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    expect((await messages(julian))[0]!.links.map((link) => link.snapshot?.text ?? link.unavailable)).toEqual(['public root', 'private_channel'])
+    await webhook({ type: 'event_callback', event: {
+      type: 'message', subtype: 'message_changed', channel: 'C1',
+      message: { ts: id, user: 'U_JB', text, attachments: [{ is_msg_unfurl: true, channel_id: 'CPRIV', ts: TS, author_name: 'Ada', text: 'shown to the channel by Slack' }] },
+      previous_message: { ts: id, user: 'U_JB', text },
+    } })
+    await vi.waitFor(async () => expect((await messages(julian))[0]!.links.map((link) => link.snapshot?.text ?? link.unavailable)).toEqual(['public root', 'shown to the channel by Slack']))
+  })
+
+  it('quotes linked messages under the message in `vb read`', () => {
+    const base = { id: 7, channel: 'dev', text: 'see these', re: 6, replyTo: null, thread: 't', labels: {}, reactions: {}, mentions: [], noSync: false, origin: null, from: 'slack', createdAt: new Date().toISOString(), editedAt: null, deleted: false, undelivered: {}, attachments: [], author: null, by: { actor: 'slack:user:U_JB', principal: 'slack:user:U_JB', profile: null, session: null } }
+    const view = { ...base, links: [
+      { url: permalink('C1'), message: 5, unavailable: null, snapshot: { author: 'Ada', text: 'export is broken\nsince monday', createdAt: null, files: [{ name: 'shot.png', url: null }] } },
+      { url: permalink('C9'), message: null, snapshot: null, unavailable: 'not_in_channel' },
+    ] } satisfies MessageView
+    expect(formatMessage(view, { reply: true }).split('\n').slice(2)).toEqual([
+      `    ↪ Ada · #5 · ${permalink('C1')}`,
+      '    > export is broken',
+      '    > since monday',
+      '    > 📎 shot.png',
+      `    ↪ ${permalink('C9')} (couldn't read it: not_in_channel)`,
+    ])
+  })
+})

@@ -1,6 +1,6 @@
 import { canonicalEmoji } from './emoji.ts'
 import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
-import { boardContract, type BoardEvent, type Origin } from './contract.ts'
+import { boardContract, type BoardEvent, type Link, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
 // in place: an event costs O(1) instead of a copy of every message.
@@ -28,6 +28,8 @@ export type Message = {
   /** Sync targets this message didn't reach, with why. A later delivery clears its entry. */
   undelivered: Record<string, string>
   attachments: Attachment[]
+  /** Platform messages it links to (Slack permalinks), each with what it said. */
+  links: Link[]
 }
 
 export type MessagesState = {
@@ -65,6 +67,7 @@ export function foldMessages(
         deleted: false,
         undelivered: {},
         attachments: payload.attachments ?? [],
+        links: payload.links ?? [],
       }
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
       return state
@@ -85,6 +88,7 @@ export function foldMessages(
       message.reactions = {}
       message.mentions = []
       message.attachments = []
+      message.links = []
       return state
     }
     case 'reaction.added': {
@@ -112,6 +116,11 @@ export function foldMessages(
       for (const key of event.payload.unset) delete message.labels[key]
       return state
     }
+    case 'message.linked': {
+      const message = state.byId[event.payload.id]
+      if (message && !message.deleted) message.links = event.payload.links
+      return state
+    }
     case 'message.sync_failed': {
       const message = state.byId[event.payload.id]
       if (message) message.undelivered[event.payload.target] = event.payload.error
@@ -129,7 +138,7 @@ export function foldMessages(
 
 export const messagesReducer = boardContract
   .reducer({
-    name: 'vboard.messages.v3',
+    name: 'vboard.messages.v4',
     initialState: { byId: {}, replies: {} } as MessagesState,
   })
   .fold(foldMessages)

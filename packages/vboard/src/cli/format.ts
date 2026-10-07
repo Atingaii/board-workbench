@@ -43,6 +43,22 @@ function reactions(message: MessageView, names: Map<string, string>): string {
     .join('   ')
 }
 
+/** Lines of a linked message an embed shows before it trails off. */
+const EMBED_LINES = 12
+
+/** A linked platform message, quoted under the message that links it, or why the board couldn't read it. */
+function embed(link: NonNullable<MessageView['links']>[number], pad: string): string[] {
+  if (!link.snapshot) return [`${pad}↪ ${link.url} (couldn't read it: ${link.unavailable ?? 'unknown'})`]
+  const { author, text, files } = link.snapshot
+  const lines = text.trim() ? text.trim().split('\n') : []
+  const shown = lines.length > EMBED_LINES ? [...lines.slice(0, EMBED_LINES), '…'] : lines
+  return [
+    `${pad}↪ ${author}${link.message !== null ? ` · #${link.message}` : ''} · ${link.url}`,
+    ...shown.map((line) => `${pad}> ${line}`),
+    ...files.map((file) => `${pad}> 📎 ${file.name}${file.url ? ` ${file.url}` : ''}`),
+  ]
+}
+
 /** One message as a block: header line, indented text, reactions. */
 export function formatMessage(message: MessageView, options: { reply?: boolean; names?: Map<string, string> } = {}) {
   const pad = options.reply ? '    ' : '      '
@@ -51,9 +67,10 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   }${labels(message)}`
   const body = message.deleted ? `${pad}(message removed)` : indent(message.text, pad)
   const files = (message.attachments ?? []).map((a) => `${pad}📎 ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
+  const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))
   const reacted = reactions(message, options.names ?? new Map())
   const undelivered = Object.entries(message.undelivered ?? {}).map(([target, error]) => `${pad}✗ didn't reach ${target}: ${error}`)
-  return [head, body, ...files, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
+  return [head, body, ...files, ...links, ...(reacted ? [`${pad}${reacted}`] : []), ...undelivered].join('\n')
 }
 
 /** Threads in order, each root followed by its replies. */
@@ -91,6 +108,8 @@ export function formatEvent(event: BoardEventView): string {
       return `#${message.id}  ${where}  ${who} (edited): ${message.text}`
     case 'message.deleted':
       return `#${message.id}  ${where}  (message removed)`
+    case 'message.linked':
+      return `#${message.id}  ${where}  ↪ links ${(message.links ?? []).map((link) => link.message !== null ? `#${link.message}` : link.url).join(', ') || 'nothing'}`
     case 'reaction.added':
     case 'reaction.removed':
       return `#${message.id}  ${where}  ${displayEmoji(event.payload.emoji)} ${

@@ -245,6 +245,13 @@ a:focus-visible, button:focus-visible, [role='separator']:focus-visible { outlin
 /* Your own reaction: a little brighter, not louder. */
 .chip.mine { border-color: var(--muted); background: var(--shade-hover); color: var(--bright); }
 /* Attachments: media in a fixed frame, so loading never moves the page; files as chips. */
+.links { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.link-embed { padding: 2px 0 2px 10px; border-left: 2px solid var(--hairline); }
+.link-meta { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--muted); }
+.link-meta .author { font-size: 13px; }
+.link-meta a, .link-file a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.link-meta a:hover, .link-file a:hover { text-decoration: underline; }
+.link-file { display: flex; gap: 4px; align-items: center; margin-top: 2px; font-size: 12px; color: var(--muted); }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .attachment-media { display: block; width: 320px; max-width: 100%; height: 200px; border: 1px solid var(--hairline); background: var(--shade); overflow: hidden; }
 .attachment-media img, .attachment-media video { display: block; width: 100%; height: 100%; object-fit: contain; }
