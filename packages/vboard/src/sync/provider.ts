@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { Message, Actor } from '../contract/reducers.ts'
 import type { BoardClient } from '../client/client.ts'
-import type { PlatformRead } from '../api/routes.ts'
+import type { SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
 import { immutable, type ProviderEvent, type SyncOverrides, type SyncResult, type SyncRoot } from './events.ts'
 
@@ -92,7 +92,7 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
    * A channel or thread, read on demand for whoever asked: nothing is synced,
    * stored, or joined. Throws `UnreadableError` for what it won't read.
    */
-  async read(_target: string, _options: { limit: number }): Promise<PlatformRead> {
+  async read(_target: string, _options: { limit: number }): Promise<SourceRead> {
     throw new UnreadableError('unsupported', `${this.platform} can't be read on demand`)
   }
   async edit(_thread: string, _message: string, _body: ProviderPost): Promise<void> {}

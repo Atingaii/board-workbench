@@ -4,7 +4,7 @@ import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
 import { UnreadableError, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
-import type { PlatformMessage, PlatformRead } from '../api/routes.ts'
+import type { SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
@@ -20,7 +20,7 @@ export type SlackClient = {
     join(args: { channel: string }): Promise<unknown>
     /** Reads a linked message or a thread; needs `channels:history` (`groups:history` for private channels). */
     replies?(args: { channel: string; ts: string; oldest?: string; latest?: string; inclusive?: boolean; limit: number }): Promise<{ messages?: SlackMessage[] }>
-    /** Reads a channel, newest first, for `vb fetch`; needs `channels:history`. */
+    /** Reads a channel, newest first, for `vb sources <key> read`; needs `channels:history`. */
     history?(args: { channel: string; limit: number }): Promise<{ messages?: SlackMessage[] }>
   }
   users?: {
@@ -367,11 +367,11 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           createdAt: tsTime(found.ts), files: filesOf(found.files),
         } }
       },
-      // A channel or thread read on demand (`vb fetch`), with the same limits as a link:
+      // A channel or thread read on demand (`vb sources <key> read`), with the same limits as a link:
       // public channels the app is already in. It never joins (that would announce the
       // app, and Slack would start sending the channel's events), and nothing it reads
       // is stored; the board still only listens to the channels it's configured with.
-      async read(target, { limit }): Promise<PlatformRead> {
+      async read(target, { limit }): Promise<SourceRead> {
         const web = await client()
         if (!web) throw new UnreadableError('no_client', 'no Slack client to read it with')
         let channel: string
@@ -411,7 +411,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           if (error instanceof UnreadableError) throw error
           throw new UnreadableError(slackError(error).split(',')[0]!, `Slack refused to read ${target}: ${slackError(error)}`)
         }
-        const messages = await Promise.all(found.slice(0, limit).filter((m) => m.ts).map(async (m): Promise<PlatformMessage> => ({
+        const messages = await Promise.all(found.slice(0, limit).filter((m) => m.ts).map(async (m): Promise<SourceMessage> => ({
           id: m.ts!,
           thread: `${channel}:${m.thread_ts ?? m.ts}`,
           author: (m.user ? await nameOf(m.user) : m.bot_profile?.name || m.username || 'someone').slice(0, 256),

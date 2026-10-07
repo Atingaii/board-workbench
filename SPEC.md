@@ -912,7 +912,8 @@ vboard sync <id> <target>                       attach the thread to an external
 vboard typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
-vboard fetch <key> <channel|thread|link> [--limit N]  read a platform channel, thread, or message link without syncing it
+vboard sources                                 the board's sources (sync entries) and their platforms
+vboard sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
 
 vboard tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -1617,7 +1618,7 @@ unfurl fills it in; an unfurl of one link keeps the others as they were. `vb rea
 are what the message said when the link arrived; its files are linked, not
 copied.
 
-**Reading on demand.** `vb fetch slack <target>` (`GET /platforms/:key/read`)
+**Reading on demand.** `vb sources slack read <target>` (`GET /sources/:key/read`)
 reads a channel (`#name` or `C0123`, newest 50 by default, shown oldest first),
 a thread (`C0123:1727000000.123456`), or the thread a message permalink is in,
 for research and references: an agent can read a channel the board doesn't

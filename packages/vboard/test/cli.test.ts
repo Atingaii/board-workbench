@@ -524,6 +524,16 @@ describe('cli', () => {
     expect(stdout.trim().split('\n')).toHaveLength(1501)
   }, 60_000)
 
+  it('lists sources, and reads one only as `sources <key> read <target>`', async () => {
+    expect((await vb(['sources'])).stdout.trim()).toBe('no sources: this board has no sync configured')
+    const misuse = await vb(['sources', 'slack', '#general'])
+    expect(misuse.code).toBe(2)
+    expect(misuse.stderr).toContain('usage: vboard sources <key> read')
+    const unsynced = await vb(['sources', 'slack', 'read', '#general'])
+    expect(unsynced.code).toBe(1)
+    expect(unsynced.stderr).toContain('no sync configured')
+  })
+
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
     expect(await vb(['post', 'x', '@nobody'])).toMatchObject({ code: 1, stderr: 'error: unknown mention @nobody\n' })

@@ -854,7 +854,7 @@ export function createSyncEngine(options: {
   }
 
   /** A platform channel or thread, read for the caller: nothing is synced, stored, or joined. */
-  async function readPlatform(key: string, target: string, limit: number) {
+  async function readSource(key: string, target: string, limit: number) {
     const platform = platformOf(key)
     try {
       return await platform.read(target, { limit })
@@ -866,7 +866,7 @@ export function createSyncEngine(options: {
 
   return {
     inboxServer,
-    readPlatform,
+    readSource,
     outboundHandlers,
     bind: (b: BoardBinding) => {
       binding = b

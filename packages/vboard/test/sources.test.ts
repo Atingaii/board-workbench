@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { slack, type SlackClient } from '../src/sync/slack.ts'
-import { formatPlatformRead } from '../src/cli/format.ts'
+import { formatSourceRead } from '../src/cli/format.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { githubActions } from '../src/server/auth.ts'
 
@@ -49,9 +49,9 @@ function setup() {
 }
 
 const read = (call: ReturnType<typeof caller>, target: string, limit?: number) =>
-  call('GET', `/platforms/slack/read?target=${encodeURIComponent(target)}${limit ? `&limit=${limit}` : ''}`)
+  call('GET', `/sources/slack/read?target=${encodeURIComponent(target)}${limit ? `&limit=${limit}` : ''}`)
 
-describe('reading a platform on demand (vb fetch)', () => {
+describe('reading a platform on demand (vb sources <key> read)', () => {
   it('reads a public channel the app is in, oldest first, by name or ID', async () => {
     const { board, history, join } = setup()
     const julian = caller(board.fetch, await personToken())
@@ -116,18 +116,18 @@ describe('reading a platform on demand (vb fetch)', () => {
 
   it('prints a channel with how to open each thread', () => {
     const now = Number(ROOT) * 1000 + 3_600_000
-    const channel = formatPlatformRead('slack', {
+    const channel = formatSourceRead('slack', {
       channel: 'CKIT', name: 'project-vercel-kit', thread: null,
       messages: [{ id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada', text: 'kit maps users\nto vercel ids', createdAt: new Date(Number(ROOT) * 1000).toISOString(), replies: 2, files: [{ name: 'map.png', url: null }] }],
     }, now)
     expect(channel.split('\n')).toEqual([
       'slack:CKIT (#project-vercel-kit)',
-      `${ROOT}  Ada · 1h  (2 replies: vb fetch slack CKIT:${ROOT})`,
+      `${ROOT}  Ada · 1h  (2 replies: vb sources slack read CKIT:${ROOT})`,
       '      kit maps users',
       '      to vercel ids',
       '      📎 map.png',
     ])
-    const thread = formatPlatformRead('slack', {
+    const thread = formatSourceRead('slack', {
       channel: 'CKIT', name: null, thread: ROOT,
       messages: [
         { id: ROOT, thread: `CKIT:${ROOT}`, author: 'Ada', text: 'root', createdAt: null, replies: 1, files: [] },

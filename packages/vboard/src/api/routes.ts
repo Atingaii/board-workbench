@@ -90,7 +90,7 @@ export const InboxQuery = z.object({
  * What to read from a platform without syncing it: a channel (`#name` or an ID),
  * a thread (`C0123:1727000000.123456`), or a message permalink (its thread).
  */
-export const PlatformReadQuery = z.object({
+export const SourceReadQuery = z.object({
   target: z.string().min(1).max(4000),
   limit: z.coerce.number().int().min(1).max(200).optional(),
 })
@@ -161,10 +161,10 @@ export type EventsPage = { events: BoardEventView[]; cursor: number }
 export type TypingResult = { targets: string[] }
 
 /** A platform message read on demand: nothing about it is stored on the board. */
-export type PlatformMessage = {
+export type SourceMessage = {
   /** The platform's message ID (Slack's `ts`). */
   id: string
-  /** The thread it's in, as a target `vb fetch` reads: `C0123:1727000000.123456`. */
+  /** The thread it's in, as a target `vb sources <key> read` reads: `C0123:1727000000.123456`. */
   thread: string
   author: string
   text: string
@@ -175,13 +175,13 @@ export type PlatformMessage = {
 }
 
 /** A channel or thread read from a platform, oldest message first. */
-export type PlatformRead = {
+export type SourceRead = {
   /** The channel's ID, and its name when the platform gave one. */
   channel: string
   name: string | null
   /** Set when a thread was read. */
   thread: string | null
-  messages: PlatformMessage[]
+  messages: SourceMessage[]
 }
 
 export type ApiError = { error: { code: string; message: string } }
@@ -214,7 +214,7 @@ export const routes = {
   typing: { method: 'POST', path: '/messages/:id/typing', body: TypingBody },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
   /** Reads a platform channel or thread on demand, without syncing or storing it. Full access only. */
-  platformRead: { method: 'GET', path: '/platforms/:key/read', query: PlatformReadQuery },
+  sourceRead: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },
   webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },
   avatar: { method: 'GET', path: '/avatars/:name' },
