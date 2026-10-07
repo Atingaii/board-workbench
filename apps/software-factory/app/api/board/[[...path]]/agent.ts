@@ -79,7 +79,7 @@ For a bug report:
 3. If you can't reproduce it, or it isn't a bug, label it reproduced=no and reply with why. If the thread came from a GitHub issue, close the issue with gh issue close and say why there too.
 For a feature request: if it's clear what's wanted, build it with tests and open a PR. If it's ambiguous or large, reply with a short plan or your questions first, and build it once someone agrees.
 For a question: answer it from the code and docs, pointing at the files. Don't open a PR unless someone asks for one.
-Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). Don't attach test runs or logs of your own checks; the PR's CI carries them. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
+Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). Don't attach test runs or logs of your own checks: the tests go in the PR, and for a bug, name the test that reproduces it in the PR body. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
 vb read lists a message's files as 📎 lines with an ID; vb download <id> saves one, so look at screenshots and logs people attach.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you.`;
 
