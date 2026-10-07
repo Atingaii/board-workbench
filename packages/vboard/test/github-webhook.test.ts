@@ -64,13 +64,3 @@ it("ignores edits to the board's own comments, which it already has", async () =
   const own = { ...comment('from the board', '2026-10-07T19:53:10Z'), user: { id: 1, login: 'vboard-factory[bot]', type: 'Bot' } }
   expect(await send('issue_comment', { action: 'edited', comment: own, issue, repository, sender: own.user })).toEqual([])
 })
-
-it("syncs a person's delete or edit of one of the board's comments", async () => {
-  const send = setup()
-  const own = { ...comment('from the board', '2026-10-07T19:53:10Z'), user: { id: 1, login: 'vboard-factory[bot]', type: 'Bot' } }
-  const person = { id: 42, login: 'julianbenegas', type: 'User' }
-  const edited = await send('issue_comment', { action: 'edited', comment: own, issue, repository, sender: person })
-  expect(edited[0]?.event).toMatchObject({ kind: 'edited', thread: 'github:basehub-ai/vboard:100', message: '77', text: 'from the board' })
-  const deleted = await send('issue_comment', { action: 'deleted', comment: own, issue, repository, sender: person })
-  expect(deleted[0]?.event).toMatchObject({ kind: 'deleted', thread: 'github:basehub-ai/vboard:100', message: '77' })
-})

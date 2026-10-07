@@ -30,7 +30,6 @@ type CommentPayload = {
   issue?: { number?: number; pull_request?: unknown }
   pull_request?: { number?: number }
   repository?: Repository
-  sender?: User
 }
 /** The adapter's own parsing, so an edit lands on the same thread and message IDs as the comment it changes. */
 type CommentParser = {
@@ -294,10 +293,8 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
         const message = review
           ? adapter.parseReviewComment(comment, repository, number, threadId)
           : adapter.parseIssueComment(comment, repository, number, threadId, type)
-        // The board's own changes: it made them, so it already has them. Checked on the sender, like the adapter does,
-        // so a person editing or deleting one of the board's comments still reaches the board.
-        const sender = payload.sender?.id ?? comment.user?.id
-        if (sender !== undefined && String(sender) === adapter.botUserId) return []
+        // The board's own comments: it made the change, so it already has it.
+        if (message.author.isMe) return []
         return payload.action === 'edited'
           ? [{ kind: 'edited', message }]
           : [{ kind: 'deleted', thread: threadId, message: message.id, raw: payload }]

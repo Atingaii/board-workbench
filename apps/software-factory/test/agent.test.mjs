@@ -118,3 +118,9 @@ test("piAvatar: a PNG generated from each Pi's name, the same every time", () =>
   assert.equal(piAvatar(1956), piAvatar(1956));
   assert.notEqual(piAvatar(1956), piAvatar(1957));
 });
+
+test("review: :looking-bunny: on the PR root while a review is underway, off once land is labeled", () => {
+  assert.match(INSTRUCTIONS.review, /Before anything else, react to the PR thread's root with vb react <root id> looking-bunny/);
+  assert.match(INSTRUCTIONS.review, /vb react <root id> looking-bunny --remove once you've labeled land/);
+  assert.doesNotMatch(INSTRUCTIONS.thread, /looking-bunny/);
+});
