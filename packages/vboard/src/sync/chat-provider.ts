@@ -148,7 +148,8 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const tasks: Promise<unknown>[] = []
     const webhooks = this.chat.webhooks as Record<string, (request: Request, options: { waitUntil(task: Promise<unknown>): void }) => Promise<Response>>
     const response = await webhooks[this.transport.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
-    const results = await Promise.allSettled(tasks)
+    const results: PromiseSettledResult<unknown>[] = []
+    while (tasks.length) results.push(...await Promise.allSettled(tasks.splice(0)))
     const failed = results.find((result) => result.status === 'rejected')
     if (failed) throw failed.reason
     if (response.ok && body !== null && this.transport.intercept) {
