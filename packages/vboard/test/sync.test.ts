@@ -105,13 +105,12 @@ describe('sync', () => {
     await vi.waitFor(() => expect(seen).toEqual(['message.posted', 'message.posted']))
   })
 
-  it('runs watchers that ask for receipts on where a message landed', async () => {
+  it('runs `--all` watchers on receipts too, like `vb tail --all`: where a message landed', async () => {
     const landed: unknown[] = []
     const { board, s } = setup({
       watch: {
         landed: {
-          tail: 'prs --label pr',
-          receipts: true,
+          tail: 'prs --label pr --all',
           run: ({ event }) => {
             if (event.type === 'message.synced') landed.push({ id: event.payload.id, external: event.payload.external, pr: event.message?.labels.pr })
           },

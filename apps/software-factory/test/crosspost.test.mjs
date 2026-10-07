@@ -38,10 +38,9 @@ function harness({ ref = "pi/2326", source = slackSource } = {}) {
   return { requests, labels, replies, watcher, run: (event) => watcher.run({ event, board }) };
 }
 
-test("asks for receipts, so it sees where a PR root landed in Slack", () => {
+test("tails with --all, so it sees where a PR root landed in Slack", () => {
   const { watcher } = harness();
-  assert.equal(watcher.receipts, true);
-  assert.equal(watcher.tail, "dev --label pr");
+  assert.equal(watcher.tail, "dev --label pr --all");
 });
 
 test("a factory PR's Slack thread and its source's Slack thread link to each other", async () => {

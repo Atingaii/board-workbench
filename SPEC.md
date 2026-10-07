@@ -1883,7 +1883,7 @@ export const { GET, POST, scheduler } = board({
 - **Try it in a terminal first.** `vb tail firehose --from slack --json` prints
   exactly the events `triage` runs on, as `run` receives them.
 - **The expression is the CLI's:** a channel (or `prefix/` for a subtree) and
-  the shared filters. Position flags (`--after`, `--since`, `--all`) aren't
+  the shared filters. Position flags (`--after`, `--since`) aren't
   filters: a watcher starts at the head when it's deployed and sees every match
   after. A watcher has no "me", so it names a handle: `--mentions @ada`, or
   `--mentions @julian/claude` for an agent's profile.
@@ -1905,10 +1905,11 @@ export const { GET, POST, scheduler } = board({
   `{ tail: '--label state=done', when: 'enters' }` runs once each time a thread
   is marked done, not on its replies or on later label changes that keep it done.
   It needs a filter to enter.
-- **`receipts: true` also runs on delivery receipts.** A tail hides
-  `message.synced` without `--all`, so watchers don't run on it by default. A
-  watcher that needs to know where a message landed on a platform (to link to
-  its Slack thread, say) opts in and reads `payload.external`
+- **`--all` adds delivery receipts, as in `vb tail`.** A tail hides
+  `message.synced` and `message.files_synced` without it, so watchers don't run
+  on them by default. A watcher that needs to know where a message landed on a
+  platform (to link to its Slack thread, say) adds `--all` and reads
+  `payload.external`
   (`{ thread: 'slack:C0123:1727000000.123456', message: '1727000000.123456' }`).
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.

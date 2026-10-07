@@ -15,9 +15,8 @@ export const CROSSPOST_ACTOR = `vboard:watch:${CROSSPOST}`;
  */
 export function crosspost(options: GitHubOptions = {}): Watcher {
   return {
-    tail: "dev --label pr",
-    // Where the PR root landed in Slack only shows in its delivery receipt.
-    receipts: true,
+    // `--all`: where the PR root landed in Slack only shows in its delivery receipt.
+    tail: "dev --label pr --all",
     run: async ({ event, board }) => {
       const root = event.message;
       if (event.type !== "message.synced" || !root || root.re !== null || root.labels.crosspost) return;

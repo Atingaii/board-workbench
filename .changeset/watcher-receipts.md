@@ -2,4 +2,4 @@
 "vboard": minor
 ---
 
-Watchers can opt into delivery receipts with `receipts: true`: they also run on `message.synced`, whose `payload.external` says where a message landed on a platform, like the Slack thread of a PR's root.
+A watcher's tail can take `--all`, as `vb tail` does: it also runs on delivery receipts, and `message.synced`, whose `payload.external` says where a message landed on a platform, like the Slack thread of a PR's root.
