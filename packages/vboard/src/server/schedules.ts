@@ -1,3 +1,4 @@
+import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
 import type { ScheduleBodyOutput, ScheduleView, SchedulesQueryOutput } from '../api/routes.ts'
 import { duration } from '../client/client.ts'
@@ -18,6 +19,8 @@ import { deploymentIdentity, writePost, type Identity, type WriteContext } from 
 export const MAX_HOP_MS = 5 * 86_400_000
 /** The shortest repeat, so a typo can't flood a thread. */
 export const MIN_EVERY_MS = 60_000
+/** How far out a schedule reaches: its first send, stop, and repeat. Keeps every time a real date. */
+export const MAX_AHEAD_MS = 366 * 86_400_000
 /** A timer that fires this early just waits again; any closer counts as on time. */
 const EARLY_MS = 1000
 
@@ -172,22 +175,21 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         return
       }
     }
-    // A retry after the post landed finds it rather than posting twice.
-    const posted =
-      Object.values(messages.byId).find((m) => m.schedule?.id === id && m.schedule.n === n)?.id ??
-      (
-        await writePost(writes, {
-          identity: schedule.as,
-          ...(schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }),
-          text: schedule.text,
-          labels: schedule.labels,
-          noSync: schedule.noSync,
-          ...(schedule.attachments.length ? { attachments: schedule.attachments } : {}),
-          schedule: { id, n },
-          // Checked when it was scheduled; a handle that's ambiguous since stays plain text.
-          lenientMentions: true,
-        })
-      ).id
+    // A retry after the post landed gets the same event ID, so A2 hands back the message it already posted.
+    const posted = (
+      await writePost(writes, {
+        identity: schedule.as,
+        id: await idempotentId('vboard-schedule', String(id), String(n)),
+        ...(schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }),
+        text: schedule.text,
+        labels: schedule.labels,
+        noSync: schedule.noSync,
+        ...(schedule.attachments.length ? { attachments: schedule.attachments } : {}),
+        schedule: { id, n },
+        // Checked when it was scheduled; a handle that's ambiguous since stays plain text.
+        lenientMentions: true,
+      })
+    ).id
     const next = nextSend(schedule, n, at, Date.now())
     await ctx.session.append('fired', { type: 'schedule.fired', payload: { id, n, message: posted, next } })
     if (next !== null) await arm(ctx, 'next', id, n + 1, next)
@@ -244,10 +246,13 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       const now = Date.now()
       const every = body.every === undefined ? null : duration(body.every)
       if (every !== null && every < MIN_EVERY_MS) throw badRequest('`every` is at least 1m')
+      if (every !== null && every > MAX_AHEAD_MS) throw badRequest('`every` is at most a year')
       const first = body.at !== undefined ? Date.parse(body.at) : now + duration(body.in ?? body.every!)
       if (first < now - 60_000) throw badRequest('`at` is in the past')
       const until = body.until !== undefined ? Date.parse(body.until) : body.for !== undefined ? first + duration(body.for) : null
       if (until !== null && until < first) throw badRequest('the schedule stops before its first send')
+      if (first > now + MAX_AHEAD_MS || (until !== null && until > now + MAX_AHEAD_MS))
+        throw badRequest('a schedule reaches at most a year out: its first send and its stop')
 
       // Mentions fail now, where the person scheduling sees it, not at send time.
       const { state: known } = await writes.session.state(actorsReducer)

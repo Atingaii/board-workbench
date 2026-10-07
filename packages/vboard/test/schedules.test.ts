@@ -137,6 +137,11 @@ describe('scheduled messages', () => {
     expect(await refused({ at: '2020-01-01T00:00:00Z' })).toContain('in the past')
     expect(await refused({ every: '1h', times: 2, for: '1d' })).toContain('pick one stop')
     expect(await refused({ in: 'tomorrow' })).toContain('durations look like')
+    // Times past what a Date holds would be stored and then break every listing.
+    expect(await refused({ in: '100000001d' })).toContain('at most a year out')
+    expect(await refused({ in: '1m', every: '1h', for: '100000001d' })).toContain('at most a year out')
+    expect(await refused({ every: '100000001d' })).toContain('at most a year')
+    expect((await julian('GET', '/schedules?all=1')).status).toBe(200)
     expect(await refused({ in: '1h', text: 'hey @nobody' })).toContain('unknown mention @nobody')
 
     const plain = caller(testBoard().fetch, await personToken())
