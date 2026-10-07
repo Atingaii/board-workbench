@@ -47,7 +47,12 @@ export class UnreadableError extends Error {
 }
 
 export type ProviderFile = { data: Buffer; filename: string; mimeType?: string }
-export type ProviderPost = { markdown: string; files?: ProviderFile[] }
+/**
+ * Who a post is from, for a platform that can show it as the sender (Slack's per-message
+ * username and icon): `name` is the label the text opens with (`**name**: …`).
+ */
+export type ProviderSender = { name: string; avatar: string | null }
+export type ProviderPost = { markdown: string; files?: ProviderFile[]; as?: ProviderSender }
 export type ProviderDelivery = { thread: string; message: string; files?: string[] }
 export type ProviderOptions = {
   platform: string
