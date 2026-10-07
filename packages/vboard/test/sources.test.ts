@@ -7,6 +7,7 @@ import { githubActions } from '../src/server/auth.ts'
 
 const ROOT = '1791389583.493629'
 const REPLY = '1791393976.415219'
+const AGENT = '1791393999.000001'
 const PERMALINK = `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}?thread_ts=${ROOT}&cid=CKIT`
 
 type Channel = { id: string; name: string; is_member: boolean; is_private?: boolean; is_ext_shared?: boolean }
@@ -30,8 +31,9 @@ function setup() {
     ? { messages: [{ ts: REPLY, bot_profile: { name: 'pi' }, text: 'nice', thread_ts: ROOT }], has_more: false }
     : {
         messages: [
-          { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 1, thread_ts: ROOT },
+          { ts: ROOT, user: 'U_ADA', text: 'kit maps slack users to vercel ids', reply_count: 2, thread_ts: ROOT },
           { ts: REPLY, bot_profile: { name: 'pi' }, text: 'nice', thread_ts: ROOT },
+          { ts: AGENT, bot_profile: { name: 'vboard' }, username: 'clever-lemur via vboard-factory', text: 'on it', thread_ts: ROOT },
         ],
         has_more: false,
       })
@@ -87,7 +89,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     const { body } = await read(julian, PERMALINK)
     expect(replies).toHaveBeenCalledWith({ channel: 'CKIT', ts: ROOT, limit: 50 })
     expect(body.thread).toBe(ROOT)
-    expect(body.messages.map((m: { author: string; text: string }) => `${m.author}: ${m.text}`)).toEqual(['Ada Lovelace: kit maps slack users to vercel ids', 'pi: nice'])
+    expect(body.messages.map((m: { author: string; text: string }) => `${m.author}: ${m.text}`)).toEqual(['Ada Lovelace: kit maps slack users to vercel ids', 'pi: nice', 'clever-lemur via vboard-factory: on it'])
     expect((await read(julian, `CKIT:${ROOT}`)).body.thread).toBe(ROOT)
   })
 
@@ -97,7 +99,7 @@ describe('reading a platform on demand (vb sources <key> read)', () => {
     for (const target of [`CKIT:${REPLY}`, `https://vercel.slack.com/archives/CKIT/p${REPLY.replace('.', '')}`]) {
       const { body } = await read(julian, target)
       expect(body.thread).toBe(ROOT)
-      expect(body.messages.map((m: { id: string }) => m.id)).toEqual([ROOT, REPLY])
+      expect(body.messages.map((m: { id: string }) => m.id)).toEqual([ROOT, REPLY, AGENT])
     }
     expect(replies).toHaveBeenLastCalledWith({ channel: 'CKIT', ts: ROOT, limit: 50 })
   })
