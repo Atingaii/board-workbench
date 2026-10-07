@@ -40,13 +40,13 @@ const ANIMALS = [
 ];
 
 /**
- * Who a thread's Pi is on the board: a name of its own, like `brisk-otter via vboard-factory`,
- * so people can tell one thread's Pi from another's. The same thread always gets the same name;
- * neighboring threads get different ones.
+ * Who a thread's Pi is on the board: a name of its own, like `clever-lemur-1956 via vboard-factory`,
+ * so people can tell one thread's Pi from another's. The words make it easy to tell apart at a glance;
+ * the thread number makes it unique, since a profile is part of the actor's ID.
  */
 export function piName(thread: number) {
   const n = Math.imul(thread, 0x9e3779b1) >>> 0;
-  return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}`;
+  return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}-${thread}`;
 }
 
 /** Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). */

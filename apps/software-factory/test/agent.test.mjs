@@ -80,11 +80,16 @@ test("review: the review reaches the board on its own, so the board reply doesn'
 
 test("piName: each thread's Pi has a name of its own, the same every time", () => {
   assert.equal(piName(1956), piName(1956));
-  assert.match(piName(1956), /^[a-z]+-[a-z]+$/);
-  // A valid board profile: starts with a letter, up to 32 letters, numbers, and hyphens.
-  for (let t = 1; t < 5000; t++) assert.match(piName(t), /^[A-Za-z][A-Za-z0-9-]{0,31}$/);
-  const nearby = new Set(Array.from({ length: 50 }, (_, i) => piName(1900 + i)));
-  assert.ok(nearby.size >= 45, `only ${nearby.size} names for 50 neighboring threads`);
+  assert.match(piName(1956), /^[a-z]+-[a-z]+-1956$/);
+  const names = new Set();
+  for (let t = 1; t <= 100_000; t++) {
+    const name = piName(t);
+    // A valid board profile: starts with a letter, up to 32 letters, numbers, and hyphens.
+    if (t % 997 === 0) assert.match(name, /^[A-Za-z][A-Za-z0-9-]{0,31}$/);
+    names.add(name);
+  }
+  assert.equal(names.size, 100_000);
+  assert.ok(piName(99_999_999).length <= 32);
 });
 
 test("byPi: the thread's own Pi, by its name or the old `pi`, and no other thread's", () => {
