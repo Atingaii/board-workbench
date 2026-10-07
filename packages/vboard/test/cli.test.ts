@@ -134,6 +134,11 @@ describe('cli', () => {
         // Discovery, without a token yet.
         const root = await tmp('vboard-link-')
         expect(await vb(['link', at], {}, undefined, root), kind).toEqual({ code: 1, stdout: '', stderr: line })
+        expect(await vb(['whoami'], { VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at), VERCEL_AUTOMATION_BYPASS_SECRET: 'stale' }), kind).toEqual({
+          code: 1,
+          stdout: '',
+          stderr: `error: ${at} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against Project → Settings → Deployment Protection → Protection Bypass for Automation\n`,
+        })
         seen.length = 0
         const ok = await vb(['whoami', '--json'], { VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at), VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
         expect(ok, kind).toMatchObject({ code: 0, stderr: '' })

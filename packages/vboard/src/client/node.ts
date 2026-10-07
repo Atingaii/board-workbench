@@ -321,10 +321,13 @@ export { BoardError, type BoardClient, type ClientOptions, type ProfileOption } 
  * to another origin; a redirected POST comes back as its 3xx.
  */
 function guarded(url: string, doFetch: typeof fetch): typeof fetch {
+  const where = 'Project → Settings → Deployment Protection → Protection Bypass for Automation'
   const wall = (status: number) =>
     new BoardError(
       'protected',
-      `${url} is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)`,
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+        ? `${url} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against ${where}`
+        : `${url} is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (${where})`,
       status,
     )
   return async (input, init = {}) => {
