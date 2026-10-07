@@ -51,7 +51,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
   `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
-  reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
+  reproduces it, then opens a PR from a `pi/<thread>` branch (its body opens
+  with a line linking what triggered it: the Slack thread or GitHub issue, which
+  `taskMessage` puts in Pi's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
   `review-pi` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when

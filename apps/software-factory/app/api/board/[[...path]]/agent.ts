@@ -30,6 +30,32 @@ const piSession = (thread: number) => `thread-${thread}`;
 export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
   by.profile === "pi" && by.session === piSession(thread);
 
+/** The Slack workspace the factory syncs with. */
+const SLACK = "https://vercel.slack.com";
+
+/**
+ * Where a thread came from, as a link Pi can put in its PR: a Slack thread's permalink or a GitHub issue or PR.
+ * `origin.thread` is the sync target: `slack:C0123:1727000000.123456`, `github:owner/repo:issue:12`, `github:owner/repo:12`.
+ */
+export function sourceLink(origin: { thread: string } | null | undefined) {
+  const thread = origin?.thread ?? "";
+  const slack = /^slack:([A-Z0-9]+):(\d+)\.(\d+)$/.exec(thread);
+  if (slack) return { platform: "Slack", url: `${SLACK}/archives/${slack[1]}/p${slack[2]}${slack[3]}` };
+  const gh = /^github:([^/:]+\/[^/:]+):(issue:)?(\d+)$/.exec(thread);
+  if (gh) return { platform: "GitHub", url: `https://github.com/${gh[1]}/${gh[2] ? "issues" : "pull"}/${gh[3]}` };
+  return null;
+}
+
+/** The task message that starts Pi on a thread, with where it came from when it's synced. */
+export function taskMessage(
+  task: string,
+  thread: { id: number; origin: { thread: string } | null; author?: { name: string } | null },
+) {
+  const source = sourceLink(thread.origin);
+  const by = thread.author?.name ? ` by ${thread.author.name}` : "";
+  return `There's ${task} in board thread #${thread.id}${source ? `, posted${by} on ${source.platform}: ${source.url}` : ""}.`;
+}
+
 /** What Pi does in a thread: work a firehose thread (bug, feature, question), or review a pull request. */
 export type Task = "thread" | "review";
 
@@ -45,7 +71,8 @@ A person's :security: reaction on a PR is a request for a deepsec review of its 
 
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
-A thread's kind label (bug, feature, question) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create that links the thread, and you reply with the PR link.
+A thread's kind label (bug, feature, question) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
+Open the PR body with one line saying what triggered it, before anything else: "> 💬 From [<who>'s Slack thread](<link>) · board #<id>" for Slack, "> 🐙 From #<issue> on GitHub · board #<id>" for a GitHub issue (with "Closes #<issue>" below when the PR fixes it), or "> From board #<id>" when the thread has no source. Your task message gives the source link and who posted it.
 For a bug report:
 1. Reproduce it with a failing test.
 2. If you reproduced it, label the thread reproduced=yes, fix it, and open a PR.

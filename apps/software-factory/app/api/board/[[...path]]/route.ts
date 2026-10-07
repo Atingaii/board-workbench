@@ -10,7 +10,7 @@ import {
 } from "@vercel/connect/chat";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { byPi, tellPi } from "./agent";
+import { byPi, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
@@ -125,7 +125,7 @@ export const { GET, POST, scheduler } = board({
             task: "thread",
             thread: message.id,
             key: `kind-${kind}`,
-            message: `There's ${PI_TASKS[kind]} in board thread #${message.id}.`,
+            message: taskMessage(PI_TASKS[kind], message),
           });
         } else if (
           event.type === "message.posted" &&
