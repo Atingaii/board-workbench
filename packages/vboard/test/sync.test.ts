@@ -304,6 +304,30 @@ describe('sync', () => {
     error.mockRestore()
   })
 
+  it('uploads a text file Slack would call binary under a name it previews, and keeps its own name on the board', async () => {
+    const { board, s, webhook } = setup()
+    const token = await personToken()
+    const julian = caller(board.fetch, token)
+    const upload = async (name: string, type: string) => {
+      const response = await board.fetch(
+        new Request(`${BOARD_URL}/attachments`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': type, 'x-board-filename': name },
+          body: 'exit 0',
+        }),
+      )
+      return ((await response.json()) as { attachment: { id: string } }).attachment.id
+    }
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:1727.3', id: '1727.3', text: 'run deepsec', user: 'U1' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    const files = [await upload('deepsec.log', 'text/plain'), await upload('notes.md', 'text/markdown'), await upload('proof.png', 'image/png')]
+    const { body } = await julian('POST', '/messages', { re: root!.id, text: 'nothing found', attachments: files })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(JSON.parse(s.posts[1]!.text).files.map((f: { filename: string }) => f.filename)).toEqual(['deepsec.log.txt', 'notes.md', 'proof.png'])
+    expect(body.message.attachments.map((a: { name: string }) => a.name)).toEqual(['deepsec.log', 'notes.md', 'proof.png'])
+  })
+
   it('starts a Slack thread for a board root in a mirrored channel, then follows it', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
