@@ -457,9 +457,9 @@ export function createSyncEngine(options: {
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
     if (message.from) name = `${name} (${platformOf(message.from).platform})`
     const quoted = quote
-      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${displayText(quote.text).slice(0, 140).replace(/\n/g, ' ')}\n\n`
+      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${displayText(quote.text, quote.by.actor).slice(0, 140).replace(/\n/g, ' ')}\n\n`
       : ''
-    const body = platformOf(key).render(immutable({ message: { ...structuredClone(message), text: displayText(message.text) }, author: actor ? { ...actor } : null, label: name, target }))
+    const body = platformOf(key).render(immutable({ message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) }, author: actor ? { ...actor } : null, label: name, target }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     return { markdown: `${quoted}${textFor(platformOf(key), message, actors, body)}` }
   }

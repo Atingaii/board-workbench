@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { displayText, vercelDeployments } from '../src/contract/bots.ts'
+import { displayText as display, vercelDeployments, VERCEL_BOT } from '../src/contract/bots.ts'
 import { formatMessage } from '../src/cli/format.ts'
 import type { MessageView } from '../src/api/routes.ts'
 import { VERCEL_BUILDING, VERCEL_WITH_SKIPPED } from './vercel-fixtures.ts'
+
+const displayText = (text: string) => display(text, VERCEL_BOT)
 
 describe('known bot messages', () => {
   it('reads the deployments out of a Vercel for GitHub comment', () => {
@@ -39,6 +41,15 @@ describe('known bot messages', () => {
     expect(displayText('hello')).toBe('hello')
     const quoted = `look at this:\n${VERCEL_BUILDING}`
     expect(displayText(quoted)).toBe(quoted)
+  })
+
+  it('only reads Vercel comments that Vercel wrote', () => {
+    expect(display(VERCEL_BUILDING, 'github:user:42')).toBe(VERCEL_BUILDING)
+    expect(display(VERCEL_BUILDING, 'slack:user:U1')).toBe(VERCEL_BUILDING)
+  })
+
+  it('reads a comment with CRLF line endings', () => {
+    expect(displayText(VERCEL_WITH_SKIPPED.replace(/\n/g, '\r\n'))).toBe(displayText(VERCEL_WITH_SKIPPED))
   })
 
   it('shows the readable form in vb read, and the original in --json', () => {

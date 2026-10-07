@@ -50,7 +50,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
   }${labels(message)}`
-  const body = message.deleted ? `${pad}(message removed)` : indent(displayText(message.text), pad)
+  const body = message.deleted ? `${pad}(message removed)` : indent(displayText(message.text, message.by.actor), pad)
   const files = (message.attachments ?? []).map((a) => `${pad}📎 ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const reacted = reactions(message, options.names ?? new Map())
   const undelivered = Object.entries(message.undelivered ?? {}).map(([target, error]) => `${pad}✗ didn't reach ${target}: ${error}`)
@@ -86,10 +86,10 @@ export function formatEvent(event: BoardEventView): string {
   switch (event.type) {
     case 'message.posted': {
       const files = (message.attachments ?? []).map((a) => `  📎 ${a.name}`).join('')
-      return `#${message.id}  ${where}  ${who}: ${displayText(message.text)}${files}`
+      return `#${message.id}  ${where}  ${who}: ${displayText(message.text, message.by.actor)}${files}`
     }
     case 'message.edited':
-      return `#${message.id}  ${where}  ${who} (edited): ${displayText(message.text)}`
+      return `#${message.id}  ${where}  ${who} (edited): ${displayText(message.text, message.by.actor)}`
     case 'message.deleted':
       return `#${message.id}  ${where}  (message removed)`
     case 'reaction.added':

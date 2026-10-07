@@ -7,11 +7,12 @@ import { slack } from '../src/sync/slack.ts'
  * The real Slack adapter, single-workspace like the software factory (an async
  * bot token, as Vercel Connect gives it), downloading through a fake transport.
  */
-function slackWith(served: Uint8Array) {
+function slackWith(served: Uint8Array, extra: Record<string, unknown> = {}) {
   const requests: { url: string; authorization: string | undefined }[] = []
   const adapter = createSlackAdapter({
     signingSecret: 'secret',
     botToken: async () => 'xoxb-test',
+    ...extra,
     fileTransport: async (url: URL, _signal: AbortSignal, headers: Record<string, string>) => {
       requests.push({ url: url.href, authorization: headers.authorization })
       return Object.assign(Readable.from([Buffer.from(served)]), {
@@ -33,5 +34,12 @@ describe('files from Slack', () => {
     const data = await provider.fetchFile({ type: 'image', name: 'shot.png', mimeType: 'image/png', size: 4, url, fetchMetadata: { url, teamId: 'T1' } })
     expect(data && [...data]).toEqual([...png])
     expect(requests).toEqual([{ url, authorization: 'Bearer xoxb-test' }])
+  })
+
+  it('keeps the team on a file in an app that also installs through OAuth, so each team uses its own token', async () => {
+    const { provider, requests } = slackWith(new Uint8Array([1]), { clientId: 'client', clientSecret: 'shh' })
+    const url = 'https://files.slack.com/files-pri/T2-F2/other.png'
+    await expect(provider.fetchFile({ type: 'image', name: 'other.png', url, fetchMetadata: { url, teamId: 'T2' } })).rejects.toThrow(/Installation not found for team T2/)
+    expect(requests).toEqual([]) // never sent with the default bot token
   })
 })

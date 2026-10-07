@@ -15,8 +15,11 @@ export type VercelDeployment = {
   skipped: boolean
 }
 
+/** Vercel for GitHub's bot account (`vercel[bot]`), as the board names it. */
+export const VERCEL_BOT = 'github:user:35613825'
+
 // `[vc]: #<hash>:<base64 JSON>`, the first line of every comment Vercel for GitHub writes.
-const VERCEL_MARKER = /^\[vc\]: #\S*\n/
+const VERCEL_MARKER = /^\[vc\]: #\S*\r?\n/
 const LINK = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
 const STATUS = /!\[([^\]]+)\]\(https:\/\/vercel\.com\/static\/status\/[^)]+\)\s*(?:\[[^\]]*\]\((https?:\/\/[^)\s]+)\))?/
 
@@ -26,9 +29,9 @@ export function vercelDeployments(text: string): VercelDeployment[] | null {
   const skippedAt = text.search(/<details><summary>\d+ Skipped Deployments?<\/summary>/)
   const deployments: VercelDeployment[] = []
   let offset = 0
-  for (const line of text.split('\n')) {
+  for (const line of text.split(/\r?\n/)) {
     const at = offset
-    offset += line.length + 1
+    offset = text.indexOf('\n', offset) + 1 || text.length
     if (!line.startsWith('|') || /^\|\s*(Project|Name)\s*\|/.test(line) || /^\|\s*:?-/.test(line)) continue
     const cells = line.split('|').slice(1, -1).map((cell) => cell.trim())
     if (cells.length < 2) continue
@@ -81,8 +84,12 @@ export function formatVercelDeployments(deployments: VercelDeployment[]): string
     .join('\n')
 }
 
-/** A message's text as people should see it: known bot messages in their readable form, anything else as is. */
-export function displayText(text: string): string {
-  const deployments = vercelDeployments(text)
+/**
+ * A message's text as people should see it: known bot messages in their
+ * readable form, anything else as is. Only the bot itself gets that form, so
+ * no one can hide a message's text behind a look-alike table.
+ */
+export function displayText(text: string, actor: string): string {
+  const deployments = actor === VERCEL_BOT ? vercelDeployments(text) : null
   return deployments ? `**▲ Vercel**\n${formatVercelDeployments(deployments)}` : text
 }
