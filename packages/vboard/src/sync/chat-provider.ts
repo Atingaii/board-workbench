@@ -36,6 +36,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   avatar?(message: ChatMessage): Promise<string | null>
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
+  /** Edits and deletes in a webhook that the adapter doesn't emit itself, as the adapter would have. */
+  missed?(headers: Headers, body: string): ChatInput[]
   uploadFiles?(thread: string, files: FileUpload[]): Promise<FileDelivery>
   /** The name a file is uploaded under, when the platform reads more into a name than the board does. */
   uploadName?(file: ProviderFile): string
@@ -149,7 +151,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
 
   private async receiveRequest(key: string, request: Request, emit: Receive): Promise<Response> {
-    const body = this.transport.intercept ? await request.clone().text() : null
+    const body = this.transport.intercept || this.transport.missed ? await request.clone().text() : null
     const tasks: Promise<unknown>[] = []
     const webhooks = this.chat.webhooks as Record<string, (request: Request, options: { waitUntil(task: Promise<unknown>): void }) => Promise<Response>>
     const response = await webhooks[this.transport.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
@@ -157,8 +159,9 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     while (tasks.length) results.push(...await Promise.allSettled(tasks.splice(0)))
     const failed = results.find((result) => result.status === 'rejected')
     if (failed) throw failed.reason
-    if (response.ok && body !== null && this.transport.intercept) {
-      for (const received of this.transport.intercept(key, request.headers, body)) await emit(received)
+    if (response.ok && body !== null) {
+      for (const input of this.transport.missed?.(request.headers, body) ?? []) await emit(await this.normalize(key, input))
+      for (const received of this.transport.intercept?.(key, request.headers, body) ?? []) await emit(received)
     }
     return response
   }
