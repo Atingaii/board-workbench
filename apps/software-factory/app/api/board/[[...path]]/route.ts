@@ -12,18 +12,10 @@ import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
+import { isPiKind, PI_KINDS, piTask } from "./kinds";
 import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
 import { renderForSlack } from "./render";
-
-/** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
-const PI_TASKS = {
-  bug: "a bug report",
-  feature: "a feature request",
-  question: "a question",
-} as const;
-const PI_KINDS = Object.keys(PI_TASKS) as (keyof typeof PI_TASKS)[];
-const isPiKind = (kind: string): kind is keyof typeof PI_TASKS => kind in PI_TASKS;
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
@@ -109,7 +101,7 @@ export const { GET, POST, scheduler } = board({
         }
       },
     },
-    // Pi watches every thread worth acting on (bugs, features, questions; not noise): it
+    // Pi watches every thread worth acting on (bugs, features, questions, tasks; not noise): it
     // gets the thread once triage gives it one of those kinds, is told again if the kind
     // changes, and hears when anyone else replies, then reads what's new itself.
     pi: {
@@ -125,7 +117,7 @@ export const { GET, POST, scheduler } = board({
             task: "thread",
             thread: message.id,
             key: `kind-${kind}`,
-            message: taskMessage(PI_TASKS[kind], message),
+            message: taskMessage(piTask(kind), message),
           });
         } else if (
           event.type === "message.posted" &&
