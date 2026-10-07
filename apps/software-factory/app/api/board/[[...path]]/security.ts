@@ -1,8 +1,14 @@
 import type { Watcher } from "vboard";
 import type { tellPi } from "./agent";
 
-/** Long enough for deepsec at its maximum thinking on a PR's diff, short of the sandbox's idle timeout. */
+/** Long enough for deepsec at its maximum thinking on a PR's diff, inside the 45m each Pi turn gets (`SANDBOX_MS` in agent.ts). */
 const DEEPSEC_TIMEOUT = "30m";
+
+/** Who the watcher's own replies are by on the board. */
+const ACTOR = "vboard:watch:security";
+
+/** Whether a message is this watcher's reply, which no one needs Pi to answer. */
+export const fromSecurity = (by: { actor: string }) => by.actor === ACTOR;
 
 /**
  * A person's :security: reaction on a PR thread's root (from Slack) has Pi run deepsec on the
@@ -36,10 +42,12 @@ export function security(options: { tellPi: typeof tellPi }): Watcher {
         message: [
           `${requester} (${event.payload.by.actor}) reacted with :security: to request a deepsec security review of ${pr} in board thread #${root.id}.`,
           `1. Check out the PR (gh pr checkout ${number} in your clone of basehub-ai/vboard), and git fetch origin so its base branch is current. Install Claude Code if it's missing (command -v claude || npm i -g @anthropic-ai/claude-code); deepsec uses it as its agent.`,
-          `2. From the repo root, run: timeout ${DEEPSEC_TIMEOUT} env CLAUDE_CODE_EXECUTABLE=claude npx -y deepsec process --diff origin/<base> --comment-out deepsec.md > deepsec.log 2>&1, where <base> is the PR's base branch (gh pr view ${number} --json baseRefName). Note its exit code.`,
-          `3. Exit 0 (no new findings): reply that deepsec found nothing, attach deepsec.log, and react on the root with vb react ${root.id} secure.`,
+          `2. Make a fresh worktree outside the clone and work there: d=$(mktemp -d) && git worktree add --detach "$d/pr" HEAD && cd "$d/pr". deepsec keeps state in data/ and only fails on net-new findings, so a run in a reused checkout can come back clean with findings still there. This also keeps its files out of the clone.`,
+          `3. In "$d/pr", run: timeout ${DEEPSEC_TIMEOUT} env CLAUDE_CODE_EXECUTABLE=claude npx -y deepsec process --diff origin/<base> --comment-out deepsec.md > deepsec.log 2>&1, where <base> is the PR's base branch (gh pr view ${number} --json baseRefName). Note its exit code.`,
+          `4. Exit 0 (no new findings): reply that deepsec found nothing, attach deepsec.log, and react on the root with vb react ${root.id} secure.`,
           "   Exit 1 (findings): reply with a short line per finding (file, issue, severity), attach deepsec.md, and don't react :secure:.",
-          "   Any other exit (including 124, the timeout): the run failed. Say why, from deepsec.log, and don't react :secure:.",
+          "   Any other exit is a failed run: 2 (deepsec needs input), 3 (it hit its cost cap), 124 (the timeout), or anything else. Say why, from deepsec.log, and don't react :secure:.",
+          `5. Back in your clone, git worktree remove --force "$d/pr".`,
           "Mention the requester in your reply. Don't change the PR's code for this unless someone asks.",
         ].join("\n"),
       });

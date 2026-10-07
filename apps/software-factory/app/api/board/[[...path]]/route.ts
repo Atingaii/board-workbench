@@ -12,7 +12,7 @@ import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, tellPi } from "./agent";
 import { classifyThread } from "./classify";
-import { security } from "./security";
+import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
 import { renderForSlack } from "./render";
 
@@ -130,7 +130,8 @@ export const { GET, POST, scheduler } = board({
         } else if (
           event.type === "message.posted" &&
           message.re !== null &&
-          !byPi(message.re, message.by)
+          !byPi(message.re, message.by) &&
+          !fromSecurity(message.by)
         ) {
           await tellPi({
             task: "thread",
