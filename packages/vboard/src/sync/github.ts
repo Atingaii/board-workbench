@@ -1,5 +1,4 @@
-import { ChatSyncProvider, type ChatInput } from './chat-provider.ts'
-import { VERCEL_BOT, vercelDeployments, type VercelDeployment } from '../contract/bots.ts'
+import { ChatSyncProvider } from './chat-provider.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
 import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
@@ -67,23 +66,6 @@ function tagsOf(item: Item): Record<string, string> {
     ...(item.assignees ?? []).map((user) => tagOf('assignee', user.login)),
   ]
   return Object.fromEntries(tags.filter((tag) => tag !== null))
-}
-
-/**
- * Vercel for GitHub's deployment comment, as labels on the PR's root:
- * `deploy.<project>=<status>` and `preview.<project>=<url>`. Skipped
- * deployments are left out. The comment itself isn't imported: Vercel edits it
- * as deployments move on, and each edit updates the labels instead.
- */
-function deploymentLabels(deployments: VercelDeployment[]): Record<string, string> {
-  const labels: Record<string, string> = {}
-  for (const deployment of deployments) {
-    const project = slug(deployment.project)
-    if (!project || deployment.skipped) continue
-    labels[`deploy.${project}`.slice(0, 64)] = deployment.status.toLowerCase().slice(0, 256)
-    if (deployment.previewUrl) labels[`preview.${project}`.slice(0, 64)] = deployment.previewUrl.slice(0, 256)
-  }
-  return labels
 }
 
 /** Actions that change only labels and assignees, which every PR and issue event reconciles. */
@@ -189,7 +171,6 @@ const NativeItem = z.looseObject({
 })
 export const GitHubPayload = z.looseObject({ pull_request: NativeItem.optional(), issue: NativeItem.optional(), action: z.string().optional() })
 const prTypes = ['pr.opened', 'pr.ready', 'pr.draft', 'pr.reopened', 'pr.closed', 'pr.labeled', 'pr.unlabeled', 'pr.assigned', 'pr.unassigned', 'review.submitted', 'review.dismissed'] as const
-
 const issueTypes = ['issue.opened', 'issue.closed', 'issue.reopened', 'issue.labeled', 'issue.unlabeled', 'issue.assigned', 'issue.unassigned'] as const
 const [messageEvent, editedEvent, deletedEvent, reactionEvent, lifecycleEvent] = eventSchema('github', 'comment').options
 const githubFields = { subject: GitHubSubject, raw: GitHubPayload }
@@ -199,13 +180,9 @@ const prLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
 const issueLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({
   type: z.literal(type), subject: GitHubSubject.extend({ type: z.literal('issue') }), raw: GitHubPayload.extend({ issue: NativeItem }),
 })
-// A Vercel deployment comment, as labels: its payload is the comment's (`issue_comment`), not the PR's.
-const deployed = lifecycleEvent.extend({
-  type: z.literal('pr.deployed'), subject: GitHubSubject.extend({ type: z.literal('pull_request') }), raw: GitHubPayload,
-})
 export const GitHubEvent = z.discriminatedUnion('type', [
   messageEvent.extend(githubFields), editedEvent.extend(githubFields), deletedEvent.extend(githubFields), reactionEvent.extend(githubFields),
-  ...prTypes.map(prLifecycle), ...issueTypes.map(issueLifecycle), deployed,
+  ...prTypes.map(prLifecycle), ...issueTypes.map(issueLifecycle),
 ])
 export type GitHubEvent = z.infer<typeof GitHubEvent>
 
@@ -311,33 +288,6 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
       const { pulls, issues } = typeof value === 'object' && !('run' in value) ? value : { pulls: value, issues: value }
       if (pulls) this.map(`${repo}:pulls`, pulls)
       if (issues) this.map(`${repo}:issues`, issues)
-    }
-  }
-
-  /** Vercel for GitHub's deployment comment becomes labels on the PR root, not a reply. */
-  protected override async normalize(key: string, input: ChatInput): Promise<ReceivedEvent> {
-    const received = await super.normalize(key, input)
-    const event = received.event
-    if ((event.kind !== 'message' && event.kind !== 'edited') || event.author.id !== VERCEL_BOT) return received
-    const deployments = vercelDeployments(event.text)
-    if (!deployments) return received
-    return {
-      ...received,
-      event: {
-        kind: 'lifecycle',
-        channel: event.channel,
-        thread: event.thread,
-        type: 'pr.deployed',
-        title: '',
-        url: null,
-        labels: deploymentLabels(deployments),
-        unset: [],
-        // A project that stops appearing, or loses its preview, drops its labels.
-        owns: ['deploy.', 'preview.'],
-        reply: null,
-        createRoot: false,
-        author: event.author,
-      },
     }
   }
 

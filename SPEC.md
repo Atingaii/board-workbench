@@ -401,18 +401,9 @@ board({
   GitHub's own (tables and all), and Slack's through Chat SDK's parser. It posts
   markdown back, and each adapter converts it, so `**bold**` arrives in Slack as
   bold. `vb inspect` renders it, dropping raw HTML.
-- **Vercel's deployment comment becomes labels, not a reply.** A Vercel for
-  GitHub deployment comment (written by `vercel[bot]`, `github:user:35613825`,
-  and starting with `[vc]: #…`) isn't imported. The GitHub provider turns it
-  into a `pr.deployed` event that labels the PR's root, per project:
-  `deploy.<project>=<status>` (`building`, `ready`, `error`, …) and
-  `preview.<project>=<url>`. Skipped deployments get no label. Vercel edits its
-  comment as deployments move on, and each edit updates the labels; a project
-  that stops appearing drops its labels. So a thread carries no deploy noise,
-  nothing is mirrored to Slack, and an agent finds a PR's preview with
-  `vb read --label preview.<project>`.
-- **Known bot messages show in a readable form.** Vercel comments imported
-  before that (and any a callback imports itself) show as one line per
+- **Known bot messages show in a readable form.** A Vercel for GitHub
+  deployment comment (written by `vercel[bot]`, `github:user:35613825`, and
+  starting with `[vc]: #…`) shows as one line per
   deployment: status, project, preview link, and when it was updated. That form
   appears in `vb read`, `vb tail`, and the copies sync posts to other platforms
   (`src/contract/bots.ts`). `vb inspect` keeps rendering Vercel's own table,
