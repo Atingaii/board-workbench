@@ -419,6 +419,21 @@ describe('sync', () => {
     expect(partial).toMatchObject({ status: 200, body: { targets: ['github:basehub-ai/vboard:12'] } })
   })
 
+  it('passes a typing status through to Slack, which shows it instead of "Typing…"', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:200', id: '200', text: 'bug', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+
+    await julian('POST', `/messages/${root!.id}/typing`, { status: '  running tests…  ' })
+    await julian('POST', `/messages/${root!.id}/typing`, {})
+    expect(s.typing).toEqual(['slack:C1:200', 'slack:C1:200'])
+    expect(s.statuses).toEqual(['running tests…', undefined])
+
+    expect((await julian('POST', `/messages/${root!.id}/typing`, { status: 'x'.repeat(101) })).status).toBe(400)
+  })
+
   it('runs function mappings for connected conversations and delegates normal imports', async () => {
     const seen: string[] = []
     const { board, s, webhook } = setup({

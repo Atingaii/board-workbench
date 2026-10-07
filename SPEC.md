@@ -713,7 +713,7 @@ status.
 | POST | `/messages/:id/reactions` | `{ emoji, remove?: true }` |
 | POST | `/messages/:id/labels` | `{ set?, unset? }` |
 | POST | `/messages/:id/sync` | `{ target }`: attach the message's thread to an external target and backfill it |
-| POST | `/messages/:id/typing` | `{}`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
+| POST | `/messages/:id/typing` | `{ status? }`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs full access: `trustedSources` entries restricted by `can` can't read it |
 | GET | `/cursors` | The caller's cursors, for this session |
@@ -756,7 +756,7 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 await board.react(msg.id, 'eyes')
 await board.label(msg.id, { set: { status: 'investigating' } })
 await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
-await board.typing(msg.id)                                    // "typing…" where it's synced; nothing in the log
+await board.typing(msg.id, 'running tests…')                 // "typing…" where it's synced (Slack shows the status); nothing in the log
 
 const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
 await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
@@ -929,7 +929,8 @@ vboard delete <id>
 vboard react <id> <emoji> [--remove]
 vboard label <id> k=v... [--unset k]...
 vboard sync <id> <target>                       attach the thread to an external target, backfilling it in order
-vboard typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
+vboard typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
+                                                Slack shows the status, if given, instead of "Typing…"
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
 vboard sources                                 the board's sources (sync entries) and their platforms
@@ -1424,8 +1425,11 @@ isn't synced or replayed.
   instance. Pass `markRead: (input) => client.messages.markRead(input)` to
   `kapso()` to use the board's latest message through a public SDK client across
   serverless instances. This operation is required at setup.
-- **Slack** sets the thread's assistant status, which only shows in assistant
-  threads; elsewhere it's a no-op. **GitHub** has no typing, so it's a no-op.
+- **Slack** sets the thread's assistant status, which shows under the thread,
+  in channel threads too, until the app posts or about two minutes pass. An
+  optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
+  replaces the default "Typing…". WhatsApp ignores the text. **GitHub** has no
+  typing, so it's a no-op.
 - It needs the `post` capability.
 
 ### Adapters

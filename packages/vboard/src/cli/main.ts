@@ -58,7 +58,8 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   delete <id>
   react <id> <emoji> [--remove]
   label <id> k=v... [--unset k]...
-  typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
+  typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
+                                           Slack shows the status, if given, instead of "Typing…"
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
   sources                                  the board's sources (its sync entries: slack, github, …)
@@ -644,7 +645,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'typing': {
       const id = messageId(args[0])
-      const targets = await client().typing(id)
+      const status = args.slice(1).join(' ').trim()
+      const targets = await client().typing(id, status || undefined)
       if (flags.json) printJson({ targets })
       return 0
     }

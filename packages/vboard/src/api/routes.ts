@@ -150,7 +150,8 @@ export const SourceReadQuery = z.object({
 
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
-export const TypingBody = z.object({}).optional()
+/** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */
+export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
 export const LabelBody = z
   .object({ set: Labels.optional(), unset: z.array(LabelKey).optional() })

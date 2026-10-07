@@ -103,7 +103,7 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   async edit(_thread: string, _message: string, _body: ProviderPost): Promise<void> {}
   async delete(_thread: string, _message: string): Promise<void> {}
   async react(_thread: string, _message: string, _emoji: string, _added: boolean): Promise<void> {}
-  async startTyping(_thread: string, _latest: string | null): Promise<void> {}
+  async startTyping(_thread: string, _latest: string | null, _status?: string): Promise<void> {}
   async deleteFiles(_ids: string[]): Promise<void> {}
   refusesFiles(_error: unknown): boolean { return false }
   async uploadFiles(_thread: string, _files: ProviderFile[]): Promise<FileDelivery> {

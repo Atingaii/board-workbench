@@ -790,9 +790,10 @@ export function createSyncEngine(options: {
   /**
    * Shows typing in every platform thread a board thread is synced to. It's
    * ephemeral and best-effort: nothing goes in the log, and a platform that
-   * fails is skipped. Answers the external threads that took it.
+   * fails is skipped. Answers the external threads that took it. `status`
+   * replaces "Typing…" where the platform shows text (Slack).
    */
-  async function typing(thread: string): Promise<string[]> {
+  async function typing(thread: string, status?: string): Promise<string[]> {
     const { session } = bound()
     const [{ state: sync }, { state: messages }] = await Promise.all([session.state(syncReducer), session.state(messagesReducer)])
     const synced = sync.threads[thread]
@@ -809,7 +810,7 @@ export function createSyncEngine(options: {
             const origin = messages.byId[ids[i]!]
             if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
           }
-          await platform.startTyping(native(external), latest)
+          await platform.startTyping(native(external), latest, status)
           return external
         } catch (error) {
           console.warn(`[vboard] skipped typing on ${external}:`, describe(error))

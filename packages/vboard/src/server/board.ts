@@ -17,6 +17,7 @@ import {
   ScheduleBody,
   SchedulesQuery,
   SyncBody,
+  TypingBody,
   type Discovery,
   type TypingResult,
   type Me,
@@ -462,7 +463,8 @@ export function board(options: BoardOptions = {}) {
           const { state } = await session.state(messagesReducer)
           const message = state.byId[match.id!]
           if (!message || message.deleted) throw notFound(`message not found: #${match.id}`, 'message_not_found')
-          const body: TypingResult = { targets: engine ? await engine.typing(message.thread) : [] }
+          const { status } = TypingBody.parse(await readJson(request)) ?? {}
+          const body: TypingResult = { targets: engine ? await engine.typing(message.thread, status) : [] }
           return json(body)
         }
         case 'inbox': {

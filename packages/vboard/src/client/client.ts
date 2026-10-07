@@ -296,8 +296,10 @@ export function createBoardClient(options: ClientOptions) {
      * Shows typing in the platform threads the message's thread is synced to
      * (on WhatsApp, also marking the latest inbound message read). Ephemeral:
      * nothing goes in the log. Answers the external threads that took it.
+     * `status` replaces "Typing…" on Slack ("running tests…").
      */
-    typing: async (id: number) => (await call<TypingResult>('POST', `/messages/${id}/typing`, { body: {} })).targets,
+    typing: async (id: number, status?: string) =>
+      (await call<TypingResult>('POST', `/messages/${id}/typing`, { body: status ? { status } : {} })).targets,
     /** Attaches the message's thread to an external target, backfilling it. Attaching twice is a no-op. */
     sync: (id: number, target: string) =>
       call<{ target: string; attached: boolean }>('POST', `/messages/${id}/sync`, { body: { target } }),
