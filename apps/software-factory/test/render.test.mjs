@@ -10,6 +10,7 @@ const input = (message) => ({
     re: null,
     text: "PR #68: RFC: [Declared] actors\nhttps://github.com/basehub-ai/vboard/pull/68",
     labels: { pr: "basehub-ai/vboard#68", state: "open" },
+    by: { actor: "github:user:40034115" },
     ...message,
   },
 });
@@ -36,4 +37,10 @@ test("everything else keeps the default", () => {
   assert.equal(renderForSlack(input({ re: 68, text: "looks good" })), "**julianbenegas (github)**: looks good");
   const issue = input({ text: "Issue #6: Link identities\nhttps://github.com/x", labels: { issue: "x#6", state: "open" } });
   assert.equal(renderForSlack(issue), `**julianbenegas (github)**: ${issue.message.text}`);
+});
+
+test("crosspost links go without a label", () => {
+  const text = ":crosspost: [#105 Link threads](https://vercel.slack.com/archives/C0C6MNT9LLC/p1791405000000100)";
+  const message = { re: 2326, text, labels: {}, by: { actor: "vboard:watch:crosspost" } };
+  assert.equal(renderForSlack({ ...input(message), label: "crosspost" }), text);
 });

@@ -98,6 +98,12 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   Messages wait behind a running turn on a per-sandbox lock. "New activity"
   ones (`news-…`) piled up there wake Pi once, for the newest, since Pi reads
   what's new itself: a burst of replies costs one turn, not one each.
+- `crosspost` (`crosspost.ts`) links a factory PR's Slack thread and the Slack
+  thread it was built for, both ways, once the PR's root lands in Slack (its tail
+  has `--all`, for the delivery receipt that says where): the PR thread gets `:crosspost: From
+  <who>'s Slack thread`, the source thread gets `:crosspost: #N <title>`. Slack
+  shows them without a label, and they don't wake Pi or triage. The PR-thread
+  one reaches GitHub too, as a comment.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.
