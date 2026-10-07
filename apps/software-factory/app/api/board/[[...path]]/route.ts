@@ -12,6 +12,7 @@ import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, tellPi } from "./agent";
 import { classifyThread } from "./classify";
+import { security } from "./security";
 import { shipit } from "./shipit";
 
 /** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
@@ -73,6 +74,7 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
+    security: security({ tellPi }),
     merged: {
       tail: "--label pr --label state=merged",
       when: "enters",

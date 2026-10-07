@@ -35,7 +35,8 @@ const PRESENCE = `As soon as you've read a message from a person that you're abo
 When you reply to a person, mention them by the handle they wrote under (author.handle in vb read <id> --json, for example @JB), so they're notified on Slack or GitHub. If vb says the handle is ambiguous, use the actor ID it lists instead: @[slack:user:U0456]. Mention each person once, not in every line.`;
 
 const DIRECTION = `Your initial task is a starting point. People can redirect you in the thread at any time; follow their latest instructions even when they change the task, including fixing code, pushing changes, approving, marking a draft ready, merging, or closing a PR.
-A person's :shipit: reaction is a request to complete the merge. Inspect the PR, resolve the blockers you can, mark it ready if needed, and merge it when GitHub's checks and review requirements allow. Carry that intent through without requiring another reaction. If you need someone else's action, ask them in the thread and explain what's still blocking it.`;
+A person's :shipit: reaction is a request to complete the merge. Inspect the PR, resolve the blockers you can, mark it ready if needed, and merge it when GitHub's checks and review requirements allow. Carry that intent through without requiring another reaction. If you need someone else's action, ask them in the thread and explain what's still blocking it.
+A person's :security: reaction on a PR is a request for a deepsec review of its diff. React :secure: on the root only when deepsec exits 0.`;
 
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
