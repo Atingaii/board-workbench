@@ -126,7 +126,11 @@ test("runs deepsec in a fresh worktree outside the clone, so earlier findings ca
   const h = harness();
   await h.run();
   const m = h.notifications[0].message;
-  assert.ok(m.includes("rm -rf /tmp/deepsec-88 && git worktree add --detach /tmp/deepsec-88 HEAD"));
+  // rm -rf alone leaves a worktree an earlier run left behind registered, and git worktree add refuses the path.
+  assert.ok(m.includes("git worktree remove --force /tmp/deepsec-88 2>/dev/null; rm -rf /tmp/deepsec-88; git worktree prune && git worktree add --detach /tmp/deepsec-88 HEAD"));
+  // Pi's commands don't keep their cwd, so the files it attaches are named by full path.
+  assert.ok(m.includes("attach /tmp/deepsec-88/deepsec.log"));
+  assert.ok(m.includes("attach /tmp/deepsec-88/deepsec.md"));
   assert.ok(m.includes("only fails on net-new findings"));
   assert.ok(m.includes("git worktree remove --force /tmp/deepsec-88"));
   // Its data/, deepsec.md and deepsec.log never land in the clone, so a later git add -A can't commit them.
