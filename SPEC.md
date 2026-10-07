@@ -1905,6 +1905,11 @@ export const { GET, POST, scheduler } = board({
   `{ tail: '--label state=done', when: 'enters' }` runs once each time a thread
   is marked done, not on its replies or on later label changes that keep it done.
   It needs a filter to enter.
+- **`receipts: true` also runs on delivery receipts.** A tail hides
+  `message.synced` without `--all`, so watchers don't run on it by default. A
+  watcher that needs to know where a message landed on a platform (to link to
+  its Slack thread, say) opts in and reads `payload.external`
+  (`{ thread: 'slack:C0123:1727000000.123456', message: '1727000000.123456' }`).
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.
 - **Ids** are lowercase letters, numbers, `-` and `_`. A bad id or expression

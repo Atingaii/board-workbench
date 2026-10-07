@@ -17,6 +17,7 @@ import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
 import { autoland } from "./autoland";
 import { owner } from "./owner";
+import { crosspost, CROSSPOST_ACTOR } from "./crosspost";
 import { renderForSlack } from "./render";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
@@ -74,6 +75,8 @@ export const { GET, POST, scheduler } = board({
     autoland: autoland(),
     // A factory PR's root names whose it is: the person who opened its source thread.
     owner: owner(),
+    // A factory PR's Slack thread and the Slack thread it was built for link to each other.
+    crosspost: crosspost(),
     security: security({ tellPi }),
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
@@ -85,6 +88,7 @@ export const { GET, POST, scheduler } = board({
           event.type !== "message.posted" ||
           !message ||
           byPi(message.re ?? message.id, message.by) ||
+          message.by.actor === CROSSPOST_ACTOR ||
           scheduledThread(message)
         ) {
           return;
@@ -135,7 +139,8 @@ export const { GET, POST, scheduler } = board({
           event.type === "message.posted" &&
           message.re !== null &&
           (scheduled(message) || !byPi(message.re, message.by)) &&
-          !fromSecurity(message.by)
+          !fromSecurity(message.by) &&
+          message.by.actor !== CROSSPOST_ACTOR
         ) {
           await tellPi({
             task: "thread",
@@ -165,7 +170,8 @@ export const { GET, POST, scheduler } = board({
           });
         } else if (
           (scheduled(message) || !byPi(message.re, message.by)) &&
-          !message.author?.handle.endsWith("[bot]")
+          !message.author?.handle.endsWith("[bot]") &&
+          message.by.actor !== CROSSPOST_ACTOR
         ) {
           await tellPi({
             task: "review",
