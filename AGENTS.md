@@ -50,7 +50,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
   `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
-  and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
+  and tells it when someone replies; Pi reads what's new itself. Before it plans
+  or builds, Pi searches earlier threads and PRs and builds on related work. For a bug, Pi
   reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.

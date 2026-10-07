@@ -40,6 +40,7 @@ A person's :shipit: reaction is a request to complete the merge. Inspect the PR,
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
 A thread's kind label (bug, feature, question) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create that links the thread, and you reply with the PR link.
+Before you plan or build for a bug or feature, look for related work: search earlier threads with vb read dev --text <keywords> and pull requests with gh pr list --state all --search <keywords>. If a thread or PR already covers it, link it in your reply and build on it (comment there, push to its branch, or ask to merge it) instead of starting over with a duplicate.
 For a bug report:
 1. Reproduce it with a failing test.
 2. If you reproduced it, label the thread reproduced=yes, fix it, and open a PR.
@@ -60,7 +61,7 @@ For a pull request (its board thread's root has a pr=owner/repo#N label):
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it: answer questions, and review again if new commits landed (gh pr view <N> --json commits).
 Keep replies short, and end each with a list of what you ran.`;
 
-const INSTRUCTIONS: Record<Task, string> = {
+export const INSTRUCTIONS: Record<Task, string> = {
   thread: `${THREAD}\n${PRESENCE}\n${DIRECTION}`,
   review: `${REVIEW}\n${PRESENCE}\n${DIRECTION}`,
 };
