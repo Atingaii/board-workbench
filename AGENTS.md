@@ -104,8 +104,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
-  every message. The policy also pins who Pi is on the board (profile `pi`,
-  session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
+  every message. The policy also pins who Pi is on the board (a profile named for the
+  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
