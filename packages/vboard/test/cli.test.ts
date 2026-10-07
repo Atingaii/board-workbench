@@ -145,6 +145,42 @@ describe('cli', () => {
     }
   }, 30_000)
 
+  it('keeps its own error for a non-board HTML page, and keeps credentials off other origins', async () => {
+    const missing = await serve(async () => new Response('<!DOCTYPE html><h1>404</h1>', { status: 404, headers: { 'content-type': 'text/html' } }))
+    try {
+      const root = await tmp('vboard-link-')
+      expect(await vb(['link', `${missing.origin}/api/board`], {}, undefined, root)).toEqual({
+        code: 1, stdout: '', stderr: 'error: 404 Not Found\n',
+      })
+    } finally {
+      await missing.close()
+    }
+
+    // A board that moved: same-origin and cross-origin hops are followed, and only the board's origin gets the token and bypass.
+    const board = testBoard({ url: undefined })
+    const seen = { moved: [] as (string | null)[], board: [] as (string | null)[] }
+    const target = await serve(async (request) => {
+      seen.board.push(request.headers.get('authorization'), request.headers.get('x-vercel-protection-bypass'))
+      return board.fetch(request)
+    })
+    const moved = await serve(async (request) => {
+      const path = new URL(request.url).pathname
+      seen.moved.push(request.headers.get('authorization'))
+      if (path.startsWith('/old')) return new Response(null, { status: 307, headers: { location: path.replace('/old', '/hop') } })
+      return new Response(null, { status: 301, headers: { location: `${target.origin}${path.replace('/hop', '')}` } })
+    })
+    try {
+      const at = `${moved.origin}/old/api/board`
+      const token = await personToken('u_julian', `${target.origin}/api/board`)
+      const me = await vb(['whoami', '--json'], { VBOARD_URL: at, VBOARD_TOKEN: token, VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
+      expect(seen.moved).toEqual([`Bearer ${token}`, `Bearer ${token}`])
+      expect(seen.board).toEqual([null, null])
+      expect(me.code).toBe(1)
+    } finally {
+      await Promise.all([moved.close(), target.close()])
+    }
+  }, 20_000)
+
   it('lets explicit and environment URLs override the project link', async () => {
     const root = await tmp('vboard-link-')
     await mkdir(join(root, '.vboard'))

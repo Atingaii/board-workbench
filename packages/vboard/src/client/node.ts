@@ -314,8 +314,11 @@ export { BoardError, type BoardClient, type ClientOptions, type ProfileOption } 
 /**
  * A board's fetch that recognizes Vercel Deployment Protection: a redirect to
  * `/sso-api`, or an HTML page where the board answers JSON (on SAML teams, the
- * redirects end at the IdP's login page with a 200). Other redirects of a GET
- * are followed. Attachments, which may be HTML, come with a `content-disposition`.
+ * redirects end at the IdP's login page with a 200). Only a 2xx, 401, or 403
+ * HTML page counts, so a 404 page keeps its own error; attachments, which may
+ * be HTML, come with a `content-disposition`. Other redirects of a GET or HEAD
+ * are followed as fetch would, dropping the token and bypass secret on the way
+ * to another origin; a redirected POST comes back as its 3xx.
  */
 function guarded(url: string, doFetch: typeof fetch): typeof fetch {
   const wall = (status: number) =>
@@ -327,19 +330,27 @@ function guarded(url: string, doFetch: typeof fetch): typeof fetch {
   return async (input, init = {}) => {
     let target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+    let headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
     for (let hops = 0; ; hops++) {
-      const response = await doFetch(hops === 0 ? input : target, { ...init, redirect: 'manual' })
+      const response = await doFetch(hops === 0 ? input : target, { ...init, headers, redirect: 'manual' })
       const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null
       if (location) {
         const next = new URL(location, target)
         if (next.pathname.startsWith('/sso-api')) throw wall(response.status)
-        if ((method === 'GET' || method === 'HEAD') && hops < 10) {
+        if (method === 'GET' || method === 'HEAD') {
+          if (hops >= 20) throw new BoardError('too_many_redirects', `too many redirects from ${url}`, response.status)
+          if (next.origin !== new URL(target).origin) {
+            headers = new Headers(headers)
+            headers.delete('authorization')
+            headers.delete('x-vercel-protection-bypass')
+          }
           target = next.href
           continue
         }
       }
-      if (/^text\/html\b/i.test(response.headers.get('content-type') ?? '') && !response.headers.has('content-disposition'))
-        throw wall(response.status)
+      const { status } = response
+      const page = /^text\/html\b/i.test(response.headers.get('content-type') ?? '') && !response.headers.has('content-disposition')
+      if (page && ((status >= 200 && status < 300) || status === 401 || status === 403)) throw wall(status)
       return response
     }
   }
