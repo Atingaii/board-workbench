@@ -68,6 +68,13 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   blockers, marks drafts ready when needed, and completes the requested merge
   when GitHub's requirements allow, without asking for another reaction. It
   mentions reviewers or owners when their action is needed.
+  `security` (`security.ts`) lets anyone add `:security:` to a PR's Slack root
+  to have Pi run a deepsec review of its diff, in a fresh `git worktree` outside
+  its clone (deepsec only fails on net-new findings, so reused state could look
+  clean). Pi reacts `:secure:` only when deepsec exits 0. On a thread that isn't
+  a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
+  Each message to Pi extends its sandbox session to at least 45m, so a long run
+  late in a session isn't cut off.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.

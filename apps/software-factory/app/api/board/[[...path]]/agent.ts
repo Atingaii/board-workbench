@@ -13,7 +13,10 @@ const MODEL = "anthropic/claude-opus-5.5";
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
 /** The `vb` Pi runs. A thread's sandbox outlives releases, so setup upgrades it in place. */
 const VBOARD = "0.4.0";
-/** A sandbox stops after this long idle in a turn; its files come back with it. */
+/**
+ * A sandbox session ends at a fixed deadline, not after idling; its files come back with the next one.
+ * Each message gets at least this long before it, so a turn that starts late in a session isn't cut off.
+ */
 const SANDBOX_MS = 45 * 60_000;
 const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
 
@@ -37,7 +40,8 @@ You hear about every reply in your threads, but most aren't for you. When a mess
 Board replies are read on Slack by busy people: keep each to a few lines. Lead with the outcome (the PR link, the answer, the one question you need answered), skip background they already know, and use a short list only when there are real options to pick from. No "What I ran" lists, no recaps of the thread; the attachments and the PR carry the detail.`;
 
 const DIRECTION = `Your initial task is a starting point. People can redirect you in the thread at any time; follow their latest instructions even when they change the task, including fixing code, pushing changes, approving, marking a draft ready, merging, or closing a PR.
-A person's :shipit: reaction is a request to complete the merge. Inspect the PR, resolve the blockers you can, mark it ready if needed, and merge it when GitHub's checks and review requirements allow. Carry that intent through without requiring another reaction. If you need someone else's action, ask them in the thread and explain what's still blocking it.`;
+A person's :shipit: reaction is a request to complete the merge. Inspect the PR, resolve the blockers you can, mark it ready if needed, and merge it when GitHub's checks and review requirements allow. Carry that intent through without requiring another reaction. If you need someone else's action, ask them in the thread and explain what's still blocking it.
+A person's :security: reaction on a PR is a request for a deepsec review of its diff. React :secure: on the root only when deepsec exits 0.`;
 
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
@@ -121,6 +125,12 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
   };
 }
 
+/** How much to extend a session ending at `expiresAt` so a turn starting `now` gets SANDBOX_MS: 0 if it already has that. */
+export function extension(expiresAt: Date | undefined, now: number) {
+  if (!expiresAt) return 0;
+  return Math.max(0, SANDBOX_MS - (expiresAt.getTime() - now));
+}
+
 async function sh(sandbox: Sandbox, script: string) {
   const done = await sandbox.runCommand({ cmd: "bash", args: ["-c", script], sudo: true });
   if (done.exitCode !== 0) throw new Error(`sandbox setup failed: ${(await done.stderr()).slice(-500)}`);
@@ -175,6 +185,9 @@ export async function tellPi({
     getToken("github/vboard-factory", { subject: { type: "app" } }),
   ]);
   await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
+  // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
+  const extend = extension(sandbox.expiresAt, Date.now());
+  if (extend > 0) await sandbox.extendTimeout(extend);
   await sandbox.runCommand({
     cmd: "bash",
     args: ["-c", TELL],

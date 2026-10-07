@@ -12,6 +12,7 @@ import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, tellPi } from "./agent";
 import { classifyThread } from "./classify";
+import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
 import { renderForSlack } from "./render";
 
@@ -75,6 +76,7 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
+    security: security({ tellPi }),
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
     "triage-gpt": {
@@ -128,7 +130,8 @@ export const { GET, POST, scheduler } = board({
         } else if (
           event.type === "message.posted" &&
           message.re !== null &&
-          !byPi(message.re, message.by)
+          !byPi(message.re, message.by) &&
+          !fromSecurity(message.by)
         ) {
           await tellPi({
             task: "thread",
