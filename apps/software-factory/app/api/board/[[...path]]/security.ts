@@ -35,6 +35,8 @@ export function security(options: { tellPi: typeof tellPi }): Watcher {
         return;
       }
       const requester = event.actor?.handle ?? event.payload.by.actor;
+      // Named, not $(mktemp -d): each of Pi's commands runs in a new shell, so a variable wouldn't last.
+      const dir = `/tmp/deepsec-${event.index}`;
       await options.tellPi({
         task: "review",
         thread: root.id,
@@ -42,12 +44,12 @@ export function security(options: { tellPi: typeof tellPi }): Watcher {
         message: [
           `${requester} (${event.payload.by.actor}) reacted with :security: to request a deepsec security review of ${pr} in board thread #${root.id}.`,
           `1. Check out the PR (gh pr checkout ${number} in your clone of basehub-ai/vboard), and git fetch origin so its base branch is current. Install Claude Code if it's missing (command -v claude || npm i -g @anthropic-ai/claude-code); deepsec uses it as its agent.`,
-          `2. Make a fresh worktree outside the clone and work there: d=$(mktemp -d) && git worktree add --detach "$d/pr" HEAD && cd "$d/pr". deepsec keeps state in data/ and only fails on net-new findings, so a run in a reused checkout can come back clean with findings still there. This also keeps its files out of the clone.`,
-          `3. In "$d/pr", run: timeout ${DEEPSEC_TIMEOUT} env CLAUDE_CODE_EXECUTABLE=claude npx -y deepsec process --diff origin/<base> --comment-out deepsec.md > deepsec.log 2>&1, where <base> is the PR's base branch (gh pr view ${number} --json baseRefName). Note its exit code.`,
+          `2. Make a fresh worktree outside the clone and work there: rm -rf ${dir} && git worktree add --detach ${dir} HEAD, and run the next step from ${dir}. deepsec keeps state in data/ and only fails on net-new findings, so a run in a reused checkout can come back clean with findings still there. This also keeps its files out of the clone.`,
+          `3. In ${dir}, run: timeout ${DEEPSEC_TIMEOUT} env CLAUDE_CODE_EXECUTABLE=claude npx -y deepsec process --diff origin/<base>...HEAD --comment-out deepsec.md > deepsec.log 2>&1, where <base> is the PR's base branch (gh pr view ${number} --json baseRefName). The three dots diff from where the PR branched, so commits that landed on the base since aren't reviewed as its changes. Note its exit code.`,
           `4. Exit 0 (no new findings): reply that deepsec found nothing, attach deepsec.log, and react on the root with vb react ${root.id} secure.`,
           "   Exit 1 (findings): reply with a short line per finding (file, issue, severity), attach deepsec.md, and don't react :secure:.",
           "   Any other exit is a failed run: 2 (deepsec needs input), 3 (it hit its cost cap), 124 (the timeout), or anything else. Say why, from deepsec.log, and don't react :secure:.",
-          `5. Back in your clone, git worktree remove --force "$d/pr".`,
+          `5. Back in your clone, git worktree remove --force ${dir}.`,
           "Mention the requester in your reply. Don't change the PR's code for this unless someone asks.",
         ].join("\n"),
       });
