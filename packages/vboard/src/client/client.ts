@@ -12,6 +12,8 @@ import type {
   MessagesPage,
   MessagesQueryInput,
   MessageView,
+  ScheduleView,
+  SchedulesQueryInput,
   ThreadView,
   TypingResult,
 } from '../api/routes.ts'
@@ -70,6 +72,32 @@ export type PostOptions = {
 }
 
 export type ReplyOptions = Omit<PostOptions, 'sync'>
+
+/**
+ * When a scheduled message goes out: once `in` a while or `at` a time, or
+ * `every` so often (first at `at`, `in`, or one `every` from now), stopping
+ * `until` a time, `for` a while after the first send, or after `times` sends.
+ * A repeat with no stop runs until it's canceled.
+ */
+export type ScheduleTiming = {
+  in?: string
+  at?: Date | string
+  every?: string
+  until?: Date | string
+  for?: string
+  times?: number
+}
+
+export type ScheduleOptions = Omit<PostOptions, 'sync' | 'id'> & ScheduleTiming
+
+const scheduleBody = (input: ScheduleOptions) => {
+  const { at, until, ...rest } = messageBody(input) as ScheduleOptions
+  return {
+    ...rest,
+    ...(at !== undefined ? { at: at instanceof Date ? at.toISOString() : at } : {}),
+    ...(until !== undefined ? { until: until instanceof Date ? until.toISOString() : until } : {}),
+  }
+}
 
 /** What `upload` takes: the bytes, and what to call them. */
 export type UploadInput = {
@@ -225,6 +253,21 @@ export function createBoardClient(options: ClientOptions) {
     async reply(id: number, input: string | ReplyOptions): Promise<MessageView> {
       return (await call<{ message: MessageView }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })).message
     },
+    /**
+     * Posts later, as you: a reply when `target` is a message ID (any message in the
+     * thread), a new thread when it's a channel. Each message it posts carries
+     * `schedule: { id, n }`. Needs a board with a scheduler.
+     */
+    async schedule(target: number | string, input: ScheduleOptions): Promise<ScheduleView> {
+      const where = typeof target === 'number' ? { re: target } : { channel: target }
+      return (await call<{ schedule: ScheduleView }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })).schedule
+    },
+    /** Pending schedules (`all` for done and canceled too), oldest first. `re` is any message in a thread. */
+    schedules: async (query: SchedulesQueryInput = {}) =>
+      (await call<{ schedules: ScheduleView[] }>('GET', `/schedules${queryString(query)}`)).schedules,
+    /** Stops a schedule; anyone may. `canceled` is false when it was already done or canceled. */
+    cancelSchedule: (id: number) =>
+      call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${id}/cancel`, { body: {} }),
     /** Stores a file on the board, for a post or reply's `attachments`. At most 4 MB. */
     async upload(input: UploadInput): Promise<Attachment> {
       const type = input.type || (input.data instanceof Blob ? input.data.type : '') || typeOf(input.name)
@@ -321,7 +364,7 @@ export function createBoardClient(options: ClientOptions) {
   }
 }
 
-export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me, MessagesPage, MessageView, ThreadView }
+export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me, MessagesPage, MessageView, ScheduleView, ThreadView }
 
 async function toError(response: Response): Promise<BoardError> {
   try {

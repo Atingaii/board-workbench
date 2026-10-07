@@ -23,6 +23,8 @@ const PI_TASKS = {
   question: "a question",
 } as const;
 const PI_KINDS = Object.keys(PI_TASKS) as (keyof typeof PI_TASKS)[];
+/** Posted by a `vb schedule`: news even when Pi scheduled it, since that's how Pi sets itself a reminder. */
+const scheduled = (message: { schedule?: unknown }) => message.schedule !== undefined;
 const isPiKind = (kind: string): kind is keyof typeof PI_TASKS => kind in PI_TASKS;
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
@@ -130,7 +132,7 @@ export const { GET, POST, scheduler } = board({
         } else if (
           event.type === "message.posted" &&
           message.re !== null &&
-          !byPi(message.re, message.by) &&
+          (scheduled(message) || !byPi(message.re, message.by)) &&
           !fromSecurity(message.by)
         ) {
           await tellPi({
@@ -160,7 +162,7 @@ export const { GET, POST, scheduler } = board({
             message: `There's a pull request to review in board thread #${message.id}.`,
           });
         } else if (
-          !byPi(message.re, message.by) &&
+          (scheduled(message) || !byPi(message.re, message.by)) &&
           !message.author?.handle.endsWith("[bot]")
         ) {
           await tellPi({
