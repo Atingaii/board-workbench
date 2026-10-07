@@ -423,7 +423,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           return { snapshot: null, unavailable: slackError(error) }
         }
         if (!found) return { snapshot: null, unavailable: 'message_not_found' }
-        const author = found.user ? await nameOf(found.user) : found.bot_profile?.name || found.username || 'someone'
+        const author = found.user ? await nameOf(found.user) : found.username || found.bot_profile?.name || 'someone'
         return { unavailable: null, snapshot: {
           author: author.slice(0, 256), text: mrkdwn(found.text ?? '').slice(0, MESSAGE_TEXT_MAX),
           createdAt: tsTime(found.ts), files: filesOf(found.files),
@@ -491,7 +491,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const messages = await Promise.all(found.slice(0, limit).filter((m) => m.ts).map(async (m): Promise<SourceMessage> => ({
           id: m.ts!,
           thread: `${channel}:${m.thread_ts ?? m.ts}`,
-          author: (m.user ? await nameOf(m.user) : m.bot_profile?.name || m.username || 'someone').slice(0, 256),
+          author: (m.user ? await nameOf(m.user) : m.username || m.bot_profile?.name || 'someone').slice(0, 256),
           text: mrkdwn(m.text ?? '').slice(0, MESSAGE_TEXT_MAX),
           createdAt: tsTime(m.ts),
           replies: m.reply_count ?? 0,
