@@ -14,6 +14,7 @@ import { byPi, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
+import { owner } from "./owner";
 import { renderForSlack } from "./render";
 
 /** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
@@ -76,6 +77,8 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
+    // A factory PR's root names whose it is: the person who opened its source thread.
+    owner: owner(),
     security: security({ tellPi }),
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
