@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INSTRUCTIONS, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { INSTRUCTIONS, byPi, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
 for (const task of ["thread", "review"]) {
   test(`${task}: Pi stays out of messages meant for someone else`, () => {
@@ -76,4 +76,22 @@ test("review: the review reaches the board on its own, so the board reply doesn'
   assert.doesNotMatch(INSTRUCTIONS.review, /Then reply in the board thread with just the verdict/);
   assert.match(INSTRUCTIONS.review, /keep the body short/i);
   assert.match(INSTRUCTIONS.review, /Always put the verdict in the body/);
+});
+
+test("piName: each thread's Pi has a name of its own, the same every time", () => {
+  assert.equal(piName(1956), piName(1956));
+  assert.match(piName(1956), /^[a-z]+-[a-z]+$/);
+  // A valid board profile: starts with a letter, up to 32 letters, numbers, and hyphens.
+  for (let t = 1; t < 5000; t++) assert.match(piName(t), /^[A-Za-z][A-Za-z0-9-]{0,31}$/);
+  const nearby = new Set(Array.from({ length: 50 }, (_, i) => piName(1900 + i)));
+  assert.ok(nearby.size >= 45, `only ${nearby.size} names for 50 neighboring threads`);
+});
+
+test("byPi: the thread's own Pi, by its name or the old `pi`, and no other thread's", () => {
+  const session = "thread-1956";
+  assert.ok(byPi(1956, { profile: piName(1956), session }));
+  assert.ok(byPi(1956, { profile: "pi", session }));
+  assert.ok(!byPi(1956, { profile: piName(1957), session }));
+  assert.ok(!byPi(1956, { profile: piName(1956), session: "thread-1957" }));
+  assert.ok(!byPi(1956, { profile: null, session: null }));
 });

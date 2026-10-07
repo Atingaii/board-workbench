@@ -23,12 +23,35 @@ const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
 /** Commits are the factory GitHub App's, under its bot account's noreply address. */
 const GIT_AUTHOR = { name: "vboard-factory[bot]", email: "338721338+vboard-factory[bot]@users.noreply.github.com" };
 
-/** Who a thread's Pi is on the board: profile `pi`, in that thread's session. */
+/** A thread's Pi session, on the board and in the sandbox. */
 const piSession = (thread: number) => `thread-${thread}`;
 
-/** Whether a message was written by the Pi working on `thread`. */
+const ADJECTIVES = [
+  "amber", "brave", "brisk", "calm", "clever", "cosmic", "crisp", "dapper",
+  "eager", "fuzzy", "gentle", "glad", "golden", "humble", "jolly", "keen",
+  "lucky", "lively", "mellow", "merry", "nimble", "plucky", "quiet", "rapid",
+  "rusty", "shy", "snappy", "sunny", "swift", "tidy", "witty", "zesty",
+];
+const ANIMALS = [
+  "badger", "beaver", "bison", "crane", "falcon", "ferret", "finch", "fox",
+  "gecko", "heron", "ibis", "koala", "lemur", "lynx", "marmot", "moose",
+  "newt", "otter", "owl", "panda", "puffin", "quokka", "raven", "robin",
+  "seal", "sloth", "stoat", "tapir", "toucan", "walrus", "wombat", "yak",
+];
+
+/**
+ * Who a thread's Pi is on the board: a name of its own, like `brisk-otter via vboard-factory`,
+ * so people can tell one thread's Pi from another's. The same thread always gets the same name;
+ * neighboring threads get different ones.
+ */
+export function piName(thread: number) {
+  const n = Math.imul(thread, 0x9e3779b1) >>> 0;
+  return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}`;
+}
+
+/** Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). */
 export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
-  by.profile === "pi" && by.session === piSession(thread);
+  (by.profile === piName(thread) || by.profile === "pi") && by.session === piSession(thread);
 
 /** The Slack workspace the factory syncs with. */
 const SLACK = "https://vercel.slack.com";
@@ -136,7 +159,9 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
             {
               headers: {
                 authorization: `Bearer ${tokens.board}`,
-                "x-board-profile": "pi",
+                "x-board-profile": piName(thread),
+                // A named profile has no built-in avatar: keep Pi's mark.
+                "x-board-avatar": `${BOARD}/avatars/pi`,
                 "x-board-session": piSession(thread),
                 ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
                   ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
@@ -222,7 +247,7 @@ export async function tellPi({
     env: {
       MODEL,
       SESSION: piSession(thread),
-      INSTRUCTIONS: INSTRUCTIONS[task],
+      INSTRUCTIONS: `${INSTRUCTIONS[task]}\nOn the board you're ${piName(thread)}: the Pi for thread #${thread} only. Other threads have their own Pi, with names of their own.`,
       KEY: key,
       MESSAGE: message,
       // Over any git config Pi writes: otherwise it picks an identity, and GitHub credits a stranger.
