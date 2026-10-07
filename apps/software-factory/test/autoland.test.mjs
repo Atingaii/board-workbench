@@ -84,7 +84,6 @@ function harness(routes) {
   const requests = [];
   const labels = [];
   const watcher = autoland({
-    byPi: (thread, by) => by.profile === "pi" && by.session === `thread-${thread}`,
     token: async () => "test-token",
     fetch: async (url) => {
       requests.push(url);

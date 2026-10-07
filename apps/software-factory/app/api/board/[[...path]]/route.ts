@@ -74,7 +74,7 @@ export const { GET, POST, scheduler } = board({
   watch: {
     shipit: shipit({ tellPi }),
     // Shadow mode: labels each reviewed factory PR autoland=would|no, and merges nothing.
-    autoland: autoland({ byPi }),
+    autoland: autoland(),
     // A factory PR's root names whose it is: the person who opened its source thread.
     owner: owner(),
     security: security({ tellPi }),
