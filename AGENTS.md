@@ -77,6 +77,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
   Each message to Pi extends its sandbox session to at least 45m, so a long run
   late in a session isn't cut off.
+  Messages wait behind a running turn on a per-sandbox lock. "New activity"
+  ones (`news-…`) piled up there wake Pi once, for the newest, since Pi reads
+  what's new itself: a burst of replies costs one turn, not one each.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.

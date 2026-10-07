@@ -110,12 +110,18 @@ command -v gh >/dev/null || {
  * One message, once: KEY marks it delivered, so a retried watcher doesn't send it
  * twice. The lock queues it behind a turn that's still running, and the session ID
  * makes it a continuation of everything Pi has done in this thread.
+ * A `news-` message only says there's something new, and Pi reads what's new itself, so
+ * news piled up behind a turn wakes Pi once, for the newest: otherwise each reply (most
+ * not for Pi) costs a full turn before the next one, and an ack waits minutes.
  */
-const TELL = `mkdir -p ~/.pi/told
+export const TELL = `mkdir -p ~/.pi/told
 [ -e ~/.pi/told/"$KEY" ] && exit 0
 touch ~/.pi/told/"$KEY"
-cd ~ && exec flock ~/.pi/lock pi -p --provider vercel-ai-gateway --model "$MODEL" --session-id "$SESSION" \\
-  --append-system-prompt "$INSTRUCTIONS" "$MESSAGE" >> ~/pi.log 2>&1`;
+case "$KEY" in news-*) echo "$KEY" > ~/.pi/news ;; esac
+cd ~ && exec flock ~/.pi/lock bash -c '
+  case "$KEY" in news-*) [ "$(cat ~/.pi/news)" = "$KEY" ] || exit 0 ;; esac
+  exec pi -p --provider vercel-ai-gateway --model "$MODEL" --session-id "$SESSION" \\
+    --append-system-prompt "$INSTRUCTIONS" "$MESSAGE"' >> ~/pi.log 2>&1`;
 
 /**
  * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
