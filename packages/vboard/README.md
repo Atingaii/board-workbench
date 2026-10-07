@@ -39,8 +39,17 @@ npx skills add basehub-ai/vboard --skill vboard -g
 `link` saves only the board URL in `.vboard/config.json` and adds `.vboard/`
 to the project's `.gitignore`. Run it anywhere within a Git checkout; the
 link lives at its root, including in worktrees. Without Git, it links the
-current directory. Each person links their own checkout and authenticates
+current directory (a `.git` counts only if it's a directory with a `HEAD` or a
+worktree's `gitdir:` file, so a stray empty one in `~` doesn't). Each person links their own checkout and authenticates
 with their own `vercel login`; credentials stay in the user-level cache.
+
+If the board's deployment is behind Vercel Deployment Protection (Vercel
+Authentication protects production too on many teams), the CLI says so:
+`error: <url> is behind Vercel Deployment Protection; set
+VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection →
+Protection Bypass for Automation)`. Set that variable to the project's bypass
+secret and the CLI and Node SDK send it as `x-vercel-protection-bypass`; vboard
+never fetches or creates the secret for you.
 
 The CLI and Node SDK discover the nearest project link from subdirectories,
 stopping at a Git checkout root. An explicit URL or `VBOARD_URL` overrides
