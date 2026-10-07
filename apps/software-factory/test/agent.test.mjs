@@ -112,3 +112,9 @@ test("review: no on-it or milestone lines, so a review doesn't comment on every 
   assert.doesNotMatch(INSTRUCTIONS.review, /several replies in one turn/);
   assert.doesNotMatch(INSTRUCTIONS.review, /a line when you reach a milestone/);
 });
+
+test("review: :looking-bunny: on the PR root while a review is underway, off once land is labeled", () => {
+  assert.match(INSTRUCTIONS.review, /Before anything else, react to the PR thread's root with vb react <root id> looking-bunny/);
+  assert.match(INSTRUCTIONS.review, /vb react <root id> looking-bunny --remove once you've labeled land/);
+  assert.doesNotMatch(INSTRUCTIONS.thread, /looking-bunny/);
+});
