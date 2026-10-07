@@ -1,5 +1,5 @@
 import type { Watcher } from "vboard";
-import { getToken } from "@vercel/connect";
+import { github, prNumber, type GitHubOptions } from "./github.ts";
 
 /** The board thread a factory PR was built for, from its `pi/<thread>` branch (`pi/1559`, `pi/1559-vercel-logs`). */
 export const threadOfBranch = (ref: unknown) => {
@@ -13,26 +13,15 @@ export const threadOfBranch = (ref: unknown) => {
  * PR's root, so a PR the factory bot opened says whose it is. PRs from other branches are skipped:
  * their author already shows.
  */
-export function owner(options: { token?: () => Promise<string>; fetch?: typeof fetch } = {}): Watcher {
-  const request = options.fetch ?? globalThis.fetch;
+export function owner(options: GitHubOptions = {}): Watcher {
   return {
     tail: "dev --label pr",
     run: async ({ event, board }) => {
       const root = event.message;
       if (event.type !== "message.posted" || !root || root.re !== null || root.labels.owner) return;
-      const number = root.labels.pr?.match(/^basehub-ai\/vboard#([1-9]\d*)$/)?.[1];
+      const number = prNumber(root.labels);
       if (!number) return;
-      const token = await (options.token?.() ?? getToken("github/vboard-factory", { subject: { type: "app" } }));
-      const response = await request(`https://api.github.com/repos/basehub-ai/vboard/pulls/${number}`, {
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: "application/vnd.github+json",
-          "x-github-api-version": "2026-03-10",
-        },
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) throw new Error(`GitHub returned ${response.status} for PR #${number}`);
-      const pr = await response.json();
+      const pr = await (await github(options))(`/pulls/${number}`);
       const source = threadOfBranch(pr.head?.ref);
       if (!source) return;
       const { message } = await board.thread(source);

@@ -51,11 +51,13 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
-  judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
+  judging the whole thread whenever a person posts. Its scope (`classify.ts`) is the
+  library and the factory, Pi included, so "Pi should…" is a feature, not noise. `pi` hands `kind=bug`,
   `kind=feature`, `kind=question`, and `kind=task` threads (not `noise`) to Pi (`agent.ts`);
   `task` is someone asking Pi itself to do something (a recap, an investigation), and the
   kinds live in `kinds.ts`
-  and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
+  and tells it when someone replies; Pi reads what's new itself. Before it plans
+  or builds, Pi searches earlier threads and PRs and builds on related work. For a bug, Pi
   reproduces it, then opens a PR from a `pi/<thread>` branch (its body opens
   with a line linking what triggered it: the Slack thread or GitHub issue, which
   `taskMessage` puts in Pi's first message), or labels the
@@ -75,6 +77,17 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   blockers, marks drafts ready when needed, and completes the requested merge
   when GitHub's requirements allow, without asking for another reaction. It
   mentions reviewers or owners when their action is needed.
+  `autoland` (`autoland.ts`) is auto-landing in shadow mode: it labels PRs and
+  merges nothing. After each review, the PR thread's Pi labels the root
+  `land=yes|no` with `land.why` and the head it reviewed (`land.sha`); yes
+  means it fixes a bug or does what a person clearly asked, with nothing to
+  fix and no caveats or tradeoffs. Only that Pi's label counts. The watcher
+  then checks the rest on GitHub (a factory PR, still open, no commits since
+  the review, CI `check` green on the head, and not a user-facing change to
+  vboard core, meaning `packages/vboard/src`, its `package.json`, or
+  `tsdown.config.ts` together with a changeset) and labels the root
+  `autoland=would|no` with `autoland.why`. A `would` root also wears
+  `:stamp-hammer:`, added and removed as the verdict flips, so Slack shows it.
   `security` (`security.ts`) lets anyone add `:security:` to a PR's Slack root
   to have Pi run a deepsec review of its diff, in a fresh `git worktree` outside
   its clone (deepsec only fails on net-new findings, so reused state could look
@@ -82,6 +95,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
   Each message to Pi extends its sandbox session to at least 45m, so a long run
   late in a session isn't cut off.
+  Messages wait behind a running turn on a per-sandbox lock. "New activity"
+  ones (`news-…`) piled up there wake Pi once, for the newest, since Pi reads
+  what's new itself: a burst of replies costs one turn, not one each.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.

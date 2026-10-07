@@ -3,7 +3,7 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { UnreadableError, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
+import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
 import type { SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
@@ -28,6 +28,48 @@ export type SlackClient = {
     lookupByEmail?(args: { email: string }): Promise<{ user?: SlackUser }>
   }
   files?: { delete(args: { file: string }): Promise<unknown> }
+  /** Posts an agent's message under its own name; needs `chat:write.customize` for `username` and `icon_url`. */
+  chat?: { postMessage(args: SlackPost): Promise<{ ts?: string }> }
+  /** Says which scopes the app has (`response_metadata.scopes`, from Slack's `x-oauth-scopes`). */
+  auth?: { test(): Promise<{ response_metadata?: { scopes?: string[] } }> }
+}
+
+type SlackPost = {
+  channel: string
+  thread_ts?: string
+  text?: string
+  markdown_text?: string
+  username?: string
+  icon_url?: string
+  unfurl_links?: boolean
+  unfurl_media?: boolean
+}
+
+/** What the Slack adapter does to a message before posting it, used when vboard posts one itself. */
+type SlackInternals = Omit<Adapter, 'decodeThreadId'> & {
+  decodeThreadId(threadId: string): { channel: string; threadTs: string }
+  formatConverter?: { toSlackPayload?(message: { markdown: string }): { text: string } | { markdown_text: string } }
+  resolveMessageMentions?(message: { markdown: string }, threadId: string): Promise<{ markdown: string }>
+}
+
+/** The `**name**: ` a message's text opens with, taken out when Slack shows the name as the sender. */
+export function withoutLabel(markdown: string, name: string): string {
+  const label = new RegExp(`(^|\\n)\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*: `)
+  return markdown.replace(label, '$1')
+}
+
+/**
+ * A sender's picture as Slack's `icon_url`: an https image. The board's built-in agent
+ * avatars are SVGs, which Slack won't show, so those keep the app's icon.
+ */
+export function slackIcon(avatar: string | null): string | null {
+  if (!avatar) return null
+  try {
+    const url = new URL(avatar)
+    return url.protocol === 'https:' && !/\/avatars\/[a-z0-9-]+$/.test(url.pathname) && !url.pathname.endsWith('.svg') ? avatar : null
+  } catch {
+    return null
+  }
 }
 
 type SlackUser = {
@@ -157,6 +199,9 @@ export function slack(options: SlackOptions): SlackProvider {
 }
 
 export class SlackProvider extends ChatSyncProvider<SlackEvent> {
+  private readonly web: () => Promise<SlackClient | undefined>
+  private customize: Promise<boolean> | undefined
+
   constructor(options: SlackOptions) {
     let directClient: SlackClient | undefined
     if (!options.client) {
@@ -494,6 +539,69 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       },
     })
     for (const [key, value] of Object.entries(options.channels)) this.map(key, value)
+    this.web = client
+  }
+
+  /**
+   * An agent's message goes out under its own name (`clever-lemur via vboard-factory`), and its
+   * picture when it has one Slack can show, instead of the app's, with the text's
+   * `**name**: ` label dropped. Without `chat:write.customize` it posts as the app, label and all.
+   */
+  override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
+    const { as, ...post } = body
+    return (as && !post.files?.length ? await this.postAs(target, as, post.markdown) : null) ?? super.post(target, kind, post)
+  }
+
+  /** An edit keeps the label out only where the message went out under the agent's name. */
+  override async edit(thread: string, message: string, body: ProviderPost) {
+    const { as, ...post } = body
+    const named = as ? await this.sentAs(thread, message, as.name) : false
+    await super.edit(thread, message, named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post)
+  }
+
+  private async postAs(target: string, as: ProviderSender, markdown: string): Promise<ProviderDelivery | null> {
+    const adapter = (await this.ready()) as SlackInternals
+    const web = await this.web()
+    if (!web?.chat || !adapter.formatConverter?.toSlackPayload || !(await this.canCustomize(web))) return null
+    const threadId = this.toChat(target)
+    const { channel, threadTs } = adapter.decodeThreadId(threadId)
+    const message = { markdown: withoutLabel(markdown, as.name) }
+    const resolved = (await adapter.resolveMessageMentions?.(message, threadId)) ?? message
+    const icon = slackIcon(as.avatar)
+    const sent = await web.chat.postMessage({
+      channel,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+      ...adapter.formatConverter.toSlackPayload(resolved),
+      unfurl_links: false,
+      unfurl_media: false,
+      username: as.name.slice(0, 80),
+      ...(icon ? { icon_url: icon } : {}),
+    })
+    if (!sent.ts) throw new Error('slack: chat.postMessage returned no ts')
+    return { thread: this.toNative(`${adapter.name}:${channel}:${threadTs || sent.ts}`), message: sent.ts }
+  }
+
+  /** Whether the app may set a message's username and icon (`chat:write.customize`), asked once. */
+  private canCustomize(web: SlackClient): Promise<boolean> {
+    this.customize ??= (async () => (await web.auth?.test())?.response_metadata?.scopes?.includes('chat:write.customize') ?? false)().catch(
+      (error: unknown) => {
+        this.customize = undefined
+        console.warn(`[vboard] slack: couldn't check the app's scopes (${slackError(error)}); posting as the app`)
+        return false
+      },
+    )
+    return this.customize
+  }
+
+  /** Whether a message Slack has went out under `name`. */
+  private async sentAs(thread: string, message: string, name: string): Promise<boolean> {
+    const web = await this.web().catch(() => undefined)
+    const channel = thread.slice(0, thread.indexOf(':'))
+    if (!web?.conversations.replies || !channel) return false
+    const found = await web.conversations
+      .replies({ channel, ts: message, oldest: message, latest: message, inclusive: true, limit: 1 })
+      .then((page) => page.messages?.find((m) => m.ts === message), () => undefined)
+    return found?.username === name.slice(0, 80)
   }
 
   override eventId(key: string, input: ChatInput): string {

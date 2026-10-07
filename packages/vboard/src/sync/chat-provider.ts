@@ -163,7 +163,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     return response
   }
 
-  private async ready() {
+  protected async ready() {
     this.initialized ??= this.chat.initialize().catch((error) => {
       this.initialized = undefined
       throw error
@@ -195,13 +195,13 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const data = await fetch()
     return data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
   }
-  override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
+  override async post(target: string, kind: ResolvedTarget['kind'], { as: _sender, ...body }: ProviderPost): Promise<ProviderDelivery> {
     if (kind === 'channel' && !this.canStartThreads) throw new Error(`${this.platform} cannot start threads`)
     await this.ready()
     const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body.files?.length ? { ...body, files: this.named(body.files) } : body)
     return { thread: this.toNative(sent.threadId), message: sent.id, ...(body.files?.length ? { files: this.transport.fileIds?.(sent.raw) ?? [] } : {}) }
   }
-  override async edit(thread: string, message: string, body: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
+  override async edit(thread: string, message: string, { as: _sender, ...body }: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
   override async delete(thread: string, message: string) { await (await this.ready()).deleteMessage(this.toChat(thread), message) }
   override async react(thread: string, message: string, emoji: string, added: boolean) {
     const adapter = await this.ready()
