@@ -37,6 +37,8 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
   uploadFiles?(thread: string, files: FileUpload[]): Promise<FileDelivery>
+  /** The name a file is uploaded under, when the platform reads more into a name than the board does. */
+  uploadName?(file: ProviderFile): string
   fileIds?(raw: unknown): string[]
   refusesFiles?(error: unknown): boolean
   deleteFiles?(ids: string[]): Promise<void>
@@ -196,7 +198,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
     if (kind === 'channel' && !this.canStartThreads) throw new Error(`${this.platform} cannot start threads`)
     await this.ready()
-    const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body)
+    const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body.files?.length ? { ...body, files: this.named(body.files) } : body)
     return { thread: this.toNative(sent.threadId), message: sent.id, ...(body.files?.length ? { files: this.transport.fileIds?.(sent.raw) ?? [] } : {}) }
   }
   override async edit(thread: string, message: string, body: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
@@ -213,8 +215,12 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
   override async uploadFiles(thread: string, files: ProviderFile[]) {
     await this.ready()
-    if (!this.transport.uploadFiles) return super.uploadFiles(thread, files)
-    return this.transport.uploadFiles(this.toChat(thread), files)
+    if (!this.transport.uploadFiles) return super.uploadFiles(thread, this.named(files))
+    return this.transport.uploadFiles(this.toChat(thread), this.named(files))
+  }
+  private named(files: ProviderFile[]): ProviderFile[] {
+    const name = this.transport.uploadName
+    return name ? files.map((file) => ({ ...file, filename: name(file) })) : files
   }
   override refusesFiles(error: unknown) { return this.transport.refusesFiles?.(error) ?? false }
   override async deleteFiles(ids: string[]) { await this.transport.deleteFiles?.(ids) }
