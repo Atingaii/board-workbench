@@ -80,6 +80,59 @@ export const PostBody = z
     message: '`noSync` and `sync` contradict each other',
   })
 
+/** `30m`, `1d`: a number and a unit, `s`, `m`, `h`, or `d`. */
+const Duration = z.string().regex(/^\d+(\.\d+)?(s|m|h|d)$/, 'durations look like 30s, 30m, 12h, or 1d')
+const Instant = z.string().datetime({ offset: true })
+
+/**
+ * A message to post later, as the caller: once (`in` or `at`), or repeating
+ * (`every`, starting `at` or `in` from now, or one `every` from now), until
+ * `until`, `for` after the first send, or `times` sends. A repeat with no stop
+ * runs until it's canceled.
+ */
+export const ScheduleBody = z
+  .object({
+    channel: ChannelPath.optional(),
+    re: MessageId.optional(),
+    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    labels: Labels.optional(),
+    noSync: z.boolean().optional(),
+    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    in: Duration.optional(),
+    at: Instant.optional(),
+    every: Duration.optional(),
+    until: Instant.optional(),
+    for: Duration.optional(),
+    times: z.number().int().positive().optional(),
+  })
+  .refine((body) => body.text.trim().length > 0 || (body.attachments?.length ?? 0) > 0, {
+    message: 'message text is empty',
+    path: ['text'],
+  })
+  .refine((body) => (body.channel === undefined) !== (body.re === undefined), {
+    message: 'a schedule needs `channel` for a new thread, or `re` for a reply',
+  })
+  .refine((body) => body.in !== undefined || body.at !== undefined || body.every !== undefined, {
+    message: 'say when: `in`, `at`, or `every`',
+  })
+  .refine((body) => !(body.in !== undefined && body.at !== undefined), { message: '`in` and `at` contradict each other' })
+  .refine((body) => [body.until, body.for, body.times].filter((v) => v !== undefined).length <= 1, {
+    message: 'pick one stop: `until`, `for`, or `times`',
+  })
+  .refine((body) => body.every !== undefined || (body.until === undefined && body.for === undefined && body.times === undefined), {
+    message: '`until`, `for`, and `times` stop a repeat: add `every`',
+  })
+
+export const SchedulesQuery = z.object({
+  /** Any message in a thread: the schedules that reply in it. */
+  re: id.optional(),
+  channel: z.string().optional(),
+  /** An actor ID or handle: the schedules it created. */
+  by: z.string().optional(),
+  /** Include done and canceled schedules. */
+  all: z.coerce.boolean().optional(),
+})
+
 export const SyncBody = z.object({ target: z.string().min(3).max(300) })
 export const InboxQuery = z.object({
   channel: z.string().optional(),
@@ -109,6 +162,38 @@ export type FiltersInput = z.input<typeof Filters>
 export type MessagesQueryInput = z.input<typeof MessagesQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
+export type ScheduleInput = z.input<typeof ScheduleBody>
+export type ScheduleBodyOutput = z.output<typeof ScheduleBody>
+export type SchedulesQueryInput = z.input<typeof SchedulesQuery>
+export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
+
+/** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
+export type ScheduleView = {
+  id: number
+  channel: string
+  /** The thread it replies in, or null when each send starts a new thread in `channel`. */
+  re: number | null
+  text: string
+  labels: Record<string, string>
+  noSync: boolean
+  attachments: { id: string; name: string; type: string; size: number }[]
+  first: string
+  /** Milliseconds between sends, or null for once. */
+  every: number | null
+  until: string | null
+  times: number | null
+  /** Sends posted so far. */
+  sent: number
+  /** When the next send is due; null once it's done or canceled. */
+  next: string | null
+  /** The last message it posted. */
+  last: number | null
+  state: 'pending' | 'done' | 'canceled'
+  canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' } | null
+  by: { actor: string; principal: string; profile: string | null; session: string | null }
+  author: ActorView
+  createdAt: string
+}
 
 /** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'>
@@ -154,7 +239,13 @@ export type Me = {
 
 export type ChannelView = Channel
 export type MessagesPage = { messages: MessageView[]; cursor: number }
-export type ThreadView = { message: MessageView; replies: MessageView[]; cursor: number }
+export type ThreadView = {
+  message: MessageView
+  replies: MessageView[]
+  cursor: number
+  /** The pending schedules that reply in this thread. Boards older than schedules leave it out. */
+  schedules?: ScheduleView[]
+}
 export type EventsPage = { events: BoardEventView[]; cursor: number }
 
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
@@ -214,6 +305,11 @@ export const routes = {
   sync: { method: 'POST', path: '/messages/:id/sync', body: SyncBody },
   /** Ephemeral: shows typing in the thread's synced platform threads, and writes nothing to the log. */
   typing: { method: 'POST', path: '/messages/:id/typing', body: TypingBody },
+  /** Posts a message later, as the caller: needs a scheduler. */
+  schedule: { method: 'POST', path: '/schedules', body: ScheduleBody },
+  schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
+  /** Anyone may cancel a schedule. Canceling one that's done is a no-op. */
+  cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
   /** Reads a platform channel or thread on demand, without syncing or storing it. Full access only. */
   sourceRead: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },

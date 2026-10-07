@@ -18,6 +18,9 @@ import { shipit } from "./shipit";
 import { owner } from "./owner";
 import { renderForSlack } from "./render";
 
+/** Posted by a `vb schedule`: news even when Pi scheduled it, since that's how Pi sets itself a reminder. */
+const scheduled = (message: { schedule?: unknown }) => message.schedule !== undefined;
+
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
 // files in .a2/attachments.
@@ -125,7 +128,7 @@ export const { GET, POST, scheduler } = board({
         } else if (
           event.type === "message.posted" &&
           message.re !== null &&
-          !byPi(message.re, message.by) &&
+          (scheduled(message) || !byPi(message.re, message.by)) &&
           !fromSecurity(message.by)
         ) {
           await tellPi({
@@ -155,7 +158,7 @@ export const { GET, POST, scheduler } = board({
             message: `There's a pull request to review in board thread #${message.id}.`,
           });
         } else if (
-          !byPi(message.re, message.by) &&
+          (scheduled(message) || !byPi(message.re, message.by)) &&
           !message.author?.handle.endsWith("[bot]")
         ) {
           await tellPi({

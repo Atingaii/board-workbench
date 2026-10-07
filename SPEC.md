@@ -492,12 +492,24 @@ export const watchContract = contract({
     'watch.matched': z.object({ thread: ThreadKey, event: z.unknown() }), // (server)
   },
 })
+
+// Scheduled messages, one session: schedules. A schedule's ID is its created event's index.
+export const schedulesContract = contract({
+  name: 'vboard-schedules',
+  events: {
+    'schedule.created': z.object({ channel, re, text, labels, noSync, attachments, first, every, until, times, as }),
+    'schedule.canceled': z.object({ id, by: Author, reason: z.enum(['canceled', 'thread_deleted']) }),
+    'schedule.due': z.object({ id, n, at }),                 // (server) an A2 timer
+    'schedule.fired': z.object({ id, n, message, next }),    // (server)
+  },
+})
 ```
 
 - **The board log holds only board facts.** Bookkeeping lives in side
   contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)), raw
-  platform events in `vboard-inbox`, and watcher matches in `vboard-watch` (see
-  [Watchers](#watchers)).
+  platform events in `vboard-inbox`, watcher matches in `vboard-watch` (see
+  [Watchers](#watchers)), and scheduled messages in `vboard-schedules` (see
+  [Scheduled messages](#scheduled-messages)).
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
   - `external.received` uses the platform's event or message ID as its event
@@ -909,6 +921,9 @@ vboard read <id>                                one thread
 
 vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
 vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
+vboard schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+vboard schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
+vboard schedule cancel <schedule>               e.g. s12; anyone may
 vboard edit <id> "<text>"
 vboard delete <id>
 vboard react <id> <emoji> [--remove]
@@ -1893,6 +1908,46 @@ a thread's events in order, threads run in parallel, and each watcher fails on
 its own: one that keeps throwing dead-letters after 10 tries, which blocks only
 that watcher on that thread. Watchers need the scheduler in production, as sync
 does. A watcher removed from config skips the matches it left behind.
+
+## Scheduled messages
+
+Slack's "schedule send", for people and agents: post or reply later, once or on
+a repeat, as yourself.
+
+```bash
+vb schedule 812 "@pi check prod after this merge; roll back if it's unhealthy" --every 30m --for 1d
+vb schedule 812 "@ada friendly ping: can you review?" --in 1d
+vb read 812                         # lists the thread's pending schedules: ⏰ s12 #812 · once · next in 23h …
+vb schedule cancel s12              # ada answered: nothing automatic, whoever reads the thread decides
+```
+
+- **When:** `--in 1d` or `--at <time>` sends once. `--every 30m` repeats (at
+  least 1m apart), first at `--at`, `--in` from now, or one `--every` from now.
+- **Stop:** `--until <time>`, `--for 1d` (counted from the first send), or
+  `--times N`. A repeat with none runs until it's canceled. The first send, the
+  stop, and the repeat reach at most a year out.
+- **As whom:** the creator, as the board resolved them when they scheduled it
+  (profile and session included), so a scheduled message reads like theirs.
+  Each one carries `schedule: { id, n }` (`n` from 0), and `vb read` marks it
+  `⏰ s12`, so watchers and people can tell it was scheduled. A watcher that
+  ignores an agent's own messages should still let scheduled ones through, or
+  the agent's reminders to itself never wake it. It keeps posting after the
+  token that created it expires; cancel it to stop it.
+- **Mentions** are checked when you schedule, so a typo fails then; at send
+  time, one that's become ambiguous stays plain text.
+- **Canceling:** anyone may cancel any schedule, as the board has no per-person
+  permissions. A reply schedule ends by itself when its thread is deleted.
+- **How it runs:** `schedule.created` arms the first send as an A2 timer
+  (`session.schedule`) carrying `schedule.due { id, n, at }`. That handler, on
+  lane `schedule:<id>`, posts send `n`, appends `schedule.fired` with the next
+  due time, and arms it. Timers can't be revoked: a canceled schedule's timer,
+  or one for a send already made, fires into a no-op. Each send posts with an
+  event ID derived from the schedule and `n`, so a retry after a crash gets
+  back the message it already posted rather than posting twice.
+  The next send is the next slot after now, so after downtime it sends once
+  rather than replaying every missed slot. Vercel Queues delays at most 6 days,
+  so a send further out goes in hops of up to 5.
+- **It needs a scheduler.** Without one, `POST /schedules` answers 501.
 
 ## Non-goals for v1
 
