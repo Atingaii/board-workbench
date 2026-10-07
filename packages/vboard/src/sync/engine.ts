@@ -763,6 +763,29 @@ export function createSyncEngine(options: {
   }
 
   /**
+   * A renderer can read labels (a PR root showing its state), so a label change edits
+   * each copy whose rendering it changes. The default renderer doesn't, so this never edits.
+   */
+  async function deliverLabels(ctx: Ctx<'labels.changed'>) {
+    const { id } = ctx.event.payload
+    const state = await latest(ctx)
+    const message = state.messages.byId[id]
+    const copies = state.sync.copies[id] ?? {}
+    if (!message || message.deleted || Object.keys(copies).length === 0) return
+    const { state: before } = await ctx.session.state(messagesReducer, { through: ctx.event.index - 1 })
+    const previous = { ...message, labels: before.byId[id]?.labels ?? {} }
+    for (const [target, copy] of Object.entries(copies)) {
+      try {
+        const body = renderFor(target, message, state.actors, undefined, copy.files === null)
+        if (body.markdown === renderFor(target, previous, state.actors, undefined, copy.files === null).markdown) continue
+        await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
+      } catch (error) {
+        console.warn(`[vboard] skipped labels.changed on ${target}:`, describe(error))
+      }
+    }
+  }
+
+  /**
    * Shows typing in every platform thread a board thread is synced to. It's
    * ephemeral and best-effort: nothing goes in the log, and a platform that
    * fails is skipped. Answers the external threads that took it.
@@ -805,6 +828,7 @@ export function createSyncEngine(options: {
     'message.deleted': { lane, handler: async (ctx: Ctx<'message.deleted'>) => void (await deliverChange(ctx)) },
     'reaction.added': { lane, handler: async (ctx: Ctx<'reaction.added'>) => void (await deliverChange(ctx)) },
     'reaction.removed': { lane, handler: async (ctx: Ctx<'reaction.removed'>) => void (await deliverChange(ctx)) },
+    'labels.changed': { lane, handler: async (ctx: Ctx<'labels.changed'>) => void (await deliverLabels(ctx)) },
   }
 
   async function readInbox(key: string, channel: string | undefined, limit: number) {

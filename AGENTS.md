@@ -65,10 +65,10 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   a rejected merge tells Pi who requested it and why it failed. Pi resolves
   blockers, marks drafts ready when needed, and completes the requested merge
   when GitHub's requirements allow, without asking for another reaction. It
-  mentions reviewers or owners when their action is needed. `merged` adds
-  `:merged:` to a PR's root when its state becomes
-  `merged`, and `closed` adds `:closed:` when its state becomes `closed`, once
-  per transition, through the board's reaction sync.
+  mentions reviewers or owners when their action is needed.
+- In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
+  `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
+  The board edits it when its `state` label changes.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with

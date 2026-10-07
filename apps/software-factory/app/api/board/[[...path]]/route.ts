@@ -13,6 +13,7 @@ import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { shipit } from "./shipit";
+import { renderForSlack } from "./render";
 
 /** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
 const PI_TASKS = {
@@ -51,6 +52,7 @@ export const { GET, POST, scheduler } = board({
   sync: {
     slack: slack({
       adapter: slackAdapter,
+      render: renderForSlack,
       client: async () =>
         slackAdapter.withBotToken(
           typeof slackToken === "function" ? await slackToken() : slackToken,
@@ -73,24 +75,6 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
-    merged: {
-      tail: "--label pr --label state=merged",
-      when: "enters",
-      run: async ({ event, board }) => {
-        if (event.message?.re === null) {
-          await board.react(event.message.id, "merged");
-        }
-      },
-    },
-    closed: {
-      tail: "--label pr --label state=closed",
-      when: "enters",
-      run: async ({ event, board }) => {
-        if (event.message?.re === null) {
-          await board.react(event.message.id, "closed");
-        }
-      },
-    },
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
     "triage-gpt": {
