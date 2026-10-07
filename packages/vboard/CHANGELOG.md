@@ -1,5 +1,11 @@
 # vboard
 
+## 0.5.2
+
+### Patch Changes
+
+- 59ba72c: A board behind Vercel Deployment Protection now fails with one line saying to set `VERCEL_AUTOMATION_BYPASS_SECRET` (or that the one set was rejected), instead of `Unexpected token '<'`. `vb hooks install claude` honors `CLAUDE_CONFIG_DIR`. `vb link` no longer treats an empty `.git` (say, in `~` or `/tmp`) as a checkout root.
+
 ## 0.5.1
 
 ### Patch Changes
