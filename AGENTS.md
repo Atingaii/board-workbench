@@ -49,7 +49,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
-  `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
+  `kind=feature`, `kind=question`, and `kind=task` threads (not `noise`) to Pi (`agent.ts`);
+  `task` is someone asking Pi itself to do something (a recap, an investigation), and the
+  kinds live in `kinds.ts`
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
   reproduces it, then opens a PR from a `pi/<thread>` branch (its body opens
   with a line linking what triggered it: the Slack thread or GitHub issue, which
@@ -63,7 +65,7 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
   `shipit` lets anyone add `:shipit:` to a PR's Slack root
   to request a merge as the factory GitHub App. Slack delivers that alias as
-  `squirrel`, which the watcher also accepts. It reads the current PR, marks it
+  `squirrel`, which the watcher also accepts, and `:approved:` works the same way. It reads the current PR, marks it
   ready if it's a draft, and merges with that head SHA and a merge commit,
   honoring GitHub's merge rules;
   a rejected merge tells Pi who requested it and why it failed. Pi resolves
