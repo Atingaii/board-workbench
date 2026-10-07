@@ -1279,6 +1279,10 @@ without inventing a caption and records both copy and file receipts. An empty
 body without media is a delivery error. Renderer changes affect future rendering,
 including pending work and retries; they do not rewrite already delivered copies.
 
+A renderer can read the message's labels. When a label change changes what a
+delivered copy renders to, vboard edits that copy, so a PR root can show its
+state. The default renderer reads no labels, so labels alone never edit a copy.
+
 ### The rules
 
 1. **Delivery.** Every message, edit, delete, and reaction in a thread goes to

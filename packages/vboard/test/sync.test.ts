@@ -777,6 +777,19 @@ describe('sync', () => {
     expect(posted.message.id).toBeGreaterThan(0)
   })
 
+  it('re-renders a copy when a label change changes its rendering, and only then', async () => {
+    const { board, s } = setup({ slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}` })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const { body } = await julian('POST', '/messages', { channel: 'prs', text: 'PR #1', labels: { state: 'draft' } })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(s.channelPosts[0]!.text).toBe(JSON.stringify({ markdown: '[draft] PR #1' }))
+
+    await julian('POST', `/messages/${body.message.id}/labels`, { set: { review: 'approved' } })
+    await julian('POST', `/messages/${body.message.id}/labels`, { set: { state: 'merged' } })
+    await vi.waitFor(() => expect(s.edits).toHaveLength(1))
+    expect(s.edits[0]).toMatchObject({ messageId: s.channelPosts[0]!.id, text: JSON.stringify({ markdown: '[merged] PR #1' }) })
+  })
+
   it.each([false, true])('posts mentions natively without changing code (custom renderer: %s)', async (customRender) => {
     const { board, s, webhook } = setup({ slackRender: customRender ? ({ message }) => message.text : undefined })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
