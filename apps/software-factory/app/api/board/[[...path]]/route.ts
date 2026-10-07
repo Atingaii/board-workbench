@@ -15,6 +15,7 @@ import { classifyThread } from "./classify";
 import { isPiKind, PI_KINDS, piTask } from "./kinds";
 import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
+import { owner } from "./owner";
 import { renderForSlack } from "./render";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
@@ -68,6 +69,8 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
+    // A factory PR's root names whose it is: the person who opened its source thread.
+    owner: owner(),
     security: security({ tellPi }),
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
