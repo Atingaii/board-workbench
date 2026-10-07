@@ -120,6 +120,21 @@ function slackError(error: unknown): string {
   return data.needed ? `${data.error}, needs ${data.needed}` : data.error
 }
 
+/** Extensions Slack shows as text (a preview, not a download): it calls any other extension binary. */
+const SLACK_TEXT_EXTENSIONS = new Set(['txt', 'md', 'markdown', 'csv', 'json', 'yaml', 'yml', 'xml', 'html', 'css', 'js', 'ts', 'py', 'rb', 'go', 'rs', 'java', 'c', 'h', 'cpp', 'sh', 'bash', 'sql', 'diff', 'patch'])
+const TEXT_TYPES = /^(text\/|application\/(json|x-ndjson|xml|yaml|x-yaml|javascript|x-sh)\b)/
+
+/**
+ * The name a file goes to Slack under. Slack picks a file's type from its
+ * extension, so a text file named `run.log` arrives as a binary download;
+ * `run.log.txt` arrives as text it previews. The board keeps the file's own name.
+ */
+export function slackFileName(filename: string, mimeType?: string): string {
+  if (!mimeType || !TEXT_TYPES.test(mimeType)) return filename
+  const extension = /\.([^./]+)$/.exec(filename)?.[1]?.toLowerCase()
+  return extension && SLACK_TEXT_EXTENSIONS.has(extension) ? filename : `${filename}.txt`
+}
+
 export const SlackEvent = eventSchema('slack', 'message')
 export type SlackEvent = z.infer<typeof SlackEvent>
 
@@ -304,6 +319,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const sent = await options.adapter.postMessage(thread, { markdown: '', files })
         return { message: sent.id, files: fileIds(sent.raw) }
       },
+      uploadName: (file) => slackFileName(file.filename, file.mimeType),
       refusesFiles: (error) => REFUSED.has((error as { data?: { error?: string } } | null)?.data?.error ?? ''),
       async deleteFiles(ids) {
         const web = await client()

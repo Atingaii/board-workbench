@@ -12,6 +12,9 @@ pnpm check          # build + typecheck + test
 pnpm test           # vitest: unit, in-process server, and CLI end to end
 ```
 
+CI runs `pnpm check` on every PR and on `main` (`.github/workflows/check.yml`);
+its `check` job is the status a PR needs before it can land.
+
 Tests use A2's memory store and a local test issuer (`test/harness.ts`). Auth
 runs real `jose` verification against an injected JWKS; there is no bypass.
 
@@ -50,9 +53,13 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
   judging the whole thread whenever a person posts. Its scope (`classify.ts`) is the
   library and the factory, Pi included, so "Pi should…" is a feature, not noise. `pi` hands `kind=bug`,
-  `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
+  `kind=feature`, `kind=question`, and `kind=task` threads (not `noise`) to Pi (`agent.ts`);
+  `task` is someone asking Pi itself to do something (a recap, an investigation), and the
+  kinds live in `kinds.ts`
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
-  reproduces it, then opens a PR from a `pi/<thread>` branch, or labels the
+  reproduces it, then opens a PR from a `pi/<thread>` branch (its body opens
+  with a line linking what triggered it: the Slack thread or GitHub issue, which
+  `taskMessage` puts in Pi's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
   `review-pi` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
@@ -62,7 +69,7 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
   `shipit` lets anyone add `:shipit:` to a PR's Slack root
   to request a merge as the factory GitHub App. Slack delivers that alias as
-  `squirrel`, which the watcher also accepts. It reads the current PR, marks it
+  `squirrel`, which the watcher also accepts, and `:approved:` works the same way. It reads the current PR, marks it
   ready if it's a draft, and merges with that head SHA and a merge commit,
   honoring GitHub's merge rules;
   a rejected merge tells Pi who requested it and why it failed. Pi resolves
@@ -87,9 +94,11 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   can reach.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
-  they're files in `.a2/attachments`. Pi attaches proof (test runs, screenshots) to the reply
-  that links its PR. Its `vb` is pinned (`VBOARD` in `agent.ts`): bump it with
-  each release Pi should use, since setup upgrades sandboxes to exactly that.
+  they're files in `.a2/attachments`. Pi attaches a screenshot to the reply
+  that links its PR when the change is visible, never test-run logs: the tests
+  are in the PR, and a bug fix's PR body names the test that reproduces it. Its
+  `vb` is pinned (`VBOARD` in `agent.ts`): bump it with each release Pi should
+  use, since setup upgrades sandboxes to exactly that.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`), on topic `vboard-factory`. Production is behind Vercel
   Authentication: the CLI needs `VERCEL_AUTOMATION_BYPASS_SECRET`, and Pi's

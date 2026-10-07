@@ -25,6 +25,13 @@ test("a PR root is one line: its state's emoji and a link", () => {
   }
 });
 
+test("a PR root labeled with its owner says whose it is", () => {
+  const labels = { pr: "basehub-ai/vboard#68", state: "open", owner: "slack:user:U0AP7QRUM7E", "owner.name": "Martin Sione" };
+  assert.ok(renderForSlack(input({ labels })).endsWith(") · for <@U0AP7QRUM7E>"));
+  const github = { ...labels, owner: "github:user:40034115", "owner.name": "julianbenegas" };
+  assert.ok(renderForSlack(input({ labels: github })).endsWith(") · for julianbenegas"));
+});
+
 test("everything else keeps the default", () => {
   assert.equal(renderForSlack(input({ re: 68, text: "looks good" })), "**julianbenegas (github)**: looks good");
   const issue = input({ text: "Issue #6: Link identities\nhttps://github.com/x", labels: { issue: "x#6", state: "open" } });

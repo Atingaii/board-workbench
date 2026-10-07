@@ -78,8 +78,8 @@ test("a retry reads the current draft status and does not mark it ready again", 
   assertIntent(h, "Checks are pending.");
 });
 
-test("shipit and its Slack squirrel alias merge a PR root for any reactor", async () => {
-  for (const [emoji, user] of [["shipit", "U123"], ["squirrel", "U123"], ["squirrel", "U456"]]) {
+test("shipit, its Slack squirrel alias, and :approved: merge a PR root for any reactor", async () => {
+  for (const [emoji, user] of [["shipit", "U123"], ["squirrel", "U123"], ["squirrel", "U456"], ["approved", "U456"]]) {
     const input = event();
     input.payload.emoji = emoji;
     input.payload.by = { actor: `slack:user:${user}`, principal: `slack:user:${user}` };
@@ -123,6 +123,15 @@ for (const [name, change] of [
     assert.deepEqual(h.notifications, []);
   });
 }
+
+test("a failed :approved: merge names the reaction it came from", async () => {
+  const input = event();
+  input.payload.emoji = "approved";
+  const h = harness([open(), { status: 405, body: { message: "Checks are pending." } }]);
+  await h.run(input);
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0].message, /reacted with :approved: to request a merge/);
+});
 
 test("a retried callback sees the merged PR and does not merge it again", async () => {
   const h = harness([open(), merged(), merged()]);

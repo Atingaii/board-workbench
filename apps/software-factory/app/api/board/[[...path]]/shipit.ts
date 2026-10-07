@@ -2,6 +2,9 @@ import type { Watcher } from "vboard";
 import { getToken } from "@vercel/connect";
 import type { tellPi } from "./agent";
 
+/** Reactions that request a merge. Slack delivers :shipit: as `squirrel`. */
+const MERGE_EMOJI = new Set(["shipit", "squirrel", "approved"]);
+
 export function shipit(options: {
   tellPi: typeof tellPi;
   token?: () => Promise<string>;
@@ -14,7 +17,7 @@ export function shipit(options: {
       const root = event.message;
       if (
         event.type !== "reaction.added" ||
-        (event.payload.emoji !== "shipit" && event.payload.emoji !== "squirrel") ||
+        !MERGE_EMOJI.has(event.payload.emoji) ||
         event.payload.from !== "slack" ||
         !event.payload.by.principal.startsWith("slack:user:") ||
         root?.re !== null
@@ -59,15 +62,16 @@ export function shipit(options: {
         if (!result.merged) throw new Error(result.message ?? "GitHub did not merge the PR.");
       } catch (error) {
         const requester = event.actor?.handle ?? event.payload.by.actor;
+        const emoji = event.payload.emoji === "approved" ? ":approved:" : ":shipit:";
         const reason = error instanceof Error ? error.message : String(error);
         await options.tellPi({
           task: "review",
           thread: root.id,
           key: `shipit-${event.index}`,
           message: [
-            `${requester} (${event.payload.by.actor}) reacted with :shipit: to request a merge of ${root.labels.pr} in board thread #${root.id}.`,
+            `${requester} (${event.payload.by.actor}) reacted with ${emoji} to request a merge of ${root.labels.pr} in board thread #${root.id}.`,
             `The factory couldn't merge it: ${reason}`,
-            "Read the thread and inspect the PR's current state, checks, and reviews. Carry out the requested merge: resolve the blockers you can, mark a draft ready if needed, and merge when GitHub's requirements allow. Ping the appropriate reviewer or owner in the thread when needed, and explain what is still blocking it. The merge request remains active; don't require another :shipit: reaction.",
+            `Read the thread and inspect the PR's current state, checks, and reviews. Carry out the requested merge: resolve the blockers you can, mark a draft ready if needed, and merge when GitHub's requirements allow. Ping the appropriate reviewer or owner in the thread when needed, and explain what is still blocking it. The merge request remains active; don't require another ${emoji} reaction.`,
           ].join("\n"),
         });
       }
