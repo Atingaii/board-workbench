@@ -62,7 +62,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
 
   update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread (channel \`work\`); --skip if there's none
-  hooks [install|uninstall|status] [claude|codex|cursor]...
+  hooks [install|uninstall|status] [claude|codex|cursor|pi]...
                                            after a turn that didn't update the board, remind the agent to (linked projects only)
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -472,7 +472,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         }
         return 0
       }
-      if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex|cursor]...')
+      if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex|cursor|pi]...')
       const { command: cli, note } = cliCommand()
       for (const agent of agents) {
         const changed = installHook(agent, cli, flags.channel ? ` --channel ${flags.channel}` : '')
