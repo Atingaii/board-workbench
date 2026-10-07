@@ -86,21 +86,26 @@ async function triage({ event, board }: WatcherContext) {
   const worth = answers.worth.probability;
   await board.label(message.id, { set: { kind, worth: worth.toFixed(2) } });
   if (worth < WORTH || (kind !== "bug" && kind !== "feature")) return;
-  // A retried watcher sees the event as it was: check the thread as it is now.
-  if ((await board.thread(message.id)).message.labels.v0) return;
+  // A retried watcher sees the event as it was: check the thread as it is now, and
+  // finish an announcement that failed after the chat started rather than start another.
+  const labels = (await board.thread(message.id)).message.labels;
+  if (labels.announcement) return;
+  let chatId = labels.v0;
+  if (!chatId) {
+    chatId = (await startV0({ kind, text: message.text, source: slackLink(message.origin?.thread) })).id;
+    await board.label(message.id, { set: { v0: chatId } });
+    await board.react(message.id, "v0");
+  }
   // Only the reports v0 takes on need words, so only they pay for a generated reason.
   const { text: reason } = await generateText({
     model: "openai/gpt-6-luna",
     system: `You triage feedback about v0, Vercel's AI app builder. In one short sentence, say why this ${kind} report is worth a coding agent's attempt.`,
     prompt: message.text,
   });
-  const chat = await startV0({ kind, text: message.text, source: slackLink(message.origin?.thread) });
-  await board.label(message.id, { set: { v0: chat.id } });
-  await board.react(message.id, "v0");
   const firstLine = message.text.split("\n")[0]!.slice(0, 140);
   const announcement = await board.post("v0-prs", {
-    text: `v0 is on a ${kind}: “${firstLine}”\n${reason}\n${chat.url}${message.origin ? `\nsource: ${slackLink(message.origin.thread)}` : ""}`,
-    labels: { source: String(message.id), v0: chat.id, kind },
+    text: `v0 is on a ${kind}: “${quoted(firstLine)}”\n${quoted(reason)}\nhttps://v0.app/chat/${chatId}${message.origin ? `\nsource: ${slackLink(message.origin.thread)}` : ""}`,
+    labels: { source: String(message.id), v0: chatId, kind },
   });
   await board.label(message.id, { set: { announcement: String(announcement.id) } });
 }
@@ -118,6 +123,15 @@ async function report({ event, board }: WatcherContext) {
     owner ? `likely owner: @[${owner}]` : null,
   ].filter(Boolean).join("\n");
   await board.reply(announcement, text);
+}
+
+/**
+ * Someone else's words, safe to post: a board write fails on an `@handle` it can't
+ * resolve, and quoting a report shouldn't ping anyone again. A word joiner after each
+ * `@` keeps the text looking the same but stops it from parsing as a mention.
+ */
+function quoted(text: string) {
+  return text.replaceAll("@", "@⁠");
 }
 
 /** `slack:C0123:1727.1234` → a Slack permalink. */
