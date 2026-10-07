@@ -75,6 +75,17 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   blockers, marks drafts ready when needed, and completes the requested merge
   when GitHub's requirements allow, without asking for another reaction. It
   mentions reviewers or owners when their action is needed.
+  `autoland` (`autoland.ts`) is auto-landing in shadow mode: it labels PRs and
+  merges nothing. After each review, the PR thread's Pi labels the root
+  `land=yes|no` with `land.why` and the head it reviewed (`land.sha`); yes
+  means it fixes a bug or does what a person clearly asked, with nothing to
+  fix and no caveats or tradeoffs. Only that Pi's label counts. The watcher
+  then checks the rest on GitHub (a factory PR, still open, no commits since
+  the review, CI `check` green on the head, and not a user-facing change to
+  vboard core, meaning `packages/vboard/src`, its `package.json`, or
+  `tsdown.config.ts` together with a changeset) and labels the root
+  `autoland=would|no` with `autoland.why`. A `would` root also wears
+  `:stamp-hammer:`, added and removed as the verdict flips, so Slack shows it.
   `security` (`security.ts`) lets anyone add `:security:` to a PR's Slack root
   to have Pi run a deepsec review of its diff, in a fresh `git worktree` outside
   its clone (deepsec only fails on net-new findings, so reused state could look
