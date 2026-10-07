@@ -63,3 +63,17 @@ test("taskMessage: Pi's task names where the thread came from and who posted it"
     "There's a bug report in board thread #7.",
   );
 });
+
+for (const task of ["thread", "review"]) {
+  test(`${task}: Pi doesn't restate what the thread already shows, GitHub included`, () => {
+    assert.match(INSTRUCTIONS[task], /no recaps of the thread, including messages synced from GitHub/);
+    assert.match(INSTRUCTIONS[task], /say each thing once/);
+  });
+}
+
+test("review: the review reaches the board on its own, so the board reply doesn't restate it", () => {
+  assert.match(INSTRUCTIONS.review, /shows up in the board thread .* on its own/);
+  assert.doesNotMatch(INSTRUCTIONS.review, /Then reply in the board thread with just the verdict/);
+  assert.match(INSTRUCTIONS.review, /keep the body short/i);
+  assert.match(INSTRUCTIONS.review, /Always put the verdict in the body/);
+});
