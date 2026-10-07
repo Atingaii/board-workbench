@@ -86,6 +86,15 @@ export const InboxQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+export const IdentityLinkBody = z.object({
+  /** The sync entry whose account to link, e.g. `slack`. */
+  sync: z.string().min(1).max(64),
+  /** `code` even when the entry can sign people in. */
+  method: z.enum(['code', 'consent']).optional(),
+})
+export const IdentityCheckBody = z.object({ sync: z.string().min(1).max(64) })
+export const IdentityUnlinkBody = z.object({ actor: z.string().min(1).max(256) })
+
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
 export const TypingBody = z.object({}).optional()
@@ -101,8 +110,14 @@ export type MessagesQueryInput = z.input<typeof MessagesQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
 
-/** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
-export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'>
+/** The person a platform account is linked to (`actor.linked`). */
+export type PersonView = { id: string; handle: string; name: string; avatar: string | null }
+
+/**
+ * `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow.
+ * `person` is who a linked platform account belongs to.
+ */
+export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'> & { person?: PersonView }
 export type MessageView = Message & { author: ActorView | null }
 
 /** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */
@@ -142,6 +157,19 @@ export type Me = {
   session: string | null
   expiresAt: string | null
 }
+
+/** A platform account linked to you, as `GET /identity` lists it. */
+export type LinkedAccount = { actor: string; handle: string | null; name: string | null; method: 'code' | 'consent'; at: string }
+export type IdentityView = { principal: string; links: LinkedAccount[]; cursor: number }
+/**
+ * How to prove an account is yours: post `code` from it anywhere the board syncs
+ * before `expiresAt`, or open `url` (the platform's sign-in) and approve.
+ */
+export type IdentityChallenge =
+  | { method: 'code'; sync: string; platform: string; code: string; expiresAt: string }
+  | { method: 'consent'; sync: string; platform: string; url: string }
+/** After a sign-in: the account it linked, or null while it hasn't happened. */
+export type IdentityCheck = { linked: LinkedAccount | null }
 
 export type ChannelView = Channel
 export type MessagesPage = { messages: MessageView[]; cursor: number }
@@ -187,6 +215,13 @@ export const routes = {
   upload: { method: 'POST', path: '/attachments' },
   attachment: { method: 'GET', path: '/attachments/:id' },
   openapi: { method: 'GET', path: '/openapi.json' },
+  /** Your linked platform accounts. */
+  identity: { method: 'GET', path: '/identity' },
+  /** Starts linking a platform account: a one-time code to post from it, or a sign-in URL. */
+  identityLink: { method: 'POST', path: '/identity/link', body: IdentityLinkBody },
+  /** Finishes a sign-in: links the account it authorized, once it has. */
+  identityCheck: { method: 'POST', path: '/identity/check', body: IdentityCheckBody },
+  identityUnlink: { method: 'POST', path: '/identity/unlink', body: IdentityUnlinkBody },
 } as const
 
 export type RouteName = keyof typeof routes

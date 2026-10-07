@@ -1,6 +1,6 @@
 import { canonicalEmoji } from './emoji.ts'
 import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
-import { boardContract, type BoardEvent, type Link, type Origin } from './contract.ts'
+import { boardContract, identityContract, type BoardEvent, type Link, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
 // in place: an event costs O(1) instead of a copy of every message.
@@ -180,13 +180,38 @@ export type Actor = {
   avatar: string | null
 }
 
+/** A platform actor proved to be a principal (`actor.linked`). */
+export type ActorLink = { to: string; method: 'code' | 'consent'; at: string }
+
 export type ActorsState = {
   byId: Record<string, Actor>
   /** Lowercased handle → actor IDs. Handles aren't reserved, so several can share one. */
   byHandle: Record<string, string[]>
+  /** Platform actor → the principal it's linked to. Display and filtering only, never permissions. */
+  links: Record<string, ActorLink>
 }
 
+/** The principal an actor belongs to: its link, its own principal for a profile (`…+claude`), or itself. */
+export function personOf(actors: ActorsState, actor: string): string {
+  const linked = actors.links[actor]?.to
+  if (linked) return linked
+  const plus = actor.indexOf('+')
+  return plus === -1 ? actor : actor.slice(0, plus)
+}
+
+/** The platform actors linked to `principal`. */
+export const linkedTo = (actors: ActorsState, principal: string): string[] =>
+  Object.entries(actors.links).filter(([, link]) => link.to === principal).map(([actor]) => actor)
+
 export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
+  if (event.type === 'actor.linked') {
+    state.links[event.payload.actor] = { to: event.payload.to, method: event.payload.method, at: iso(event.createdAt) }
+    return state
+  }
+  if (event.type === 'actor.unlinked') {
+    delete state.links[event.payload.actor]
+    return state
+  }
   if (event.type !== 'actor.seen') return state
   const { actor, kind, handle, name, avatar } = event.payload
   const previous = state.byId[actor]
@@ -205,14 +230,15 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
 
 export const actorsReducer = boardContract
   .reducer({
-    name: 'vboard.actors.v1',
-    initialState: { byId: {}, byHandle: {} } as ActorsState,
+    name: 'vboard.actors.v2',
+    initialState: { byId: {}, byHandle: {}, links: {} } as ActorsState,
   })
   .fold(foldActors)
 
 /** A copy of a board message on a platform. */
 /** `files`: the platform's IDs for the message's files, or null when it refused them; unset until they're sent. */
-export type ExternalCopy = { thread: string; message: string; files?: string[] | null }
+/** `asUser`: posted with its author's own token, so editing or deleting it needs that token too. */
+export type ExternalCopy = { thread: string; message: string; files?: string[] | null; asUser?: true }
 
 export type SyncedThread = {
   root: number
@@ -302,3 +328,20 @@ export const syncReducer = boardContract
     initialState: { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} } as SyncState,
   })
   .fold(foldSync)
+
+export type IdentityCode = { principal: string; sync: string; expiresAt: string; usedBy: string | null }
+/** Code hash → its code. */
+export type IdentityCodesState = Record<string, IdentityCode>
+
+export const identityCodesReducer = identityContract
+  .reducer({ name: 'vboard.identity-codes.v1', initialState: {} as IdentityCodesState })
+  .fold((state, event) => {
+    if (event.type === 'identity.code_issued') {
+      const { hash, principal, sync, expiresAt } = event.payload
+      state[hash] ??= { principal, sync, expiresAt, usedBy: null }
+    } else if (event.type === 'identity.code_used') {
+      const code = state[event.payload.hash]
+      if (code && code.usedBy === null) code.usedBy = event.payload.actor
+    }
+    return state
+  })

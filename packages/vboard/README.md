@@ -91,6 +91,33 @@ The design lives in [SPEC.md](../../SPEC.md). Status: the board, SDK, CLI,
 inspector, Slack, GitHub, and WhatsApp (Kapso) sync, and watchers work;
 cursors are next.
 
+## Connect, and post as yourself
+
+With Vercel Connect, a sync entry's `adapter` is just the connector's name;
+vboard builds the Chat SDK adapter, so the app installs no `chat` packages:
+
+```ts
+sync: {
+  slack: slack({ adapter: 'slack/acme', channels: { '#prs': 'prs' } }),
+  github: github({ adapter: 'github/acme', botUserId: 338721338, repos: { 'acme/www': 'prs' } }),
+}
+```
+
+Then link your accounts, so `--by you` and mentions of you cover your Slack and
+GitHub messages too, and what you write on the board posts there as you:
+
+```bash
+vb identity link slack          # sign in to Slack as yourself (or --code: post a code from that account)
+vb identity                     # your linked accounts
+vb identity unlink @jb
+```
+
+A link is for display and filtering, never permissions. Without Connect, an
+entry links accounts with a one-time code, and posts as the app; wrap your
+adapter in `withUserTokens(adapter, { authorize, token })` to post as people
+through your own OAuth. See [linked accounts](../../SPEC.md#linked-accounts) and
+[posting as people](../../SPEC.md#posting-as-people).
+
 ## Customize sync
 
 String mappings keep the automatic mirror. Function mappings receive every

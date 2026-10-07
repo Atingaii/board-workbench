@@ -14,6 +14,8 @@ export function authorName(message: Pick<MessageView, 'author' | 'by'>): string 
   const slash = author.handle.indexOf('/')
   if (message.by.profile !== null && slash !== -1)
     return `${author.name} via ${author.handle.slice(0, slash)}`
+  // A linked platform account says whose it is.
+  if (author.person && author.person.handle !== author.handle) return `${author.name} (${author.person.handle})`
   return author.name
 }
 

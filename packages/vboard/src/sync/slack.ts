@@ -7,6 +7,9 @@ import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInpu
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
+import { createSlackAdapter } from '@chat-adapter/slack'
+import { connectSlackAdapter } from '@vercel/connect/chat'
+import { connectUserTokens, withUserTokens } from './users.ts'
 
 type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean; is_im?: boolean; is_mpim?: boolean }
 export type SlackClient = {
@@ -20,6 +23,7 @@ export type SlackClient = {
     /** Reads a linked message; needs `channels:history` (`groups:history` for private channels). */
     replies?(args: { channel: string; ts: string; oldest: string; latest: string; inclusive: boolean; limit: number }): Promise<{ messages?: SlackMessage[] }>
   }
+  auth?: { test(args?: Record<string, unknown>): Promise<{ user_id?: string; user?: string }> }
   users?: {
     info(args: { user: string }): Promise<{ user?: SlackUser }>
     lookupByEmail?(args: { email: string }): Promise<{ user?: SlackUser }>
@@ -120,8 +124,14 @@ export type SlackEvent = z.infer<typeof SlackEvent>
 
 export type SlackHandler = SyncHandler<SlackEvent>
 export type SlackOptions = {
-  adapter: Adapter
+  /**
+   * A Vercel Connect connector (`'slack/acme'`): vboard builds the Slack adapter,
+   * its Web API client, and people's sign-in, so messages they write post as them.
+   * Or your own Chat SDK adapter, wrapped in `withUserTokens` to post as people.
+   */
+  adapter: Adapter | string
   render?: (input: RenderInput) => string
+  /** Not needed with a connector. */
   client?: () => Promise<SlackClient>
   channels: Record<string, EventMapping<SlackEvent>>
 }
@@ -136,8 +146,22 @@ export function slack(options: SlackOptions): SlackProvider {
   return new SlackProvider(options)
 }
 
+type SlackWithTokens = Adapter & { webClient?: SlackClient; withBotToken?<T>(token: string, fn: () => T): T }
+
+/** A Slack adapter, client, and people's tokens, all from one Vercel Connect connector. */
+function fromConnector(connector: string) {
+  const credentials = connectSlackAdapter(connector)
+  const adapter = withUserTokens(createSlackAdapter(credentials) as unknown as SlackWithTokens, connectUserTokens(connector))
+  const botToken = credentials.botToken
+  const client = async () => adapter.withBotToken!(typeof botToken === 'function' ? await botToken() : botToken, () => adapter.webClient!)
+  return { adapter: adapter as Adapter, client }
+}
+
 export class SlackProvider extends ChatSyncProvider<SlackEvent> {
-  constructor(options: SlackOptions) {
+  constructor(given: SlackOptions) {
+    const connected = typeof given.adapter === 'string' ? fromConnector(given.adapter) : null
+    const options = connected ? { ...given, adapter: connected.adapter, client: given.client ?? connected.client } : { ...given, adapter: given.adapter as Adapter }
+    const tokens = options.adapter as SlackWithTokens
     let directClient: SlackClient | undefined
     if (!options.client) {
       try {
@@ -395,6 +419,24 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       // A Slack thread is named by its root message's ts.
       isRoot: (thread, messageId) => thread.slice(thread.lastIndexOf(':') + 1) === messageId,
       context: () => null,
+      ...(typeof tokens.withBotToken === 'function'
+        ? {
+            runAs: <T>(token: string, fn: () => Promise<T>) => tokens.withBotToken!(token, fn),
+            async whoAmI(token: string) {
+              const me = await tokens.withBotToken!(token, () => tokens.webClient!.auth!.test())
+              if (!me.user_id) throw new Error("Slack didn't say whose token this is")
+              const web = await client().catch(() => undefined)
+              const user = (await web?.users?.info({ user: me.user_id }).catch(() => undefined))?.user
+              const handle = user?.profile?.display_name || user?.name || me.user || me.user_id
+              return {
+                id: `slack:user:${me.user_id}`, handle,
+                name: user?.profile?.real_name || user?.real_name || handle,
+                avatar: user?.profile?.image_72 ?? user?.profile?.image_48 ?? null,
+                isBot: false,
+              }
+            },
+          }
+        : {}),
       async resolveTarget(target): Promise<ResolvedTarget> {
         const at = target.indexOf(':')
         const channel = await this.resolveChannel(at === -1 ? target : target.slice(0, at))
@@ -415,3 +457,4 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     return SlackEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }
+export { withUserTokens, type UserTokens } from './users.ts'

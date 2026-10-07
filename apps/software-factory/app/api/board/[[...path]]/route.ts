@@ -2,12 +2,6 @@ import { board } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { github } from "vboard/adapter-github";
 import { vercelBlob } from "vboard/adapter-vercel-blob";
-import { createSlackAdapter } from "@chat-adapter/slack";
-import { createGitHubAdapter } from "@chat-adapter/github";
-import {
-  connectGitHubAdapter,
-  connectSlackAdapter,
-} from "@vercel/connect/chat";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, tellPi } from "./agent";
@@ -31,10 +25,6 @@ const env = process.env.VERCEL_ENV;
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
-const slackCredentials = connectSlackAdapter("slack/vboard-factory");
-const slackAdapter = createSlackAdapter(slackCredentials);
-const slackToken = slackCredentials.botToken;
-
 export const { GET, POST, scheduler } = board({
   store: env
     ? redisHttp({
@@ -49,23 +39,18 @@ export const { GET, POST, scheduler } = board({
   blob: env ? vercelBlob() : undefined,
   scheduler: vercelQueues({ topic: "vboard-factory" }),
   sync: {
+    // Connect connectors: vboard builds the adapters, and people who sign in
+    // (`vb identity link slack`) post as themselves.
     slack: slack({
-      adapter: slackAdapter,
-      client: async () =>
-        slackAdapter.withBotToken(
-          typeof slackToken === "function" ? await slackToken() : slackToken,
-          () => slackAdapter.webClient,
-        ),
+      adapter: "slack/vboard-factory",
       channels: {
         C0C6MNT9LLC: "dev",
       },
     }),
     github: github({
-      adapter: createGitHubAdapter({
-        ...connectGitHubAdapter("github/vboard-factory"),
-        // Connect can't detect the bot's identity, so pin it to prevent echoes.
-        botUserId: 338721338,
-      }),
+      adapter: "github/vboard-factory",
+      // Connect can't detect the bot's identity, so pin it to prevent echoes.
+      botUserId: 338721338,
       repos: {
         "basehub-ai/vboard": { pulls: "dev", issues: "dev" },
       },
