@@ -1,4 +1,4 @@
-import type { BoardEventView, MessageView } from '../api/routes.ts'
+import type { BoardEventView, MessageView, PlatformRead } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -126,4 +126,25 @@ export function formatEvent(event: BoardEventView): string {
     default:
       return `#${event.index}  ${event.type}`
   }
+}
+
+/**
+ * A channel or thread read with `vb fetch`: a header, then each message under its ID,
+ * with the target that reads its thread when it has replies.
+ */
+export function formatPlatformRead(key: string, read: PlatformRead, now = Date.now()): string {
+  const where = `${key}:${read.channel}${read.name ? ` (#${read.name})` : ''}${read.thread ? `, thread ${read.thread}` : ''}`
+  if (read.messages.length === 0) return `${where}\nno messages`
+  const blocks = read.messages.map((message) => {
+    const reply = read.thread !== null && message.id !== read.thread
+    const pad = reply ? '    ' : '      '
+    const when = message.createdAt ? ` · ${ago(message.createdAt, now)}` : ''
+    const replies = message.replies > 0 && read.thread === null ? `  (${message.replies} ${message.replies === 1 ? 'reply' : 'replies'}: vb fetch ${key} ${message.thread})` : ''
+    return [
+      `${reply ? '  ↳ ' : ''}${message.id}  ${message.author}${when}${replies}`,
+      indent(message.text || '(no text)', pad),
+      ...message.files.map((file) => `${pad}📎 ${file.name}${file.url ? ` ${file.url}` : ''}`),
+    ].join('\n')
+  })
+  return [where, ...blocks].join('\n')
 }

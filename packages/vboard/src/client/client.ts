@@ -7,6 +7,7 @@ import type {
   EventsQueryInput,
   FiltersInput,
   InboxEntry,
+  PlatformRead,
   Me,
   MessagesPage,
   MessagesQueryInput,
@@ -260,6 +261,12 @@ export function createBoardClient(options: ClientOptions) {
     /** Raw platform events for a sync entry, newest first. */
     inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
       (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
+    /**
+     * Reads a platform channel (`#name`, an ID), thread (`C0123:1727000000.123456`),
+     * or message permalink on demand, without syncing or storing it. Full access only.
+     */
+    readPlatform: (key: string, target: string, opts: { limit?: number } = {}) =>
+      call<PlatformRead>('GET', `/platforms/${key}/read${queryString({ target, ...opts })}`),
 
     poll,
 

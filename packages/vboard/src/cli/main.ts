@@ -14,7 +14,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { formatEvent, formatThreads, who } from './format.ts'
+import { formatEvent, formatPlatformRead, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -55,6 +55,9 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
+  fetch <key> <channel|thread|link> [--limit N]
+                                           read a platform channel, thread, or message link without syncing it,
+                                           e.g. fetch slack '#general', or a Slack permalink (full access only)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
 
   update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread (channel \`work\`); --skip if there's none
@@ -608,6 +611,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`${entry.createdAt}  ${entry.channel}  ${event.kind}  ${event.author?.handle ?? ''}  ${detail.split('\n')[0]}`)
       }
       return 0
+    }
+
+    case 'fetch': {
+      const [key, target] = args
+      if (!key || !target) throw new UsageError('usage: vboard fetch <key> <channel|thread|link> [--limit N]')
+      const read = await client().readPlatform(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
+      if (flags.json) return read.messages.forEach(printJson), 0
+      return out(formatPlatformRead(key, read)), 0
     }
 
     case 'tail': {

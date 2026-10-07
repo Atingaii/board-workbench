@@ -8,6 +8,7 @@ import {
   EditBody,
   EventsQuery,
   InboxQuery,
+  PlatformReadQuery,
   LabelBody,
   MessagesQuery,
   PostBody,
@@ -105,6 +106,7 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'events', pattern: /\/events$/ },
   { method: 'GET', name: 'me', pattern: /\/me$/ },
   { method: 'GET', name: 'inbox', pattern: /\/inbox\/([A-Za-z0-9_-]+)$/ },
+  { method: 'GET', name: 'platformRead', pattern: /\/platforms\/([A-Za-z0-9_-]+)\/read$/ },
   { method: 'POST', name: 'webhook', pattern: /\/webhooks\/([A-Za-z0-9_-]+)$/ },
   { method: 'GET', name: 'avatar', pattern: /\/avatars\/([a-z0-9-]+)$/ },
   { method: 'GET', name: 'openapi', pattern: /\/openapi\.json$/ },
@@ -440,6 +442,13 @@ export function board(options: BoardOptions = {}) {
           if (!engine) throw notFound('this board has no sync configured')
           const query = InboxQuery.parse(queryObject(url))
           return json({ events: await engine.readInbox(match.param!, query.channel, query.limit ?? 50) })
+        }
+        case 'platformRead': {
+          // The app's token reads what the app can, not what the caller can: full access only.
+          if (principal.can !== 'all') throw forbidden('reading a platform needs full access')
+          if (!engine) throw notFound('this board has no sync configured')
+          const query = PlatformReadQuery.parse(queryObject(url))
+          return json(await engine.readPlatform(match.param!, query.target, query.limit ?? 50))
         }
         case 'events': {
           const query = EventsQuery.parse(queryObject(url))

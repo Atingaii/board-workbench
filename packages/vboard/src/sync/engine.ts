@@ -28,7 +28,7 @@ import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, ty
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import type { BoardSession } from '../server/board.ts'
-import { badRequest, notFound } from '../server/errors.ts'
+import { badRequest, HttpError, notFound } from '../server/errors.ts'
 import {
   writeDelete,
   writeEdit,
@@ -42,7 +42,7 @@ import {
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import { ReceivedEvent, ResolvedTarget, type ProviderMapping, type SyncClient, type SyncContext } from './provider.ts'
+import { ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderMapping, type SyncClient, type SyncContext } from './provider.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
 
@@ -853,8 +853,20 @@ export function createSyncEngine(options: {
       }))
   }
 
+  /** A platform channel or thread, read for the caller: nothing is synced, stored, or joined. */
+  async function readPlatform(key: string, target: string, limit: number) {
+    const platform = platformOf(key)
+    try {
+      return await platform.read(target, { limit })
+    } catch (error) {
+      if (error instanceof UnreadableError) throw new HttpError(error.code === 'unsupported' || error.code === 'invalid_target' ? 400 : 403, error.code, error.message)
+      throw badRequest(`can't read ${target} from ${key}: ${describe(error)}`, 'platform_error')
+    }
+  }
+
   return {
     inboxServer,
+    readPlatform,
     outboundHandlers,
     bind: (b: BoardBinding) => {
       binding = b

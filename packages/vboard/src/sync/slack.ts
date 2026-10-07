@@ -3,7 +3,8 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, ReceivedEvent, FetchedLink } from './provider.ts'
+import { UnreadableError, type ResolvedTarget, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
+import type { PlatformMessage, PlatformRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
 import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
@@ -17,8 +18,10 @@ export type SlackClient = {
     }>
     info(args: { channel: string }): Promise<{ channel?: SlackChannel }>
     join(args: { channel: string }): Promise<unknown>
-    /** Reads a linked message; needs `channels:history` (`groups:history` for private channels). */
-    replies?(args: { channel: string; ts: string; oldest: string; latest: string; inclusive: boolean; limit: number }): Promise<{ messages?: SlackMessage[] }>
+    /** Reads a linked message or a thread; needs `channels:history` (`groups:history` for private channels). */
+    replies?(args: { channel: string; ts: string; oldest?: string; latest?: string; inclusive?: boolean; limit: number }): Promise<{ messages?: SlackMessage[] }>
+    /** Reads a channel, newest first, for `vb fetch`; needs `channels:history`. */
+    history?(args: { channel: string; limit: number }): Promise<{ messages?: SlackMessage[] }>
   }
   users?: {
     info(args: { user: string }): Promise<{ user?: SlackUser }>
@@ -43,6 +46,8 @@ type SlackMessage = {
   username?: string
   bot_profile?: { name?: string }
   files?: SlackFile[]
+  thread_ts?: string
+  reply_count?: number
 }
 /** What Slack attaches to a message that links another: `is_msg_unfurl` marks a message link's. */
 type SlackAttachment = {
@@ -361,6 +366,61 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
           author: author.slice(0, 256), text: mrkdwn(found.text ?? '').slice(0, MESSAGE_TEXT_MAX),
           createdAt: tsTime(found.ts), files: filesOf(found.files),
         } }
+      },
+      // A channel or thread read on demand (`vb fetch`), with the same limits as a link:
+      // public channels the app is already in. It never joins (that would announce the
+      // app, and Slack would start sending the channel's events), and nothing it reads
+      // is stored; the board still only listens to the channels it's configured with.
+      async read(target, { limit }): Promise<PlatformRead> {
+        const web = await client()
+        if (!web) throw new UnreadableError('no_client', 'no Slack client to read it with')
+        let channel: string
+        let thread: string | null = null
+        const link = new RegExp(PERMALINK.source).exec(target)
+        if (link) {
+          const [, id, seconds, micros, query] = link
+          channel = id!
+          thread = /[?&]thread_ts=(\d+\.\d+)/.exec(query?.replaceAll('&amp;', '&') ?? '')?.[1] ?? `${seconds}.${micros}`
+        } else if (target.startsWith('#')) {
+          channel = (await find(web, target.slice(1))).id
+        } else {
+          const parsed = /^([A-Z0-9]+)(?::(\d+\.\d+))?$/.exec(target)
+          if (!parsed) throw new UnreadableError('invalid_target', `not a Slack channel, thread, or message link: ${target} (try #name, C0123, C0123:1727000000.123456, or a permalink)`)
+          channel = parsed[1]!
+          thread = parsed[2] ?? null
+        }
+        let found: SlackMessage[]
+        let name: string | null = null
+        try {
+          const info = (await web.conversations.info({ channel })).channel
+          if (!info) throw new UnreadableError('channel_not_found', `no Slack channel ${channel}`)
+          name = info.name ?? null
+          const label = name ? `#${name}` : channel
+          if (info.is_private || info.is_im || info.is_mpim)
+            throw new UnreadableError('private_channel', `${label} is private: the board only reads public channels on demand`)
+          if (!info.is_member)
+            throw new UnreadableError('not_in_channel', `the app isn't in ${label}: someone needs to add it (it won't join on its own)`)
+          if (thread) {
+            if (!web.conversations.replies) throw new UnreadableError('no_client', "this Slack client can't read threads")
+            found = (await web.conversations.replies({ channel, ts: thread, limit })).messages ?? []
+          } else {
+            if (!web.conversations.history) throw new UnreadableError('no_client', "this Slack client can't read channels")
+            found = ((await web.conversations.history({ channel, limit })).messages ?? []).reverse()
+          }
+        } catch (error) {
+          if (error instanceof UnreadableError) throw error
+          throw new UnreadableError(slackError(error).split(',')[0]!, `Slack refused to read ${target}: ${slackError(error)}`)
+        }
+        const messages = await Promise.all(found.slice(0, limit).filter((m) => m.ts).map(async (m): Promise<PlatformMessage> => ({
+          id: m.ts!,
+          thread: `${channel}:${m.thread_ts ?? m.ts}`,
+          author: (m.user ? await nameOf(m.user) : m.bot_profile?.name || m.username || 'someone').slice(0, 256),
+          text: mrkdwn(m.text ?? '').slice(0, MESSAGE_TEXT_MAX),
+          createdAt: tsTime(m.ts),
+          replies: m.reply_count ?? 0,
+          files: filesOf(m.files),
+        })))
+        return { channel, name, thread, messages }
       },
       // Slack unfurls a message link a moment later, as a `message_changed` that keeps the text.
       // Chat SDK drops those (nothing it shows changed), so they come here.
