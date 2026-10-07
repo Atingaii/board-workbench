@@ -74,7 +74,7 @@ env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
 class UsageError extends Error {}
 
-const { values: flags, positionals } = (() => {
+const parsed = (() => {
   try {
     return parseArgs({
       args: withMentions(process.argv.slice(2)),
@@ -108,9 +108,11 @@ const { values: flags, positionals } = (() => {
     })
   } catch (error) {
     process.stderr.write(`error: ${(error as Error).message}\n`)
-    process.exit(2)
+    return null
   }
 })()
+// A misused flag runs nothing: the end of this file exits 2, once the error line is out.
+const { values: flags, positionals } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
 
 const out = (text: string) => process.stdout.write(`${text}\n`)
 const printJson = (value: unknown) => out(JSON.stringify(value))
@@ -654,7 +656,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
   }
 }
 
-if (flags.version) {
+if (parsed === null) {
+  exit(2)
+} else if (flags.version) {
   out(VERSION)
 } else if (flags.help) {
   out(HELP)
