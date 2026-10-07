@@ -78,11 +78,14 @@ test("review: the review reaches the board on its own, so the board reply doesn'
   assert.match(INSTRUCTIONS.review, /Always put the verdict in the body/);
 });
 
-for (const task of ["thread", "review"]) {
-  test(`${task}: Pi says it's on it before long work, then posts updates as it goes`, () => {
-    assert.match(INSTRUCTIONS[task], /several replies in one turn/);
-    assert.match(INSTRUCTIONS[task], /before you start, post a one-line reply saying what you're about to do/);
-    assert.match(INSTRUCTIONS[task], /a line when you reach a milestone/);
-    assert.match(INSTRUCTIONS[task], /quick answer is just the answer/);
-  });
-}
+test("thread: Pi says it's on it before long work, then posts updates as it goes", () => {
+  assert.match(INSTRUCTIONS.thread, /several replies in one turn/);
+  assert.match(INSTRUCTIONS.thread, /before you start, post a one-line reply saying what you're about to do/);
+  assert.match(INSTRUCTIONS.thread, /a line when you reach a milestone/);
+  assert.match(INSTRUCTIONS.thread, /quick answer is just the answer/);
+});
+
+test("review: no on-it or milestone lines, so a review doesn't comment on every PR", () => {
+  assert.doesNotMatch(INSTRUCTIONS.review, /several replies in one turn/);
+  assert.doesNotMatch(INSTRUCTIONS.review, /a line when you reach a milestone/);
+});
