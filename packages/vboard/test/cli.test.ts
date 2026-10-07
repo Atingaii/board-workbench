@@ -388,6 +388,29 @@ describe('cli', () => {
     await expect(readFile(join(home, '.cursor', 'hooks.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('delivers all of a long read to a reader that falls behind', async () => {
+    const post = async (body: unknown) =>
+      ((await (await fetch(`${url}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${env.VBOARD_TOKEN}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })).json()) as { message: { id: number } }).message
+    const root = await post({ channel: 'long-reads', text: 'a long thread', noSync: true })
+    // Well past a pipe's buffer on any OS (Linux's is bigger than macOS's), so a dropped tail shows.
+    for (let batch = 0; batch < 15; batch++)
+      await Promise.all(Array.from({ length: 100 }, (_, i) => post({ re: root.id, text: `note ${batch * 100 + i} ${'x'.repeat(300)}`, noSync: true })))
+    // A reader that waits before reading: what's still queued on the pipe when the command returns must arrive.
+    const child = spawn(process.execPath, [CLI, 'read', String(root.id), '--json'], { env })
+    child.stdin.end()
+    child.stdout.pause()
+    setTimeout(() => child.stdout.resume(), 300)
+    let stdout = ''
+    child.stdout.on('data', (d) => (stdout += d))
+    const code = await new Promise((resolve) => child.on('close', resolve))
+    expect(code).toBe(0)
+    expect(stdout.trim().split('\n')).toHaveLength(1501)
+  }, 60_000)
+
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
     expect(await vb(['post', 'x', '@nobody'])).toMatchObject({ code: 1, stderr: 'error: unknown mention @nobody\n' })

@@ -74,7 +74,7 @@ env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
 class UsageError extends Error {}
 
-const { values: flags, positionals } = (() => {
+const parsed = (() => {
   try {
     return parseArgs({
       args: withMentions(process.argv.slice(2)),
@@ -108,9 +108,11 @@ const { values: flags, positionals } = (() => {
     })
   } catch (error) {
     process.stderr.write(`error: ${(error as Error).message}\n`)
-    process.exit(2)
+    return null
   }
 })()
+// A misused flag runs nothing: the end of this file exits 2, once the error line is out.
+const { values: flags, positionals } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
 
 const out = (text: string) => process.stdout.write(`${text}\n`)
 const printJson = (value: unknown) => out(JSON.stringify(value))
@@ -654,17 +656,31 @@ async function run(command: string | undefined, args: string[]): Promise<number>
   }
 }
 
-if (flags.version) {
+if (parsed === null) {
+  exit(2)
+} else if (flags.version) {
   out(VERSION)
 } else if (flags.help) {
   out(HELP)
 } else {
   const [command, ...args] = positionals
   run(command, args).then(
-    (code) => process.exit(code),
+    (code) => exit(code),
     (error: unknown) => {
       process.stderr.write(`error: ${(error as Error).message}\n`)
-      process.exit(error instanceof UsageError ? 2 : 1)
+      exit(error instanceof UsageError ? 2 : 1)
     },
   )
+}
+
+/**
+ * Exits once stdout and stderr have flushed. On a pipe, writes can still be
+ * queued when a command returns, and `process.exit` would drop them: a long
+ * `read --json` would reach a slow reader cut off.
+ */
+function exit(code: number) {
+  let pending = 2
+  const done = () => --pending === 0 && process.exit(code)
+  process.stdout.write('', done)
+  process.stderr.write('', done)
 }
