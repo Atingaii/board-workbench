@@ -55,7 +55,7 @@ test(":security: on a PR root asks Pi for a deepsec review of the diff, for any 
     assert.ok(n.message.includes("basehub-ai/vboard#53"));
     assert.ok(n.message.includes("gh pr checkout 53"));
     assert.ok(n.message.includes("npm i -g @anthropic-ai/claude-code"));
-    assert.ok(n.message.includes("timeout 30m env CLAUDE_CODE_EXECUTABLE=claude npx -y deepsec process --diff origin/<base> --comment-out deepsec.md"));
+    assert.ok(n.message.includes("timeout 30m env CLAUDE_CODE_EXECUTABLE=claude npx -y deepsec process --diff origin/<base>...HEAD --comment-out deepsec.md"));
     assert.ok(n.message.includes("Exit 0"));
     assert.ok(n.message.includes("vb react 59 secure"));
     assert.ok(n.message.includes("Exit 1"));
@@ -126,9 +126,13 @@ test("runs deepsec in a fresh worktree outside the clone, so earlier findings ca
   const h = harness();
   await h.run();
   const m = h.notifications[0].message;
-  assert.ok(m.includes('git worktree add --detach "$d/pr" HEAD'));
+  // rm -rf alone leaves a worktree an earlier run left behind registered, and git worktree add refuses the path.
+  assert.ok(m.includes("git worktree remove --force /tmp/deepsec-88 2>/dev/null; rm -rf /tmp/deepsec-88; git worktree prune && git worktree add --detach /tmp/deepsec-88 HEAD"));
+  // Pi's commands don't keep their cwd, so the files it attaches are named by full path.
+  assert.ok(m.includes("attach /tmp/deepsec-88/deepsec.log"));
+  assert.ok(m.includes("attach /tmp/deepsec-88/deepsec.md"));
   assert.ok(m.includes("only fails on net-new findings"));
-  assert.ok(m.includes('git worktree remove --force "$d/pr"'));
+  assert.ok(m.includes("git worktree remove --force /tmp/deepsec-88"));
   // Its data/, deepsec.md and deepsec.log never land in the clone, so a later git add -A can't commit them.
   assert.ok(m.indexOf("git worktree add") < m.indexOf("npx -y deepsec process"));
 });
@@ -155,4 +159,22 @@ test("a message late in a sandbox session extends it to a full turn, and an earl
   assert.equal(extension(new Date(now + 45 * min), now), 0);
   assert.equal(extension(new Date(now + 60 * min), now), 0);
   assert.equal(extension(undefined, now), 0);
+});
+
+test("reviews only the PR's own changes, from where it branched off its base", async () => {
+  const h = harness();
+  await h.run();
+  assert.ok(h.notifications[0].message.includes("--diff origin/<base>...HEAD"));
+  assert.ok(!h.notifications[0].message.includes("--diff origin/<base> "));
+});
+
+test("names the worktree, since a shell variable doesn't outlive one of Pi's commands", async () => {
+  const h = harness();
+  await h.run();
+  assert.ok(!h.notifications[0].message.includes("$d"));
+  const input = event();
+  input.index = 91;
+  const g = harness();
+  await g.run(input);
+  assert.ok(g.notifications[0].message.includes("git worktree add --detach /tmp/deepsec-91 HEAD"));
 });
