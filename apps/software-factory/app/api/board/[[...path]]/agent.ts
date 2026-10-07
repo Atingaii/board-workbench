@@ -49,6 +49,13 @@ export function piName(thread: number) {
   return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}-${thread}`;
 }
 
+/**
+ * A thread's Pi's picture, generated from its name so each Pi has its own: a PNG, since Slack
+ * won't use the board's SVG avatars as a message's icon.
+ */
+export const piAvatar = (thread: number) =>
+  `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(piName(thread))}`;
+
 /** Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). */
 export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
   (by.profile === piName(thread) || by.profile === "pi") && by.session === piSession(thread);
@@ -173,8 +180,7 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
               headers: {
                 authorization: `Bearer ${tokens.board}`,
                 "x-board-profile": piName(thread),
-                // A named profile has no built-in avatar: keep Pi's mark.
-                "x-board-avatar": `${BOARD}/avatars/pi`,
+                "x-board-avatar": piAvatar(thread),
                 "x-board-session": piSession(thread),
                 ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
                   ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INSTRUCTIONS, byPi, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { INSTRUCTIONS, byPi, piAvatar, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
 for (const task of ["thread", "review"]) {
   test(`${task}: Pi stays out of messages meant for someone else`, () => {
@@ -111,6 +111,12 @@ test("thread: Pi says it's on it before long work, then posts updates as it goes
 test("review: no on-it or milestone lines, so a review doesn't comment on every PR", () => {
   assert.doesNotMatch(INSTRUCTIONS.review, /several replies in one turn/);
   assert.doesNotMatch(INSTRUCTIONS.review, /a line when you reach a milestone/);
+});
+
+test("piAvatar: a PNG generated from each Pi's name, the same every time", () => {
+  assert.equal(piAvatar(1956), "https://vercel.com/api/www/avatar?s=64&format=png&u=clever-lemur-1956");
+  assert.equal(piAvatar(1956), piAvatar(1956));
+  assert.notEqual(piAvatar(1956), piAvatar(1957));
 });
 
 test("review: :looking-bunny: on the PR root while a review is underway, off once land is labeled", () => {
