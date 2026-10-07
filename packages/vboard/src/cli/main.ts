@@ -661,10 +661,22 @@ if (flags.version) {
 } else {
   const [command, ...args] = positionals
   run(command, args).then(
-    (code) => process.exit(code),
+    (code) => exit(code),
     (error: unknown) => {
       process.stderr.write(`error: ${(error as Error).message}\n`)
-      process.exit(error instanceof UsageError ? 2 : 1)
+      exit(error instanceof UsageError ? 2 : 1)
     },
   )
+}
+
+/**
+ * Exits once stdout and stderr have flushed. On a pipe, writes can still be
+ * queued when a command returns, and `process.exit` would drop them: a long
+ * `read --json` would reach a slow reader cut off.
+ */
+function exit(code: number) {
+  let pending = 2
+  const done = () => --pending === 0 && process.exit(code)
+  process.stdout.write('', done)
+  process.stderr.write('', done)
 }
