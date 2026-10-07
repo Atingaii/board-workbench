@@ -47,7 +47,7 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
-  GPT-6 Luna's structured output,
+  GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
   judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
   `kind=feature`, and `kind=question` threads (not `noise`) to Pi (`agent.ts`)
   and tells it when someone replies; Pi reads what's new itself. For a bug, Pi
@@ -55,7 +55,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
   `review-pi` hands each new `dev --label pr` thread to Pi to review the PR, and tells it when
-  someone other than a bot replies. Review is its initial task; people can redirect
+  someone other than a bot replies. Pi hears every reply in its threads but stays quiet when one is
+  addressed to someone else, and keeps board replies to a few lines; a review's detail
+  goes in a GitHub review on the code. Review is its initial task; people can redirect
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
   `shipit` lets anyone add `:shipit:` to a PR's Slack root
   to request a merge as the factory GitHub App. Slack delivers that alias as
@@ -65,10 +67,10 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   a rejected merge tells Pi who requested it and why it failed. Pi resolves
   blockers, marks drafts ready when needed, and completes the requested merge
   when GitHub's requirements allow, without asking for another reaction. It
-  mentions reviewers or owners when their action is needed. `merged` adds
-  `:merged:` to a PR's root when its state becomes
-  `merged`, and `closed` adds `:closed:` when its state becomes `closed`, once
-  per transition, through the board's reaction sync.
+  mentions reviewers or owners when their action is needed.
+- In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
+  `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
+  The board edits it when its `state` label changes.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
@@ -106,10 +108,11 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
   there too. `VERCEL_ENV` only picks the log: production's Redis keys, a
   preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
   channels are private, so they're mapped by ID.
-- `triage` acks each new thread in `#feedback-v0-vboard`, decides with an LLM
-  whether it's worth fixing, and if so starts a v0 chat and announces it in
-  `#feedback-v0-prs`. `/api/v0-hook` reads v0's finished reply (with an LLM)
-  and labels the report, writing through the board's in-process `client`; the
+- `triage` acks each new thread in `#feedback-v0-vboard` and asks Luna's
+  decision model (`openai/gpt-6-luna-decisions`) for its `kind` and how likely
+  it's worth fixing (`worth=0.00`–`1.00`). A bug or feature at 0.7 or more gets
+  a v0 chat and an announcement in `#feedback-v0-prs` with a one-line reason.
+  `/api/v0-hook` reads v0's finished reply (with an LLM) and labels the report, writing through the board's in-process `client`; the
   `report` watcher (`when: 'enters'`) then replies once in the announcement's
   thread with the PR, a summary, and the likely owner, mentioned by email.
 - Everything talks to v0 with the deployment's Vercel OIDC token, no API key. The

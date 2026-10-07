@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Adapter } from 'chat'
 import { fakePlatform, withSlackClient, type WebhookPayload } from './sync-fixtures.ts'
-import { VERCEL_WITH_SKIPPED } from './vercel-fixtures.ts'
 import { slack } from '../src/sync/slack.ts'
 import { ChatSyncProvider } from '../src/sync/chat-provider.ts'
 import type { SyncContext, EventMapping } from '../src/sync/provider.ts'
@@ -13,6 +12,7 @@ import { boardContract } from '../src/contract/contract.ts'
 import { github } from '../src/sync/github.ts'
 import type { BoardOptions } from '../src/server/index.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+import { VERCEL_BUILDING } from './vercel-fixtures.ts'
 
 type SlackChannels = Parameters<typeof slack>[0]['channels']
 
@@ -454,43 +454,6 @@ describe('sync', () => {
     expect(g.posts).toHaveLength(0) // GitHub's own reply never goes back to GitHub
   })
 
-  it("keeps Vercel's deployment comment as labels on the PR root, not as a reply", async () => {
-    const { board, s, webhook } = setup()
-    const julian = caller(board.fetch, await personToken())
-    await webhook(
-      'github',
-      {
-        action: 'opened',
-        repository: { full_name: 'basehub-ai/vboard' },
-        sender: { login: 'julianbenegas', id: 42 },
-        pull_request: { number: 9, title: 'Deploy me', html_url: 'https://github.com/basehub-ai/vboard/pull/9', draft: false, merged: false },
-      },
-      { 'x-github-event': 'pull_request', 'x-github-delivery': 'v1' },
-    )
-    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
-    const [root] = await read(julian, 'prs')
-    const vercel = (id: string, body: string) =>
-      webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:9', id, text: body, user: '35613825', name: 'vercel[bot]', raw: { comment: { body, user: { login: 'vercel[bot]' } } } })
-
-    await vercel('vc1', VERCEL_WITH_SKIPPED)
-    await vi.waitFor(async () =>
-      expect((await julian('GET', `/messages/${root!.id}`)).body.message.labels).toMatchObject({
-        'deploy.vboard-factory': 'building',
-        'preview.vboard-factory': 'https://vboard-factory-git-changeset-release-main.playground-vercel.tools',
-      }),
-    )
-    // The skipped project gets no label.
-    expect(Object.keys((await julian('GET', `/messages/${root!.id}`)).body.message.labels)).not.toContain('deploy.vboard')
-
-    // As the deployment moves on, the labels follow.
-    await vercel('vc2', VERCEL_WITH_SKIPPED.replace(/Building/g, 'Ready').replace('building.svg', 'ready.svg'))
-    await vi.waitFor(async () => expect((await julian('GET', `/messages/${root!.id}`)).body.message.labels['deploy.vboard-factory']).toBe('ready'))
-    const thread = (await julian('GET', `/messages/${root!.id}`)).body
-    expect(thread.replies).toEqual([]) // no reply, on the board or on Slack
-    expect(s.posts).toHaveLength(0)
-    expect((await julian('GET', '/messages?label=preview.vboard-factory')).body.messages.map((m: { id: number }) => m.id)).toEqual([root!.id])
-  })
-
   it("keeps a GitHub author's avatar when a comment arrives without one", async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken())
@@ -539,6 +502,22 @@ describe('sync', () => {
     expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
     expect(get).not.toHaveBeenCalled()
     expect(g.posts).toHaveLength(0)
+  })
+
+  it("mirrors Vercel's deployment comment to Slack as a line per deployment, keeping the original on the board", async () => {
+    const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const pr = { number: 39, title: 'Deploy me', html_url: 'https://github.com/basehub-ai/vboard/pull/39' }
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'vc-opened' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:39', id: 'vc', text: VERCEL_BUILDING, user: '35613825', name: 'vercel[bot]' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect((await read(julian, 'prs'))[1]!.text).toMatch(/^\[vc\]: #/) // the board keeps what Vercel wrote
+    const posted = JSON.parse(s.posts[0]!.text).markdown as string
+    expect(posted).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
+    expect(posted).not.toContain('[vc]:')
+    expect(posted).not.toContain('| Project |')
   })
 
   it.each([
@@ -775,6 +754,19 @@ describe('sync', () => {
     await vi.waitFor(() => expect(s.channelPosts.map((p) => p.channelId).sort()).toEqual(['slack:C1', 'slack:C2']))
     expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(JSON.stringify({ markdown: '**julian**: **ship it**' }))
     expect(posted.message.id).toBeGreaterThan(0)
+  })
+
+  it('re-renders a copy when a label change changes its rendering, and only then', async () => {
+    const { board, s } = setup({ slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}` })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const { body } = await julian('POST', '/messages', { channel: 'prs', text: 'PR #1', labels: { state: 'draft' } })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(s.channelPosts[0]!.text).toBe(JSON.stringify({ markdown: '[draft] PR #1' }))
+
+    await julian('POST', `/messages/${body.message.id}/labels`, { set: { review: 'approved' } })
+    await julian('POST', `/messages/${body.message.id}/labels`, { set: { state: 'merged' } })
+    await vi.waitFor(() => expect(s.edits).toHaveLength(1))
+    expect(s.edits[0]).toMatchObject({ messageId: s.channelPosts[0]!.id, text: JSON.stringify({ markdown: '[merged] PR #1' }) })
   })
 
   it.each([false, true])('posts mentions natively without changing code (custom renderer: %s)', async (customRender) => {
