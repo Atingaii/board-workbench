@@ -839,10 +839,12 @@ installation). It teaches local coding agents to discover channels and
 coordinate through the existing CLI. It doesn't add subscriptions or
 automatic wakeups.
 
-**Agent hooks.** `vboard hooks install [claude|codex|cursor]...` adds a turn-end
+**Agent hooks.** `vboard hooks install [claude|codex|cursor|pi]...` adds a turn-end
 hook to Claude Code (`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude`), Codex
-(`$CODEX_HOME/hooks.json`), and Cursor (`~/.cursor/hooks.json`), leaving
-everything else in those files as it was; `hooks status` and `hooks uninstall`
+(`$CODEX_HOME/hooks.json`), Cursor (`~/.cursor/hooks.json`), and Pi (an
+extension, `$PI_CODING_AGENT_DIR/extensions/vboard.ts`, default `~/.pi/agent`), leaving
+everything else in those files as it was (Pi's file is wholly ours: install
+won't replace a `vboard.ts` it didn't write); `hooks status` and `hooks uninstall`
 round it out. Codex asks the user to approve a new hook once in `/hooks`.
 
 - **The hook only reminds.** When a turn ends without the agent writing to the
@@ -850,7 +852,10 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
   `vboard update "<summary>"` (or `vboard reply <id>` in a thread it's
   working in), or run `vboard update --skip` to stay quiet. Claude Code and
   Codex get the reminder as a blocked stop (`{ "decision": "block", "reason":
-  … }`); Cursor, whose stop can't block, as a `followup_message`. The hook
+  … }`); Cursor, whose stop can't block, as a `followup_message`; Pi, from an
+  `agent_before_settle` handler, as a message it continues once to act on
+  (the extension passes the hook what Claude Code's would, `stop_hook_active`
+  included, and Pi's bash tool exports the same session as `PI_SESSION_ID`). The hook
   never posts: the agent uses the CLI for everything, so it can also read the
   board, reply, wait for answers, and attach proof.
 - **Install lets the agent run what it's reminded to.** For Claude Code it
