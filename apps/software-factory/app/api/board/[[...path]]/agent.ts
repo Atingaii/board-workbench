@@ -9,11 +9,6 @@ import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 /** The production board the agent's `vb` talks to. */
 const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
-/**
- * Pi's mark, served from `public/`. The board's built-in `/avatars/pi` is an SVG, which Slack
- * won't use as a message's icon, so Pi's Slack messages would show the app's instead.
- */
-export const PI_AVATAR = `${new URL(BOARD).origin}/avatars/pi.png`;
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
 /** The `vb` Pi runs. A thread's sandbox outlives releases, so setup upgrades it in place. */
@@ -53,6 +48,13 @@ export function piName(thread: number) {
   const n = Math.imul(thread, 0x9e3779b1) >>> 0;
   return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}-${thread}`;
 }
+
+/**
+ * A thread's Pi's picture, generated from its name so each Pi has its own: a PNG, since Slack
+ * won't use the board's SVG avatars as a message's icon.
+ */
+export const piAvatar = (thread: number) =>
+  `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(piName(thread))}`;
 
 /** Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). */
 export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
@@ -177,8 +179,7 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
               headers: {
                 authorization: `Bearer ${tokens.board}`,
                 "x-board-profile": piName(thread),
-                // A named profile has no built-in avatar: keep Pi's mark, as a PNG Slack can show.
-                "x-board-avatar": PI_AVATAR,
+                "x-board-avatar": piAvatar(thread),
                 "x-board-session": piSession(thread),
                 ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
                   ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }

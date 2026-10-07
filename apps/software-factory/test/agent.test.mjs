@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INSTRUCTIONS, PI_AVATAR, byPi, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { INSTRUCTIONS, byPi, piAvatar, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
 for (const task of ["thread", "review"]) {
   test(`${task}: Pi stays out of messages meant for someone else`, () => {
@@ -113,11 +113,8 @@ test("review: no on-it or milestone lines, so a review doesn't comment on every 
   assert.doesNotMatch(INSTRUCTIONS.review, /a line when you reach a milestone/);
 });
 
-test("PI_AVATAR: a PNG this app serves, since Slack won't show the board's SVG avatars", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const url = new URL(PI_AVATAR);
-  assert.equal(url.protocol, "https:");
-  assert.match(url.pathname, /\.png$/);
-  const png = await readFile(new URL(`../public${url.pathname}`, import.meta.url));
-  assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+test("piAvatar: a PNG generated from each Pi's name, the same every time", () => {
+  assert.equal(piAvatar(1956), "https://vercel.com/api/www/avatar?s=64&format=png&u=clever-lemur-1956");
+  assert.equal(piAvatar(1956), piAvatar(1956));
+  assert.notEqual(piAvatar(1956), piAvatar(1957));
 });
