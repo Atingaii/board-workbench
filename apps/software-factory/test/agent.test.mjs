@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INSTRUCTIONS, byPi, piAvatar, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { GITHUB_TOKEN, INSTRUCTIONS, byPi, piAvatar, piName, sourceLink, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
 for (const task of ["thread", "review"]) {
   test(`${task}: Pi stays out of messages meant for someone else`, () => {
@@ -123,4 +123,26 @@ test("review: :looking-bunny: on the PR root while a review is underway, off onc
   assert.match(INSTRUCTIONS.review, /Before anything else, react to the PR thread's root with vb react <root id> looking-bunny/);
   assert.match(INSTRUCTIONS.review, /vb react <root id> looking-bunny --remove once you've labeled land/);
   assert.doesNotMatch(INSTRUCTIONS.thread, /looking-bunny/);
+});
+
+test("GITHUB_TOKEN: Pi never gets a cached GitHub token that dies before its session ends", async () => {
+  const { getToken } = await import("@vercel/connect");
+  const realFetch = globalThis.fetch;
+  let minted = 0;
+  globalThis.fetch = async () => {
+    minted++;
+    // Each token Connect mints here has 10 minutes left.
+    return Response.json({ token: `t${minted}`, expiresAt: Date.now() + 10 * 60_000, connector: { id: "c", uid: "u", type: "github" } });
+  };
+  try {
+    const options = { vercelToken: "oidc" };
+    // The default 30s buffer hands the 10-minute token out again: the bug.
+    const app = { subject: { type: "app" } };
+    assert.equal(await getToken("github/test", app, options), await getToken("github/test", app, options));
+    // Pi's asks for one that lasts the whole session, so it isn't reused.
+    assert.notEqual(await getToken("github/test", GITHUB_TOKEN, options), await getToken("github/test", GITHUB_TOKEN, options));
+    assert.ok(GITHUB_TOKEN.validityBufferMs >= 45 * 60_000);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

@@ -19,6 +19,13 @@ const VBOARD = "0.4.0";
  */
 const SANDBOX_MS = 45 * 60_000;
 const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
+/**
+ * The factory GitHub App's token for a sandbox: one that outlives the session it's handed to. Connect
+ * caches tokens and by default hands out any with 30s left, so a turn could start with a token that dies
+ * minutes in (board thread #2331). A session ends at most SANDBOX_MS after a message, and the next
+ * message brings a new token, so one valid for SANDBOX_MS covers it. GitHub's last 60 minutes.
+ */
+export const GITHUB_TOKEN = { subject: { type: "app" }, validityBufferMs: SANDBOX_MS } as const;
 
 /** Commits are the factory GitHub App's, under its bot account's noreply address. */
 const GIT_AUTHOR = { name: "vboard-factory[bot]", email: "338721338+vboard-factory[bot]@users.noreply.github.com" };
@@ -254,7 +261,7 @@ export async function tellPi({
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),
     getVercelOidcToken({ audience: BOARD }),
-    getToken("github/vboard-factory", { subject: { type: "app" } }),
+    getToken("github/vboard-factory", GITHUB_TOKEN),
   ]);
   await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
   // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
