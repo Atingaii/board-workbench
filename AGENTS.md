@@ -51,7 +51,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
-  judging the whole thread whenever a person posts. `pi` hands `kind=bug`,
+  judging the whole thread whenever a person posts. Its scope (`classify.ts`) is the
+  library and the factory, Pi included, so "Pi should…" is a feature, not noise. `pi` hands `kind=bug`,
   `kind=feature`, `kind=question`, and `kind=task` threads (not `noise`) to Pi (`agent.ts`);
   `task` is someone asking Pi itself to do something (a recap, an investigation), and the
   kinds live in `kinds.ts`
