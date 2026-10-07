@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { TELL } from "../app/api/board/[[...path]]/agent.ts";
+
+// TELL runs in a Linux sandbox; macOS doesn't ship flock (util-linux).
+const skip = spawnSync("flock", ["--version"]).error ? "needs flock" : false;
 
 // A sandbox home with a fake `pi` that records each turn it's asked to run.
 function sandbox() {
@@ -22,11 +25,12 @@ function sandbox() {
     });
   const turns = () => (existsSync(join(home, "turns")) ? readFileSync(join(home, "turns"), "utf8").trim().split("\n") : []);
   // A turn that's still running: holds Pi's lock until released.
-  const busy = () => {
+  const busy = async () => {
     const gate = join(home, "gate");
+    const ready = join(home, "ready");
     writeFileSync(gate, "");
-    const holder = spawn("flock", [join(home, ".pi", "lock"), "bash", "-c", `while [ -e ${gate} ]; do sleep 0.05; done`]);
-    execFileSync("bash", ["-c", "sleep 0.2"]);
+    const holder = spawn("flock", [join(home, ".pi", "lock"), "bash", "-c", `touch ${ready}; while [ -e ${gate} ]; do sleep 0.05; done`]);
+    while (!existsSync(ready)) await sleep(10);
     return () => new Promise((resolve) => { holder.on("exit", resolve); execFileSync("rm", [gate]); });
   };
   return { tell, turns, busy };
@@ -34,9 +38,9 @@ function sandbox() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("replies that pile up behind a running turn wake Pi once, not once each", async () => {
+test("replies that pile up behind a running turn wake Pi once, not once each", { skip }, async () => {
   const { tell, turns, busy } = sandbox();
-  const release = busy();
+  const release = await busy();
   const queued = [];
   for (const key of ["news-1174", "news-1175", "news-1179", "news-1184"]) {
     queued.push(tell(key));
@@ -48,9 +52,9 @@ test("replies that pile up behind a running turn wake Pi once, not once each", a
   assert.deepEqual(turns(), ["news-1184"]);
 });
 
-test("tasks (a kind, a shipit, a review) are never dropped, even behind a turn", async () => {
+test("tasks (a kind, a shipit, a review) are never dropped, even behind a turn", { skip }, async () => {
   const { tell, turns, busy } = sandbox();
-  const release = busy();
+  const release = await busy();
   const queued = [];
   for (const key of ["kind-bug", "news-1", "shipit-9", "news-2"]) {
     queued.push(tell(key));
@@ -61,7 +65,7 @@ test("tasks (a kind, a shipit, a review) are never dropped, even behind a turn",
   assert.deepEqual(turns().sort(), ["kind-bug", "news-2", "shipit-9"]);
 });
 
-test("a message is still delivered once: a retried watcher is a no-op", async () => {
+test("a message is still delivered once: a retried watcher is a no-op", { skip }, async () => {
   const { tell, turns } = sandbox();
   await tell("news-1");
   await tell("news-1");
