@@ -4,6 +4,7 @@ import type { Actor } from '../contract/reducers.ts'
 import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/contract.ts'
 import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
+import type { SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
 export { externalAuthor } from './types.ts'
@@ -30,10 +31,14 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   /** Platform messages a message links to, located under sync key `key`. */
   links?(key: string, message: ChatMessage): ExternalLink[]
   fetchLink?(link: ExternalLink): Promise<FetchedLink>
+  /** A channel or thread, read on demand without syncing it. */
+  read?(target: string, options: { limit: number }): Promise<SourceRead>
   avatar?(message: ChatMessage): Promise<string | null>
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
   uploadFiles?(thread: string, files: FileUpload[]): Promise<FileDelivery>
+  /** The name a file is uploaded under, when the platform reads more into a name than the board does. */
+  uploadName?(file: ProviderFile): string
   fileIds?(raw: unknown): string[]
   refusesFiles?(error: unknown): boolean
   deleteFiles?(ids: string[]): Promise<void>
@@ -178,6 +183,10 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   override async fetchLink(link: ExternalLink): Promise<FetchedLink> {
     return this.transport.fetchLink ? this.transport.fetchLink(link) : super.fetchLink(link)
   }
+
+  override async read(target: string, options: { limit: number }): Promise<SourceRead> {
+    return this.transport.read ? this.transport.read(target, options) : super.read(target, options)
+  }
   override async fetchFile(file: ExternalFile): Promise<Uint8Array | null> {
     // Ready first: an adapter may resolve a file's credentials from its Chat state.
     const adapter = await this.ready()
@@ -189,7 +198,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
     if (kind === 'channel' && !this.canStartThreads) throw new Error(`${this.platform} cannot start threads`)
     await this.ready()
-    const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body)
+    const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body.files?.length ? { ...body, files: this.named(body.files) } : body)
     return { thread: this.toNative(sent.threadId), message: sent.id, ...(body.files?.length ? { files: this.transport.fileIds?.(sent.raw) ?? [] } : {}) }
   }
   override async edit(thread: string, message: string, body: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
@@ -206,8 +215,12 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
   override async uploadFiles(thread: string, files: ProviderFile[]) {
     await this.ready()
-    if (!this.transport.uploadFiles) return super.uploadFiles(thread, files)
-    return this.transport.uploadFiles(this.toChat(thread), files)
+    if (!this.transport.uploadFiles) return super.uploadFiles(thread, this.named(files))
+    return this.transport.uploadFiles(this.toChat(thread), this.named(files))
+  }
+  private named(files: ProviderFile[]): ProviderFile[] {
+    const name = this.transport.uploadName
+    return name ? files.map((file) => ({ ...file, filename: name(file) })) : files
   }
   override refusesFiles(error: unknown) { return this.transport.refusesFiles?.(error) ?? false }
   override async deleteFiles(ids: string[]) { await this.transport.deleteFiles?.(ids) }
