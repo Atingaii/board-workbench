@@ -12,15 +12,12 @@ import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
 import { byPi, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
-import { isPiKind, PI_KINDS, piTask } from "./kinds";
+import { isPiKind, PI_KINDS, piTask, scheduled, scheduledThread } from "./kinds";
 import { fromSecurity, security } from "./security";
 import { shipit } from "./shipit";
 import { autoland } from "./autoland";
 import { owner } from "./owner";
 import { renderForSlack } from "./render";
-
-/** Posted by a `vb schedule`: news even when Pi scheduled it, since that's how Pi sets itself a reminder. */
-const scheduled = (message: { schedule?: unknown }) => message.schedule !== undefined;
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
@@ -87,7 +84,8 @@ export const { GET, POST, scheduler } = board({
         if (
           event.type !== "message.posted" ||
           !message ||
-          byPi(message.re ?? message.id, message.by)
+          byPi(message.re ?? message.id, message.by) ||
+          scheduledThread(message)
         ) {
           return;
         }
@@ -120,7 +118,12 @@ export const { GET, POST, scheduler } = board({
         if (!message) {
           return;
         }
-        const kind = event.type === "labels.changed" ? event.payload.set.kind : undefined;
+        const kind =
+          event.type === "labels.changed"
+            ? event.payload.set.kind
+            : event.type === "message.posted"
+              ? scheduledThread(message) ?? undefined
+              : undefined;
         if (kind && isPiKind(kind) && message.re === null) {
           await tellPi({
             task: "thread",
