@@ -45,7 +45,38 @@ function harness(responses) {
 }
 
 const open = () => ({ body: { merged: false, state: "open", draft: false, head: { sha: "abc123" } } });
+const draft = () => ({ body: { ...open().body, draft: true, node_id: "PR_test" } });
+const ready = () => ({ body: { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } } });
 const merged = () => ({ body: { merged: true } });
+
+test("shipit marks a draft ready before merging the same head", async () => {
+  const h = harness([draft(), ready(), merged()]);
+  await h.run();
+  assert.equal(h.requests.length, 3);
+  assert.equal(h.requests[1].url, "https://api.github.com/graphql");
+  assert.equal(h.requests[1].method, "POST");
+  assert.ok(h.requests[1].body.query.includes("markPullRequestReadyForReview"));
+  assert.deepEqual(h.requests[1].body.variables, { id: "PR_test" });
+  assert.equal(h.requests[2].method, "PUT");
+  assert.deepEqual(h.requests[2].body, { sha: "abc123", merge_method: "merge" });
+  assert.deepEqual(h.notifications, []);
+});
+
+test("a failed ready mutation tells Pi the merge intent without attempting to merge", async () => {
+  const h = harness([draft(), { body: { errors: [{ message: "Not allowed to mark this PR ready." }] } }]);
+  await h.run();
+  assert.equal(h.requests.length, 2);
+  assertIntent(h, "Not allowed to mark this PR ready.");
+});
+
+test("a retry reads the current draft status and does not mark it ready again", async () => {
+  const h = harness([draft(), ready(), { status: 405, body: { message: "Checks are pending." } }, open(), merged()]);
+  await h.run();
+  await h.run();
+  assert.equal(h.requests.filter(r => r.url === "https://api.github.com/graphql").length, 1);
+  assert.equal(h.requests.filter(r => r.method === "PUT").length, 2);
+  assertIntent(h, "Checks are pending.");
+});
 
 test("shipit and its Slack squirrel alias merge a PR root for any reactor", async () => {
   for (const [emoji, user] of [["shipit", "U123"], ["squirrel", "U123"], ["squirrel", "U456"]]) {
@@ -102,7 +133,7 @@ test("a retried callback sees the merged PR and does not merge it again", async 
 });
 
 for (const [name, body, reason] of [
-  ["draft", { state: "open", draft: true }, "The PR is still a draft."],
+  ["draft without a node ID", { ...draft().body, node_id: undefined }, "GitHub did not return the PR's node ID."],
   ["closed", { state: "closed", draft: false }, "The PR is closed."],
   ["missing head", { state: "open", draft: false }, "GitHub did not return the PR's head SHA."],
 ]) {
@@ -153,11 +184,11 @@ function assertIntent(h, reason, requester = "sam") {
 }
 
 test("uses the reactor's verified identity when its display name is unavailable", async () => {
-  const h = harness([{ body: { state: "open", draft: true } }]);
+  const h = harness([{ body: { state: "closed", draft: false } }]);
   const input = event();
   delete input.actor;
   await h.run(input);
-  assertIntent(h, "The PR is still a draft.", "slack:user:U123");
+  assertIntent(h, "The PR is closed.", "slack:user:U123");
 });
 
 test("a failed Pi handoff can retry with the same deduplication key", async () => {
@@ -165,7 +196,7 @@ test("a failed Pi handoff can retry with the same deduplication key", async () =
   let delivered = false;
   const watcher = shipit({
     token: async () => "test-token",
-    fetch: async () => Response.json({ state: "open", draft: true }),
+    fetch: async () => Response.json({ state: "closed", draft: false }),
     tellPi: async input => {
       notifications.push(input);
       if (!delivered) {

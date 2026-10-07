@@ -24,9 +24,9 @@ export function shipit(options: {
       try {
         const token = await (options.token?.() ?? getToken("github/vboard-factory", { subject: { type: "app" } }));
         const url = `https://api.github.com/repos/basehub-ai/vboard/pulls/${number}`;
-        const github = async (path: string, body?: object) => {
+        const github = async (path: string, body?: object, method = body ? "PUT" : "GET") => {
           const response = await request(path, {
-            method: body ? "PUT" : "GET",
+            method,
             headers: {
               authorization: `Bearer ${token}`,
               accept: "application/vnd.github+json",
@@ -38,13 +38,23 @@ export function shipit(options: {
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.message ?? `GitHub returned ${response.status}`);
+          if (data.errors?.length) throw new Error(data.errors[0].message ?? "GitHub returned GraphQL errors.");
           return data;
         };
         const pr = await github(url);
         if (pr.merged) return;
         if (pr.state !== "open") throw new Error("The PR is closed.");
-        if (pr.draft) throw new Error("The PR is still a draft.");
         if (typeof pr.head?.sha !== "string" || !pr.head.sha) throw new Error("GitHub did not return the PR's head SHA.");
+        if (pr.draft) {
+          if (typeof pr.node_id !== "string" || !pr.node_id) throw new Error("GitHub did not return the PR's node ID.");
+          const ready = await github("https://api.github.com/graphql", {
+            query: "mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }",
+            variables: { id: pr.node_id },
+          }, "POST");
+          if (ready.data?.markPullRequestReadyForReview?.pullRequest?.isDraft !== false) {
+            throw new Error("GitHub did not mark the PR ready for review.");
+          }
+        }
         const result = await github(`${url}/merge`, { sha: pr.head.sha, merge_method: "merge" });
         if (!result.merged) throw new Error(result.message ?? "GitHub did not merge the PR.");
       } catch (error) {
