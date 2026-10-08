@@ -189,9 +189,15 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
 - **Discovery:** `GET /` is unauthenticated and returns
   `{ team_id, project_id, issuer, audience }`, so the client knows which project
   to mint for. The CLI can run from any directory.
-- **Preview protection:** if `VERCEL_AUTOMATION_BYPASS_SECRET` is set, the client
-  sends `x-vercel-protection-bypass`. Otherwise every CI run against a protected
-  preview hits Vercel's login page.
+- **Deployment protection:** the Node client sends `x-vercel-protection-bypass`
+  with `VERCEL_AUTOMATION_BYPASS_SECRET` when it's set. Otherwise, when a board
+  answers with Vercel Authentication's wall, it does what `vercel curl` does:
+  with your Vercel login it resolves the board's host to its project
+  (`/v13/deployments/<host>`, then `/now/aliases/<host>`, in your scope and then
+  each team), reads its `automation-bypass` secret (creating one with
+  `PATCH /v1/projects/<id>/protection-bypass` if there's none), caches it in
+  `~/.config/vboard/bypass/`, and retries. When that can't work it fails with a
+  `protected` error instead of parsing the login page.
 
 **Verified (2026-10-01): the exchange keeps `user_id`.** We exchanged a
 development token from `@vercel/oidc` 3.8.5 for a custom audience
