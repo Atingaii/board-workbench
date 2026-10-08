@@ -1,12 +1,38 @@
 #!/usr/bin/env bash
-# Records an agent-browser session and burns a caption for each step into it.
-#   ui-video start [--fps N] start recording the current agent-browser session (15 fps unless set)
-#   ui-video step "<text>"   caption from now until the next step
-#   ui-video stop <out.mp4>  stop, burn the captions in, and fit the mp4 under 4 MB
+# Records an agent-browser session, burns a caption for each step into it, and narrates it.
+#   ui-video start [--fps N] [--mute]  start recording the current agent-browser session (15 fps unless set)
+#   ui-video step "<text>"   caption from now until the next step, read aloud; waits until it's been said
+#   ui-video stop <out.mp4>  stop, burn the captions in, add the narration, and fit the mp4 under 4 MB
+# The narrator is a speech model on AI Gateway: UI_VIDEO_VOICE_MODEL (openai/tts-1) with UI_VIDEO_VOICE (nova).
+# --mute, or UI_VIDEO_VOICE=off, records captions only. If a line can't be spoken, it's captioned only.
 set -euo pipefail
 DIR="${UI_VIDEO_DIR:-/tmp/ui-video}"
 LIMIT=$((4 * 1000 * 1000))
+GATEWAY="${UI_VIDEO_GATEWAY:-https://ai-gateway.vercel.sh/v3/ai}"
 now() { date +%s.%N; }
+elapsed() { awk -v a="$(cat "$DIR/start")" -v b="$(now)" 'BEGIN { printf "%.3f", b - a }'; }
+
+# Speaks $1 into $2 (an mp3) with AI Gateway's speech model API; fails if it can't.
+speak() {
+  local body
+  body=$(TEXT="$1" VOICE="${UI_VIDEO_VOICE:-nova}" node -e \
+    'process.stdout.write(JSON.stringify({ text: process.env.TEXT, voice: process.env.VOICE, outputFormat: "mp3" }))')
+  curl -fsS --max-time 30 "$GATEWAY/speech-model" \
+    -H "Authorization: Bearer ${AI_GATEWAY_API_KEY:-}" -H "Content-Type: application/json" \
+    -H "ai-gateway-protocol-version: 0.0.1" -H "ai-gateway-auth-method: api-key" \
+    -H "ai-speech-model-specification-version: 4" -H "ai-model-id: ${UI_VIDEO_VOICE_MODEL:-openai/tts-1}" \
+    -d "$body" | node -e '
+      let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+        const { audio } = JSON.parse(s);
+        if (!audio) process.exit(1);
+        require("fs").writeFileSync(process.argv[1], Buffer.from(audio, "base64"));
+      })' "$2"
+}
+
+# The length of an audio file in seconds, from ffmpeg's header dump.
+duration() {
+  { ffmpeg -hide_banner -i "$1" 2>&1 || true; } | awk -F'[:, ]+' '/Duration:/ { print $3 * 3600 + $4 * 60 + $5; exit }'
+}
 
 srt_time() { # seconds -> HH:MM:SS,mmm
   awk -v t="$1" 'BEGIN { if (t < 0) t = 0; ms = int(t * 1000 + 0.5);
@@ -17,6 +43,10 @@ case "${1:-}" in
   start)
     rm -rf "$DIR" && mkdir -p "$DIR"
     shift
+    args=()
+    for a in "$@"; do if [ "$a" = --mute ]; then touch "$DIR/mute"; else args+=("$a"); fi; done
+    set -- "${args[@]}"
+    [ "${UI_VIDEO_VOICE:-}" = off ] && touch "$DIR/mute"
     # 15 fps is plenty for clicks and page loads, and keeps the encoder up on a busy sandbox.
     [[ " $* " == *" --fps "* ]] || set -- --fps 15 "$@"
     agent-browser record start "$DIR/raw.webm" --cursor "$@" >/dev/null
@@ -29,12 +59,25 @@ case "${1:-}" in
     shift
     text="$*"
     [ -n "$text" ] || { echo "usage: ui-video step \"<text>\"" >&2; exit 1; }
-    printf '%s\t%s\n' "$(awk -v a="$(cat "$DIR/start")" -v b="$(now)" 'BEGIN { printf "%.3f", b - a }')" "${text//$'\t'/ }" >> "$DIR/steps.tsv"
+    at=$(elapsed)
+    printf '%s\t%s\n' "$at" "${text//$'\t'/ }" >> "$DIR/steps.tsv"
+    [ -f "$DIR/mute" ] && exit 0
+    # The line plays from when the step started; wait until it's been said, so the next action follows it.
+    clip="$DIR/voice-$(wc -l < "$DIR/steps.tsv" | tr -d ' ').mp3"
+    if speak "$text" "$clip.tmp" && len=$(duration "$clip.tmp") && [ -n "$len" ]; then
+      mv "$clip.tmp" "$clip"
+      printf '%s\t%s\n' "$at" "$clip" >> "$DIR/voice.tsv"
+      left=$(awk -v at="$at" -v len="$len" -v now="$(elapsed)" 'BEGIN { d = at + len - now; printf "%.3f", (d > 0 ? d : 0) }')
+      sleep "$left"
+    else
+      rm -f "$clip.tmp"
+      echo "couldn't narrate \"$text\": it's captioned only" >&2
+    fi
     ;;
   stop)
     out="${2:?usage: ui-video stop <out.mp4>}"
     [ -f "$DIR/start" ] || { echo "not recording: run ui-video start first" >&2; exit 1; }
-    end=$(awk -v a="$(cat "$DIR/start")" -v b="$(now)" 'BEGIN { printf "%.3f", b - a }')
+    end=$(elapsed)
     agent-browser record stop >/dev/null || { echo "the recording failed: record the take again (try a lower --fps)" >&2; exit 1; }
     # Each caption shows until the next one starts; the last one until the end.
     n=0
@@ -47,15 +90,30 @@ case "${1:-}" in
       printf '%d\n%s --> %s\n%s\n\n' "$n" "$(srt_time "$from")" "$(srt_time "$to")" "$text" >> "$DIR/captions.srt"
     done
     style="FontName=Liberation Sans,FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H40000000,BackColour=&H40000000,BorderStyle=3,Outline=4,Shadow=0,MarginV=16"
+    # Each spoken line starts where its step does.
+    audio=() mix="" voices=0
+    if [ -s "$DIR/voice.tsv" ]; then
+      while IFS=$'\t' read -r at clip; do
+        audio+=(-i "$clip"); voices=$((voices + 1))
+        mix+="[$voices:a]adelay=$(awk -v t="$at" 'BEGIN { printf "%d", t * 1000 }'):all=1[v$voices];"
+      done < "$DIR/voice.tsv"
+      for i in $(seq 1 "$voices"); do mix+="[v$i]"; done
+      mix+="amix=inputs=$voices:normalize=0:duration=longest[a]"
+    fi
     # Smaller and blurrier each try until it fits under the board's 4 MB.
     for try in "1280 28" "1280 33" "960 35" "720 38"; do
       set -- $try
-      ffmpeg -loglevel error -y -i "$DIR/raw.webm" \
+      if [ "$voices" -gt 0 ]; then
+        sound=(-filter_complex "$mix" -map 0:v -map "[a]" -c:a aac -b:a 64k -ac 1)
+      else
+        sound=(-an)
+      fi
+      ffmpeg -loglevel error -y -i "$DIR/raw.webm" "${audio[@]}" \
         -vf "scale='min($1,iw)':-2,subtitles=$DIR/captions.srt:force_style='$style'" \
-        -c:v libx264 -preset veryfast -crf "$2" -pix_fmt yuv420p -movflags +faststart -an "$out"
+        -c:v libx264 -preset veryfast -crf "$2" -pix_fmt yuv420p -movflags +faststart "${sound[@]}" "$out"
       size=$(stat -c %s "$out")
       if [ "$size" -le "$LIMIT" ]; then
-        echo "$out: $((size / 1000)) KB, ${n} captions, ${end%.*}s"
+        echo "$out: $((size / 1000)) KB, ${n} captions, ${voices} narrated, ${end%.*}s"
         exit 0
       fi
     done
@@ -63,7 +121,7 @@ case "${1:-}" in
     exit 1
     ;;
   *)
-    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

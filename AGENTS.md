@@ -136,7 +136,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `apps/software-factory/skills/` and written to `~/.pi/agent/skills` every turn
   (add a new file to `SKILLS` in `agent.ts`). `ui-video` records a flow in
   `agent-browser` and burns a caption for each step in with ffmpeg, as an mp4
-  under 4 MB. Setup installs both, pinned (`AGENT_BROWSER`, `FFMPEG_STATIC`),
+  under 4 MB, narrated by a speech model on AI Gateway (`openai/tts-1`; the
+  network policy's gateway key covers it). Setup installs both, pinned (`AGENT_BROWSER`, `FFMPEG_STATIC`),
   and a failed install doesn't stop Pi. Pi tests against a local dev server or
   the preview of its own branch (`piPreview`). The network policy adds the
   Vercel Authentication bypass to that host only, so the secret never reaches
