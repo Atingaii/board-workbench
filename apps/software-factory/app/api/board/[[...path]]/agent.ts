@@ -22,14 +22,22 @@ const VBOARD = "0.4.0";
  * threads' setup failed on a 403.
  */
 const GH = "2.102.0";
-/** The browser Pi drives and the ffmpeg it records with, for the ui-video skill; pinned like gh. */
+/** What installs the Chrome Pi uses on its desktop (and drives headless, when it wants), pinned like gh. */
 const AGENT_BROWSER = "0.38.2";
 /** ffmpeg 6.0, a static build with libass, so captions can be burned in. */
 const FFMPEG_STATIC = "5.2.0";
 /** The user Pi runs as, whose home its skills and agent-browser's Chrome go in. */
 const PI_USER = "vercel-sandbox";
-/** The skills Pi gets on top of its own (see `skills/`), written into its sandbox every turn. */
-const SKILLS = ["ui-video/SKILL.md", "ui-video/scripts/ui-video"];
+/**
+ * What Pi gets on top of its own, written into `~/.pi/agent` every turn from this app's folders of the same names:
+ * the ui-video skill, and the computer tool (an extension) it records.
+ */
+const PI_FILES = [
+  "skills/ui-video/SKILL.md",
+  "skills/ui-video/scripts/ui-video",
+  "extensions/computer/index.ts",
+  "extensions/computer/xinput.py",
+];
 /**
  * A sandbox session ends at a fixed deadline, not after idling; its files come back with the next one.
  * Each message gets at least this long before it, so a turn that starts late in a session isn't cut off.
@@ -145,7 +153,7 @@ For a bug report:
 For a feature request: if it's clear what's wanted, build it with tests and open a PR. If it's ambiguous or large, reply with a short plan or your questions first, and build it once someone agrees.
 For a question: answer it from the code and docs, pointing at the files. Don't open a PR unless someone asks for one.
 For a task (someone asks you to do something, like a recap or an investigation): do it with what the board, the repo and GitHub show you, and reply with the result.
-Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). When a change touches UI, prefer showing people it works over telling them: for a flow they click through, attach a captioned video of it working instead, using the ui-video skill. Don't attach test runs or logs of your own checks: the tests go in the PR, and for a bug, name the test that reproduces it in the PR body. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
+Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). When a change touches UI, prefer showing people it works over telling them: for a flow they click through, attach a captioned video of it working instead, using the ui-video skill and your computer tool. Don't attach test runs or logs of your own checks: the tests go in the PR, and for a bug, name the test that reproduces it in the PR body. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
 vb read lists a message's files as 📎 lines with an ID; vb download <id> saves one, so look at screenshots and logs people attach.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you.`;
 
@@ -172,7 +180,9 @@ command -v gh >/dev/null || {
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH}/gh_${GH}_linux_amd64.tar.gz" | tar xz -C /tmp
   install "/tmp/gh_${GH}_linux_amd64/bin/gh" /usr/local/bin/gh
 }
-# For the ui-video skill. Pi can work without them, so a failed install doesn't stop setup; the next turn tries again.
+# For the computer tool and the ui-video skill: a virtual desktop, its keyboard and mouse (XTEST), Chrome, and ffmpeg.
+# Pi can work without them, so a failed install doesn't stop setup; the next turn tries again.
+command -v Xvfb >/dev/null || dnf install -y -q xorg-x11-server-Xvfb libXtst >/dev/null 2>&1 || true
 command -v ffmpeg >/dev/null || { npm install -g ffmpeg-static@${FFMPEG_STATIC} >/dev/null 2>&1 \
   && ln -sf "$(npm root -g)/ffmpeg-static/ffmpeg" /usr/local/bin/ffmpeg; } || true
 [ "$(agent-browser --version 2>/dev/null)" = "agent-browser ${AGENT_BROWSER}" ] || { npm install -g agent-browser@${AGENT_BROWSER} >/dev/null 2>&1 \
@@ -248,13 +258,13 @@ export function extension(expiresAt: Date | undefined, now: number) {
   return Math.max(0, SANDBOX_MS - (expiresAt.getTime() - now));
 }
 
-/** The skills in `skills/`, as files in Pi's sandbox, where pi finds them: scripts executable. */
-export async function skills(root = join(process.cwd(), "skills")) {
+/** PI_FILES, as files in Pi's sandbox where pi finds them: scripts executable. */
+export async function piFiles(root = process.cwd()) {
   return Promise.all(
-    SKILLS.map(async (file) => ({
-      path: `/home/${PI_USER}/.pi/agent/skills/${file}`,
+    PI_FILES.map(async (file) => ({
+      path: `/home/${PI_USER}/.pi/agent/${file}`,
       content: await readFile(join(root, file)),
-      mode: file.includes("/scripts/") ? 0o755 : 0o644,
+      mode: file.includes("/scripts/") || file.endsWith(".py") ? 0o755 : 0o644,
     })),
   );
 }
@@ -335,7 +345,7 @@ async function deliver({ task, thread, key, message }: PiMessage) {
   }
   // Every turn, so a sandbox picks up a new pinned vb; before the policy, so no credential is in place yet.
   await sh(sandbox, SETUP);
-  await sandbox.writeFiles(await skills());
+  await sandbox.writeFiles(await piFiles());
   // Fresh tokens with every message, so a thread can pick up again days later.
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),
