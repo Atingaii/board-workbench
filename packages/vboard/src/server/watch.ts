@@ -49,6 +49,16 @@ const WATCHED = [
 /** Receipts: only a `--all` tail shows them. */
 const RECEIPTS = new Set(['message.synced', 'message.files_synced'])
 
+/**
+ * A2 dead-letters a handler after 10 failures, and a dead letter stops its
+ * lane, which is the thread's: the watcher would never run on that thread
+ * again. So `run` gets a few tries, then the failure is recorded and the
+ * thread moves on.
+ */
+const RUN_ATTEMPTS = 5
+
+const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
+
 /** A watcher writes as itself, and its own writes never wake it. */
 const identityOf = (id: string): Identity => deploymentIdentity(`vboard:watch:${id}`, id)
 
@@ -93,7 +103,16 @@ export function createWatchers(options: {
           if (!watcher) return
           if (!clientAs) throw new Error('watchers used before the board bound them')
           const event = ctx.event.payload.event as BoardEventView
-          await watcher.run({ event, board: clientAs(watcher.identity, ctx.event.id) })
+          try {
+            await watcher.run({ event, board: clientAs(watcher.identity, ctx.event.id) })
+          } catch (error) {
+            if (ctx.attempt < RUN_ATTEMPTS) throw error
+            console.error(`[vboard] watcher ${watcher.id} gave up on event #${event.index} after ${ctx.attempt} tries:`, describe(error))
+            await ctx.session.append(`failed:${ctx.event.id}`, {
+              type: 'watch.failed',
+              payload: { matched: ctx.event.id, thread: ctx.event.payload.thread, error: describe(error) },
+            })
+          }
         },
       },
     },

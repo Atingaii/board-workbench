@@ -186,6 +186,36 @@ describe('watchers', () => {
     await vi.waitFor(() => expect(ok.types()).toEqual(['message.posted', 'message.posted']))
   })
 
+  it("give up on an event that keeps failing, and keep running on the thread's later events", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const seen: string[] = []
+    const board = testBoard({
+      watch: {
+        flaky: {
+          tail: 'firehose',
+          run: ({ event }) => {
+            if (event.message?.text === 'boom') throw new Error('sandbox setup failed')
+            seen.push(event.message!.text)
+          },
+        },
+      },
+    })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = await julian('POST', '/messages', { channel: 'firehose', text: 'boom' })
+    await julian('POST', '/messages', { re: root.body.message.id, text: 'are you alive?' })
+
+    // Without a scheduler nothing retries on its own; each drain is the next try.
+    const watches = board.servers.at(-1)!
+    await vi.waitFor(async () => {
+      await watches.drain('watch:flaky')
+      expect(seen).toEqual(['are you alive?'])
+    })
+    const failed = (await watches.session('watch:flaky').history()).filter((event) => event.type === 'watch.failed')
+    expect(failed).toEqual([expect.objectContaining({ payload: expect.objectContaining({ thread: root.body.message.thread, error: 'sandbox setup failed' }) })])
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('watcher flaky gave up on event'), 'sandbox setup failed')
+    error.mockRestore()
+  })
+
   it('fail the boot when one is misconfigured', () => {
     const run = () => {}
     expect(() => testBoard({ watch: { triage: { tail: 'firehose --after 3', run } } })).toThrow(
