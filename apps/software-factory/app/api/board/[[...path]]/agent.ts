@@ -13,7 +13,7 @@ const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
 /** The `vb` Pi runs. A thread's sandbox outlives releases, so setup upgrades it in place. */
-const VBOARD = "0.4.0";
+const VBOARD = "0.6.0";
 /**
  * The `gh` a new sandbox gets, pinned too: asking GitHub's API for the latest release goes out without
  * credentials (setup runs before the network policy), and sandboxes share that rate limit, so new
