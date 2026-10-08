@@ -129,12 +129,14 @@ describe('cli', () => {
         return request.headers.get('x-vercel-protection-bypass') === 's3cret' ? board.fetch(request) : wall()
       })
       const at = `${protectedBoard.origin}/api/board`
-      const line = `error: ${at} is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)\n`
+      const line = `error: ${at} is behind Vercel Deployment Protection, and your Vercel login can't see its project: run \`vercel login\` or ask for access, or set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)\n`
+      // No Vercel login to look the project's bypass up with: no auth.json, no `vercel` on PATH.
+      const signedOut = { PATH: '', XDG_DATA_HOME: await tmp('vboard-data-') }
       try {
-        expect(await vb(['whoami'], { VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at) }), kind).toEqual({ code: 1, stdout: '', stderr: line })
+        expect(await vb(['whoami'], { ...signedOut, VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at) }), kind).toEqual({ code: 1, stdout: '', stderr: line })
         // Discovery, without a token yet.
         const root = await tmp('vboard-link-')
-        expect(await vb(['link', at], {}, undefined, root), kind).toEqual({ code: 1, stdout: '', stderr: line })
+        expect(await vb(['link', at], signedOut, undefined, root), kind).toEqual({ code: 1, stdout: '', stderr: line })
         expect(await vb(['whoami'], { VBOARD_URL: at, VBOARD_TOKEN: await personToken('u_julian', at), VERCEL_AUTOMATION_BYPASS_SECRET: 'stale' }), kind).toEqual({
           code: 1,
           stdout: '',

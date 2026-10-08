@@ -130,8 +130,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   limit sandboxes share.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`), on topic `vboard-factory`. Production is behind Vercel
-  Authentication: the CLI needs `VERCEL_AUTOMATION_BYPASS_SECRET`, and Pi's
-  network policy injects it when calling the board. Connect forwards webhooks
+  Authentication: the CLI gets through with your `vercel login` (or
+  `VERCEL_AUTOMATION_BYPASS_SECRET`), and Pi's network policy injects the
+  bypass when calling the board. Connect forwards webhooks
   through deployment protection.
 
 ## the v0 feedback bot (`apps/v0-feedback`)
