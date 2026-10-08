@@ -578,14 +578,15 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           } catch {}
           const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
           const profile = codexNetwork(host)
-          out(`  to let vb reach just the board from Codex's sandbox, add to ${tilde(config)}:`)
+          out(`  to let vb reach the board from Codex's sandbox, add to ${tilde(config)}:`)
           out('')
-          out(['# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
+          out(['# a permission profile (beta) that opens the network to just the board', '', '# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
         }
         out('')
       }
       if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
-      out("The hooks remind once per turn without a board update, in linked projects.")
+      out('The hooks remind once per turn without a board update.')
+      out('They stay quiet outside projects linked with `vb link <url>`.')
       return 0
     }
 

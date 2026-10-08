@@ -27,8 +27,11 @@ describe('cli hooks', () => {
     expect(installed.stdout).toContain('Claude Code  ~/.claude/settings.json\n  added the turn-end hook\n  update, reply, and read run without asking\n\n')
     expect(installed.stdout).not.toContain('Bash(')
     expect(installed.stdout).not.toContain(home)
+    expect(installed.stdout).toContain('They stay quiet outside projects linked with `vb link <url>`.\n')
+    // Prose fits 80 columns; only the pasted config (indented four) and its domains can run over.
+    expect(installed.stdout.split('\n').filter((line) => line.length > 80 && !line.startsWith('    '))).toEqual([])
     // Codex has no command allowlist; its sandbox needs network, so it's told how to allow just the board.
-    expect(installed.stdout).toContain("to let vb reach just the board from Codex's sandbox, add to ~/.codex/config.toml:\n\n    # at the top, before any [table]\n    default_permissions = \"vboard\"\n")
+    expect(installed.stdout).toContain("to let vb reach the board from Codex's sandbox, add to ~/.codex/config.toml:\n\n    # a permission profile (beta) that opens the network to just the board\n\n    # at the top, before any [table]\n    default_permissions = \"vboard\"\n")
     expect(installed.stdout).toContain(`"${new URL(url).hostname}" = "allow"`)
     expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain('Claude Code  ~/.claude/settings.json\n  already installed\n')
     const claude = JSON.parse(await readFile(settings, 'utf8'))
