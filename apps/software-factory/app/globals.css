@@ -830,8 +830,8 @@ kbd {
   color: var(--faint);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
-  /* 66 columns at ~0.6em each, shrunk to fit narrow screens. */
-  font-size: clamp(0.5rem, (100vw - 2.5rem) / 40, 1.05rem);
+  /* 76 columns at ~0.6em each, shrunk to fit narrow screens. */
+  font-size: clamp(0.45rem, (100vw - 2.5rem) / 46, 1rem);
   line-height: 1.4;
 }
 
