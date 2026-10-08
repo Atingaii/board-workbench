@@ -160,19 +160,19 @@ export const channelsReducer = reducer({
   name: 'vboard.channels.v1',
   initialState: {} as ChannelsState,
 }).fold((state, event) => {
-    if (event.type !== 'message.posted') return state
-    const { channel, re } = event.payload
-    const entry = (state[channel] ??= {
-      path: channel,
-      lastIndex: 0,
-      messages: 0,
-      threads: 0,
-    })
-    entry.lastIndex = event.index
-    entry.messages += 1
-    if (re === null) entry.threads += 1
-    return state
+  if (event.type !== 'message.posted') return state
+  const { channel, re } = event.payload
+  const entry = (state[channel] ??= {
+    path: channel,
+    lastIndex: 0,
+    messages: 0,
+    threads: 0,
   })
+  entry.lastIndex = event.index
+  entry.messages += 1
+  if (re === null) entry.threads += 1
+  return state
+})
 
 export type Actor = {
   id: string
