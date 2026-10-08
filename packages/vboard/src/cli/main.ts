@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, delimiter, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
@@ -244,9 +244,31 @@ const fromNpx = (path: string) => /[\\/]_npx[\\/]/.test(path)
 function globalVb(): string | null {
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     const candidate = join(dir, 'vb')
-    if (existsSync(candidate) && !fromNpx(realpathSync(candidate))) return realpathSync(candidate)
+    if (existsSync(candidate) && !fromNpx(realpathSync(candidate))) return candidate
   }
   return null
+}
+
+/**
+ * Whether `bin` runs the CLI at `self`: a symlink to it (npm), or a shell
+ * shim that execs node on it (pnpm, through `$basedir`- or `$basedir_abs`-relative paths).
+ */
+function runsCli(bin: string, self: string): boolean {
+  try {
+    const real = realpathSync(bin)
+    if (real === self) return true
+    if (statSync(real).size > 64 * 1024) return false
+    const script = readFileSync(real, 'utf8')
+    if (!script.startsWith('#!')) return false
+    const basedir = dirname(bin)
+    // pnpm 10 quotes "$basedir/…"; pnpm 11 quotes "$basedir_abs/…" and notes `# cmd-shim-target=<path>`.
+    const paths = [
+      ...[...script.matchAll(/"([^"\n]+)"/g)].map(([, quoted]) => quoted!.replace(/^\$(?:\{basedir(?:_abs)?\}|basedir(?:_abs)?)(?=\/)/, basedir)),
+      ...[...script.matchAll(/^# cmd-shim-target=(.+)$/gm)].map(([, target]) => target!.trim()),
+    ]
+    for (const path of paths) if (isAbsolute(path) && existsSync(path) && realpathSync(path) === self) return true
+  } catch {}
+  return false
 }
 
 /**
@@ -258,7 +280,7 @@ function cliCommand(): { command: string; note?: string } {
   const self = realpathSync(process.argv[1]!)
   const installed = globalVb()
   if (!fromNpx(self)) {
-    if (installed === self) return { command: 'vb' }
+    if (installed && runsCli(installed, self)) return { command: 'vb' }
     const quote = (part: string) => (/^[\w./-]+$/.test(part) ? part : `'${part.replace(/'/g, `'\\''`)}'`)
     return { command: [process.execPath, self].map(quote).join(' ') }
   }
