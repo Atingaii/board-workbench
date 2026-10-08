@@ -1199,9 +1199,13 @@ export const { GET, POST, scheduler } = board({
   imports. New board threads start external threads where supported, and replies,
   reactions, edits, and deletes flow through the connection automatically.
 - **A function: a callback for every incoming event.** It receives `{ event,
-  board }`, including for connected threads. Call `board.sync(channel, event)` to
+  board, permalink }`, including for connected threads. Call `board.sync(channel, event)` to
   apply the default import, pass overrides, or use other board operations. Calling
   no default sync skips that event. Once connected, outgoing delivery is automatic.
+  `permalink()` returns the platform's own link to the event's message, from
+  `SyncProvider.permalink(event)`: fetched on the first call, reused for the rest
+  of the callback, and forgotten after a failure so a retry asks again. It only
+  reads the URL; nothing is imported or joined. The base provider returns `null`.
 - **`{ channel, run }`: a callback with static reverse routing.** Incoming events
   go through `run`. The declared channel also lets new board-created threads find
   the external channel without executing the callback to discover routing.
@@ -1647,12 +1651,17 @@ vboard configures every Chat instance itself:
 `slack({ adapter, channels })`. Keys are Slack channels, by name (`'#prs'`) or
 ID (`'C0123ABC'`).
 
-**A function receives `{ event, board }`.** The shared envelope includes:
+**A function receives `{ event, board, permalink }`.** The shared envelope includes:
 - `text`
 - `author`
 - `channel`
 - `thread`, the target that `sync` accepts
 - `raw`, the Slack payload
+
+`permalink()` calls `chat.getPermalink` with the provider's client, so the link
+has the workspace's own host (Enterprise Grid included) and a reply's
+`thread_ts`. It's `null` for a deleted message, which Slack can no longer link;
+any other Slack refusal throws, and the callback retries.
 
 **Setup:**
 
@@ -1796,8 +1805,8 @@ vb read issues --label tag.bug                     # issues labeled bug
   `board.sync(channel, event)` imports state labels; callbacks can also supply
   label overrides or call `board.label` themselves.
 
-- **A function receives `{ event, board }`,** with `event` typed as the union
-  above. Every event carries `thread`.
+- **A function receives `{ event, board, permalink }`,** with `event` typed as the union
+  above. `permalink()` returns `null` on GitHub. Every event carries `thread`.
 - **A comment on a PR or issue the board hasn't seen** fetches it through the
   adapter's `.octokit`, creates a root from its title and URL with its author,
   state, labels, and assignees, then posts the comment as a reply. Known threads
