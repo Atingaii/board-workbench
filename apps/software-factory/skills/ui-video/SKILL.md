@@ -1,9 +1,14 @@
 ---
 name: ui-video
-description: Record a captioned video of a UI change working in a real browser (agent-browser + ffmpeg) and attach it to a board reply. Use when a PR changes something people can see, to show it working end to end.
+description: Record a captioned video of a UI change working in a real browser (agent-browser + ffmpeg) and attach it to a board reply. Use whenever a change touches UI, to show people it works instead of telling them.
 ---
 
 # Show a UI change on video
+
+When a change touches UI, prefer showing people it works over telling them.
+You decide how: a video for a flow people click through, a screenshot when
+one still frame shows it, or nothing when there's nothing to see (say so in
+the PR instead).
 
 A short screen recording of the flow the change touches, with a caption burned
 in for each step ("Signing in with the test account", "The new message shows up
