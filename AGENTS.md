@@ -123,12 +123,22 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments`. Pi attaches a screenshot to the reply
-  that links its PR when the change is visible, never test-run logs: the tests
+  that links its PR when the change is visible (a captioned video, for a flow),
+  never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
   `vb` is pinned (`VBOARD` in `agent.ts`): bump it with each release Pi should
   use, since setup upgrades sandboxes to exactly that. So is `gh` (`GH`), which
   new sandboxes download without asking GitHub's API, whose unauthenticated rate
   limit sandboxes share.
+- Pi's sandbox also has skills of the factory's own, in
+  `apps/software-factory/skills/` and written to `~/.pi/agent/skills` every turn
+  (add a new file to `SKILLS` in `agent.ts`). `ui-video` records a flow in
+  `agent-browser` and burns a caption for each step in with ffmpeg, as an mp4
+  under 4 MB. Setup installs both, pinned (`AGENT_BROWSER`, `FFMPEG_STATIC`),
+  and a failed install doesn't stop Pi. Pi tests against a local dev server or
+  the preview of its own branch (`piPreview`). The network policy adds the
+  Vercel Authentication bypass to that host only, so the secret never reaches
+  other deployments, or the sandbox.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues
   (`vercel.json`), on topic `vboard-factory`. Production is behind Vercel
   Authentication: the CLI needs `VERCEL_AUTOMATION_BYPASS_SECRET`, and Pi's
