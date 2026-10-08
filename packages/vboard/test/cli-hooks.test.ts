@@ -210,7 +210,7 @@ describe('cli hooks', () => {
       expect(await settle()).toBeUndefined()
       // An aborted run isn't reminded.
       expect(await settle('aborted')).toBeUndefined()
-      expect(await settle()).not.toBeUndefined()
+      expect(await settle()).toMatchObject({ continue: true })
     } finally {
       vi.unstubAllEnvs()
     }
