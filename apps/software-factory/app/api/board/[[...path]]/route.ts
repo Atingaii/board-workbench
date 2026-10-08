@@ -10,14 +10,14 @@ import {
 } from "@vercel/connect/chat";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { byPi, taskMessage, tellPi } from "./agent";
+import { byPi, byWatcher, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { isPiKind, PI_KINDS, piTask, scheduled, scheduledThread } from "./kinds";
-import { fromSecurity, security } from "./security";
+import { security } from "./security";
 import { shipit } from "./shipit";
 import { autoland } from "./autoland";
 import { owner } from "./owner";
-import { crosspost, CROSSPOST_ACTOR } from "./crosspost";
+import { crosspost } from "./crosspost";
 import { renderForSlack } from "./render";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
@@ -88,7 +88,7 @@ export const { GET, POST, scheduler } = board({
           event.type !== "message.posted" ||
           !message ||
           byPi(message.re ?? message.id, message.by) ||
-          message.by.actor === CROSSPOST_ACTOR ||
+          byWatcher(message.by) ||
           scheduledThread(message)
         ) {
           return;
@@ -117,7 +117,7 @@ export const { GET, POST, scheduler } = board({
     // changes, and hears when anyone else replies, then reads what's new itself.
     pi: {
       tail: `dev --label kind=${PI_KINDS.join("|")}`,
-      run: async ({ event }) => {
+      run: async ({ event, board }) => {
         const message = event.message;
         if (!message) {
           return;
@@ -130,6 +130,7 @@ export const { GET, POST, scheduler } = board({
               : undefined;
         if (kind && isPiKind(kind) && message.re === null) {
           await tellPi({
+            board,
             task: "thread",
             thread: message.id,
             key: `kind-${kind}`,
@@ -139,10 +140,10 @@ export const { GET, POST, scheduler } = board({
           event.type === "message.posted" &&
           message.re !== null &&
           (scheduled(message) || !byPi(message.re, message.by)) &&
-          !fromSecurity(message.by) &&
-          message.by.actor !== CROSSPOST_ACTOR
+          !byWatcher(message.by)
         ) {
           await tellPi({
+            board,
             task: "thread",
             thread: message.re,
             key: `news-${message.id}`,
@@ -156,13 +157,14 @@ export const { GET, POST, scheduler } = board({
     // threads: `--label pr` matches a reply by its root's labels too.
     "review-pi": {
       tail: "dev --label pr",
-      run: async ({ event }) => {
+      run: async ({ event, board }) => {
         const message = event.message;
         if (event.type !== "message.posted" || !message) {
           return;
         }
         if (message.re === null) {
           await tellPi({
+            board,
             task: "review",
             thread: message.id,
             key: "pr",
@@ -171,9 +173,10 @@ export const { GET, POST, scheduler } = board({
         } else if (
           (scheduled(message) || !byPi(message.re, message.by)) &&
           !message.author?.handle.endsWith("[bot]") &&
-          message.by.actor !== CROSSPOST_ACTOR
+          !byWatcher(message.by)
         ) {
           await tellPi({
+            board,
             task: "review",
             thread: message.re,
             key: `news-${message.id}`,
