@@ -377,8 +377,10 @@ describe('sync', () => {
     const { board, s } = setup()
     const julian = caller(board.fetch, await personToken())
     await julian('POST', '/messages', { channel: 'firehose', text: 'scratch', noSync: true })
-    await new Promise((r) => setTimeout(r, 50))
-    expect(s.channelPosts).toHaveLength(0)
+    await julian('POST', '/messages', { channel: 'firehose', text: 'shared' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(s.channelPosts[0]!.text).toContain('shared') // only the synced root reaches Slack
+    expect((await read(julian, 'firehose')).map((m) => m.text)).toEqual(['scratch', 'shared'])
   })
 
   it('syncs reactions both ways', async () => {
@@ -657,6 +659,7 @@ describe('sync', () => {
     const julian = caller(board.fetch, await personToken())
     await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:52', id: 'c1', text: 'Building', user: '35613825' })
     await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(1))
+    expect(seen.mock.calls[0]![0].event).toMatchObject({ type: 'comment', text: 'Building' })
     expect(await read(julian, 'prs')).toHaveLength(0)
     expect(get).not.toHaveBeenCalled()
   })
@@ -808,11 +811,10 @@ describe('sync', () => {
       avatar: 'https://avatars.githubusercontent.com/in/8329?v=4',
     })
 
-    const { body: posted } = await julian('POST', '/messages', { channel: 'firehose', text: '**ship it**' })
+    await julian('POST', '/messages', { channel: 'firehose', text: '**ship it**' })
     // The GitHub thread mirrored to Slack too: each starts a thread in its channel.
     await vi.waitFor(() => expect(s.channelPosts.map((p) => p.channelId).sort()).toEqual(['slack:C1', 'slack:C2']))
     expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(JSON.stringify({ markdown: '**julian**: **ship it**' }))
-    expect(posted.message.id).toBeGreaterThan(0)
   })
 
   it('re-renders a copy when a label change changes its rendering, and only then', async () => {
@@ -1301,6 +1303,7 @@ describe('provider callbacks', () => {
     const board = testBoard({ sync: { github: github({ adapter: g.adapter, repos: { 'basehub-ai/vboard': seen } }) } })
     await board.fetch(new Request(`${BOARD_URL}/webhooks/github`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'github:basehub-ai/vboard:99', id: 'c1', text: 'skip', user: '1' }) }))
     await vi.waitFor(() => expect(seen).toHaveBeenCalledOnce())
+    expect(seen.mock.calls[0]![0].event).toMatchObject({ type: 'comment', text: 'skip' })
     expect(get).not.toHaveBeenCalled()
   })
 
