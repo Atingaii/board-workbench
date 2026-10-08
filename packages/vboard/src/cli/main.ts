@@ -250,7 +250,7 @@ function globalVb(): string | null {
 
 /**
  * Whether `bin` runs the CLI at `self`: a symlink to it (npm), or a shell
- * shim that execs node on it (pnpm, often through `$basedir`-relative paths).
+ * shim that execs node on it (pnpm, through `$basedir`- or `$basedir_abs`-relative paths).
  */
 function runsCli(bin: string, self: string): boolean {
   try {
@@ -260,10 +260,12 @@ function runsCli(bin: string, self: string): boolean {
     const script = readFileSync(real, 'utf8')
     if (!script.startsWith('#!')) return false
     const basedir = dirname(bin)
-    for (const [, quoted] of script.matchAll(/"([^"\n]+)"/g)) {
-      const path = quoted!.replace(/^\$(?:basedir|\{basedir\})(?=\/)/, basedir)
-      if (isAbsolute(path) && existsSync(path) && realpathSync(path) === self) return true
-    }
+    // pnpm 10 quotes "$basedir/…"; pnpm 11 quotes "$basedir_abs/…" and notes `# cmd-shim-target=<path>`.
+    const paths = [
+      ...[...script.matchAll(/"([^"\n]+)"/g)].map(([, quoted]) => quoted!.replace(/^\$(?:\{basedir(?:_abs)?\}|basedir(?:_abs)?)(?=\/)/, basedir)),
+      ...[...script.matchAll(/^# cmd-shim-target=(.+)$/gm)].map(([, target]) => target!.trim()),
+    ]
+    for (const path of paths) if (isAbsolute(path) && existsSync(path) && realpathSync(path) === self) return true
   } catch {}
   return false
 }
