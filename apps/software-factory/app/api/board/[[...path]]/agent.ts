@@ -120,7 +120,7 @@ export function taskMessage(
 export type Task = "thread" | "review";
 
 /** How Pi keeps people company in any thread: they see it's on it, and get pinged when it answers. */
-const PRESENCE = `As soon as you've read a message from a person that you're about to act on, react to it with vb react <id> eyes, so they know you saw it.
+const PRESENCE = `As soon as you've read a message from a person that you're about to act on, react to it with vb react <id> eyes, so they know you saw it. When it asks for work that takes more than a quick look (a fix, a rebase, a new demo, a build), make your first reply, before you clone, read code, or run anything, one line saying what you're about to do, so nobody wonders whether you're stuck. A ⏳ on their message means it waited while you finished something else: say so in that line.
 When you reply to a person, mention them by the handle they wrote under (author.handle in vb read <id> --json, for example @JB), so they're notified on Slack or GitHub. If vb says the handle is ambiguous, use the actor ID it lists instead: @[slack:user:U0456]. Mention each person once, not in every line.
 You hear about every reply in your threads, but most aren't for you. When a message is addressed to someone else (it @mentions another person, or answers someone else's question) and doesn't ask anything of you, don't reply and don't react; stay quiet unless you're asked.
 Board replies are read on Slack by busy people: keep each to a few lines. Lead with the outcome (the PR link, the answer, the one question you need answered), skip background they already know, and use a short list only when there are real options to pick from. No "What I ran" lists, and no recaps of the thread, including messages synced from GitHub (PR descriptions, reviews and comments, yours too): point at them instead, and say each thing once; the attachments and the PR carry the detail.
@@ -302,13 +302,36 @@ export async function startOrSay(
  * (the calling watcher's) says so in the thread; see `startOrSay`.
  * `key` names the message, so telling Pi the same thing twice is a no-op.
  */
-export async function tellPi({ board, ...input }: PiMessage & { board: Pick<WatcherContext["board"], "reply"> }) {
-  await startOrSay(board, input.thread, () => deliver(input));
+export async function tellPi({ board, ...input }: PiMessage & { board: Pick<WatcherContext["board"], "reply" | "react"> }) {
+  await startOrSay(board, input.thread, () => deliver(input, board));
 }
 
-type PiMessage = { task: Task; thread: number; key: string; message: string };
+type PiMessage = {
+  task: Task;
+  thread: number;
+  key: string;
+  message: string;
+  /** The person's message this one is about, which gets a ⏳ when it has to wait for Pi's current turn. */
+  about?: number;
+};
 
-async function deliver({ task, thread, key, message }: PiMessage) {
+/** The reaction on a message that waits behind Pi's current turn: Pi can't see it, or say it has, until that turn ends. */
+export const QUEUED = "hourglass_flowing_sand";
+
+/** Whether a turn holds the lock TELL waits on; run in the sandbox, it exits 0 when one does. */
+export const BUSY = `[ -e ~/.pi/lock ] && ! flock -n ~/.pi/lock true`;
+
+/** Marks `about` queued when Pi is busy. Best-effort: a reaction that fails never holds up the message. */
+export async function markQueued(board: Pick<WatcherContext["board"], "react">, about: number | undefined, busy: () => Promise<boolean>) {
+  if (about === undefined) return;
+  try {
+    if (await busy()) await board.react(about, QUEUED);
+  } catch (error) {
+    console.warn(`[factory] couldn't mark #${about} queued:`, error);
+  }
+}
+
+async function deliver({ task, thread, key, message, about }: PiMessage, watcher: Pick<WatcherContext["board"], "react">) {
   const [{ Sandbox }, { getToken }, { getVercelOidcToken }] = await Promise.all([
     import("@vercel/sandbox"),
     import("@vercel/connect"),
@@ -333,6 +356,8 @@ async function deliver({ task, thread, key, message }: PiMessage) {
     await sandbox.delete();
     sandbox = await Sandbox.create(settings);
   }
+  // Before setup, which takes a while: the person hears right away that Pi got it and is finishing something else.
+  await markQueued(watcher, about, async () => (await sandbox.runCommand({ cmd: "bash", args: ["-c", BUSY] })).exitCode === 0);
   // Every turn, so a sandbox picks up a new pinned vb; before the policy, so no credential is in place yet.
   await sh(sandbox, SETUP);
   await sandbox.writeFiles(await skills());
