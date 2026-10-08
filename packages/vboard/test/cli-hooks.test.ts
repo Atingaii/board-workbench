@@ -22,11 +22,15 @@ describe('cli hooks', () => {
 
     const installed = await vb(['hooks', 'install', 'claude', 'codex'], at)
     expect(installed).toMatchObject({ code: 0, stderr: '' })
-    expect(installed.stdout).toContain('Codex: added the turn-end hook')
+    expect(installed.stdout).toContain('Codex  ~/.codex/hooks.json\n  added the turn-end hook\n')
+    // One short block per agent: home as ~, and what's allowed said in words, not as the rules' raw commands.
+    expect(installed.stdout).toContain('Claude Code  ~/.claude/settings.json\n  added the turn-end hook\n  update, reply, and read run without asking\n\n')
+    expect(installed.stdout).not.toContain('Bash(')
+    expect(installed.stdout).not.toContain(home)
     // Codex has no command allowlist; its sandbox needs network, so it's told how to allow just the board.
-    expect(installed.stdout).toContain("Codex's sandbox has no network by default")
+    expect(installed.stdout).toContain("to let vb reach just the board from Codex's sandbox, add to ~/.codex/config.toml:\n\n    # at the top, before any [table]\n    default_permissions = \"vboard\"\n")
     expect(installed.stdout).toContain(`"${new URL(url).hostname}" = "allow"`)
-    expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain('Claude Code: already installed')
+    expect((await vb(['hooks', 'install', 'claude'], at)).stdout).toContain('Claude Code  ~/.claude/settings.json\n  already installed\n')
     const claude = JSON.parse(await readFile(settings, 'utf8'))
     expect(claude.model).toBe('opus')
     expect(claude.hooks.PreToolUse).toEqual([])
@@ -38,7 +42,7 @@ describe('cli hooks', () => {
     expect(claude.permissions).toEqual({ allow: ['Bash(ls:*)', `Bash(${cli} update:*)`, `Bash(${cli} reply:*)`, `Bash(${cli} read:*)`], deny: ['Bash(rm:*)'] })
     const codex = JSON.parse(await readFile(join(home, '.codex', 'hooks.json'), 'utf8'))
     expect(codex.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent codex 2>\/dev\/null \|\| true$/)
-    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude .*\|\| true\nCodex: .* hook stop --agent codex .*\|\| true\nCursor: not installed/)
+    expect((await vb(['hooks', 'status'], at)).stdout).toBe('Claude Code  installed  ~/.claude/settings.json\nCodex        installed  ~/.codex/hooks.json\nCursor       not installed\nPi           not installed\n')
 
     // Whatever the saved command runs into (say, an older vb without `hook`, which exits 2), it can't fail a turn.
     const stale = join(home, 'bin')
@@ -53,7 +57,7 @@ describe('cli hooks', () => {
     })
     expect(ran).toEqual({ code: 0, stderr: '' })
 
-    expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
+    expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toBe('Claude Code  removed  ~/.claude/settings.json\n')
     expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual(theirs)
     expect((await vb(['hooks', 'install', 'gemini'], at))).toMatchObject({ code: 2, stderr: 'error: unknown agent: gemini (known: claude, codex, cursor, pi)\n' })
   })
@@ -67,8 +71,8 @@ describe('cli hooks', () => {
     expect(settings.hooks.Stop[0].hooks[0].command).toMatch(/ hook stop --agent claude /)
     expect(settings.permissions.allow).toHaveLength(3)
     expect(readdirSync(home)).toEqual([])
-    expect((await vb(['hooks', 'status'], at)).stdout).toMatch(/Claude Code: .* hook stop --agent claude /)
-    expect((await vb(['hooks', 'status'], { HOME: home })).stdout).toMatch(/Claude Code: not installed/)
+    expect((await vb(['hooks', 'status', 'claude'], at)).stdout).toBe(`Claude Code  installed  ${join(config, 'settings.json')}\n`)
+    expect((await vb(['hooks', 'status', 'claude'], { HOME: home })).stdout).toBe('Claude Code  not installed\n')
     expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
     expect(JSON.parse(await readFile(join(config, 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: [] } })
     expect(readdirSync(home)).toEqual([])
@@ -152,7 +156,7 @@ describe('cli hooks', () => {
 
   it('reminds Cursor with a follow-up message, keyed by project since its shell has no session', async () => {
     const home = await tmp('vboard-home-')
-    expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor: added the turn-end hook')
+    expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor  ~/.cursor/hooks.json\n  added the turn-end hook\n')
     expect(JSON.parse(await readFile(join(home, '.cursor', 'hooks.json'), 'utf8'))).toEqual({
       version: 1,
       hooks: { stop: [{ command: expect.stringMatching(/ hook stop --agent cursor 2>\/dev\/null \|\| true$/), timeout: 10 }] },
@@ -183,9 +187,9 @@ describe('cli hooks', () => {
     const agentDir = join(home, 'pi-agent')
     const at = { HOME: home, PI_CODING_AGENT_DIR: agentDir }
     const file = join(agentDir, 'extensions', 'vboard.ts')
-    expect((await vb(['hooks', 'install', 'pi'], at)).stdout).toContain(`Pi: added the turn-end hook to ${file}`)
-    expect((await vb(['hooks', 'install', 'pi'], at)).stdout).toContain('Pi: already installed')
-    expect((await vb(['hooks', 'status', 'pi'], at)).stdout).toMatch(/^Pi: .* hook stop --agent pi 2>\/dev\/null \|\| true\n$/)
+    expect((await vb(['hooks', 'install', 'pi'], at)).stdout).toContain('Pi  ~/pi-agent/extensions/vboard.ts\n  added the turn-end hook\n')
+    expect((await vb(['hooks', 'install', 'pi'], at)).stdout).toContain('  already installed\n')
+    expect((await vb(['hooks', 'status', 'pi'], at)).stdout).toBe('Pi  installed  ~/pi-agent/extensions/vboard.ts\n')
 
     // Load it as Pi does, with a stand-in for Pi's API, and run its handler as Pi would before settling.
     const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {}
@@ -218,11 +222,11 @@ describe('cli hooks', () => {
     expect(stdout.trim().split('\n').map((line) => JSON.parse(line)).filter((m) => m.re !== null).map((m) => [m.by.profile, m.by.session, m.text])).toEqual([['pi', session, 'Taught Pi the hook.']])
 
     // It won't overwrite an extension that isn't its own; uninstalling removes only its file.
-    expect((await vb(['hooks', 'uninstall', 'pi'], at)).stdout).toContain(`Pi: removed the turn-end hook from ${file}`)
+    expect((await vb(['hooks', 'uninstall', 'pi'], at)).stdout).toBe('Pi  removed  ~/pi-agent/extensions/vboard.ts\n')
     await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await writeFile(file, 'export default () => {}\n')
     expect(await vb(['hooks', 'install', 'pi'], at)).toMatchObject({ code: 1, stderr: `error: ${file} isn't vboard's: move it, then install again\n` })
-    expect((await vb(['hooks', 'status', 'pi'], at)).stdout).toBe('Pi: not installed\n')
+    expect((await vb(['hooks', 'status', 'pi'], at)).stdout).toBe('Pi  not installed\n')
     expect(await readFile(file, 'utf8')).toBe('export default () => {}\n')
   }, 30_000)
 })

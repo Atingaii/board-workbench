@@ -27,6 +27,7 @@ import {
   installHook,
   markPosted,
   reminder,
+  tilde,
   uninstallHook,
   workOf,
   type HookAgent,
@@ -538,8 +539,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'hooks': {
       const [action = 'status', ...names] = args
       const agents = hookAgents(names)
+      const width = Math.max(...agents.map((agent) => AGENTS[agent].name.length))
+      const row = (agent: HookAgent, ...cells: string[]) => out([AGENTS[agent].name.padEnd(width), ...cells].join('  ').trimEnd())
       if (action === 'status') {
-        for (const agent of agents) out(`${AGENTS[agent].name}: ${installedHook(agent) ?? 'not installed'}`)
+        for (const agent of agents) {
+          const installed = installedHook(agent) !== null
+          row(agent, installed ? 'installed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : '')
+        }
         return 0
       }
       if (action === 'uninstall') {
@@ -547,20 +553,22 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           const installed = installedHook(agent)
           const rules = installed ? allowRules(agent, cliOf(installed)) : null
           if (rules) disallow(rules.file, rules.rules)
-          out(`${AGENTS[agent].name}: ${uninstallHook(agent) ? `removed the turn-end hook from ${AGENTS[agent].file()}` : 'not installed'}`)
+          row(agent, uninstallHook(agent) ? 'removed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : '')
         }
         return 0
       }
       if (action !== 'install') throw new UsageError('usage: vboard hooks [install|uninstall|status] [claude|codex|cursor|pi]...')
       const { command: cli, note } = cliCommand()
+      // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
         const changed = installHook(agent, cli, flags.channel ? ` --channel ${flags.channel}` : '')
-        out(`${AGENTS[agent].name}: ${changed ? `added the turn-end hook to ${AGENTS[agent].file()}` : 'already installed'}`)
+        out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
+        out(`  ${changed ? 'added the turn-end hook' : 'already installed'}`)
         // The reminder asks for `vb update`, `vb reply`, and `vb read`: no permission prompt for each.
         const rules = allowRules(agent, cli)
         const added = rules ? allow(rules.file, rules.rules) : []
-        if (added.length > 0) out(`  allowed ${added.join(', ')} in ${rules!.file}`)
-        if (agent === 'cursor' && !rules) out('  install vb globally (npm i -g vboard) to let Cursor run it without asking')
+        if (added.length > 0) out(`  ${agent === 'claude' ? 'update, reply, and read run without asking' : 'vb runs without asking'}`)
+        if (agent === 'cursor' && !rules) out('  npm i -g vboard lets Cursor run vb without asking')
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
           let host: string | null = null
@@ -570,16 +578,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           } catch {}
           const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
           const profile = codexNetwork(host)
-          out("  Codex's sandbox has no network by default, so vb can't reach the board from it. To allow just the board")
-          out(`  (permission profiles are beta), put this at the top of ${config}, before any [table]:\n`)
-          out(`    ${profile.top}\n`)
-          out('  and these tables anywhere in it (merge [features] into yours if you have one):\n')
-          out(profile.tables.replace(/^/gm, '    '))
+          out(`  to let vb reach just the board from Codex's sandbox, add to ${tilde(config)}:`)
           out('')
+          out(['# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
         }
+        out('')
       }
-      if (note) out(`Note: ${note}.`)
-      out('It reminds only in projects linked with `vb link <url>` (or with VBOARD_URL set), once per turn that didn\'t update the board.')
+      if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
+      out("The hooks remind once per turn without a board update, in linked projects.")
       return 0
     }
 
