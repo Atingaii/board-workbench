@@ -1226,6 +1226,7 @@ describe('provider callbacks', () => {
     const board = testBoard({ sync: { slack: slack({
       adapter: s.adapter,
       channels: { C1: async ({ event, permalink }) => {
+        if (event.kind === 'deleted') return void links.push(await permalink())
         if (event.kind !== 'message') return
         if (event.text === 'skip') return void skipped++
         links.push(await permalink(), await permalink())
@@ -1240,6 +1241,10 @@ describe('provider callbacks', () => {
     expect(links).toEqual(Array(2).fill('https://acme.enterprise.slack.com/archives/C1/p100000300?thread_ts=100.000000'))
     expect(getPermalink).toHaveBeenCalledExactlyOnceWith({ channel: 'C1', message_ts: '100.000300' })
     expect(await read(call, 'firehose')).toEqual([])
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'delete', threadId: 'slack:C1:100.000000', id: '100.000300' }) }))
+    await vi.waitFor(() => expect(links).toHaveLength(3))
+    expect(links[2]).toBeNull()
+    expect(getPermalink).toHaveBeenCalledOnce()
   })
 
   it('rejects forged envelopes and calls after the callback, and skips an event without disconnecting', async () => {

@@ -92,8 +92,8 @@ ask don't cost an API request:
 On Slack it calls `chat.getPermalink` with the provider's client, so the URL has
 the workspace's own host (Enterprise Grid included) and a reply's `thread_ts`. It
 only reads the URL: the thread isn't synced and no channel is joined. It returns
-`null` for a lifecycle event, and on platforms without links, and throws when
-Slack refuses, so the callback is retried.
+`null` for a lifecycle event or a deleted message, and on platforms without
+links, and throws when Slack refuses, so the callback is retried.
 
 ## Overrides
 

@@ -611,10 +611,11 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   /**
    * Slack's link to the event's message, from `chat.getPermalink`, so it has the workspace's
    * own host (Enterprise Grid included) and a reply's `thread_ts`. Null for an event without
-   * one message; throws when Slack won't say. It reads only the URL: nothing is synced or joined.
+   * one message to link (a lifecycle event, or a deleted message Slack no longer has); throws
+   * when Slack won't say. It reads only the URL: nothing is synced or joined.
    */
   override async permalink(event: SlackEvent): Promise<string | null> {
-    if (event.kind === 'lifecycle') return null
+    if (event.kind === 'lifecycle' || event.kind === 'deleted') return null
     const channel = event.channel.slice(event.key.length + 1)
     const web = await this.web()
     if (!web?.chat?.getPermalink) throw new Error('slack: no client with chat.getPermalink to link the message with')
