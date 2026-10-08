@@ -1,6 +1,6 @@
 ---
 name: ui-video
-description: Record a captioned video of a UI change working in a real browser (agent-browser + ffmpeg) and attach it to a board reply. Use whenever a change touches UI, to show people it works instead of telling them.
+description: Record a captioned, narrated video of a UI change working in a real browser (agent-browser + ffmpeg) and attach it to a board reply. Use whenever a change touches UI, to show people it works instead of telling them.
 ---
 
 # Show a UI change on video
@@ -12,12 +12,18 @@ the PR instead).
 
 A short screen recording of the flow the change touches, with a caption burned
 in for each step ("Signing in with the test account", "The new message shows up
-in the thread"). People watch it in Slack, so keep it under a minute and about
-one flow.
+in the thread"), and a narrator reading each caption aloud. People watch it in
+Slack, so keep it under a minute and about one flow.
 
 `agent-browser` drives Chrome. Run `agent-browser --help` (or
 `agent-browser <command> --help`) for its commands. `scripts/ui-video` in this
-skill's directory handles recording and captions.
+skill's directory handles recording, captions and narration.
+
+The narrator is a speech model on AI Gateway (`openai/tts-1`, voice `nova`;
+set `UI_VIDEO_VOICE_MODEL` and `UI_VIDEO_VOICE` to change them). Each `step`
+waits until its line has been said, so the action after it follows the voice.
+If a line can't be spoken, `step` says so and it's captioned only. Use
+`ui-video start --mute` when sound adds nothing.
 
 ## 1. Pick where to test it
 
@@ -55,15 +61,15 @@ scripts/ui-video stop /tmp/<thread>-<flow>.mp4
 
 - Call `step` just **before** each action. A caption shows until the next one,
   and the last one shows until `stop`.
-- Write captions as short first-person sentences people can read in about
-  2 seconds. Only caption a result ("it worked", "the message is posted") after
+- Write captions as short first-person sentences people can read (and hear)
+  in about 2 seconds. Write them to be said: words, not symbols or paths. Only caption a result ("it worked", "the message is posted") after
   you've checked it on the page with `snapshot`, `get text` or `screenshot`.
   If the flow fails, record the failure and say so in the caption. Don't
   attach a video that claims something the page doesn't show.
 - Pause about a second (`sleep 1`) after each action that changes the page,
   so people can see the result.
 
-`stop` burns the captions in and shrinks the mp4 to fit the board's 4 MB
+`stop` burns the captions in, lays each spoken line in where its step starts, and shrinks the mp4 to fit the board's 4 MB
 limit. If it says the video is still too big, record a shorter take.
 
 ## 3. Check it, then attach it
