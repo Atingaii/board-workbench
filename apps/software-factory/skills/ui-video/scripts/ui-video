@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Records an agent-browser session and burns a caption for each step into it.
+#   ui-video start [--fps N] start recording the current agent-browser session (15 fps unless set)
+#   ui-video step "<text>"   caption from now until the next step
+#   ui-video stop <out.mp4>  stop, burn the captions in, and fit the mp4 under 4 MB
+set -euo pipefail
+DIR="${UI_VIDEO_DIR:-/tmp/ui-video}"
+LIMIT=$((4 * 1000 * 1000))
+now() { date +%s.%N; }
+
+srt_time() { # seconds -> HH:MM:SS,mmm
+  awk -v t="$1" 'BEGIN { if (t < 0) t = 0; ms = int(t * 1000 + 0.5);
+    printf "%02d:%02d:%02d,%03d", int(ms / 3600000), int(ms / 60000) % 60, int(ms / 1000) % 60, ms % 1000 }'
+}
+
+case "${1:-}" in
+  start)
+    rm -rf "$DIR" && mkdir -p "$DIR"
+    shift
+    # 15 fps is plenty for clicks and page loads, and keeps the encoder up on a busy sandbox.
+    [[ " $* " == *" --fps "* ]] || set -- --fps 15 "$@"
+    agent-browser record start "$DIR/raw.webm" --cursor "$@" >/dev/null
+    now > "$DIR/start"
+    : > "$DIR/steps.tsv"
+    echo "recording; caption each step with: ui-video step \"<what you're doing>\""
+    ;;
+  step)
+    [ -f "$DIR/start" ] || { echo "not recording: run ui-video start first" >&2; exit 1; }
+    shift
+    text="$*"
+    [ -n "$text" ] || { echo "usage: ui-video step \"<text>\"" >&2; exit 1; }
+    printf '%s\t%s\n' "$(awk -v a="$(cat "$DIR/start")" -v b="$(now)" 'BEGIN { printf "%.3f", b - a }')" "${text//$'\t'/ }" >> "$DIR/steps.tsv"
+    ;;
+  stop)
+    out="${2:?usage: ui-video stop <out.mp4>}"
+    [ -f "$DIR/start" ] || { echo "not recording: run ui-video start first" >&2; exit 1; }
+    end=$(awk -v a="$(cat "$DIR/start")" -v b="$(now)" 'BEGIN { printf "%.3f", b - a }')
+    agent-browser record stop >/dev/null || { echo "the recording failed: record the take again (try a lower --fps)" >&2; exit 1; }
+    # Each caption shows until the next one starts; the last one until the end.
+    n=0
+    : > "$DIR/captions.srt"
+    mapfile -t lines < "$DIR/steps.tsv"
+    for i in "${!lines[@]}"; do
+      from="${lines[$i]%%$'\t'*}"; text="${lines[$i]#*$'\t'}"
+      if [ $((i + 1)) -lt ${#lines[@]} ]; then to="${lines[$((i + 1))]%%$'\t'*}"; else to="$end"; fi
+      n=$((n + 1))
+      printf '%d\n%s --> %s\n%s\n\n' "$n" "$(srt_time "$from")" "$(srt_time "$to")" "$text" >> "$DIR/captions.srt"
+    done
+    style="FontName=Liberation Sans,FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H40000000,BackColour=&H40000000,BorderStyle=3,Outline=4,Shadow=0,MarginV=16"
+    # Smaller and blurrier each try until it fits under the board's 4 MB.
+    for try in "1280 28" "1280 33" "960 35" "720 38"; do
+      set -- $try
+      ffmpeg -loglevel error -y -i "$DIR/raw.webm" \
+        -vf "scale='min($1,iw)':-2,subtitles=$DIR/captions.srt:force_style='$style'" \
+        -c:v libx264 -preset veryfast -crf "$2" -pix_fmt yuv420p -movflags +faststart -an "$out"
+      size=$(stat -c %s "$out")
+      if [ "$size" -le "$LIMIT" ]; then
+        echo "$out: $((size / 1000)) KB, ${n} captions, ${end%.*}s"
+        exit 0
+      fi
+    done
+    echo "$out is still over 4 MB ($((size / 1000)) KB): record a shorter take" >&2
+    exit 1
+    ;;
+  *)
+    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+    exit 1
+    ;;
+esac

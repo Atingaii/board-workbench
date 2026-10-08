@@ -1,5 +1,7 @@
 import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 import type { WatcherContext } from "vboard";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 // Pi, the coding agent, working on a board thread from its own Vercel Sandbox: the
 // `pi` CLI with `vb`, `gh`, and git, like a developer at a terminal. Each thread gets
@@ -20,6 +22,14 @@ const VBOARD = "0.4.0";
  * threads' setup failed on a 403.
  */
 const GH = "2.102.0";
+/** The browser Pi drives and the ffmpeg it records with, for the ui-video skill; pinned like gh. */
+const AGENT_BROWSER = "0.38.2";
+/** ffmpeg 6.0, a static build with libass, so captions can be burned in. */
+const FFMPEG_STATIC = "5.2.0";
+/** The user Pi runs as, whose home its skills and agent-browser's Chrome go in. */
+const PI_USER = "vercel-sandbox";
+/** The skills Pi gets on top of its own (see `skills/`), written into its sandbox every turn. */
+const SKILLS = ["ui-video/SKILL.md", "ui-video/scripts/ui-video"];
 /**
  * A sandbox session ends at a fixed deadline, not after idling; its files come back with the next one.
  * Each message gets at least this long before it, so a turn that starts late in a session isn't cut off.
@@ -135,7 +145,7 @@ For a bug report:
 For a feature request: if it's clear what's wanted, build it with tests and open a PR. If it's ambiguous or large, reply with a short plan or your questions first, and build it once someone agrees.
 For a question: answer it from the code and docs, pointing at the files. Don't open a PR unless someone asks for one.
 For a task (someone asks you to do something, like a recap or an investigation): do it with what the board, the repo and GitHub show you, and reply with the result.
-Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). Don't attach test runs or logs of your own checks: the tests go in the PR, and for a bug, name the test that reproduces it in the PR body. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
+Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). When a change touches UI, prefer showing people it works over telling them: for a flow they click through, attach a captioned video of it working instead, using the ui-video skill. Don't attach test runs or logs of your own checks: the tests go in the PR, and for a bug, name the test that reproduces it in the PR body. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
 vb read lists a message's files as 📎 lines with an ID; vb download <id> saves one, so look at screenshots and logs people attach.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you.`;
 
@@ -161,7 +171,12 @@ command -v pi >/dev/null || npm install -g ${PI} pnpm >/dev/null 2>&1
 command -v gh >/dev/null || {
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH}/gh_${GH}_linux_amd64.tar.gz" | tar xz -C /tmp
   install "/tmp/gh_${GH}_linux_amd64/bin/gh" /usr/local/bin/gh
-}`;
+}
+# For the ui-video skill. Pi can work without them, so a failed install doesn't stop setup; the next turn tries again.
+command -v ffmpeg >/dev/null || { npm install -g ffmpeg-static@${FFMPEG_STATIC} >/dev/null 2>&1 \
+  && ln -sf "$(npm root -g)/ffmpeg-static/ffmpeg" /usr/local/bin/ffmpeg; } || true
+[ "$(agent-browser --version 2>/dev/null)" = "agent-browser ${AGENT_BROWSER}" ] || { npm install -g agent-browser@${AGENT_BROWSER} >/dev/null 2>&1 \
+  && HOME=/home/${PI_USER} agent-browser install --with-deps >/dev/null 2>&1 && chown -R ${PI_USER}: /home/${PI_USER}/.agent-browser; } || true`;
 
 /**
  * One message, once: KEY marks it delivered, so a retried watcher doesn't send it
@@ -181,11 +196,23 @@ cd ~ && exec flock ~/.pi/lock bash -c '
     --append-system-prompt "$INSTRUCTIONS" "$MESSAGE"' >> ~/pi.log 2>&1`;
 
 /**
+ * The preview of Pi's own branch, `pi/<thread>`: its branch URL on the factory's preview domain. Pi's network policy
+ * gets it past Vercel Authentication. Only this host: `*.playground-vercel.tools` would also hand the bypass secret
+ * to every other deployment on that domain.
+ */
+export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
+
+/**
  * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
  * On the board, the policy also sets who Pi is, so nothing in the sandbox can post as anyone else.
  */
-function policy(thread: number, tokens: { gateway: string; board: string; github: string }): NetworkPolicy {
+export function policy(
+  thread: number,
+  tokens: { gateway: string; board: string; github: string },
+  bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+): NetworkPolicy {
   const basic = Buffer.from(`x-access-token:${tokens.github}`).toString("base64");
+  const protection = bypass ? { "x-vercel-protection-bypass": bypass } : {};
   return {
     allow: {
       // Pi speaks the Anthropic messages API to AI Gateway, which reads x-api-key.
@@ -201,14 +228,13 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
                 "x-board-profile": piName(thread),
                 "x-board-avatar": piAvatar(thread),
                 "x-board-session": piSession(thread),
-                ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET
-                  ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
-                  : {}),
+                ...protection,
               },
             },
           ],
         },
       ],
+      ...(bypass ? { [piPreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
       "github.com": [{ transform: [{ headers: { authorization: `Basic ${basic}` } }] }],
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "*": [],
@@ -220,6 +246,17 @@ function policy(thread: number, tokens: { gateway: string; board: string; github
 export function extension(expiresAt: Date | undefined, now: number) {
   if (!expiresAt) return 0;
   return Math.max(0, SANDBOX_MS - (expiresAt.getTime() - now));
+}
+
+/** The skills in `skills/`, as files in Pi's sandbox, where pi finds them: scripts executable. */
+export async function skills(root = join(process.cwd(), "skills")) {
+  return Promise.all(
+    SKILLS.map(async (file) => ({
+      path: `/home/${PI_USER}/.pi/agent/skills/${file}`,
+      content: await readFile(join(root, file)),
+      mode: file.includes("/scripts/") ? 0o755 : 0o644,
+    })),
+  );
 }
 
 async function sh(sandbox: Sandbox, script: string) {
@@ -298,6 +335,7 @@ async function deliver({ task, thread, key, message }: PiMessage) {
   }
   // Every turn, so a sandbox picks up a new pinned vb; before the policy, so no credential is in place yet.
   await sh(sandbox, SETUP);
+  await sandbox.writeFiles(await skills());
   // Fresh tokens with every message, so a thread can pick up again days later.
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),
