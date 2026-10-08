@@ -665,7 +665,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'download': {
       const id = args[0]
-      if (!id) throw new UsageError('usage: vboard download <attachment> [path]   (the id `vb read` shows after 📎)')
+      if (!id) throw new UsageError('usage: vboard download <attachment> [path]   (the id `vb read` shows on a file line)')
       const response = await client().download(id)
       const data = new Uint8Array(await response.arrayBuffer())
       if (args[1] === '-') return process.stdout.write(data), 0

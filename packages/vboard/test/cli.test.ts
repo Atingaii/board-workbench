@@ -288,7 +288,7 @@ describe('cli', () => {
     expect(attachment).toMatchObject({ name: 'after.png', type: 'image/png', size: 4 })
 
     const read = await vb(['read', id])
-    expect(read.stdout).toContain(`📎 after.png · image/png · 4 B · ${attachment.id}`)
+    expect(read.stdout).toContain(`file after.png · image/png · 4 B · ${attachment.id}`)
 
     const saved = join(dir, 'copy.png')
     expect(await vb(['download', attachment.id, saved])).toMatchObject({ code: 0, stdout: `${saved}\n` })

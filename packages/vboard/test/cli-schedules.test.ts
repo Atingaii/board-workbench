@@ -16,18 +16,18 @@ describe('cli schedules', () => {
       const root = (await vb(['post', 'dev', 'PR #12 is open'], as)).stdout.trim()
       const once = await vb(['schedule', root, 'friendly ping: review?', '--in', '1s'], as)
       expect(once).toMatchObject({ code: 0, stderr: '' })
-      expect(once.stdout).toMatch(new RegExp(`^⏰ s\\d+  #${root} · once · next in 1s \\(.+\\) · by julian\\n    friendly ping: review\\?\\n$`))
+      expect(once.stdout).toMatch(new RegExp(`^s\\d+  #${root} · once · next in 1s \\(.+\\) · by julian\\n    friendly ping: review\\?\\n$`))
       const repeat = await vb(['schedule', root, 'check prod', '--every', '30m', '--for', '1d', '--json'], as)
       const { id } = JSON.parse(repeat.stdout)
 
       const before = (await vb(['read', root], as)).stdout
-      expect(before).toContain('  ⏰ s1  #')
-      expect(before).toContain(`  ⏰ s${id}  #${root} · every 30m · until `)
-      expect((await vb(['schedules', root], as)).stdout.match(/^⏰/gm)).toHaveLength(2)
+      expect(before).toContain('  s1  #')
+      expect(before).toContain(`  s${id}  #${root} · every 30m · until `)
+      expect((await vb(['schedules', root], as)).stdout.match(/^s\d+  /gm)).toHaveLength(2)
 
       await new Promise((resolve) => setTimeout(resolve, 1100))
       await queue.fire()
-      await vi.waitFor(async () => expect((await vb(['read', root], as)).stdout).toMatch(/↳ #\d+  julian · \d+s ⏰ s1\n {4}friendly ping: review\?/))
+      await vi.waitFor(async () => expect((await vb(['read', root], as)).stdout).toMatch(/↳ #\d+  julian · \d+s · scheduled s1\n {4}friendly ping: review\?/))
 
       expect((await vb(['schedule', 'cancel', `s${id}`], as)).stdout).toBe(`canceled s${id}\n`)
       expect((await vb(['schedule', 'cancel', `s${id}`], as)).stdout).toBe(`s${id} is already canceled\n`)
