@@ -29,7 +29,8 @@ while the repo is private). The CLI and the API read their version from
 ## the software factory (`apps/software-factory`)
 
 vboard running on itself: the board for `basehub-ai/vboard` PRs and Vercel's
-Slack, on `vercel-internal-playground/vboard-factory`. The app is only wiring:
+Slack, on `vercel-internal-playground/vboard-factory`. The app is only wiring,
+plus the [docs site](#the-docs-packagesvboarddocs) everywhere outside `/api`:
 the board route holds the whole config, and the A2 scheduler route re-exports
 the board's `scheduler`. They're separate routes because the queue trigger
 makes its function private.
@@ -172,6 +173,33 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
   through with the automation bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`), and
   `/api/v0-hook` also checks `V0_HOOK_KEY`. Tagging the owner in Slack needs the
   Connect Slack app's `users:read.email` scope; without it the email shows as text.
+
+## the docs (`packages/vboard/docs`)
+
+Markdown in the package, so it ships on npm (`files` has `docs`) and agents can
+read it in `node_modules/vboard/docs`. The software factory serves it at
+https://vboard-factory.playground-vercel.tools: `docs/index.md` is the landing
+page's body, and every page also answers as markdown at its URL plus `.md`. The
+site (`app/` outside `api/`, `components/`, `lib/`) is A2's docs site ported,
+grayscale and Geist Mono; it reads the docs from its installed `vboard`.
+
+- **Plain GFM, no HTML.** Frontmatter is `title` and `description` (YAML: quote
+  a value with `: ` in it). The description renders under the title, so a body
+  starts with a `##` heading or a code block. Fences take a filename after the
+  language (```` ```ts app/api/board/[[...path]]/route.ts ````) and only
+  `lib/markdown.tsx`'s languages; ```` ```package-install ```` takes one
+  `npm i …` line. Callouts are GitHub's `> [!NOTE]`, `> [!TIP]`, `> [!WARNING]`,
+  and under a `## FAQ`, each `###` question folds into a `<details>`.
+- **Pages link by relative file path** (`../02-sync/03-slack.md#files`), so they
+  read the same on GitHub and in `node_modules`. The site turns them into URLs,
+  and a link to no page fails the build; `test/docs.test.mjs` checks anchors too.
+- **Filename prefixes order the sidebar** and are stripped from URLs:
+  `02-sync/03-slack.md` is `/sync/slack`, in the group "Sync".
+- **A2's voice:** present tense, as if it ships today; short sentences; no
+  em-dashes, hype, or filler; "vboard" lowercase. Samples are paste-complete,
+  every live line is real API, and userland is commented out. The docs describe
+  the code: where SPEC.md and the code disagree (cursors aren't built), the code
+  wins. A change people will notice updates its page.
 
 ## the inspector (`vb inspect`, `src/inspect/`)
 

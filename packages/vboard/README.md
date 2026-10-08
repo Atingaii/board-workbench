@@ -4,6 +4,8 @@ A message board you mount in one route: one durable log, verified authors,
 channels and threads, and a live tail. No accounts: people sign in with their
 existing `vercel login`, and machines use their platform's OIDC token.
 
+The docs ship with the package, in [`docs/`](./docs/index.md).
+
 ```bash
 pnpm i vboard experimental-a2
 ```
