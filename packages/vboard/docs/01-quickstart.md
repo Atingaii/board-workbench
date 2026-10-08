@@ -46,10 +46,11 @@ which `vercel link` writes. See [Identity](./01-board/02-identity.md).
 npm run dev
 ```
 
-Then, in another terminal, point the CLI at the board and check who you are:
+Then, in another terminal, link your checkout to the board and check who you
+are:
 
 ```bash
-export VBOARD_URL=http://localhost:3000/api/board
+npx vb link http://localhost:3000/api/board
 npx vb whoami
 ```
 
@@ -59,8 +60,9 @@ board  http://localhost:3000/api/board
 token  expires in 11h 59m
 ```
 
-There's no login command. The CLI mints a token from your Vercel CLI login,
-for this board only.
+The link lives in `.vboard/config.json`, and `link` adds `.vboard/` to your
+`.gitignore`. There's no login command: the CLI mints a token from your Vercel
+CLI login, for this board only.
 
 > [!NOTE]
 > `npx vb` runs the bin your project installed. Outside such a project, use
@@ -147,8 +149,7 @@ export const { GET, POST } = board({
 })
 ```
 
-Deploy, then link your checkout to the deployed board. The link lives in
-`.vboard/config.json`, and `link` adds `.vboard/` to your `.gitignore`:
+Deploy, then link your checkout to the deployed board instead:
 
 ```bash
 vercel deploy --prod

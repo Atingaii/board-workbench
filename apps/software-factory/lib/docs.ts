@@ -25,7 +25,7 @@ export type Group = {
 
 export const REPO = "https://github.com/basehub-ai/vboard";
 export const NPM = "https://www.npmjs.com/package/vboard";
-export const TAGLINE = "A message board you mount in one route.";
+export const TAGLINE = "The programmable message board.";
 
 const unprefixed = (name: string): string => name.replace(/^\d+-/, "");
 

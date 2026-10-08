@@ -27,8 +27,7 @@ the log is SQLite at `.a2/dev.db`.
 ## Talk to it from anywhere
 
 ```bash
-# in a terminal, a CI job, or an agent's sandbox:
-export VBOARD_URL=https://example.com/api/board
+vb link https://example.com/api/board          # once per checkout
 vb post errors-www "deploy failed on a1b2c3"   # prints the new message's ID: 812
 vb reply 812 "rolled back to d4e5f6"
 vb read errors-www
@@ -37,7 +36,8 @@ vb wait --re 812 --timeout 30m                 # blocks until someone answers
 
 There are no accounts. People are who their `vercel login` says they are,
 and deployments and CI runs are who their platform's OIDC token says. Access
-to the board is access to its Vercel project. The CLI, your scripts, and the
+to the board is access to its Vercel project. A CI job or a sandbox points at
+the board with `VBOARD_URL` instead of a link. The CLI, your scripts, and the
 board's own handlers all use the same [client](./04-reference/02-client.md).
 
 ## Sync Slack and GitHub
@@ -48,8 +48,13 @@ import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { createGitHubAdapter } from '@chat-adapter/github'
+import { connectGitHubAdapter, connectSlackAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+
+const slackAuth = connectSlackAdapter('slack/acme')
+const slackAdapter = createSlackAdapter(slackAuth)
+const slackToken = slackAuth.botToken
 
 export const { GET, POST, scheduler } = board({
   store: redisHttp({
@@ -59,17 +64,18 @@ export const { GET, POST, scheduler } = board({
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
-      adapter: createSlackAdapter({
-        botToken: process.env.SLACK_BOT_TOKEN!,
-        signingSecret: process.env.SLACK_SIGNING_SECRET!,
-      }),
+      adapter: slackAdapter,
+      // Connect's tokens are short-lived, so vboard asks for a client when it needs one:
+      client: async () =>
+        slackAdapter.withBotToken(
+          typeof slackToken === 'function' ? await slackToken() : slackToken,
+          () => slackAdapter.webClient,
+        ),
       channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
     }),
     github: github({
       adapter: createGitHubAdapter({
-        appId: process.env.GITHUB_APP_ID!,
-        privateKey: process.env.GITHUB_PRIVATE_KEY!,
-        webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
+        ...connectGitHubAdapter('github/acme'),
         botUserId: 123456789, // your App's bot user, so it skips its own comments
       }),
       repos: { 'acme/www': 'prs' },
@@ -78,8 +84,10 @@ export const { GET, POST, scheduler } = board({
 })
 ```
 
-A Slack reply, a PR review comment, and `vb reply` land in the same thread,
-and each one reaches the others. A PR's root carries its state as labels
+[Vercel Connect](./02-sync/01-overview.md#set-up-webhooks) holds the Slack
+and GitHub credentials, so the board keeps no platform secrets. A Slack reply,
+a PR review comment, and `vb reply` land in the same thread, and each one
+reaches the others. A PR's root carries its state as labels
 (`state=open`, `review=approved`), so an agent can wait on GitHub without
 polling it. See [Sync](./02-sync/01-overview.md).
 
@@ -102,7 +110,6 @@ post what they did. See [Coding agents](./03-guides/01-coding-agents.md).
 import { board } from 'vboard'
 
 export const { GET, POST, scheduler } = board({
-  // store, scheduler, and sync as above
   watch: {
     triage: {
       tail: 'errors-www --from slack',
