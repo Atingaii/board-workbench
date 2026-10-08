@@ -45,7 +45,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  The Redis namespace is `vboard-factory`, separate from the v0 feedback bot.
+  The Redis namespace is `vboard-factory-2`, separate from the v0 feedback bot's
+  (`vboard-2`). Both are new with A2 0.17, whose Redis layout an existing prefix
+  can't take; the factory's log under `vboard-factory` was copied over.
   Slack channel `C0C6MNT9LLC`, GitHub PRs, and GitHub issues all mirror `dev`.
   Connect uses `slack/vboard-factory` and
   `github/vboard-factory`, with production triggers at

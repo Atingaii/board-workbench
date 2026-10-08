@@ -42,8 +42,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.16.1
-        version: 0.16.1(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
+        specifier: 0.17.0
+        version: 0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
       geist:
         specifier: ^1.7.2
         version: 1.7.2(next@16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
@@ -130,8 +130,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.16.1
-        version: 0.16.1(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
+        specifier: 0.17.0
+        version: 0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
       next:
         specifier: ^16.3.8
         version: 16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -210,8 +210,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.16.1
-        version: 0.16.1(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
+        specifier: 0.17.0
+        version: 0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0)
       lucide-react:
         specifier: ^1.49.0
         version: 1.49.0(@types/react@19.3.0)(react@19.3.0)
@@ -1771,8 +1771,8 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  experimental-a2@0.16.1:
-    resolution: {integrity: sha512-O0/V6sUYdBVTy2Jdf/GRByL4w8HEaEG0z9BnkY3RfY4bPIY+nKyJ6jRqvi8UC3OL/q5qVgkMDI78/Arip2LhfQ==}
+  experimental-a2@0.17.0:
+    resolution: {integrity: sha512-oZNUBuKJ9Lhb92uEUQxSoUWpUq1ABkJW3K2u6+aooFrufIP/AV1TgjfEOYGWLJejnWaSRLs63f5l1ddItzWW8Q==}
     engines: {node: '>=22.13'}
     peerDependencies:
       '@opentelemetry/api': ^1.9.0
@@ -4290,7 +4290,7 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  experimental-a2@0.16.1(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0):
+  experimental-a2@0.17.0(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(react@19.3.0):
     optionalDependencies:
       '@vercel/queue': 0.7.0
       ai: 7.0.130(zod@4.6.5)
