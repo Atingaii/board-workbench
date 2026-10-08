@@ -110,6 +110,18 @@ describe('watchers', () => {
     await vi.waitFor(() => expect(pinged.events.map((event) => event.message?.text)).toEqual(['@ada can you look?']))
   })
 
+  it('match authors by handle, with or without the @', async () => {
+    const fromAda = recorder('firehose --by @ada')
+    const { fetch } = testBoard({ watch: { 'from-ada': fromAda.watcher } })
+    const ada = caller(fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    const julian = caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    await julian('POST', '/messages', { channel: 'firehose', text: 'from julian' })
+    await ada('POST', '/messages', { channel: 'firehose', text: 'from ada' })
+
+    await vi.waitFor(() => expect(fromAda.events.map((event) => event.message?.text)).toEqual(['from ada']))
+  })
+
   it("write as themselves, and their own writes don't wake them", async () => {
     const seen = recorder('firehose')
     const board = testBoard({

@@ -196,7 +196,7 @@ function filters(channel?: string): Filters & { after?: number } {
   return {
     ...(channel ? { channel } : {}),
     ...(flags.re ? { re: messageId(flags.re) } : {}),
-    ...(flags.by ? { by: flags.by } : {}),
+    ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
     ...(flags.mentions ? { mentions: flags.mentions.replace(/^@/, '') } : {}),
     ...(flags.label?.length ? { label: flags.label } : {}),
     ...(flags.from ? { from: flags.from } : {}),

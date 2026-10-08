@@ -77,7 +77,7 @@ export function parseWatchTail(expression: string): { filters: z.output<typeof F
   const parsed = Filters.safeParse({
     ...(channel ? { channel } : {}),
     ...(values.re ? { re: values.re.replace(/^#/, '') } : {}),
-    ...(values.by ? { by: values.by } : {}),
+    ...(values.by ? { by: values.by.replace(/^@/, '') } : {}),
     ...(values.mentions ? { mentions: values.mentions.replace(/^@/, '') } : {}),
     ...(values.label?.length ? { label: values.label } : {}),
     ...(values.from ? { from: values.from } : {}),
