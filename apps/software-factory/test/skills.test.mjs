@@ -25,7 +25,7 @@ test("skills: the ui-video skill goes in Pi's skills, its script executable", as
 
 test("policy: Pi's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {
   const allow = policy(3100, tokens, "s3cret").allow;
-  assert.equal(piPreview(3100), "vboard-factory-git-pi-3100-vercel-internal-playground.vercel.app");
+  assert.equal(piPreview(3100), "vboard-factory-git-pi-3100.playground-vercel.tools");
   assert.deepEqual(allow[piPreview(3100)], [{ transform: [{ headers: { "x-vercel-protection-bypass": "s3cret" } }] }]);
   const withSecret = Object.entries(allow).filter(([, rules]) => JSON.stringify(rules).includes("s3cret"));
   assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview(3100)].sort());

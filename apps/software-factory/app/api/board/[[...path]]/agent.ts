@@ -176,7 +176,7 @@ command -v gh >/dev/null || {
 command -v ffmpeg >/dev/null || { npm install -g ffmpeg-static@${FFMPEG_STATIC} >/dev/null 2>&1 \
   && ln -sf "$(npm root -g)/ffmpeg-static/ffmpeg" /usr/local/bin/ffmpeg; } || true
 [ "$(agent-browser --version 2>/dev/null)" = "agent-browser ${AGENT_BROWSER}" ] || { npm install -g agent-browser@${AGENT_BROWSER} >/dev/null 2>&1 \
-  && HOME=~${PI_USER} agent-browser install --with-deps >/dev/null 2>&1 && chown -R ${PI_USER}: ~${PI_USER}/.agent-browser; } || true`;
+  && HOME=/home/${PI_USER} agent-browser install --with-deps >/dev/null 2>&1 && chown -R ${PI_USER}: /home/${PI_USER}/.agent-browser; } || true`;
 
 /**
  * One message, once: KEY marks it delivered, so a retried watcher doesn't send it
@@ -196,10 +196,11 @@ cd ~ && exec flock ~/.pi/lock bash -c '
     --append-system-prompt "$INSTRUCTIONS" "$MESSAGE"' >> ~/pi.log 2>&1`;
 
 /**
- * The preview of Pi's own branch, `pi/<thread>`: Vercel's branch URL for it on the factory's project. Pi's network
- * policy gets it past Vercel Authentication. Only this host, since the bypass secret must not reach other deployments.
+ * The preview of Pi's own branch, `pi/<thread>`: its branch URL on the factory's preview domain. Pi's network policy
+ * gets it past Vercel Authentication. Only this host: `*.playground-vercel.tools` would also hand the bypass secret
+ * to every other deployment on that domain.
  */
-export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}-vercel-internal-playground.vercel.app`;
+export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
 
 /**
  * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
