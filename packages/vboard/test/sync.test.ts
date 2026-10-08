@@ -575,7 +575,7 @@ describe('sync', () => {
       deleteForIssue: vi.fn(async () => ({})),
     }
     const { board, g, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() }, issues: { get: vi.fn() }, reactions } } })
-    Object.assign(g.adapter, { botUserId: '1', emojiToGitHubReaction: (emoji: string) => (emoji === 'rocket' ? 'rocket' : '+1') })
+    Object.assign(g.adapter, { botUserId: '1', emojiToGitHubReaction: (emoji: string) => ({ rocket: 'rocket', eyes: 'eyes' })[emoji] ?? '+1' })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const item = { number: 41, title: 'Ship it', html_url: 'https://github.com/basehub-ai/vboard/pull/41' }
     await webhook('github', { action: 'opened', repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' }, [key]: item },
@@ -587,6 +587,13 @@ describe('sync', () => {
     const where = { owner: 'basehub-ai', repo: 'vboard', issue_number: 41 }
     await vi.waitFor(() => expect(reactions.createForIssue).toHaveBeenCalledExactlyOnceWith({ ...where, content: 'rocket' }))
     expect(g.reactions).toEqual([]) // no comment reaction on comment NaN
+
+    // Emoji GitHub doesn't have stay off the PR, rather than turning into the bot's 👍.
+    await julian('POST', `/messages/${root!.id}/reactions`, { emoji: 'looking-bunny' })
+    await julian('POST', `/messages/${root!.id}/reactions`, { emoji: 'thumbs_up' })
+    await vi.waitFor(() => expect(reactions.createForIssue).toHaveBeenLastCalledWith({ ...where, content: '+1' }))
+    expect(reactions.createForIssue).toHaveBeenCalledTimes(2)
+    expect((await read(julian, 'prs'))[0]!.reactions).toHaveProperty('looking-bunny')
 
     await julian('POST', `/messages/${root!.id}/reactions`, { emoji: 'rocket', remove: true })
     await vi.waitFor(() => expect(reactions.deleteForIssue).toHaveBeenCalledExactlyOnceWith({ ...where, reaction_id: 10 }))

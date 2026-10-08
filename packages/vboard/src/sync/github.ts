@@ -352,13 +352,20 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     if (!match) throw new Error(`invalid GitHub thread: ${thread}`)
     const adapter = (await this.ready()) as Adapter & {
       octokit: GitHubClient
+      getOctokitForThread?(owner: string, repo: string): Promise<GitHubClient>
       botUserId?: string
       emojiToGitHubReaction?(emoji: string): string
     }
-    const reactions = adapter.octokit.rest.reactions
+    // GitHub has eight reactions, and the adapter turns any other emoji into +1. On the PR itself
+    // that reads as the bot approving (a review's looking-bunny, a person's shipit), so skip those.
+    const content = adapter.emojiToGitHubReaction?.(emoji)
+    if (!content || (content === '+1' && emoji !== 'thumbs_up' && emoji !== '+1')) return
+    const [, owner, repo, number] = match as unknown as [string, string, string, string]
+    // The adapter's own reactions use the thread's installation, which holds outside a webhook request too.
+    const client = (await adapter.getOctokitForThread?.(owner, repo)) ?? adapter.octokit
+    const reactions = client.rest.reactions
     if (!reactions) throw new Error('GitHub client has no reactions API')
-    const where = { owner: match[1]!, repo: match[2]!, issue_number: Number(match[3]) }
-    const content = adapter.emojiToGitHubReaction?.(emoji) ?? '+1'
+    const where = { owner, repo, issue_number: Number(number) }
     if (added) return void (await reactions.createForIssue({ ...where, content }))
     if (adapter.botUserId === undefined) return
     const { data } = await reactions.listForIssue({ ...where, content, per_page: 100 })
