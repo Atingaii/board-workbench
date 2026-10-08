@@ -1,9 +1,9 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { basename, delimiter, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { env, tmp, url, useBoard, vb, vb_in } from './cli-harness.ts'
+import { CLI, env, tmp, url, useBoard, vb, vb_in } from './cli-harness.ts'
 
 useBoard()
 
@@ -56,6 +56,37 @@ describe('cli hooks', () => {
     expect((await vb(['hooks', 'uninstall', 'claude'], at)).stdout).toContain('removed')
     expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual(theirs)
     expect((await vb(['hooks', 'install', 'gemini'], at))).toMatchObject({ code: 2, stderr: 'error: unknown agent: gemini (known: claude, codex, cursor, pi)\n' })
+  })
+
+  it('reminds with plain vb when the vb on PATH is a pnpm-style shim for this CLI', async () => {
+    // pnpm installs global bins as shell scripts that exec node on the package, through its node_modules symlink.
+    const home = await tmp('vboard-home-')
+    const bin = join(home, 'pnpm')
+    await mkdir(join(bin, 'global', 'node_modules'), { recursive: true })
+    await symlink(dirname(dirname(CLI)), join(bin, 'global', 'node_modules', 'vboard'))
+    const shim = [
+      '#!/bin/sh',
+      'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+      'if [ -x "$basedir/node" ]; then',
+      '  exec "$basedir/node"  "$basedir/global/node_modules/vboard/cli/main.ts" "$@"',
+      'else',
+      '  exec node  "$basedir/global/node_modules/vboard/cli/main.ts" "$@"',
+      'fi',
+      '',
+    ].join('\n')
+    await writeFile(join(bin, 'vb'), shim, { mode: 0o755 })
+    const at = { HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}` }
+
+    expect(await vb(['hooks', 'install', 'claude'], at)).toMatchObject({ code: 0, stderr: '' })
+    const claude = JSON.parse(await readFile(join(home, '.claude', 'settings.json'), 'utf8'))
+    expect(claude.hooks.Stop[0].hooks[0].command).toBe('vb hook stop --agent claude 2>/dev/null || true')
+
+    const repo = await tmp('vboard-repo-')
+    execFileSync('git', ['init', '-q', '-b', 'feat/shim'], { cwd: repo })
+    const { stdout } = await vb(['hook', 'stop', '--agent', 'claude'], at, JSON.stringify({ session_id: `shim-${Date.now()}`, cwd: repo }))
+    const { reason } = JSON.parse(stdout) as { reason: string }
+    expect(reason).toContain(': vb update "<summary>", or vb reply <id>')
+    expect(reason).not.toContain(process.execPath)
   })
 
   it('installs the Claude Code hook in CLAUDE_CONFIG_DIR when it is set', async () => {
