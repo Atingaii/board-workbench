@@ -148,6 +148,7 @@ export const { GET, POST, scheduler } = board({
             task: "thread",
             thread: message.re,
             key: `news-${message.id}`,
+            about: message.id,
             message: `There's new activity in board thread #${message.re}.`,
           });
         }
@@ -181,6 +182,7 @@ export const { GET, POST, scheduler } = board({
             task: "review",
             thread: message.re,
             key: `news-${message.id}`,
+            about: message.id,
             message: `There's new activity in board thread #${message.re}.`,
           });
         }
