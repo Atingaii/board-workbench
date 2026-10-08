@@ -170,3 +170,11 @@ test("BUSY: exits 0 only while a turn holds the lock", { skip: !hasFlock() && "n
 function hasFlock() {
   return require_("node:child_process").spawnSync("bash", ["-c", "command -v flock"]).status === 0;
 }
+
+test("the reviewer tells the PR's source thread, and that thread's Pi acts on it", async () => {
+  const { INSTRUCTIONS } = await import("../app/api/board/[[...path]]/agent.ts");
+  assert.match(INSTRUCTIONS.review, /Tell the thread the work started in/);
+  assert.match(INSTRUCTIONS.review, /board #<id>/);
+  assert.match(INSTRUCTIONS.thread, /Your PR's reviewer posts its verdict in your thread/);
+  assert.match(INSTRUCTIONS.thread, /gets the reviewer to look again/);
+});
