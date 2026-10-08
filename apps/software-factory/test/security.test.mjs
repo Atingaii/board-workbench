@@ -136,7 +136,12 @@ test("runs deepsec in a worktree named for the event, and attaches its files by 
   const g = harness();
   await g.run(input);
   const m = g.notifications[0].message;
-  assert.ok(m.includes("git worktree add --detach /tmp/deepsec-91 HEAD"));
+  // rm -rf alone leaves a worktree an earlier run left behind registered, and git worktree add refuses the path.
+  assert.ok(m.includes("git worktree remove --force /tmp/deepsec-91 2>/dev/null; rm -rf /tmp/deepsec-91; git worktree prune && git worktree add --detach /tmp/deepsec-91 HEAD"));
+  // Its data/, deepsec.md and deepsec.log never land in the clone, so a later git add -A can't commit them.
+  assert.ok(m.indexOf("git worktree add") < m.indexOf("npx -y deepsec process"));
+  // Three dots: only the PR's own changes, not commits that landed on its base since it branched.
+  assert.ok(m.includes("deepsec process --diff origin/<base>...HEAD "));
   assert.ok(m.includes("attach /tmp/deepsec-91/deepsec.log"));
   assert.ok(m.includes("attach /tmp/deepsec-91/deepsec.md"));
 });

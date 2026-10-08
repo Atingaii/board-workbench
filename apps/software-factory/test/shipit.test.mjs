@@ -95,6 +95,9 @@ test("shipit, its Slack squirrel alias, and :approved: merge a PR root for any r
     for (const request of h.requests) {
       assert.equal(request.headers.authorization, "Bearer test-token");
       assert.equal(request.headers["x-github-api-version"], "2026-03-10");
+      // Every GitHub call has a timeout, so a hung request can't stall the watcher.
+      // AbortSignal.timeout ignores mocked timers, so a hung fetch would take the full 15s here.
+      assert.ok(request.signal instanceof AbortSignal);
     }
     assert.deepEqual(h.notifications, []);
   }
