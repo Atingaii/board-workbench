@@ -153,6 +153,24 @@ describe('cli', () => {
     }
   }, 30_000)
 
+  it("doesn't wait on a signed-out `vercel` CLI's login flow", async () => {
+    const wall = await serve(async () => new Response(null, { status: 302, headers: { location: 'https://vercel.com/sso-api?url=x' } }))
+    // A `vercel` that logs each call and, like a signed-out CLI, starts a login flow that never ends.
+    const bin = await tmp('vboard-bin-')
+    const log = join(bin, 'calls')
+    await writeFile(join(bin, 'vercel'), `#!/bin/sh\necho "$*" >> ${log}\nexec ${execFileSync('sh', ['-c', 'command -v sleep']).toString().trim()} 60\n`, { mode: 0o755 })
+    try {
+      const at = `${wall.origin}/api/board`
+      const started = Date.now()
+      const result = await vb(['whoami'], { PATH: bin, XDG_DATA_HOME: await tmp('vboard-data-'), VBOARD_URL: at })
+      expect(result).toMatchObject({ code: 1, stderr: expect.stringContaining("your Vercel login can't see its project") })
+      expect(Date.now() - started).toBeLessThan(20_000)
+      expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual(['whoami --non-interactive'])
+    } finally {
+      await wall.close()
+    }
+  }, 30_000)
+
   it('keeps its own error for a non-board HTML page, and keeps credentials off other origins', async () => {
     const missing = await serve(async () => new Response('<!DOCTYPE html><h1>404</h1>', { status: 404, headers: { 'content-type': 'text/html' } }))
     try {

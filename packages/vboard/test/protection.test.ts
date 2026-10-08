@@ -24,7 +24,9 @@ const SECRET = 'automation-bypass-secret'
  * secret), and the slice of the Vercel API `vercel curl` uses to get through:
  * the host is a deployment in one of your teams, not your own scope.
  */
-function protectedBoard(options: { bypass?: Record<string, { scope: string }>; canCreate?: boolean } = {}) {
+function protectedBoard(
+  options: { bypass?: Record<string, { scope: string }>; canCreate?: boolean; canRead?: boolean; page?: boolean } = {},
+) {
   const board = testBoard()
   let bypass = options.bypass ?? {}
   const api: string[] = []
@@ -40,8 +42,11 @@ function protectedBoard(options: { bypass?: Record<string, { scope: string }>; c
       if (url.pathname === '/v2/teams') return Response.json({ teams: [{ id: 'team_other' }, { id: 'team_board' }] })
       if (url.pathname === `/v13/deployments/${HOST}` && team === 'team_board')
         return Response.json({ projectId: 'prj_board', ownerId: 'team_board' })
-      if (url.pathname === '/v9/projects/prj_board' && team === 'team_board')
-        return Response.json({ id: 'prj_board', name: 'board', protectionBypass: bypass })
+      if (url.pathname === '/v9/projects/prj_board' && team === 'team_board') {
+        if (options.canRead === false) return Response.json({ error: { code: 'forbidden' } }, { status: 403 })
+        const sso = options.page ? null : { deploymentType: 'all_except_custom_domains' }
+        return Response.json({ id: 'prj_board', name: 'board', protectionBypass: bypass, ssoProtection: sso, passwordProtection: null })
+      }
       if (url.pathname === '/v1/projects/prj_board/protection-bypass' && request.method === 'PATCH' && team === 'team_board') {
         if (options.canCreate === false) return Response.json({ error: { code: 'forbidden' } }, { status: 403 })
         bypass = { ...bypass, [SECRET]: { scope: 'automation-bypass' } }
@@ -50,6 +55,8 @@ function protectedBoard(options: { bypass?: Record<string, { scope: string }>; c
       return Response.json({ error: { code: 'not_found' } }, { status: 404 })
     }
     sent.push(request.headers.get('x-vercel-protection-bypass'))
+    // A plain website, not a board: an HTML page whatever you send.
+    if (options.page) return new Response('<!DOCTYPE html><h1>Welcome</h1>', { headers: { 'content-type': 'text/html' } })
     if (request.headers.get('x-vercel-protection-bypass') !== SECRET)
       return new Response('Protected by Vercel Authentication', {
         status: 302,
@@ -138,6 +145,28 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
       code: 'protected',
       message: expect.stringContaining("can't read or create its project's automation bypass"),
     })
+  })
+
+  it("doesn't create a bypass on an unprotected project that answers with a web page", async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const { fetch, api } = protectedBoard({ page: true })
+    const client = createClient({ url: BOARD_URL, token: await personToken(), fetch })
+    await expect(client.discovery()).rejects.toMatchObject({
+      code: 'no_board',
+      message: `no board at ${BOARD_URL}: it answered with a web page, and its Vercel project isn't protected`,
+    })
+    expect(api.some((call) => call.startsWith('PATCH'))).toBe(false)
+    expect(stderr).not.toHaveBeenCalled()
+  })
+
+  it("doesn't create a second bypass when it can't read the project's settings", async () => {
+    const { fetch, api } = protectedBoard({ bypass: { [SECRET]: { scope: 'automation-bypass' } }, canRead: false })
+    const client = createClient({ url: BOARD_URL, token: await personToken(), fetch })
+    await expect(client.discovery()).rejects.toMatchObject({
+      code: 'protected',
+      message: expect.stringContaining("can't read its project's settings"),
+    })
+    expect(api.some((call) => call.startsWith('PATCH'))).toBe(false)
   })
 
   it('uses VERCEL_AUTOMATION_BYPASS_SECRET when set, without asking Vercel', async () => {

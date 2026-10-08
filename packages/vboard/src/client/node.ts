@@ -451,9 +451,19 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
   const project = await findProject(api, host)
   if (!project) throw blocked("can't see its project: run `vercel login` or ask for access")
   const scope = project.ownerId.startsWith('team_') ? `?teamId=${project.ownerId}` : ''
-  const details = (await api('GET', `/v9/projects/${project.projectId}${scope}`)) as { name?: string; protectionBypass?: Bypasses } | null
-  const existing = automationBypass(details?.protectionBypass)
+  const details = (await api('GET', `/v9/projects/${project.projectId}${scope}`)) as {
+    name?: string
+    protectionBypass?: Bypasses
+    ssoProtection?: unknown
+    passwordProtection?: unknown
+  } | null
+  // Without the project's settings, creating could add a second bypass.
+  if (!details) throw blocked("can't read its project's settings: ask for access")
+  const existing = automationBypass(details.protectionBypass)
   if (existing) return { secret: existing, created: false }
+  // An HTML page from an unprotected project isn't a wall: it isn't a board, so nothing gets created.
+  if (!details.ssoProtection && !details.passwordProtection)
+    throw new BoardError('no_board', `no board at ${url}: it answered with a web page, and its Vercel project isn't protected`, 0)
   const created = (await api('PATCH', `/v1/projects/${project.projectId}/protection-bypass${scope}`)) as { protectionBypass?: Bypasses } | null
   const secret = automationBypass(created?.protectionBypass)
   if (!secret) throw blocked("can't read or create its project's automation bypass: ask a project admin")
@@ -475,15 +485,25 @@ async function findProject(api: VercelApi, host: string): Promise<{ projectId: s
   const { teams } = ((await api('GET', '/v2/teams?limit=100').catch(() => null)) ?? {}) as { teams?: { id: string; limited?: boolean }[] }
   const ids = (teams ?? []).filter((team) => !team.limited).map((team) => team.id)
   for (const kind of ['deployment', 'alias'] as const) {
-    const found = (await Promise.all(ids.map((id) => lookup(kind, id)))).find(Boolean)
-    if (found) return found
+    // A few at a time: with keychain credentials each lookup is a `vercel` process.
+    for (let i = 0; i < ids.length; i += 8) {
+      const found = (await Promise.all(ids.slice(i, i + 8).map((id) => lookup(kind, id)))).find(Boolean)
+      if (found) return found
+    }
   }
   return null
 }
 
 /** When credentials live in the keychain, the Vercel CLI makes the API call itself. */
+let vercelCli: Promise<boolean> | undefined
 const vercelCliApi: VercelApi = async (method, path) => {
-  const args = ['api', path, '-X', method, '--raw']
+  // Signed out, `vercel` starts a login flow and waits: check once, quickly, before any call.
+  vercelCli ??= promisify(execFile)('vercel', ['whoami', '--non-interactive'], { timeout: 10_000 }).then(
+    () => true,
+    () => false,
+  )
+  if (!(await vercelCli)) throw new BoardError('not_logged_in', 'not signed in to Vercel: run `vercel login`', 0)
+  const args = ['api', path, '-X', method, '--raw', '--non-interactive']
   if (method === 'PATCH') args.push('--input', '-')
   try {
     const run = promisify(execFile)('vercel', args, { timeout: 30_000 })
