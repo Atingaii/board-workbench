@@ -3,9 +3,23 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 type Tone = "line" | "ink" | "on";
-type Cell = { char: string; tone: Tone };
+type Icon = "slack" | "github";
+/** A logo takes two cells: the first draws it, the second is covered by it. */
+type Cell = { char: string; tone: Tone; icon?: Icon; covered?: true };
 type Place = "slack" | "agent" | "github";
 type Point = [x: number, y: number];
+
+/** Monochrome marks: GitHub's from Primer Octicons (MIT), Slack's from Material Design Icons (Apache-2.0). */
+const ICONS: Record<Icon, { viewBox: string; d: string }> = {
+  github: {
+    viewBox: "0 0 16 16",
+    d: "M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656",
+  },
+  slack: {
+    viewBox: "0 0 24 24",
+    d: "M6,15A2,2 0 0,1 4,17A2,2 0 0,1 2,15A2,2 0 0,1 4,13H6V15M7,15A2,2 0 0,1 9,13A2,2 0 0,1 11,15V20A2,2 0 0,1 9,22A2,2 0 0,1 7,20V15M9,7A2,2 0 0,1 7,5A2,2 0 0,1 9,3A2,2 0 0,1 11,5V7H9M9,8A2,2 0 0,1 11,10A2,2 0 0,1 9,12H4A2,2 0 0,1 2,10A2,2 0 0,1 4,8H9M17,10A2,2 0 0,1 19,8A2,2 0 0,1 21,10A2,2 0 0,1 19,12H17V10M16,10A2,2 0 0,1 14,12A2,2 0 0,1 12,10V5A2,2 0 0,1 14,3A2,2 0 0,1 16,5V10M14,18A2,2 0 0,1 16,20A2,2 0 0,1 14,22A2,2 0 0,1 12,20V18H14M14,17A2,2 0 0,1 12,15A2,2 0 0,1 14,13H19A2,2 0 0,1 21,15A2,2 0 0,1 19,17H14Z",
+  },
+};
 
 /**
  * One PR's whole life in one board thread. Each event happens in one place, goes
@@ -64,10 +78,10 @@ const EVENTS: {
 const PLACES: Place[] = ["slack", "agent", "github"];
 const WIDTH = 76;
 /** Each place's box, and where its wire drops into the top border, clear of the title. */
-const BOXES: Record<Place, { x: number; w: number; title: string; right?: true; stem: number }> = {
-  slack: { x: 0, w: 22, title: "slack #prs", stem: 18 },
+const BOXES: Record<Place, { x: number; w: number; title: string; icon?: Icon; right?: true; stem: number }> = {
+  slack: { x: 0, w: 22, title: "slack #prs", icon: "slack", stem: 18 },
   agent: { x: 24, w: 28, title: "agent", stem: 38 },
-  github: { x: 54, w: 22, title: "github #42", right: true, stem: 57 },
+  github: { x: 54, w: 22, title: "github #42", icon: "github", right: true, stem: 57 },
 };
 const BOARD = { x: 11, w: 55, title: "board · prs" };
 /** Where the board's own wire meets the bus. */
@@ -135,9 +149,20 @@ function draw(tick: number): Cell[][] {
     const cell = grid[y]?.[x];
     if (cell) Object.assign(cell, { char: HEAVY[cell.char] ?? cell.char, tone: "on" });
   };
-  const box = (x: number, y: number, w: number, h: number, title: string, right = false): void => {
-    const rule = "─".repeat(w - title.length - 5);
-    put(x, y, right ? `┌${rule} ${title} ─┐` : `┌─ ${title} ${rule}┐`, "line");
+  const icons = new Map<Place, Cell>();
+  const box = (x: number, y: number, w: number, h: number, title: string, right = false, place?: Place): void => {
+    const icon = place && BOXES[place].icon;
+    // A logo leads its title: two cells for it, then a space.
+    const label = icon ? `   ${title}` : title;
+    const rule = "─".repeat(w - label.length - 5);
+    put(x, y, right ? `┌${rule} ${label} ─┐` : `┌─ ${label} ${rule}┐`, "line");
+    if (icon) {
+      const start = right ? x + w - label.length - 3 : x + 3;
+      const [first, second] = [grid[y]![start]!, grid[y]![start + 1]!];
+      Object.assign(first, { icon, tone: "ink" });
+      second.covered = true;
+      icons.set(place, first);
+    }
     for (let row = y + 1; row < y + h - 1; row++) {
       put(x, row, "│", "line");
       put(x + w - 1, row, "│", "line");
@@ -157,7 +182,7 @@ function draw(tick: number): Cell[][] {
   for (const place of PLACES) {
     const { x, w, title, right: alignRight, stem } = BOXES[place];
     put(stem, BUS + 1, "│", "line");
-    box(x, PLACES_Y, w, EVENTS.length + 2, title, alignRight);
+    box(x, PLACES_Y, w, EVENTS.length + 2, title, alignRight, place);
     put(stem, PLACES_Y, "┴", "line");
   }
 
@@ -166,7 +191,12 @@ function draw(tick: number): Cell[][] {
     const timing = TIMELINE[i]!;
     if (tick < timing.start) return;
     const tone: Tone = tick < timing.end ? "on" : "ink";
-    const row = (place: Place) => put(BOXES[place].x + 2, PLACES_Y + 1 + i, event.rows[place], tone);
+    const row = (place: Place): void => {
+      put(BOXES[place].x + 2, PLACES_Y + 1 + i, event.rows[place], tone);
+      // A place's logo lights up while something is happening there.
+      const icon = icons.get(place);
+      if (icon && tone === "on") icon.tone = "on";
+    };
 
     row(event.from);
     const pulse = (path: Point[], start: number): void => {
@@ -193,16 +223,24 @@ function draw(tick: number): Cell[][] {
 
 function render(tick: number): ReactNode {
   return draw(tick).map((row, y) => {
-    const runs: { text: string; tone: Tone }[] = [];
-    for (const { char, tone } of row) {
+    const runs: ({ text: string; tone: Tone } | { icon: Icon; tone: Tone })[] = [];
+    for (const { char, tone, icon, covered } of row) {
+      if (covered) continue;
       const last = runs.at(-1);
-      if (last?.tone === tone) last.text += char;
+      if (icon) runs.push({ icon, tone });
+      else if (last && "text" in last && last.tone === tone) last.text += char;
       else runs.push({ text: char, tone });
     }
     return (
       <span key={y}>
         {runs.map((run, i) =>
-          run.tone === "line" ? (
+          "icon" in run ? (
+            <span key={i} className={`icon ${run.tone}`}>
+              <svg viewBox={ICONS[run.icon].viewBox} fill="currentColor">
+                <path d={ICONS[run.icon].d} />
+              </svg>
+            </span>
+          ) : run.tone === "line" ? (
             run.text
           ) : (
             <span key={i} className={run.tone}>

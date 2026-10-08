@@ -839,6 +839,21 @@ kbd {
   color: var(--bright);
 }
 
+/* A logo in a box title spans exactly two cells, so the columns stay aligned. */
+.diagram .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2ch;
+  height: 1.4em;
+  vertical-align: top;
+}
+
+.diagram .icon svg {
+  width: 1.05em;
+  height: 1.05em;
+}
+
 .diagram .ink {
   color: var(--muted);
 }
