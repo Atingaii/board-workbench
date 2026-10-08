@@ -2,6 +2,7 @@ import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 import type { WatcherContext } from "vboard";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import vboard from "vboard/package.json" with { type: "json" };
 
 // Pi, the coding agent, working on a board thread from its own Vercel Sandbox: the
 // `pi` CLI with `vb`, `gh`, and git, like a developer at a terminal. Each thread gets
@@ -14,8 +15,11 @@ const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
-/** The `vb` Pi runs. A thread's sandbox outlives releases, so setup upgrades it in place. */
-const VBOARD = "0.6.0";
+/**
+ * The `vb` Pi runs: the vboard this deployment was built with, so each release reaches Pi
+ * with no hand-made bump. A thread's sandbox outlives releases, so setup upgrades it in place.
+ */
+const VBOARD: string = vboard.version;
 /**
  * The `gh` a new sandbox gets, pinned too: asking GitHub's API for the latest release goes out without
  * credentials (setup runs before the network policy), and sandboxes share that rate limit, so new
