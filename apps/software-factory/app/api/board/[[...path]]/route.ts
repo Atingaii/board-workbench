@@ -4,18 +4,15 @@ import { github } from "vboard/adapter-github";
 import { vercelBlob } from "vboard/adapter-vercel-blob";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { byPi, tellPi } from "./agent";
+import { byPi, byWatcher, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
+import { isPiKind, PI_KINDS, piTask, scheduled, scheduledThread } from "./kinds";
+import { security } from "./security";
 import { shipit } from "./shipit";
-
-/** The kinds of thread Pi acts on, and how it's told about one. Noise it ignores. */
-const PI_TASKS = {
-  bug: "a bug report",
-  feature: "a feature request",
-  question: "a question",
-} as const;
-const PI_KINDS = Object.keys(PI_TASKS) as (keyof typeof PI_TASKS)[];
-const isPiKind = (kind: string): kind is keyof typeof PI_TASKS => kind in PI_TASKS;
+import { autoland } from "./autoland";
+import { owner } from "./owner";
+import { crosspost } from "./crosspost";
+import { renderForSlack } from "./render";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
@@ -31,7 +28,8 @@ export const { GET, POST, scheduler } = board({
         url: process.env.KV_REST_API_URL!,
         token: process.env.KV_REST_API_TOKEN!,
         // One Redis serves every environment: a preview never touches production's log.
-        keyPrefix: env === "production" ? "vboard-factory" : `vboard-factory:${env}`,
+        // `-2` since A2 0.17 changed its Redis layout; the log under `vboard-factory` was copied over.
+        keyPrefix: env === "production" ? "vboard-factory-2" : `vboard-factory-2:${env}`,
       })
     : undefined,
   // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
@@ -43,6 +41,7 @@ export const { GET, POST, scheduler } = board({
     // (`vb identity link slack`) post as themselves.
     slack: slack({
       adapter: "slack/vboard-factory",
+      render: renderForSlack,
       channels: {
         C0C6MNT9LLC: "dev",
       },
@@ -58,24 +57,13 @@ export const { GET, POST, scheduler } = board({
   },
   watch: {
     shipit: shipit({ tellPi }),
-    merged: {
-      tail: "--label pr --label state=merged",
-      when: "enters",
-      run: async ({ event, board }) => {
-        if (event.message?.re === null) {
-          await board.react(event.message.id, "merged");
-        }
-      },
-    },
-    closed: {
-      tail: "--label pr --label state=closed",
-      when: "enters",
-      run: async ({ event, board }) => {
-        if (event.message?.re === null) {
-          await board.react(event.message.id, "closed");
-        }
-      },
-    },
+    // Shadow mode: labels each reviewed factory PR autoland=would|no, and merges nothing.
+    autoland: autoland(),
+    // A factory PR's root names whose it is: the person who opened its source thread.
+    owner: owner(),
+    // A factory PR's Slack thread and the Slack thread it was built for link to each other.
+    crosspost: crosspost(),
+    security: security({ tellPi }),
     // Every non-PR dev thread gets a kind, judged from all of it,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
     "triage-gpt": {
@@ -85,7 +73,9 @@ export const { GET, POST, scheduler } = board({
         if (
           event.type !== "message.posted" ||
           !message ||
-          byPi(message.re ?? message.id, message.by)
+          byPi(message.re ?? message.id, message.by) ||
+          byWatcher(message.by) ||
+          scheduledThread(message)
         ) {
           return;
         }
@@ -108,33 +98,42 @@ export const { GET, POST, scheduler } = board({
         }
       },
     },
-    // Pi watches every thread worth acting on (bugs, features, questions; not noise): it
+    // Pi watches every thread worth acting on (bugs, features, questions, tasks; not noise): it
     // gets the thread once triage gives it one of those kinds, is told again if the kind
     // changes, and hears when anyone else replies, then reads what's new itself.
     pi: {
       tail: `dev --label kind=${PI_KINDS.join("|")}`,
-      run: async ({ event }) => {
+      run: async ({ event, board }) => {
         const message = event.message;
         if (!message) {
           return;
         }
-        const kind = event.type === "labels.changed" ? event.payload.set.kind : undefined;
+        const kind =
+          event.type === "labels.changed"
+            ? event.payload.set.kind
+            : event.type === "message.posted"
+              ? scheduledThread(message) ?? undefined
+              : undefined;
         if (kind && isPiKind(kind) && message.re === null) {
           await tellPi({
+            board,
             task: "thread",
             thread: message.id,
             key: `kind-${kind}`,
-            message: `There's ${PI_TASKS[kind]} in board thread #${message.id}.`,
+            message: taskMessage(piTask(kind), message),
           });
         } else if (
           event.type === "message.posted" &&
           message.re !== null &&
-          !byPi(message.re, message.by)
+          (scheduled(message) || !byPi(message.re, message.by)) &&
+          !byWatcher(message.by)
         ) {
           await tellPi({
+            board,
             task: "thread",
             thread: message.re,
             key: `news-${message.id}`,
+            about: message.id,
             message: `There's new activity in board thread #${message.re}.`,
           });
         }
@@ -145,26 +144,30 @@ export const { GET, POST, scheduler } = board({
     // threads: `--label pr` matches a reply by its root's labels too.
     "review-pi": {
       tail: "dev --label pr",
-      run: async ({ event }) => {
+      run: async ({ event, board }) => {
         const message = event.message;
         if (event.type !== "message.posted" || !message) {
           return;
         }
         if (message.re === null) {
           await tellPi({
+            board,
             task: "review",
             thread: message.id,
             key: "pr",
             message: `There's a pull request to review in board thread #${message.id}.`,
           });
         } else if (
-          !byPi(message.re, message.by) &&
-          !message.author?.handle.endsWith("[bot]")
+          (scheduled(message) || !byPi(message.re, message.by)) &&
+          !message.author?.handle.endsWith("[bot]") &&
+          !byWatcher(message.by)
         ) {
           await tellPi({
+            board,
             task: "review",
             thread: message.re,
             key: `news-${message.id}`,
+            about: message.id,
             message: `There's new activity in board thread #${message.re}.`,
           });
         }

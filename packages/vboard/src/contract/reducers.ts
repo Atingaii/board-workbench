@@ -1,3 +1,4 @@
+import { reducer } from 'experimental-a2'
 import { canonicalEmoji } from './emoji.ts'
 import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
 import { boardContract, identityContract, type BoardEvent, type Link, type Origin } from './contract.ts'
@@ -30,6 +31,8 @@ export type Message = {
   attachments: Attachment[]
   /** Platform messages it links to (Slack permalinks), each with what it said. */
   links: Link[]
+  /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
+  schedule?: { id: number; n: number }
 }
 
 export type MessagesState = {
@@ -68,6 +71,7 @@ export function foldMessages(
         undelivered: {},
         attachments: payload.attachments ?? [],
         links: payload.links ?? [],
+        ...(payload.schedule ? { schedule: { ...payload.schedule } } : {}),
       }
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
       return state
@@ -136,12 +140,11 @@ export function foldMessages(
   }
 }
 
-export const messagesReducer = boardContract
-  .reducer({
-    name: 'vboard.messages.v4',
-    initialState: { byId: {}, replies: {} } as MessagesState,
-  })
-  .fold(foldMessages)
+export const messagesReducer = reducer({
+  contract: boardContract,
+  name: 'vboard.messages.v4',
+  initialState: { byId: {}, replies: {} } as MessagesState,
+}).fold(foldMessages)
 
 export type Channel = {
   path: string
@@ -152,25 +155,24 @@ export type Channel = {
 
 export type ChannelsState = Record<string, Channel>
 
-export const channelsReducer = boardContract
-  .reducer({
-    name: 'vboard.channels.v1',
-    initialState: {} as ChannelsState,
+export const channelsReducer = reducer({
+  contract: boardContract,
+  name: 'vboard.channels.v1',
+  initialState: {} as ChannelsState,
+}).fold((state, event) => {
+  if (event.type !== 'message.posted') return state
+  const { channel, re } = event.payload
+  const entry = (state[channel] ??= {
+    path: channel,
+    lastIndex: 0,
+    messages: 0,
+    threads: 0,
   })
-  .fold((state, event) => {
-    if (event.type !== 'message.posted') return state
-    const { channel, re } = event.payload
-    const entry = (state[channel] ??= {
-      path: channel,
-      lastIndex: 0,
-      messages: 0,
-      threads: 0,
-    })
-    entry.lastIndex = event.index
-    entry.messages += 1
-    if (re === null) entry.threads += 1
-    return state
-  })
+  entry.lastIndex = event.index
+  entry.messages += 1
+  if (re === null) entry.threads += 1
+  return state
+})
 
 export type Actor = {
   id: string
@@ -228,12 +230,11 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
   return state
 }
 
-export const actorsReducer = boardContract
-  .reducer({
-    name: 'vboard.actors.v2',
-    initialState: { byId: {}, byHandle: {}, links: {} } as ActorsState,
-  })
-  .fold(foldActors)
+export const actorsReducer = reducer({
+  contract: boardContract,
+  name: 'vboard.actors.v2',
+  initialState: { byId: {}, byHandle: {}, links: {} } as ActorsState,
+}).fold(foldActors)
 
 /** A copy of a board message on a platform. */
 /** `files`: the platform's IDs for the message's files, or null when it refused them; unset until they're sent. */
@@ -322,26 +323,27 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
   }
 }
 
-export const syncReducer = boardContract
-  .reducer({
-    name: 'vboard.sync.v1',
-    initialState: { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} } as SyncState,
-  })
-  .fold(foldSync)
+export const syncReducer = reducer({
+  contract: boardContract,
+  name: 'vboard.sync.v1',
+  initialState: { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} } as SyncState,
+}).fold(foldSync)
 
 export type IdentityCode = { principal: string; sync: string; expiresAt: string; usedBy: string | null }
 /** Code hash → its code. */
 export type IdentityCodesState = Record<string, IdentityCode>
 
-export const identityCodesReducer = identityContract
-  .reducer({ name: 'vboard.identity-codes.v1', initialState: {} as IdentityCodesState })
-  .fold((state, event) => {
-    if (event.type === 'identity.code_issued') {
-      const { hash, principal, sync, expiresAt } = event.payload
-      state[hash] ??= { principal, sync, expiresAt, usedBy: null }
-    } else if (event.type === 'identity.code_used') {
-      const code = state[event.payload.hash]
-      if (code && code.usedBy === null) code.usedBy = event.payload.actor
-    }
-    return state
-  })
+export const identityCodesReducer = reducer({
+  contract: identityContract,
+  name: 'vboard.identity-codes.v1',
+  initialState: {} as IdentityCodesState,
+}).fold((state, event) => {
+  if (event.type === 'identity.code_issued') {
+    const { hash, principal, sync, expiresAt } = event.payload
+    state[hash] ??= { principal, sync, expiresAt, usedBy: null }
+  } else if (event.type === 'identity.code_used') {
+    const code = state[event.payload.hash]
+    if (code && code.usedBy === null) code.usedBy = event.payload.actor
+  }
+  return state
+})

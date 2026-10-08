@@ -35,6 +35,7 @@ function slackAs(owners: Record<string, string>, onPost?: (post: { threadId: str
     ran,
     extend(adapter: Adapter) {
       const post = adapter.postMessage.bind(adapter)
+      const postChannel = adapter.postChannelMessage!.bind(adapter)
       const edit = adapter.editMessage.bind(adapter)
       const remove = adapter.deleteMessage.bind(adapter)
       Object.assign(adapter, {
@@ -49,6 +50,13 @@ function slackAs(owners: Record<string, string>, onPost?: (post: { threadId: str
           const token = context.getStore() ?? null
           ran.push({ op: 'post', threadId, id: sent.id, text: JSON.stringify(message), token })
           await onPost?.({ threadId, id: sent.id, token })
+          return sent
+        },
+        postChannelMessage: async (channelId: string, message: never) => {
+          const sent = await postChannel(channelId, message)
+          const token = context.getStore() ?? null
+          ran.push({ op: 'post', threadId: sent.threadId, id: sent.id, text: JSON.stringify(message), token })
+          await onPost?.({ threadId: sent.threadId, id: sent.id, token })
           return sent
         },
         editMessage: async (threadId: string, id: string, message: never) => {
@@ -167,8 +175,8 @@ describe('linking accounts with a one-time code', () => {
     vi.setSystemTime(Date.now() + 11 * 60_000)
     await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '103', text: forGitHub, user: 'U_BOB' })
     await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '104', text: stale, user: 'U_BOB' })
-    vi.useRealTimers()
     await vi.waitFor(async () => expect((await read(julian, 'channel=firehose')).map((m) => m.text)).toEqual(expect.arrayContaining([forGitHub, stale])))
+    vi.useRealTimers()
     expect((await julian('GET', '/identity')).body.links).toHaveLength(1)
   })
 
@@ -275,6 +283,64 @@ describe('signing in, and posting as yourself', () => {
     expect(as.ran.filter((r) => r.op === 'post')).toHaveLength(1)
   })
 
+  it('holds back the copy of a new thread you started, which comes back before the board knows its Slack thread', async () => {
+    const tokens = fakeTokens()
+    let echo: Promise<Response> | undefined
+    const { board, as, webhook } = setup({
+      users: tokens.users,
+      owners: { 'xoxp-julian': 'U_JULIAN' },
+      onPost: async (post) => {
+        if (!post.token) return
+        echo = webhook('slack', { type: 'message', threadId: post.threadId, id: post.id, text: 'new thread', user: 'U_JULIAN' })
+        await echo
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      },
+    })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    tokens.signIn('vercel:user:u_julian', 'xoxp-julian')
+    await julian('POST', '/identity/check', { sync: 'slack' })
+
+    await julian('POST', '/messages', { channel: 'firehose', text: 'new thread' })
+    await vi.waitFor(() => expect(echo).toBeDefined())
+    await echo
+    await vi.waitFor(async () => {
+      const events = (await julian('GET', '/events?after=0&all=true')).body.events as { type: string; payload: { external?: { asUser?: boolean } } }[]
+      expect(events.find((e) => e.type === 'message.synced')?.payload.external?.asUser).toBe(true)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect((await read(julian, 'channel=firehose')).map((m) => [m.text, m.by.actor])).toEqual([['new thread', 'vercel:user:u_julian']])
+    expect(as.ran.filter((r) => r.op === 'post')).toMatchObject([{ token: 'xoxp-julian', threadId: expect.stringMatching(/^slack:C1:/) }])
+  })
+
+  it('posts as you only while the account you signed in with is linked', async () => {
+    const tokens = fakeTokens()
+    const { board, as, webhook } = setup({ users: tokens.users, owners: { 'xoxp-julian': 'U_JULIAN' } })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'a thread', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'channel=firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'channel=firehose')
+    const posts = () => as.ran.filter((r) => r.op === 'post')
+
+    // Signed in (`--no-wait`) but never checked: nothing's linked, so the app posts.
+    tokens.signIn('vercel:user:u_julian', 'xoxp-julian')
+    await julian('POST', '/messages', { re: root!.id, text: 'one' })
+    await vi.waitFor(() => expect(posts()).toHaveLength(1))
+    expect(posts()[0]).toMatchObject({ token: null })
+
+    await julian('POST', '/identity/check', { sync: 'slack' })
+    const two = (await julian('POST', '/messages', { re: root!.id, text: 'two' })).body.message
+    await vi.waitFor(() => expect(posts()).toHaveLength(2))
+    expect(posts()[1]).toMatchObject({ token: 'xoxp-julian' })
+
+    // Unlinked: the app posts again, though Connect still has the token; the copy that went as you stays yours to edit.
+    await julian('POST', '/identity/unlink', { actor: 'slack:user:U_JULIAN' })
+    await julian('POST', '/messages', { re: root!.id, text: 'three' })
+    await vi.waitFor(() => expect(posts()).toHaveLength(3))
+    expect(posts()[2]).toMatchObject({ token: null })
+    await julian('POST', `/messages/${two.id}/edit`, { text: 'two!' })
+    await vi.waitFor(() => expect(as.ran.find((r) => r.op === 'edit')).toMatchObject({ id: posts()[1]!.id, token: 'xoxp-julian' }))
+  })
+
   it('posts a GitHub comment as you through the API, and links the account the token is', async () => {
     const tokens = fakeTokens()
     const calls: { method: string; url: string; auth: string | null; body: unknown }[] = []
@@ -325,6 +391,7 @@ describe('signing in, and posting as yourself', () => {
     const { board, s, as, webhook } = setup({ users: tokens.users, owners: { 'xoxp-julian': 'U_JULIAN' } })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     tokens.signIn('vercel:user:u_julian', 'xoxp-julian')
+    await julian('POST', '/identity/check', { sync: 'slack' })
     const failing = s.adapter.postMessage
     s.adapter.postMessage = async (threadId, message) => {
       if (JSON.stringify(message) === '{"markdown":"hello"}')

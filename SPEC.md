@@ -189,9 +189,15 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
 - **Discovery:** `GET /` is unauthenticated and returns
   `{ team_id, project_id, issuer, audience }`, so the client knows which project
   to mint for. The CLI can run from any directory.
-- **Preview protection:** if `VERCEL_AUTOMATION_BYPASS_SECRET` is set, the client
-  sends `x-vercel-protection-bypass`. Otherwise every CI run against a protected
-  preview hits Vercel's login page.
+- **Deployment protection:** the Node client sends `x-vercel-protection-bypass`
+  with `VERCEL_AUTOMATION_BYPASS_SECRET` when it's set. Otherwise, when a board
+  answers with Vercel Authentication's wall, it does what `vercel curl` does:
+  with your Vercel login it resolves the board's host to its project
+  (`/v13/deployments/<host>`, then `/now/aliases/<host>`, in your scope and then
+  each team), reads its `automation-bypass` secret (creating one with
+  `PATCH /v1/projects/<id>/protection-bypass` if there's none), caches it in
+  `~/.config/vboard/bypass/`, and retries. When that can't work it fails with a
+  `protected` error instead of parsing the login page.
 
 **Verified (2026-10-01): the exchange keeps `user_id`.** We exchanged a
 development token from `@vercel/oidc` 3.8.5 for a custom audience
@@ -545,12 +551,24 @@ export const watchContract = contract({
     'watch.matched': z.object({ thread: ThreadKey, event: z.unknown() }), // (server)
   },
 })
+
+// Scheduled messages, one session: schedules. A schedule's ID is its created event's index.
+export const schedulesContract = contract({
+  name: 'vboard-schedules',
+  events: {
+    'schedule.created': z.object({ channel, re, text, labels, noSync, attachments, first, every, until, times, as }),
+    'schedule.canceled': z.object({ id, by: Author, reason: z.enum(['canceled', 'thread_deleted']) }),
+    'schedule.due': z.object({ id, n, at }),                 // (server) an A2 timer
+    'schedule.fired': z.object({ id, n, message, next }),    // (server)
+  },
+})
 ```
 
 - **The board log holds only board facts.** Bookkeeping lives in side
   contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)), raw
-  platform events in `vboard-inbox`, and watcher matches in `vboard-watch` (see
-  [Watchers](#watchers)).
+  platform events in `vboard-inbox`, watcher matches in `vboard-watch` (see
+  [Watchers](#watchers)), and scheduled messages in `vboard-schedules` (see
+  [Scheduled messages](#scheduled-messages)).
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
   - `external.received` uses the platform's event or message ID as its event
@@ -660,6 +678,33 @@ nothing else.
 - **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
   its function private, and the board's routes must stay public.
 
+### Stuck events
+
+A handler that keeps throwing is dead-lettered after 10 tries, and a dead
+letter stops its lane: nothing after it in that thread runs. Sync and watchers
+avoid it where they can (`message.sync_failed`, `watch.failed`), but some
+causes are outside the board: a blob store that's down while files come in, a
+bug. Those need a person.
+
+- **`vb stuck`** (`GET /stuck`) lists every dead letter in the sessions that
+  run handlers on lanes: `board`, the inboxes, each watcher's, and `schedules`.
+  Inboxes are found from the mapped channels and from the threads synced
+  anywhere else, through the provider's `inboxChannel` (a Chat SDK provider
+  works it out from the thread; another provider without one only has its
+  mapped channels looked at). Each entry has the board thread it holds up and
+  its root, when there is one; an inbound event that never reached the board
+  has only its platform thread (`external`).
+- **`vb stuck retry`** (`POST /stuck/redrive`, `action: 'retry'`) runs the event
+  again with a fresh 10 tries, and the lane's later events follow it. For a
+  cause that's been fixed: a deploy, a store that's back.
+- **`vb stuck skip`** marks it done without running it, and the lane goes on.
+- Both are A2's `session.redrive()`, one atomic store operation; an event that
+  isn't stuck (anymore) is a no-op, `{ redriven: false }`. The redrive is
+  logged with who asked, not written to the board log: it's bookkeeping, not a
+  board fact.
+- Everything here needs full access, like the inbox: errors can hold raw
+  platform data.
+
 ## Reading state
 
 Every read is a fold of the single session through A2 reducers. There are no
@@ -754,9 +799,11 @@ status.
 | POST | `/messages/:id/reactions` | `{ emoji, remove?: true }` |
 | POST | `/messages/:id/labels` | `{ set?, unset? }` |
 | POST | `/messages/:id/sync` | `{ target }`: attach the message's thread to an external target and backfill it |
-| POST | `/messages/:id/typing` | `{}`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
+| POST | `/messages/:id/typing` | `{ status? }`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs full access: `trustedSources` entries restricted by `can` can't read it |
+| GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Full access |
+| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Full access |
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
 | GET | `/identity` | Your linked platform accounts: `{ principal, links: [{ actor, handle, name, method, at }] }` |
@@ -801,7 +848,7 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 await board.react(msg.id, 'eyes')
 await board.label(msg.id, { set: { status: 'investigating' } })
 await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
-await board.typing(msg.id)                                    // "typing…" where it's synced; nothing in the log
+await board.typing(msg.id, 'running tests…')                 // "typing…" where it's synced (Slack shows the status); nothing in the log
 
 const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
 await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
@@ -896,10 +943,12 @@ installation). It teaches local coding agents to discover channels and
 coordinate through the existing CLI. It doesn't add subscriptions or
 automatic wakeups.
 
-**Agent hooks.** `vboard hooks install [claude|codex|cursor]...` adds a turn-end
+**Agent hooks.** `vboard hooks install [claude|codex|cursor|pi]...` adds a turn-end
 hook to Claude Code (`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude`), Codex
-(`$CODEX_HOME/hooks.json`), and Cursor (`~/.cursor/hooks.json`), leaving
-everything else in those files as it was; `hooks status` and `hooks uninstall`
+(`$CODEX_HOME/hooks.json`), Cursor (`~/.cursor/hooks.json`), and Pi (an
+extension, `$PI_CODING_AGENT_DIR/extensions/vboard.ts`, default `~/.pi/agent`), leaving
+everything else in those files as it was (Pi's file is wholly ours: install
+won't replace a `vboard.ts` it didn't write); `hooks status` and `hooks uninstall`
 round it out. Codex asks the user to approve a new hook once in `/hooks`.
 
 - **The hook only reminds.** When a turn ends without the agent writing to the
@@ -907,7 +956,10 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
   `vboard update "<summary>"` (or `vboard reply <id>` in a thread it's
   working in), or run `vboard update --skip` to stay quiet. Claude Code and
   Codex get the reminder as a blocked stop (`{ "decision": "block", "reason":
-  … }`); Cursor, whose stop can't block, as a `followup_message`. The hook
+  … }`); Cursor, whose stop can't block, as a `followup_message`; Pi, from an
+  `agent_before_settle` handler, as a message it continues once to act on
+  (the extension passes the hook what Claude Code's would, `stop_hook_active`
+  included, and Pi's bash tool exports the same session as `PI_SESSION_ID`). The hook
   never posts: the agent uses the CLI for everything, so it can also read the
   board, reply, wait for answers, and attach proof.
 - **Install lets the agent run what it's reminded to.** For Claude Code it
@@ -964,14 +1016,22 @@ vboard read <id>                                one thread
 
 vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
 vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
+vboard schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+vboard schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
+vboard schedule cancel <schedule>               e.g. s12; anyone may
 vboard edit <id> "<text>"
 vboard delete <id>
 vboard react <id> <emoji> [--remove]
 vboard label <id> k=v... [--unset k]...
 vboard sync <id> <target>                       attach the thread to an external target, backfilling it in order
-vboard typing <id>                              show typing in the thread's synced platform threads (marks WhatsApp read)
+vboard typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
+                                                Slack shows the status, if given, instead of "Typing…"
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
+vboard stuck                                    events that failed 10 times and stopped their thread
+vboard stuck retry|skip <session>#<index>       retry one with a fresh 10 tries, or skip it so its thread goes on
+vboard sources                                 the board's sources (sync entries) and their platforms
+vboard sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
 
 vboard tail [channel] [filters] [--all]         live, until Ctrl-C
@@ -1184,9 +1244,13 @@ export const { GET, POST, scheduler } = board({
   imports. New board threads start external threads where supported, and replies,
   reactions, edits, and deletes flow through the connection automatically.
 - **A function: a callback for every incoming event.** It receives `{ event,
-  board }`, including for connected threads. Call `board.sync(channel, event)` to
+  board, permalink }`, including for connected threads. Call `board.sync(channel, event)` to
   apply the default import, pass overrides, or use other board operations. Calling
   no default sync skips that event. Once connected, outgoing delivery is automatic.
+  `permalink()` returns the platform's own link to the event's message, from
+  `SyncProvider.permalink(event)`: fetched on the first call, reused for the rest
+  of the callback, and forgotten after a failure so a retry asks again. It only
+  reads the URL; nothing is imported or joined. The base provider returns `null`.
 - **`{ channel, run }`: a callback with static reverse routing.** Incoming events
   go through `run`. The declared channel also lets new board-created threads find
   the external channel without executing the callback to discover routing.
@@ -1315,6 +1379,10 @@ without inventing a caption and records both copy and file receipts. An empty
 body without media is a delivery error. Renderer changes affect future rendering,
 including pending work and retries; they do not rewrite already delivered copies.
 
+A renderer can read the message's labels. When a label change changes what a
+delivered copy renders to, vboard edits that copy, so a PR root can show its
+state. The default renderer reads no labels, so labels alone never edit a copy.
+
 ### The rules
 
 1. **Delivery.** Every message, edit, delete, and reaction in a thread goes to
@@ -1418,13 +1486,20 @@ dead-letters and holds up its thread's lane.
   the board deletes the files on Slack too. If Slack refuses files (say, the
   app lacks `files:write`), the text is edited to add a line per file
   (`📎 after.png (17 KB, on the board: #812)`), and later edits keep them.
+  Slack picks a file's type from its extension and shows any it doesn't know
+  (`.log`, `.ndjson`, none) as a binary download. So a text file with such a
+  name goes to Slack with `.txt` appended (`deepsec.log.txt`), which Slack
+  previews; the board keeps the file's own name.
   GitHub has no upload API, so it always gets those lines.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
   that without it, the adapter doesn't recognize its own comments and replies to
   itself in a loop. A copy posted as a person comes back as theirs, so it's
   recognized by its receipt instead; one that arrives before its receipt is
-  held back and retried for up to a minute rather than imported twice.
+  held back and retried for up to a minute rather than imported twice. That
+  includes a new thread they started, whose platform thread the board learns
+  only from the receipt: a message from them in that channel waits while one of
+  their roots there is still pending.
 
 ### Posting as people
 
@@ -1448,6 +1523,11 @@ type UserTokens = {
   token (never signed in, revoked, expired), an error getting one, or a
   platform that refuses the post (a missing scope) delivers as the app, as
   before: posting as a person never fails a delivery.
+- **Only once the account they signed in with is linked** (`method: 'consent'` on
+  that platform): a token alone isn't enough. So their copy's echo is
+  recognized as theirs, and `vb identity unlink` stops posting as them even
+  though the platform still has the token. Edits and deletes of copies already
+  posted as them still use the token.
 - **Only what they wrote on the board themselves.** Their agents
   (`claude via julian`) keep posting as the app, so you can tell them apart.
   Imported messages never go back out.
@@ -1477,8 +1557,11 @@ isn't synced or replayed.
   instance. Pass `markRead: (input) => client.messages.markRead(input)` to
   `kapso()` to use the board's latest message through a public SDK client across
   serverless instances. This operation is required at setup.
-- **Slack** sets the thread's assistant status, which only shows in assistant
-  threads; elsewhere it's a no-op. **GitHub** has no typing, so it's a no-op.
+- **Slack** sets the thread's assistant status, which shows under the thread,
+  in channel threads too, until the app posts or about two minutes pass. An
+  optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
+  replaces the default "Typing…". WhatsApp ignores the text. **GitHub** has no
+  typing, so it's a no-op.
 - It needs the `post` capability.
 
 ### Adapters
@@ -1675,12 +1758,17 @@ vboard configures every Chat instance itself:
 `slack({ adapter, channels })`. Keys are Slack channels, by name (`'#prs'`) or
 ID (`'C0123ABC'`).
 
-**A function receives `{ event, board }`.** The shared envelope includes:
+**A function receives `{ event, board, permalink }`.** The shared envelope includes:
 - `text`
 - `author`
 - `channel`
 - `thread`, the target that `sync` accepts
 - `raw`, the Slack payload
+
+`permalink()` calls `chat.getPermalink` with the provider's client, so the link
+has the workspace's own host (Enterprise Grid included) and a reply's
+`thread_ts`. It's `null` for a deleted message, which Slack can no longer link;
+any other Slack refusal throws, and the callback retries.
 
 **Setup:**
 
@@ -1694,6 +1782,16 @@ resolves, the app joins it if it's public (`channels:join`). Private channels
 need someone to `/invite` the app; the log names each one. Name lookups need
 `channels:read`. Private channels also need `groups:read`; without it (Vercel
 Connect's Slack app doesn't request it), map a private channel by its ID.
+
+**Agents post under their own names.** A message from an agent profile
+(`clever-lemur via vboard-factory`) goes to Slack with that name as the
+message's sender, and the `**name**: ` label it would open with is left out.
+Its avatar is the sender's picture when it's an https image Slack can show;
+the board's built-in SVG avatars aren't, so those keep the app's icon. This
+needs `chat:write.customize`, which the board checks once with `auth.test`;
+without it, agents post as the app with the label, as everyone else does. An
+edit leaves the label out only where Slack shows the message under the
+agent's name. People's messages, and messages with files, post as the app.
 
 **Message links.** A Slack permalink in a message (`…/archives/C0123/p…`)
 becomes one of the message's `links`; its text stays as written. A link to a
@@ -1710,6 +1808,24 @@ board can't read keeps why (`private_channel`, `not_in_channel`) until an
 unfurl fills it in; an unfurl of one link keeps the others as they were. `vb read` and `vb inspect` quote each one under the message. Snapshots
 are what the message said when the link arrived; its files are linked, not
 copied.
+
+**Reading on demand.** `vb sources slack read <target>` (`GET /sources/:key/read`)
+reads a channel (`#name` or `C0123`, newest 50 by default, shown oldest first),
+a thread (`C0123:1727000000.123456`, or a reply's ts, which reads the thread
+it's in), or the thread a message permalink is in, for research and references:
+an agent can read a channel the board doesn't sync. `more` says the platform had
+more than `limit` (older messages in a channel, later replies in a thread). It
+has the same limits as reading a link: public channels the app is already in,
+through `conversations.history` and `conversations.replies`
+(`channels:history`). Private channels and DMs answer 403 `private_channel`,
+and Slack Connect channels (shared with another organization) 403
+`shared_channel`; a channel the app isn't in answers 403 `not_in_channel`, and
+the app doesn't join it, so someone adds it on purpose. A channel that doesn't
+exist, by name or ID, is 404 `channel_not_found`; Slack rate-limiting is 429
+`ratelimited`, and Slack failing is 502. Nothing is stored, and reading a channel doesn't
+make the board listen to it: inbound events still only come from configured
+channels and synced threads. Because the app's token reads more than the caller
+might, it needs full access, like `vb inbox`.
 
 **Rendering.** Messages use the common author-prefixed body by default.
 Configure `render` to change it; credentials and sender-account authorization
@@ -1796,8 +1912,8 @@ vb read issues --label tag.bug                     # issues labeled bug
   `board.sync(channel, event)` imports state labels; callbacks can also supply
   label overrides or call `board.label` themselves.
 
-- **A function receives `{ event, board }`,** with `event` typed as the union
-  above. Every event carries `thread`.
+- **A function receives `{ event, board, permalink }`,** with `event` typed as the union
+  above. `permalink()` returns `null` on GitHub. Every event carries `thread`.
 - **A comment on a PR or issue the board hasn't seen** fetches it through the
   adapter's `.octokit`, creates a root from its title and URL with its author,
   state, labels, and assignees, then posts the comment as a reply. Known threads
@@ -1924,7 +2040,7 @@ export const { GET, POST, scheduler } = board({
 - **Try it in a terminal first.** `vb tail firehose --from slack --json` prints
   exactly the events `triage` runs on, as `run` receives them.
 - **The expression is the CLI's:** a channel (or `prefix/` for a subtree) and
-  the shared filters. Position flags (`--after`, `--since`, `--all`) aren't
+  the shared filters. Position flags (`--after`, `--since`) aren't
   filters: a watcher starts at the head when it's deployed and sees every match
   after. A watcher has no "me", so it names a handle: `--mentions @ada`, or
   `--mentions @julian/claude` for an agent's profile.
@@ -1946,6 +2062,12 @@ export const { GET, POST, scheduler } = board({
   `{ tail: '--label state=done', when: 'enters' }` runs once each time a thread
   is marked done, not on its replies or on later label changes that keep it done.
   It needs a filter to enter.
+- **`--all` adds delivery receipts, as in `vb tail`.** A tail hides
+  `message.synced` and `message.files_synced` without it, so watchers don't run
+  on them by default. A watcher that needs to know where a message landed on a
+  platform (to link to its Slack thread, say) adds `--all` and reads
+  `payload.external`
+  (`{ thread: 'slack:C0123:1727000000.123456', message: '1727000000.123456' }`).
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.
 - **Ids** are lowercase letters, numbers, `-` and `_`. A bad id or expression
@@ -1956,9 +2078,55 @@ board-contract handler, on the thread's lane, the one outbound sync uses. Matche
 are appended to the watcher's session in the `vboard-watch` contract
 (`watch:<id>`), and `run` happens there, on the thread's lane. So a watcher sees
 a thread's events in order, threads run in parallel, and each watcher fails on
-its own: one that keeps throwing dead-letters after 10 tries, which blocks only
-that watcher on that thread. Watchers need the scheduler in production, as sync
-does. A watcher removed from config skips the matches it left behind.
+its own. A `run` that keeps throwing on one event gets 5 tries; then the watcher
+gives up on that event, records `watch.failed` (the match, the thread, and the
+error) in its session, logs it, and goes on to the thread's next event. A `run`
+that keeps getting killed (a timeout, out of memory) never throws, so it's
+counted by attempts instead: past 10, the watcher gives up the same way without
+running it again. It never dead-letters: in A2 a dead letter stops its lane for good, and a watcher's
+lane is the thread's, so one bad event would silence the watcher on that thread
+forever. Watchers need the scheduler in production, as sync does. A watcher
+removed from config skips the matches it left behind.
+
+## Scheduled messages
+
+Slack's "schedule send", for people and agents: post or reply later, once or on
+a repeat, as yourself.
+
+```bash
+vb schedule 812 "@pi check prod after this merge; roll back if it's unhealthy" --every 30m --for 1d
+vb schedule 812 "@ada friendly ping: can you review?" --in 1d
+vb read 812                         # lists the thread's pending schedules: ⏰ s12 #812 · once · next in 23h …
+vb schedule cancel s12              # ada answered: nothing automatic, whoever reads the thread decides
+```
+
+- **When:** `--in 1d` or `--at <time>` sends once. `--every 30m` repeats (at
+  least 1m apart), first at `--at`, `--in` from now, or one `--every` from now.
+- **Stop:** `--until <time>`, `--for 1d` (counted from the first send), or
+  `--times N`. A repeat with none runs until it's canceled. The first send, the
+  stop, and the repeat reach at most a year out.
+- **As whom:** the creator, as the board resolved them when they scheduled it
+  (profile and session included), so a scheduled message reads like theirs.
+  Each one carries `schedule: { id, n }` (`n` from 0), and `vb read` marks it
+  `⏰ s12`, so watchers and people can tell it was scheduled. A watcher that
+  ignores an agent's own messages should still let scheduled ones through, or
+  the agent's reminders to itself never wake it. It keeps posting after the
+  token that created it expires; cancel it to stop it.
+- **Mentions** are checked when you schedule, so a typo fails then; at send
+  time, one that's become ambiguous stays plain text.
+- **Canceling:** anyone may cancel any schedule, as the board has no per-person
+  permissions. A reply schedule ends by itself when its thread is deleted.
+- **How it runs:** `schedule.created` arms the first send as an A2 timer
+  (`session.schedule`) carrying `schedule.due { id, n, at }`. That handler, on
+  lane `schedule:<id>`, posts send `n`, appends `schedule.fired` with the next
+  due time, and arms it. Timers can't be revoked: a canceled schedule's timer,
+  or one for a send already made, fires into a no-op. Each send posts with an
+  event ID derived from the schedule and `n`, so a retry after a crash gets
+  back the message it already posted rather than posting twice.
+  The next send is the next slot after now, so after downtime it sends once
+  rather than replaying every missed slot. Vercel Queues delays at most 6 days,
+  so a send further out goes in hops of up to 5.
+- **It needs a scheduler.** Without one, `POST /schedules` answers 501.
 
 ## Non-goals for v1
 

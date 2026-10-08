@@ -36,7 +36,7 @@ import { actorSeen } from '../server/actors.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import type { BoardSession } from '../server/board.ts'
-import { badRequest, forbidden, notFound } from '../server/errors.ts'
+import { badRequest, forbidden, HttpError, notFound } from '../server/errors.ts'
 import {
   writeDelete,
   writeEdit,
@@ -50,7 +50,7 @@ import {
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import { ReceivedEvent, ResolvedTarget, type ProviderMapping, type SyncClient, type SyncContext } from './provider.ts'
+import { ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderMapping, type ProviderSender, type SyncClient, type SyncContext } from './provider.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
 
@@ -339,7 +339,7 @@ export function createSyncEngine(options: {
         const { state: messages } = await session.state(messagesReducer)
         const origin = messages.byId[copied]?.origin
         if (!origin || origin.message !== event.message || (origin.subthread ?? origin.thread) !== (event.subthread ?? event.thread)) return
-      } else if (linked && platform.users && attempt < ECHO_ATTEMPTS && (await deliveringAsPerson(linked, event.thread, event.author.id)))
+      } else if (platform.users && attempt < ECHO_ATTEMPTS && (await deliveringAsPerson(linked, event)))
         throw new Error(`holding ${event.message} until ${event.author.id}'s board message there has its receipt`)
       const code = event.author.isBot ? undefined : CODE.exec(event.text)?.[1]
       if (code && (await claimCode(key, event, code))) return
@@ -381,26 +381,35 @@ export function createSyncEngine(options: {
   }
 
   /**
-   * Whether a board message by the person behind `author` (a linked account) may be on
-   * its way to `external` as them, without a receipt yet: then a message from them
-   * there could be that very copy.
+   * Whether a board message by the person behind `event`'s author (an account they
+   * signed in with) may be on its way there as them, without a receipt yet: then
+   * `event` could be that very copy. In a thread the board knows (`thread`), that's
+   * any of the person's messages still going to it; anywhere else, a new thread of
+   * theirs still going to `event`'s channel, whose platform thread the board learns
+   * only from the receipt.
    */
-  async function deliveringAsPerson(thread: string, external: string, author: string) {
+  async function deliveringAsPerson(thread: string | undefined, event: Extract<ExternalEvent, { kind: 'message' }>) {
     const { session } = bound()
     const [{ state: actors }, { state: sync }, { state: messages }] = await Promise.all([
       session.state(actorsReducer), session.state(syncReducer), session.state(messagesReducer),
     ])
-    const person = actors.links[author]?.to
-    const synced = sync.threads[thread]
-    if (!person || !synced) return false
-    const targets = synced.targets.filter((target) => synced.external[target] === external)
+    const link = actors.links[event.author.id]
+    if (!link || link.method !== 'consent') return false
     const now = Date.now()
-    return [synced.root, ...(messages.replies[synced.root] ?? [])].some((id) => {
+    const pending = (id: number, target: string) => {
       const message = messages.byId[id]
-      return !!message && message.by.principal === person && message.by.profile === null && message.from === null &&
+      return !!message && message.by.principal === link.to && message.by.profile === null && message.from === null &&
         !message.deleted && !message.noSync && now - Date.parse(message.createdAt) < ECHO_WINDOW_MS &&
-        targets.some((target) => !sync.copies[id]?.[target] && !message.undelivered[target])
-    })
+        !sync.copies[id]?.[target] && !message.undelivered[target]
+    }
+    if (thread !== undefined) {
+      const synced = sync.threads[thread]
+      if (!synced) return false
+      const targets = synced.targets.filter((target) => synced.external[target] === event.thread)
+      return [synced.root, ...(messages.replies[synced.root] ?? [])].some((id) => targets.some((target) => pending(id, target)))
+    }
+    return Object.values(sync.threads).some((synced) =>
+      synced.targets.includes(event.channel) && !synced.external[event.channel] && pending(synced.root, event.channel))
   }
 
   const codes = () => identityServer.session(IDENTITY_SESSION)
@@ -640,8 +649,13 @@ export function createSyncEngine(options: {
    * wrote on the board themselves, not their agents, and null when they haven't
    * signed in. A token that can't be had is the bot's turn, never a failed delivery.
    */
-  async function personToken(platform: SyncProvider, message: Message): Promise<string | null> {
+  async function personToken(platform: SyncProvider, message: Message, actors: ActorsState | null): Promise<string | null> {
     if (!platform.users || message.from !== null || message.by.profile !== null || !message.by.principal.startsWith('vercel:user:')) return null
+    // A new post goes as them only once they've linked the account they signed in with, so
+    // its echo is recognized as theirs and `vb identity unlink` stops it. Their copies
+    // already out there (`actors` null) stay theirs to change.
+    if (actors && !Object.entries(actors.links).some(([actor, link]) =>
+      link.to === message.by.principal && link.method === 'consent' && actor.startsWith(`${platform.platform}:user:`))) return null
     try {
       return await platform.users.token(message.by.principal)
     } catch (error) {
@@ -665,7 +679,7 @@ export function createSyncEngine(options: {
   async function postAsPerson(target: string, place: string, kind: ResolvedTarget['kind'], message: Message, actors: ActorsState, quote?: Message) {
     const platform = platformOf(keyOf(target))
     if (!message.text.trim()) return null
-    const token = await personToken(platform, message)
+    const token = await personToken(platform, message, actors)
     if (!token) return null
     try {
       return await platform.postAs(token, native(place), kind, renderAsPerson(target, message, actors, quote))
@@ -676,7 +690,7 @@ export function createSyncEngine(options: {
   }
 
   /** A board message as markdown for a platform, which converts it to its own format. */
-  function render(key: string, target: string, message: Message, actors: ActorsState, quote?: Message): { markdown: string } {
+  function render(key: string, target: string, message: Message, actors: ActorsState, quote?: Message): { markdown: string; as?: ProviderSender } {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
@@ -686,7 +700,9 @@ export function createSyncEngine(options: {
       : ''
     const body = platformOf(key).render(immutable({ message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) }, author: actor ? { ...actor } : null, label: name, target }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    return { markdown: `${quoted}${textFor(platformOf(key), message, actors, body)}` }
+    const markdown = `${quoted}${textFor(platformOf(key), message, actors, body)}`
+    // An agent's message can carry its own name and picture where the platform shows a sender per message.
+    return message.by.profile && !message.from ? { markdown, as: { name, avatar: actor?.avatar ?? null } } : { markdown }
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
@@ -699,9 +715,9 @@ export function createSyncEngine(options: {
    */
   const renderFor = (target: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
     const key = keyOf(target)
-    const { markdown } = render(key, target, message, actors, quote)
+    const { markdown, as } = render(key, target, message, actors, quote)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles || !options.blob)
-    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown }
+    return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
 
   type Ctx<K extends keyof BoardEvents> = HandlerContext<BoardEvents, K>
@@ -937,7 +953,7 @@ export function createSyncEngine(options: {
         const platform = platformOf(keyOf(target))
         const thread = native(copy.thread)
         // A copy posted as its author is theirs to change: only their token can.
-        const token = copy.asUser && message && (event.type === 'message.edited' || event.type === 'message.deleted') ? await personToken(platform, message) : null
+        const token = copy.asUser && message && (event.type === 'message.edited' || event.type === 'message.deleted') ? await personToken(platform, message, null) : null
         if (copy.asUser && message && (event.type === 'message.edited' || event.type === 'message.deleted') && !token) {
           console.warn(`[vboard] skipped ${event.type} on ${target}: #${message.id} was posted as its author, and their token is gone`)
           continue
@@ -960,11 +976,35 @@ export function createSyncEngine(options: {
   }
 
   /**
+   * A renderer can read labels (a PR root showing its state), so a label change edits
+   * each copy whose rendering it changes. The default renderer doesn't, so this never edits.
+   */
+  async function deliverLabels(ctx: Ctx<'labels.changed'>) {
+    const { id } = ctx.event.payload
+    const state = await latest(ctx)
+    const message = state.messages.byId[id]
+    const copies = state.sync.copies[id] ?? {}
+    if (!message || message.deleted || Object.keys(copies).length === 0) return
+    const { state: before } = await ctx.session.state(messagesReducer, { through: ctx.event.index - 1 })
+    const previous = { ...message, labels: before.byId[id]?.labels ?? {} }
+    for (const [target, copy] of Object.entries(copies)) {
+      try {
+        const body = renderFor(target, message, state.actors, undefined, copy.files === null)
+        if (body.markdown === renderFor(target, previous, state.actors, undefined, copy.files === null).markdown) continue
+        await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
+      } catch (error) {
+        console.warn(`[vboard] skipped labels.changed on ${target}:`, describe(error))
+      }
+    }
+  }
+
+  /**
    * Shows typing in every platform thread a board thread is synced to. It's
    * ephemeral and best-effort: nothing goes in the log, and a platform that
-   * fails is skipped. Answers the external threads that took it.
+   * fails is skipped. Answers the external threads that took it. `status`
+   * replaces "Typing…" where the platform shows text (Slack).
    */
-  async function typing(thread: string): Promise<string[]> {
+  async function typing(thread: string, status?: string): Promise<string[]> {
     const { session } = bound()
     const [{ state: sync }, { state: messages }] = await Promise.all([session.state(syncReducer), session.state(messagesReducer)])
     const synced = sync.threads[thread]
@@ -981,7 +1021,7 @@ export function createSyncEngine(options: {
             const origin = messages.byId[ids[i]!]
             if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
           }
-          await platform.startTyping(native(external), latest)
+          await platform.startTyping(native(external), latest, status)
           return external
         } catch (error) {
           console.warn(`[vboard] skipped typing on ${external}:`, describe(error))
@@ -1002,6 +1042,7 @@ export function createSyncEngine(options: {
     'message.deleted': { lane, handler: async (ctx: Ctx<'message.deleted'>) => void (await deliverChange(ctx)) },
     'reaction.added': { lane, handler: async (ctx: Ctx<'reaction.added'>) => void (await deliverChange(ctx)) },
     'reaction.removed': { lane, handler: async (ctx: Ctx<'reaction.removed'>) => void (await deliverChange(ctx)) },
+    'labels.changed': { lane, handler: async (ctx: Ctx<'labels.changed'>) => void (await deliverLabels(ctx)) },
   }
 
   async function readInbox(key: string, channel: string | undefined, limit: number) {
@@ -1026,9 +1067,43 @@ export function createSyncEngine(options: {
       }))
   }
 
+  /** Every inbox that can hold events: the mapped channels', and those of threads synced anywhere else. */
+  async function inboxChannels(): Promise<string[]> {
+    const channels = new Set<string>()
+    for (const key of Object.keys(entries)) for (const channel of (await mappings(key)).keys()) channels.add(channel)
+    const { state: sync } = await bound().session.state(syncReducer)
+    for (const thread of Object.keys(sync.byExternalThread)) {
+      const key = thread.slice(0, thread.indexOf(':'))
+      const channel = entries[key]?.inboxChannel(key, thread)
+      if (channel) channels.add(channel)
+    }
+    return [...channels]
+  }
+
+  /** The status for what a platform wouldn't read: the caller's mistake, missing, refused, or the platform failing. */
+  const unreadableStatus = (code: string) => {
+    if (code === 'unsupported' || code === 'invalid_target') return 400
+    if (code === 'channel_not_found') return 404
+    if (code === 'ratelimited') return 429
+    if (['no_client', 'list_failed', 'internal_error', 'fatal_error', 'service_unavailable', 'request_timeout'].includes(code)) return 502
+    return 403
+  }
+
+  /** A platform channel or thread, read for the caller: nothing is synced, stored, or joined. */
+  async function readSource(key: string, target: string, limit: number) {
+    const platform = platformOf(key)
+    try {
+      return await platform.read(target, { limit })
+    } catch (error) {
+      if (error instanceof UnreadableError) throw new HttpError(unreadableStatus(error.code), error.code, error.message)
+      throw badRequest(`can't read ${target} from ${key}: ${describe(error)}`, 'platform_error')
+    }
+  }
+
   return {
     inboxServer,
     identityServer,
+    readSource,
     outboundHandlers,
     startLink,
     checkLink,
@@ -1040,6 +1115,7 @@ export function createSyncEngine(options: {
     findByEmail,
     handleWebhook,
     readInbox,
+    inboxChannels,
     typing,
   }
 }

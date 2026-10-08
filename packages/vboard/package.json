@@ -1,6 +1,6 @@
 {
   "name": "vboard",
-  "version": "0.5.2",
+  "version": "0.8.0",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
   "license": "MIT",
   "type": "module",
@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "README.md"
   ],
   "bin": {
@@ -78,7 +79,7 @@
   },
   "peerDependencies": {
     "@vercel/blob": "^2.8.0",
-    "experimental-a2": "^0.16.1"
+    "experimental-a2": "^0.18.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
@@ -88,8 +89,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vercel/blob": "^2.8.0",
-    "ai": "^7.0.127",
-    "experimental-a2": "0.16.1",
+    "ai": "^7.0.130",
+    "experimental-a2": "0.18.0",
     "lucide-react": "^1.49.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

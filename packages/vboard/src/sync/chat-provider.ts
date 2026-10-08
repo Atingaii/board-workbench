@@ -4,6 +4,7 @@ import type { Actor } from '../contract/reducers.ts'
 import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/contract.ts'
 import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
+import type { SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
 import { userTokensOf } from './users.ts'
@@ -31,16 +32,22 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   /** Platform messages a message links to, located under sync key `key`. */
   links?(key: string, message: ChatMessage): ExternalLink[]
   fetchLink?(link: ExternalLink): Promise<FetchedLink>
+  /** A channel or thread, read on demand without syncing it. */
+  read?(target: string, options: { limit: number }): Promise<SourceRead>
   avatar?(message: ChatMessage): Promise<string | null>
   fetchRoot?(thread: string): Promise<Omit<SyncRoot, 'raw'> & { raw?: unknown }>
   intercept?(key: string, headers: Headers, body: string): ReceivedEvent[]
+  /** Edits and deletes in a webhook that the adapter doesn't emit itself, as the adapter would have. */
+  missed?(headers: Headers, body: string): ChatInput[]
   uploadFiles?(thread: string, files: FileUpload[]): Promise<FileDelivery>
+  /** The name a file is uploaded under, when the platform reads more into a name than the board does. */
+  uploadName?(file: ProviderFile): string
   fileIds?(raw: unknown): string[]
   refusesFiles?(error: unknown): boolean
   deleteFiles?(ids: string[]): Promise<void>
   /** What the adapter needs to fetch a file again, if not everything the event carried. */
   fileToFetch?(file: ExternalFile): ExternalFile
-  startTyping?(thread: string, latest: string | null): Promise<void>
+  startTyping?(thread: string, latest: string | null, status?: string): Promise<void>
   /** Runs adapter calls with a person's token instead of the bot's: how a message posts as them. */
   runAs?<T>(token: string, fn: () => Promise<T>): Promise<T>
   /** The platform account a person's token belongs to. */
@@ -89,6 +96,11 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const thread = `${key}:${this.transport.groupThread?.(native) ?? native}`
     const channel = this.transport.channelOf?.(native) ?? this.toNative(this.transport.adapter.channelIdFromThreadId(chatThread))
     return { channel: `${key}:${channel}`, thread, subthread: precise === thread ? null : precise }
+  }
+
+  override inboxChannel(key: string, thread: string): string {
+    const native = thread.slice(key.length + 1)
+    return `${key}:${this.transport.channelOf?.(native) ?? this.toNative(this.transport.adapter.channelIdFromThreadId(this.toChat(native)))}`
   }
 
   eventId(key: string, input: ChatInput): string {
@@ -149,7 +161,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
 
   private async receiveRequest(key: string, request: Request, emit: Receive): Promise<Response> {
-    const body = this.transport.intercept ? await request.clone().text() : null
+    const body = this.transport.intercept || this.transport.missed ? await request.clone().text() : null
     const tasks: Promise<unknown>[] = []
     const webhooks = this.chat.webhooks as Record<string, (request: Request, options: { waitUntil(task: Promise<unknown>): void }) => Promise<Response>>
     const response = await webhooks[this.transport.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
@@ -157,13 +169,14 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     while (tasks.length) results.push(...await Promise.allSettled(tasks.splice(0)))
     const failed = results.find((result) => result.status === 'rejected')
     if (failed) throw failed.reason
-    if (response.ok && body !== null && this.transport.intercept) {
-      for (const received of this.transport.intercept(key, request.headers, body)) await emit(received)
+    if (response.ok && body !== null) {
+      for (const input of this.transport.missed?.(request.headers, body) ?? []) await emit(await this.normalize(key, input))
+      for (const received of this.transport.intercept?.(key, request.headers, body) ?? []) await emit(received)
     }
     return response
   }
 
-  private async ready() {
+  protected async ready() {
     this.initialized ??= this.chat.initialize().catch((error) => {
       this.initialized = undefined
       throw error
@@ -183,6 +196,10 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   override async fetchLink(link: ExternalLink): Promise<FetchedLink> {
     return this.transport.fetchLink ? this.transport.fetchLink(link) : super.fetchLink(link)
   }
+
+  override async read(target: string, options: { limit: number }): Promise<SourceRead> {
+    return this.transport.read ? this.transport.read(target, options) : super.read(target, options)
+  }
   override async fetchFile(file: ExternalFile): Promise<Uint8Array | null> {
     // Ready first: an adapter may resolve a file's credentials from its Chat state.
     const adapter = await this.ready()
@@ -191,10 +208,10 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const data = await fetch()
     return data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
   }
-  override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
+  override async post(target: string, kind: ResolvedTarget['kind'], { as: _sender, ...body }: ProviderPost): Promise<ProviderDelivery> {
     if (kind === 'channel' && !this.canStartThreads) throw new Error(`${this.platform} cannot start threads`)
     await this.ready()
-    const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body)
+    const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body.files?.length ? { ...body, files: this.named(body.files) } : body)
     return { thread: this.toNative(sent.threadId), message: sent.id, ...(body.files?.length ? { files: this.transport.fileIds?.(sent.raw) ?? [] } : {}) }
   }
   override async whoAmI(token: string) {
@@ -217,22 +234,26 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   override async deleteAs(token: string, thread: string, message: string) {
     await this.as(token, () => this.delete(thread, message))
   }
-  override async edit(thread: string, message: string, body: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
+  override async edit(thread: string, message: string, { as: _sender, ...body }: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
   override async delete(thread: string, message: string) { await (await this.ready()).deleteMessage(this.toChat(thread), message) }
   override async react(thread: string, message: string, emoji: string, added: boolean) {
     const adapter = await this.ready()
     if (added) await adapter.addReaction(this.toChat(thread), message, emoji)
     else await adapter.removeReaction(this.toChat(thread), message, emoji)
   }
-  override async startTyping(thread: string, latest: string | null) {
+  override async startTyping(thread: string, latest: string | null, status?: string) {
     const adapter = await this.ready()
-    if (this.transport.startTyping) await this.transport.startTyping(this.toChat(thread), latest)
-    else await adapter.startTyping(this.toChat(thread))
+    if (this.transport.startTyping) await this.transport.startTyping(this.toChat(thread), latest, status)
+    else await adapter.startTyping(this.toChat(thread), status)
   }
   override async uploadFiles(thread: string, files: ProviderFile[]) {
     await this.ready()
-    if (!this.transport.uploadFiles) return super.uploadFiles(thread, files)
-    return this.transport.uploadFiles(this.toChat(thread), files)
+    if (!this.transport.uploadFiles) return super.uploadFiles(thread, this.named(files))
+    return this.transport.uploadFiles(this.toChat(thread), this.named(files))
+  }
+  private named(files: ProviderFile[]): ProviderFile[] {
+    const name = this.transport.uploadName
+    return name ? files.map((file) => ({ ...file, filename: name(file) })) : files
   }
   override refusesFiles(error: unknown) { return this.transport.refusesFiles?.(error) ?? false }
   override async deleteFiles(ids: string[]) { await this.transport.deleteFiles?.(ids) }

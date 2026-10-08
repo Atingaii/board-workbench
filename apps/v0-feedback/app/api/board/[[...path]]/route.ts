@@ -4,8 +4,7 @@ import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { generateText, Output } from "ai";
-import { z } from "zod";
+import { experimental_decide as decide, generateText } from "ai";
 import { startV0 } from "./v0";
 
 // The v0 feedback bot, on Vercel's Slack: people post v0 feedback in #feedback-v0-vboard.
@@ -26,7 +25,8 @@ export const { GET, POST, scheduler, client } = board({
         url: process.env.KV_REST_API_URL!,
         token: process.env.KV_REST_API_TOKEN!,
         // One Redis serves every environment: a preview never touches production's log.
-        keyPrefix: env === "production" ? "vboard" : `vboard:${env}`,
+        // `-2` since A2 0.17 changed its Redis layout, which an existing prefix can't take.
+        keyPrefix: env === "production" ? "vboard-2" : `vboard-2:${env}`,
       })
     : undefined,
   scheduler: vercelQueues({ topic: "vboard" }),
@@ -51,38 +51,62 @@ export const { GET, POST, scheduler, client } = board({
   },
 });
 
+/** How sure triage must be that a report is worth fixing before it starts a v0 chat. */
+const WORTH = 0.7;
+
 /** Acks a new thread, decides whether it's worth addressing, and hands the ones that are to v0. */
 async function triage({ event, board }: WatcherContext) {
   const message = event.message;
   if (event.type !== "message.posted" || !message || message.re !== null) return;
   await board.react(message.id, "ack");
-  const { output: verdict } = await generateText({
+  const { answers } = await decide({
+    model: "openai/gpt-6-luna-decisions",
+    state: message.text,
+    questions: {
+      kind: {
+        type: "choice",
+        instructions: "Classify this feedback about v0, Vercel's AI app builder.",
+        criteria: {
+          bug: "Something is broken or behaves wrongly.",
+          feature: "A request for something v0 doesn't do yet, or a concrete improvement.",
+          feedback: "An opinion, praise or complaint, with nothing specific to act on.",
+          noise: "Chatter or nothing to act on.",
+        },
+      },
+      worth: {
+        type: "boolean",
+        instructions: "Should a coding agent try to fix or build this now?",
+        criteria: {
+          true: "A bug or feature specific enough to act on and small enough for a coding agent to attempt: a clear symptom or ask.",
+          false: "A vague wish, a strategy question, or nothing to fix or build.",
+        },
+      },
+    },
+  });
+  const kind = answers.kind.choice;
+  const worth = answers.worth.probability;
+  await board.label(message.id, { set: { kind, worth: worth.toFixed(2) } });
+  if (worth < WORTH || (kind !== "bug" && kind !== "feature")) return;
+  // A retried watcher sees the event as it was: check the thread as it is now, and
+  // finish an announcement that failed after the chat started rather than start another.
+  const labels = (await board.thread(message.id)).message.labels;
+  if (labels.announcement) return;
+  let chatId = labels.v0;
+  if (!chatId) {
+    chatId = (await startV0({ kind, text: message.text, source: slackLink(message.origin?.thread) })).id;
+    await board.label(message.id, { set: { v0: chatId } });
+    await board.react(message.id, "v0");
+  }
+  // Only the reports v0 takes on need words, so only they pay for a generated reason.
+  const { text: reason } = await generateText({
     model: "openai/gpt-6-luna",
-    output: Output.object({
-      schema: z.object({
-        kind: z.enum(["bug", "feature", "feedback", "noise"]),
-        worth: z.boolean().describe("Whether v0 should try to fix or build this now"),
-        reason: z.string().describe("One short sentence"),
-      }),
-    }),
-    system: [
-      "You triage feedback about v0, Vercel's AI app builder.",
-      "kind — bug: something is broken or behaves wrongly. feature: a request for something v0 doesn't do yet, or a concrete improvement. feedback: an opinion, praise or complaint, with nothing specific to act on. noise: chatter or nothing to act on.",
-      "worth is true only for a bug or feature that is specific enough to act on and small enough for a coding agent to attempt: a clear symptom or ask, not a vague wish or a strategy question.",
-    ].join("\n"),
+    system: `You triage feedback about v0, Vercel's AI app builder. In one short sentence, say why this ${kind} report is worth a coding agent's attempt.`,
     prompt: message.text,
   });
-  await board.label(message.id, { set: { kind: verdict.kind, worth: String(verdict.worth) } });
-  if (!verdict.worth || (verdict.kind !== "bug" && verdict.kind !== "feature")) return;
-  // A retried watcher sees the event as it was: check the thread as it is now.
-  if ((await board.thread(message.id)).message.labels.v0) return;
-  const chat = await startV0({ kind: verdict.kind, text: message.text, source: slackLink(message.origin?.thread) });
-  await board.label(message.id, { set: { v0: chat.id } });
-  await board.react(message.id, "v0");
   const firstLine = message.text.split("\n")[0]!.slice(0, 140);
   const announcement = await board.post("v0-prs", {
-    text: `v0 is on a ${verdict.kind}: “${firstLine}”\n${verdict.reason}\n${chat.url}${message.origin ? `\nsource: ${slackLink(message.origin.thread)}` : ""}`,
-    labels: { source: String(message.id), v0: chat.id, kind: verdict.kind },
+    text: `v0 is on a ${kind}: “${quoted(firstLine)}”\n${quoted(reason)}\nhttps://v0.app/chat/${chatId}${message.origin ? `\nsource: ${slackLink(message.origin.thread)}` : ""}`,
+    labels: { source: String(message.id), v0: chatId, kind },
   });
   await board.label(message.id, { set: { announcement: String(announcement.id) } });
 }
@@ -100,6 +124,15 @@ async function report({ event, board }: WatcherContext) {
     owner ? `likely owner: @[${owner}]` : null,
   ].filter(Boolean).join("\n");
   await board.reply(announcement, text);
+}
+
+/**
+ * Someone else's words, safe to post: a board write fails on an `@handle` it can't
+ * resolve, and quoting a report shouldn't ping anyone again. A word joiner after each
+ * `@` keeps the text looking the same but stops it from parsing as a mention.
+ */
+function quoted(text: string) {
+  return text.replaceAll("@", "@⁠");
 }
 
 /** `slack:C0123:1727.1234` → a Slack permalink. */
