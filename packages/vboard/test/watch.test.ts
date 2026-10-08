@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BoardEventView } from '../src/api/routes.ts'
 import { parseTail, parseWatchTail, words } from '../src/api/tail.ts'
 import type { Watcher } from '../src/server/index.ts'
+import { runMatch } from '../src/server/watch.ts'
 import { caller, personToken, testBoard } from './harness.ts'
 
 /** A watcher that records every event it runs on. */
@@ -213,6 +214,24 @@ describe('watchers', () => {
     const failed = (await watches.session('watch:flaky').history()).filter((event) => event.type === 'watch.failed')
     expect(failed).toEqual([expect.objectContaining({ payload: expect.objectContaining({ thread: root.body.message.thread, error: 'sandbox setup failed' }) })])
     expect(error).toHaveBeenCalledWith(expect.stringContaining('watcher flaky gave up on event'), 'sandbox setup failed')
+    error.mockRestore()
+  })
+
+  it('give up without running once runs keep getting killed, which never throw', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const run = vi.fn()
+    const recorded: unknown[] = []
+    const match = { id: 'm1', payload: { thread: 't1', event: { index: 7, type: 'message.posted' } } }
+    const input = { watcher: { id: 'pi', run }, match, board: () => ({}) as never, record: async (failure: unknown) => void recorded.push(failure) }
+
+    // Up to twice the tries, a run gets another go: earlier attempts may have been kills.
+    await runMatch({ ...input, attempt: 10 })
+    expect(run).toHaveBeenCalledTimes(1)
+    // Past that, the runs keep dying (A2 counts kills as attempts, not failures): give up, don't run again.
+    await runMatch({ ...input, attempt: 11 })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(recorded).toEqual([{ matched: 'm1', thread: 't1', error: 'its run was cut short 10 times (a timeout, or out of memory)' }])
+    expect(error).toHaveBeenCalledWith('[vboard] watcher pi gave up on event #7 after 11 tries:', 'its run was cut short 10 times (a timeout, or out of memory)')
     error.mockRestore()
   })
 

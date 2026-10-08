@@ -1927,8 +1927,10 @@ are appended to the watcher's session in the `vboard-watch` contract
 a thread's events in order, threads run in parallel, and each watcher fails on
 its own. A `run` that keeps throwing on one event gets 5 tries; then the watcher
 gives up on that event, records `watch.failed` (the match, the thread, and the
-error) in its session, logs it, and goes on to the thread's next event. It
-never dead-letters: in A2 a dead letter stops its lane for good, and a watcher's
+error) in its session, logs it, and goes on to the thread's next event. A `run`
+that keeps getting killed (a timeout, out of memory) never throws, so it's
+counted by attempts instead: past 10, the watcher gives up the same way without
+running it again. It never dead-letters: in A2 a dead letter stops its lane for good, and a watcher's
 lane is the thread's, so one bad event would silence the watcher on that thread
 forever. Watchers need the scheduler in production, as sync does. A watcher
 removed from config skips the matches it left behind.
