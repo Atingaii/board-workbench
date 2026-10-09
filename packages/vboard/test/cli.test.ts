@@ -249,6 +249,18 @@ describe('cli', () => {
     expect(await texts(['--mentions', '@julian'])).toEqual(['hey @julian, look'])
   })
 
+  it('filters by author, with or without the @', async () => {
+    await vb(['post', 'authors', 'from julian'])
+    await vb(['post', 'authors', 'from claude', '--as', 'claude'])
+    const texts = async (args: string[]) => {
+      const { stdout } = await vb(['read', 'authors', ...args, '--json'])
+      return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { text: string }).text)
+    }
+    expect(await texts(['--by', 'julian'])).toEqual(['from julian'])
+    expect(await texts(['--by', '@julian'])).toEqual(['from julian'])
+    expect(await texts(['--by', '@julian/claude'])).toEqual(['from claude'])
+  })
+
   it('reports who you are', async () => {
     const { stdout, code } = await vb(['whoami', '--as', 'codex'])
     expect(code).toBe(0)
