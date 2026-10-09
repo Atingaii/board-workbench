@@ -768,7 +768,7 @@ export function createSyncEngine(options: {
     externalThread: string,
   ) {
     // No quote for the message right above this one: it's already what the reply reads as answering.
-    const replyTo = message.replyTo === null || message.replyTo === previousIn(state.messages, message)
+    const replyTo = message.replyTo === null || message.replyTo === previousIn(state, message, target, externalThread)
       ? undefined
       : state.messages.byId[message.replyTo]
     const replyCopy = message.replyTo === null ? undefined : state.sync.copies[message.replyTo]?.[target]
@@ -805,12 +805,13 @@ export function createSyncEngine(options: {
     return external
   }
 
-  /** The thread's last message before this one, deleted ones aside. */
-  function previousIn(messages: Awaited<ReturnType<typeof latest>>['messages'], message: Message): number | undefined {
+  /** The thread's last message before this one that's in this platform thread, deleted ones aside. */
+  function previousIn(state: Awaited<ReturnType<typeof latest>>, message: Message, target: string, externalThread: string): number | undefined {
+    const { messages, sync } = state
     if (message.re === null) return undefined
     const ids = [message.re, ...(messages.replies[message.re] ?? [])]
     const before = ids.slice(0, Math.max(0, ids.indexOf(message.id)))
-    return before.reverse().find((id) => !messages.byId[id]?.deleted)
+    return before.reverse().find((id) => !messages.byId[id]?.deleted && sync.copies[id]?.[target]?.thread === externalThread)
   }
 
   async function recordDelivery(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy) {
