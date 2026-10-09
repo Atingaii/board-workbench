@@ -767,7 +767,10 @@ export function createSyncEngine(options: {
     target: string,
     externalThread: string,
   ) {
-    const replyTo = message.replyTo === null ? undefined : state.messages.byId[message.replyTo]
+    // No quote for the message right above this one: it's already what the reply reads as answering.
+    const replyTo = message.replyTo === null || message.replyTo === previousIn(state, message, target, externalThread)
+      ? undefined
+      : state.messages.byId[message.replyTo]
     const replyCopy = message.replyTo === null ? undefined : state.sync.copies[message.replyTo]?.[target]
     // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere it quotes it.
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
@@ -800,6 +803,15 @@ export function createSyncEngine(options: {
     const external = { thread: place, message: sentId, ...(files !== undefined ? { files } : {}) }
     await recordDelivery(ctx, message, target, external)
     return external
+  }
+
+  /** The thread's last message before this one that's in this platform thread, deleted ones aside. */
+  function previousIn(state: Awaited<ReturnType<typeof latest>>, message: Message, target: string, externalThread: string): number | undefined {
+    const { messages, sync } = state
+    if (message.re === null) return undefined
+    const ids = [message.re, ...(messages.replies[message.re] ?? [])]
+    const before = ids.slice(0, Math.max(0, ids.indexOf(message.id)))
+    return before.reverse().find((id) => !messages.byId[id]?.deleted && sync.copies[id]?.[target]?.thread === externalThread)
   }
 
   async function recordDelivery(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy) {

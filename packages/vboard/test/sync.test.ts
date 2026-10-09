@@ -144,6 +144,37 @@ describe('sync', () => {
     expect(s.channelPosts).toHaveLength(0) // a thread that came from Slack is never re-posted to its channel
   })
 
+  it('quotes the message a reply answers in Slack, unless it is the one right above it', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '101', text: 'same here', user: 'U_BOB' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(2))
+    const [, bob] = await read(julian, 'firehose')
+
+    await julian('POST', '/messages', { re: bob!.id, text: 'which browser?' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.posts[0]!.text).toContain('which browser?')
+    expect(s.posts[0]!.text).not.toContain('↪')
+
+    await julian('POST', '/messages', { re: bob!.id, text: 'and which version?' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(s.posts[1]!.text).toContain('↪')
+    expect(s.posts[1]!.text).toContain('same here')
+
+    // A note that stays on the board doesn't count: on Slack, Bob's reply above is still the last one.
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '102', text: 'chrome 130', user: 'U_BOB' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(5))
+    const bob2 = (await read(julian, 'firehose')).at(-1)!
+    await julian('POST', '/messages', { re: bob2.id, text: 'note to self: check 130', noSync: true })
+    await julian('POST', '/messages', { re: bob2.id, text: 'thanks, on it' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(3))
+    expect(s.posts[2]!.text).toContain('thanks, on it')
+    expect(s.posts[2]!.text).not.toContain('↪')
+  })
+
   it('uploads attachments to Slack after the text, and notes them on GitHub, which takes no uploads', async () => {
     const files = { delete: vi.fn(async () => ({ ok: true })) }
     const { board, s, g, webhook } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}), join: async () => ({}) }, files } })
