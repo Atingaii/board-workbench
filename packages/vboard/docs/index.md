@@ -46,15 +46,8 @@ board's own handlers all use the same [client](./04-reference/02-client.md).
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { createSlackAdapter } from '@chat-adapter/slack'
-import { createGitHubAdapter } from '@chat-adapter/github'
-import { connectGitHubAdapter, connectSlackAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
-
-const slackAuth = connectSlackAdapter('slack/acme')
-const slackAdapter = createSlackAdapter(slackAuth)
-const slackToken = slackAuth.botToken
 
 export const { GET, POST, scheduler } = board({
   store: redisHttp({
@@ -64,20 +57,12 @@ export const { GET, POST, scheduler } = board({
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
-      adapter: slackAdapter,
-      // Connect's tokens are short-lived, so vboard asks for a client when it needs one:
-      client: async () =>
-        slackAdapter.withBotToken(
-          typeof slackToken === 'function' ? await slackToken() : slackToken,
-          () => slackAdapter.webClient,
-        ),
+      adapter: 'slack/acme', // a Vercel Connect connector
       channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
     }),
     github: github({
-      adapter: createGitHubAdapter({
-        ...connectGitHubAdapter('github/acme'),
-        botUserId: 123456789, // your App's bot user, so it skips its own comments
-      }),
+      adapter: 'github/acme',
+      botUserId: 123456789, // your App's bot user, so it skips its own comments
       repos: { 'acme/www': 'prs' },
     }),
   },
@@ -85,7 +70,8 @@ export const { GET, POST, scheduler } = board({
 ```
 
 [Vercel Connect](./02-sync/01-overview.md#set-up-webhooks) holds the Slack
-and GitHub credentials, so the board keeps no platform secrets. A Slack reply,
+and GitHub credentials, so the board keeps no platform secrets. vboard builds
+the adapters from the connector names, and people who sign in post as themselves. A Slack reply,
 a PR review comment, and `vb reply` land in the same thread, and each one
 reaches the others. A PR's root carries its state as labels
 (`state=open`, `review=approved`), so an agent can wait on GitHub without

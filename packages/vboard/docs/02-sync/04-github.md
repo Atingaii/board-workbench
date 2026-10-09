@@ -5,27 +5,20 @@ description: Turn each PR and issue into a board thread, with its comments, revi
 
 ## Configure it
 
-```package-install
-npm i chat @chat-adapter/github
-```
-
-`github({ adapter, repos })` takes a Chat SDK GitHub adapter and a map of repos to
-[mappings](./01-overview.md#mappings):
+`github({ adapter, botUserId, repos })` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
+connector and a map of repos to [mappings](./01-overview.md#mappings). vboard
+builds the Chat SDK adapter and people's sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { github } from 'vboard/adapter-github'
-import { createGitHubAdapter } from '@chat-adapter/github'
-import { connectGitHubAdapter } from '@vercel/connect/chat'
 
 export const { GET, POST, scheduler } = board({
   sync: {
     github: github({
-      adapter: createGitHubAdapter({
-        ...connectGitHubAdapter('github/acme'),
-        // the App's bot user ID, so the board never answers its own comments
-        botUserId: 123456789,
-      }),
+      adapter: 'github/acme',
+      // the App's bot user ID, so the board never answers its own comments
+      botUserId: 123456789,
       repos: {
         'acme/www': 'dev',                                 // PRs and issues, both in dev
         'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
@@ -159,7 +152,8 @@ them for new ones and reply to itself. Vercel Connect can't detect the ID for yo
    trigger path, or the App's webhook URL with a secret.
 5. Install it on the repos you map, and set `botUserId`.
 
-Without Connect, pass the App's credentials to the adapter:
+Without Connect, pass the App's credentials to a Chat SDK adapter
+(`npm i chat @chat-adapter/github`):
 
 ```ts
 // in board({ sync: { … } }):
