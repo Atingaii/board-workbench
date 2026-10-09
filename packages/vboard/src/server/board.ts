@@ -2,11 +2,14 @@ import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Store, type A2Scheduler, type ServerOptions } from 'experimental-a2/server'
 import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, watchSession, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, messagesReducer, syncReducer } from '../contract/reducers.ts'
+import { actorsReducer, channelsReducer, linkedTo, messagesReducer, syncReducer } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import {
   EditBody,
   EventsQuery,
+  IdentityCheckBody,
+  IdentityLinkBody,
+  IdentityUnlinkBody,
   InboxQuery,
   SourceReadQuery,
   LabelBody,
@@ -20,6 +23,7 @@ import {
   SyncBody,
   TypingBody,
   type Discovery,
+  type IdentityView,
   type StuckEvent,
   type TypingResult,
   type Me,
@@ -41,7 +45,7 @@ import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
 import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
-import { compileFilter, liveFeed, pollFeed, view } from './feed.ts'
+import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId } from './identity.ts'
 import { createSchedules } from './schedules.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
@@ -98,6 +102,10 @@ type Match = { name: RouteName; base: string; id?: number; param?: string }
 
 // Most specific first; each route is matched as a suffix of the request path.
 const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
+  { method: 'POST', name: 'identityLink', pattern: /\/identity\/link$/ },
+  { method: 'POST', name: 'identityCheck', pattern: /\/identity\/check$/ },
+  { method: 'POST', name: 'identityUnlink', pattern: /\/identity\/unlink$/ },
+  { method: 'GET', name: 'identity', pattern: /\/identity$/ },
   { method: 'POST', name: 'edit', pattern: /\/messages\/(\d+)\/edit$/ },
   { method: 'POST', name: 'delete', pattern: /\/messages\/(\d+)\/delete$/ },
   { method: 'POST', name: 'react', pattern: /\/messages\/(\d+)\/reactions$/ },
@@ -396,8 +404,47 @@ export function board(options: BoardOptions = {}) {
         }
         case 'actors': {
           const { state, index } = await session.state(actorsReducer)
-          const actors = Object.values(state.byId).sort((a, b) => a.handle.localeCompare(b.handle))
+          const actors = Object.values(state.byId)
+            .sort((a, b) => a.handle.localeCompare(b.handle))
+            .map((a) => {
+              const person = personView(state, a.id)
+              return person ? { ...a, person } : a
+            })
           return json({ actors, cursor: index })
+        }
+        case 'identity': {
+          const { state, index } = await session.state(actorsReducer)
+          const links = linkedTo(state, principal.id).map((id) => ({
+            actor: id,
+            handle: state.byId[id]?.handle ?? null,
+            name: state.byId[id]?.name ?? null,
+            method: state.links[id]!.method,
+            at: state.links[id]!.at,
+          }))
+          const body: IdentityView = { principal: principal.id, links, cursor: index }
+          return json(body)
+        }
+        case 'identityLink': {
+          if (!engine) throw notFound('this board has no sync configured')
+          const body = IdentityLinkBody.parse(await readJson(request))
+          return json(await engine.startLink(identity, body.sync, body.method))
+        }
+        case 'identityCheck': {
+          if (!engine) throw notFound('this board has no sync configured')
+          const body = IdentityCheckBody.parse(await readJson(request))
+          return json({ linked: await engine.checkLink(identity, body.sync) })
+        }
+        case 'identityUnlink': {
+          if (principal.kind !== 'person') throw forbidden('only people link platform accounts')
+          const body = IdentityUnlinkBody.parse(await readJson(request))
+          const { state } = await session.state(actorsReducer)
+          const mine = linkedTo(state, principal.id)
+          const wanted = body.actor.replace(/^@/, '').toLowerCase()
+          const found = mine.filter((id) => id === body.actor || state.byId[id]?.handle.toLowerCase() === wanted)
+          if (found.length === 0) throw notFound(`${body.actor} isn't linked to you`, 'not_linked')
+          if (found.length > 1) throw badRequest(`${body.actor} names several of your accounts: use ${found.join(' or ')}`, 'ambiguous_actor')
+          await session.append({ type: 'actor.unlinked', payload: { actor: found[0]!, by: author } })
+          return json({ ok: true, actor: found[0]! })
         }
         case 'messages': {
           const query = MessagesQuery.parse(queryObject(url))

@@ -7,6 +7,7 @@ import type { ProviderEvent, SyncRoot } from './events.ts'
 import type { SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
+import { userTokensOf } from './users.ts'
 export { externalAuthor } from './types.ts'
 
 export type ChatInput =
@@ -47,6 +48,10 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   /** What the adapter needs to fetch a file again, if not everything the event carried. */
   fileToFetch?(file: ExternalFile): ExternalFile
   startTyping?(thread: string, latest: string | null, status?: string): Promise<void>
+  /** Runs adapter calls with a person's token instead of the bot's: how a message posts as them. */
+  runAs?<T>(token: string, fn: () => Promise<T>): Promise<T>
+  /** The platform account a person's token belongs to. */
+  whoAmI?(token: string): Promise<ExternalAuthor>
 }
 
 const externalFile = (file: NonNullable<ChatMessage['attachments']>[number]): ExternalFile => ({
@@ -65,7 +70,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   private initialized: Promise<void> | undefined
 
   constructor(transport: ChatTransport) {
-    super({ ...transport, uploadsFiles: !!transport.uploadFiles })
+    super({ ...transport, users: transport.users ?? userTokensOf(transport.adapter), uploadsFiles: !!transport.uploadFiles })
     this.transport = transport
     this.chat = createChat(transport.adapter)
     const onMessage = async (_thread: unknown, message: ChatMessage) => this.emit({ kind: 'message', message })
@@ -208,6 +213,26 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     await this.ready()
     const sent = await (kind === 'channel' ? this.chat.channel(this.toChat(target)) : this.chat.thread(this.toChat(target))).post(body.files?.length ? { ...body, files: this.named(body.files) } : body)
     return { thread: this.toNative(sent.threadId), message: sent.id, ...(body.files?.length ? { files: this.transport.fileIds?.(sent.raw) ?? [] } : {}) }
+  }
+  override async whoAmI(token: string) {
+    if (!this.transport.whoAmI) return super.whoAmI(token)
+    await this.ready()
+    return this.transport.whoAmI(token)
+  }
+  /** As the person: ready first, so the adapter learns its own identity with the bot's token, never theirs. */
+  private async as<T>(token: string, fn: () => Promise<T>): Promise<T> {
+    if (!this.transport.runAs) throw new Error(`${this.platform} can't post as a person`)
+    await this.ready()
+    return this.transport.runAs(token, fn)
+  }
+  override async postAs(token: string, target: string, kind: ResolvedTarget['kind'], body: ProviderPost) {
+    return this.as(token, () => this.post(target, kind, body))
+  }
+  override async editAs(token: string, thread: string, message: string, body: ProviderPost) {
+    await this.as(token, () => this.edit(thread, message, body))
+  }
+  override async deleteAs(token: string, thread: string, message: string) {
+    await this.as(token, () => this.delete(thread, message))
   }
   override async edit(thread: string, message: string, { as: _sender, ...body }: ProviderPost) { await (await this.ready()).editMessage(this.toChat(thread), message, body) }
   override async delete(thread: string, message: string) { await (await this.ready()).deleteMessage(this.toChat(thread), message) }

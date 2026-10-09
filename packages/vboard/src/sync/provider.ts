@@ -4,6 +4,7 @@ import type { BoardClient } from '../client/client.ts'
 import type { SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
 import { immutable, type ProviderEvent, type SyncOverrides, type SyncResult, type SyncRoot } from './events.ts'
+import type { UserTokens } from './users.ts'
 
 export const ResolvedTarget = z.object({ target: z.string().min(1), channel: z.string().min(1), kind: z.enum(['channel', 'thread']) }).strict()
 export type ResolvedTarget = z.infer<typeof ResolvedTarget>
@@ -69,6 +70,8 @@ export type ProviderOptions = {
   singleReaction?: boolean
   uploadsFiles?: boolean
   render?: (input: RenderInput) => string
+  /** People's own tokens, to post as them and to link accounts by signing in. */
+  users?: UserTokens | null
 }
 
 export const ReceivedEvent = z.object({ event: ExternalEvent, raw: z.unknown(), dedupe: z.string().min(1) })
@@ -81,10 +84,13 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   readonly singleReaction: boolean
   readonly uploadsFiles: boolean
   readonly mappings: Record<string, ProviderMapping> = {}
+  /** People's tokens, when the adapter has them: messages they write post as them. */
+  readonly users: UserTokens | null
   protected readonly options: ProviderOptions
 
   constructor(options: ProviderOptions) {
     this.options = options
+    this.users = options.users ?? null
     this.platform = options.platform
     this.canStartThreads = options.canStartThreads ?? false
     this.singleReaction = options.singleReaction ?? false
@@ -95,6 +101,15 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   abstract resolveChannel(key: string): Promise<string>
   abstract resolveTarget(target: string): Promise<ResolvedTarget>
   abstract post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery>
+
+  /** The platform account a person's token belongs to. */
+  async whoAmI(_token: string): Promise<ExternalAuthor> { throw new Error(`${this.platform} can't post as a person`) }
+  /** `post`, as the person whose token this is. */
+  async postAs(_token: string, _target: string, _kind: ResolvedTarget['kind'], _body: ProviderPost): Promise<ProviderDelivery> {
+    throw new Error(`${this.platform} can't post as a person`)
+  }
+  async editAs(_token: string, _thread: string, _message: string, _body: ProviderPost): Promise<void> {}
+  async deleteAs(_token: string, _thread: string, _message: string): Promise<void> {}
 
   async findByEmail(_email: string): Promise<ExternalAuthor | null> { return null }
   mention(_actor: Actor): string | null { return null }

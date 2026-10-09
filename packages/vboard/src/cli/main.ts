@@ -43,6 +43,9 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 
   channels                                 channels, grouped by path prefix
   actors                                   actors and their handles
+  identity                                 your linked Slack and GitHub accounts
+  identity link <key> [--code] [--no-wait] link your account on sync entry <key> (e.g. slack): sign in, or post a code from it
+  identity unlink <account>                unlink one, by handle or actor ID
 
   read <channel> [filters] [--limit N]     threads in a channel, newest last (no channel: every channel)
   read <id>                                one thread
@@ -119,6 +122,8 @@ const parsed = (() => {
         timeout: { type: 'string' },
         port: { type: 'string' },
         'no-open': { type: 'boolean' },
+        code: { type: 'boolean' },
+        'no-wait': { type: 'boolean' },
         in: { type: 'string' },
         at: { type: 'string' },
         every: { type: 'string' },
@@ -367,6 +372,68 @@ function openBrowser(url: string) {
   child.unref()
 }
 
+/** How long `identity link` waits for the sign-in or the code. */
+const LINK_WAIT_MS = 10 * 60_000
+
+async function identity(args: string[]): Promise<number> {
+  const board = client()
+  const [sub, target] = args
+  if (sub === undefined) {
+    const view = await board.identity()
+    if (flags.json) return printJson(view), 0
+    if (view.links.length === 0) return out('no linked accounts: `vb identity link <key>` links one, where <key> is a sync entry such as slack or github'), 0
+    for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
+    return 0
+  }
+  if (sub === 'unlink') {
+    if (!target || args.length !== 2) throw new UsageError('usage: vboard identity unlink <account>   (a handle or actor ID from `vb identity`)')
+    const result = await board.unlinkAccount(target)
+    if (flags.json) printJson(result)
+    else out(`unlinked ${result.actor}`)
+    return 0
+  }
+  if (sub !== 'link' || !target || args.length !== 2) throw new UsageError('usage: vboard identity [link <key> [--code] [--no-wait] | unlink <account>]')
+  const before = new Set((await board.identity()).links.map((link) => `${link.actor}|${link.at}`))
+  const challenge = await board.linkAccount(target, flags.code ? { method: 'code' } : {})
+  if (flags.json) printJson(challenge)
+  const until = Date.now() + LINK_WAIT_MS
+  const sleep = () => new Promise((resolve) => setTimeout(resolve, 2000))
+  if (challenge.method === 'consent') {
+    if (!flags.json) {
+      out(`Sign in to ${challenge.platform} as yourself to link it (and to post as you there):\n\n  ${challenge.url}\n`)
+      out(`Only open it yourself: whoever completes it links their account to you.`)
+    }
+    if (!flags['no-open'] && !flags.json) openBrowser(challenge.url)
+    if (flags['no-wait']) return 0
+    while (Date.now() < until) {
+      const linked = await board.checkAccount(target)
+      if (linked) {
+        if (flags.json) printJson(linked)
+        else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
+        return 0
+      }
+      await sleep()
+    }
+  } else {
+    if (!flags.json) {
+      const minutes = Math.round((Date.parse(challenge.expiresAt) - Date.now()) / 60_000)
+      out(`From your ${challenge.platform} account, post this as a message anywhere the board syncs, within ${minutes} minutes:\n\n  ${challenge.code}\n`)
+    }
+    if (flags['no-wait']) return 0
+    while (Date.now() < Math.min(until, Date.parse(challenge.expiresAt))) {
+      await sleep()
+      const linked = (await board.identity()).links.find((link) => link.actor.startsWith(`${challenge.platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
+      if (linked) {
+        if (flags.json) printJson(linked)
+        else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
+        return 0
+      }
+    }
+  }
+  process.stderr.write('timed out\n')
+  return 124
+}
+
 async function run(command: string | undefined, args: string[]): Promise<number> {
   switch (command) {
     case undefined:
@@ -434,9 +501,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'actors': {
       const actors = await client().actors()
       if (flags.json) return actors.forEach(printJson), 0
-      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}`)
+      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}${actor.person ? `  → @${actor.person.handle}` : ''}`)
       return 0
     }
+
+    case 'identity':
+      return identity(args)
 
     case 'read': {
       const target = args[0]

@@ -6,6 +6,9 @@ import type {
   EventsPage,
   EventsQueryInput,
   FiltersInput,
+  IdentityChallenge,
+  IdentityCheck,
+  IdentityView,
   InboxEntry,
   StuckEvent,
   SourceRead,
@@ -242,7 +245,20 @@ export function createBoardClient(options: ClientOptions) {
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
-    actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
+    actors: async () => (await call<{ actors: (Actor & { person?: ActorView['person'] })[] }>('GET', '/actors')).actors,
+
+    /** Your linked platform accounts. */
+    identity: () => call<IdentityView>('GET', '/identity'),
+    /**
+     * Starts linking your account on sync entry `sync`: a sign-in URL to open
+     * (only you), or a one-time code to post from that account where the board syncs.
+     */
+    linkAccount: (sync: string, opts: { method?: 'code' | 'consent' } = {}) =>
+      call<IdentityChallenge>('POST', '/identity/link', { body: { sync, ...opts } }),
+    /** After a sign-in: the account it linked, or null until you've approved. */
+    checkAccount: async (sync: string) => (await call<IdentityCheck>('POST', '/identity/check', { body: { sync } })).linked,
+    /** Unlinks one of your accounts, by actor ID or handle. History keeps its messages as they were. */
+    unlinkAccount: (account: string) => call<{ ok: true; actor: string }>('POST', '/identity/unlink', { body: { actor: account } }),
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
       call<MessagesPage>('GET', `/messages${queryString(query)}`),
@@ -375,7 +391,7 @@ export function createBoardClient(options: ClientOptions) {
   }
 }
 
-export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Me, MessagesPage, MessageView, ScheduleView, ThreadView }
+export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, IdentityChallenge, IdentityView, Me, MessagesPage, MessageView, ScheduleView, ThreadView }
 
 async function toError(response: Response): Promise<BoardError> {
   try {

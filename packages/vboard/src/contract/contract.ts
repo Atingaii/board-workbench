@@ -122,7 +122,12 @@ export const boardContract = contract({
       id: MessageId,
       thread: ThreadKey,
       target: ExternalTarget,
-      external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300) }),
+      external: z.object({
+        thread: ExternalTarget,
+        message: z.string().min(1).max(300),
+        /** Posted with its author's own platform token, so it shows as them. Older receipts have none. */
+        asUser: z.literal(true).optional(),
+      }),
     }),
     /**
      * Board message `id`'s files reached `target` after its text: `files` are the
@@ -149,6 +154,19 @@ export const boardContract = contract({
       name: z.string().min(1).max(128),
       avatar: z.string().url().nullable(),
     }),
+    /**
+     * A platform actor (`slack:user:U0456`) is the same person as a principal
+     * (`vercel:user:…`): for display, `--by`, and mentions, never for permissions.
+     * `method` says how it was proved: a one-time code posted from that account,
+     * or the account's own sign-in (`consent`).
+     */
+    'actor.linked': z.object({
+      actor: ActorId,
+      to: ActorId,
+      method: z.enum(['code', 'consent']),
+      by: Author,
+    }),
+    'actor.unlinked': z.object({ actor: ActorId, by: Author }),
   },
 })
 
@@ -354,3 +372,25 @@ export const schedulesContract = contract({
 export type ScheduleEvents = typeof schedulesContract.events
 export type ScheduleEvent = ContractEvent<ScheduleEvents>
 export const SCHEDULES_SESSION = 'schedules'
+
+/**
+ * One-time codes for linking accounts, outside the board log: a code is a secret
+ * until it's used, and only its hash is kept. Session `identity`.
+ */
+export const identityContract = contract({
+  name: 'vboard-identity',
+  events: {
+    'identity.code_issued': z.object({
+      hash: z.string().min(1).max(128),
+      /** Who the account it's posted from links to. */
+      principal: ActorId,
+      /** The sync entry it must be posted through. */
+      sync: z.string().min(1).max(64),
+      expiresAt: z.string().max(64),
+    }),
+    /** The first account to post it wins; any later post is just a message. */
+    'identity.code_used': z.object({ hash: z.string().min(1).max(128), actor: ActorId }),
+  },
+})
+
+export const IDENTITY_SESSION = 'identity'
