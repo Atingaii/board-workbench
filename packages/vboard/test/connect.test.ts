@@ -45,6 +45,33 @@ describe('a Vercel Connect connector as the adapter', () => {
     expect(await provider.users!.authorize('vercel:user:u_monto')).toBe('https://connect.test/github/acme?subject=vercel:user:u_monto')
   })
 
+  it("finds the app's bot user ID itself, from GraphQL's viewer, when botUserId isn't set", async () => {
+    type Detecting = { botUserId?: string; logger: unknown; initialize(chat: unknown): Promise<void>; defaultOctokit: unknown }
+    const provider = github({ adapter: 'github/acme', repos: { 'basehub-ai/vboard': 'prs' } })
+    const adapter = (provider as unknown as { transport: { adapter: Detecting } }).transport.adapter
+    expect(adapter.botUserId).toBeUndefined()
+    // An installation token can't call REST's /user, but GraphQL's viewer answers with the bot.
+    const graphql = vi.fn(async () => ({ viewer: { databaseId: 338721338, login: 'acme[bot]' } }))
+    adapter.defaultOctokit = { graphql }
+    await adapter.initialize({ getLogger: () => adapter.logger })
+    expect(graphql).toHaveBeenCalledWith('query { viewer { databaseId login } }')
+    expect(adapter.botUserId).toBe('338721338')
+    // Once known, it isn't asked again.
+    await adapter.initialize({ getLogger: () => adapter.logger })
+    expect(graphql).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a given botUserId without asking GitHub', async () => {
+    type Detecting = { botUserId?: string; initialize(chat: unknown): Promise<void>; defaultOctokit: unknown }
+    const provider = github({ adapter: 'github/acme', botUserId: 42, repos: {} })
+    const adapter = (provider as unknown as { transport: { adapter: Detecting } }).transport.adapter
+    const graphql = vi.fn()
+    adapter.defaultOctokit = { graphql }
+    await adapter.initialize({})
+    expect(graphql).not.toHaveBeenCalled()
+    expect(adapter.botUserId).toBe('42')
+  })
+
   it('keeps a plain adapter posting as the app', async () => {
     const { fakePlatform } = await import('./sync-fixtures.ts')
     expect(slack({ adapter: fakePlatform('slack').adapter, channels: {} }).users).toBeNull()

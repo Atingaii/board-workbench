@@ -44,7 +44,6 @@ export const { GET, POST, scheduler } = board({
     }),
     github: github({
       adapter: 'github/acme',
-      botUserId: 123456789,
       repos: {
         'acme/www': { pulls: 'prs', issues: 'issues' },
       },

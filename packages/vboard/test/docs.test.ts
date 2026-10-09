@@ -25,7 +25,7 @@ describe('the docs show the short way to sync with Vercel Connect', () => {
     const imports = [...code.matchAll(/from '([^']+)'/g)].map((match) => match[1]!)
     // A connector name is enough: vboard builds the adapter, the client, and sign-in.
     expect(imports.filter((from) => !from.startsWith('vboard') && !from.startsWith('experimental-a2'))).toEqual([])
-    expect(code).not.toMatch(/withBotToken|client:/)
+    expect(code).not.toMatch(/withBotToken|client:|botUserId/)
     expect(code).toMatch(/adapter: '(slack|github)\/acme'/)
   })
 })

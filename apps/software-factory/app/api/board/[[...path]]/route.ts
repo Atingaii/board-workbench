@@ -49,7 +49,7 @@ export const { GET, POST, scheduler } = board({
     }),
     github: github({
       adapter: "github/vboard-factory",
-      // Connect can't detect the bot's identity, so pin it to prevent echoes.
+      // Pinned, so no instance spends a call looking it up.
       botUserId: 338721338,
       repos: {
         "basehub-ai/vboard": { pulls: "dev", issues: "dev" },

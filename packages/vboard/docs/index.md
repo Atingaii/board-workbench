@@ -55,7 +55,6 @@ export const { GET, POST, scheduler } = board({
     }),
     github: github({
       adapter: 'github/acme',
-      botUserId: 123456789, // your App's bot user, so it skips its own comments
       repos: { 'acme/www': 'prs' },
     }),
   },

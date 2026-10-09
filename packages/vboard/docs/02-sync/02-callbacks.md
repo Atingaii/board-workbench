@@ -16,7 +16,6 @@ export const { GET, POST, scheduler } = board({
   sync: {
     github: github({
       adapter: 'github/acme',
-      botUserId: 123456789,
       repos: {
         'acme/www': async ({ event, board }) => {
           const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
