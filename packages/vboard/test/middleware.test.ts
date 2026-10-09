@@ -58,6 +58,25 @@ describe('middleware', () => {
     expect(body.message).toMatchObject({ text: 'hello', labels: { kind: 'bug', checked: 'yes' } })
   })
 
+  it("doesn't run again on a retry of a write that landed", async () => {
+    let calls = 0
+    // Passes the first time and drops after: a judge that doesn't answer the same twice.
+    const board = testBoard({ middleware: [async ({ next }) => (calls++ === 0 ? next() : undefined)] })
+    const julian = await person(board)
+    const first = await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })
+    const retry = await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })
+    expect([first.status, retry.status]).toEqual([201, 201])
+    expect(retry.body.message.id).toBe(first.body.message.id)
+    expect(calls).toBe(1)
+  })
+
+  it('drops a write it empties', async () => {
+    const board = testBoard({ middleware: [async ({ next }) => next({ text: '' })] })
+    const julian = await person(board)
+    expect((await julian('POST', '/messages', { channel: 'dev', text: 'my email is ada@example.com' })).body.error.code).toBe('dropped')
+    expect(await texts(julian, 'dev')).toEqual([])
+  })
+
   it('stops at the first one that does not call next', async () => {
     const second = vi.fn()
     const board = testBoard({ middleware: [() => {}, second] })

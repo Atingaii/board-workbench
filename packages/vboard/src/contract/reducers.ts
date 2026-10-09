@@ -146,6 +146,19 @@ export const messagesReducer = reducer({
   initialState: { byId: {}, replies: {} } as MessagesState,
 }).fold(foldMessages)
 
+/**
+ * Each post's event ID → its message: a retried write with the same ID is already on
+ * the board, and doesn't go through the middleware again.
+ */
+export const postedReducer = reducer({
+  contract: boardContract,
+  name: 'vboard.posted.v1',
+  initialState: {} as Record<string, number>,
+}).fold((state, event) => {
+  if (event.type === 'message.posted') state[event.id] = event.index
+  return state
+})
+
 export type Channel = {
   path: string
   lastIndex: number

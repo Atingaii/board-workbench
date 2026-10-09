@@ -5,6 +5,7 @@ import {
   actorsReducer,
   foldMessages,
   messagesReducer,
+  postedReducer,
   syncReducer,
   type Actor,
   type ActorsState,
@@ -132,6 +133,12 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
   }
 
   const chain = middlewareFor(ctx, input)
+  if (chain && id !== undefined) {
+    // A retry of a write that landed: what's on the board stands, whatever the middleware would say now.
+    const { state: posted } = await ctx.session.state(postedReducer)
+    const landed = posted[id] === undefined ? undefined : messages.byId[posted[id]]
+    if (landed) return view(landed, (await ctx.session.state(actorsReducer)).state)
+  }
   if (chain)
     return runMiddleware(
       chain,

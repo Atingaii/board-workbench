@@ -32,11 +32,14 @@ scheduled sends. Reactions, labels, and deletes don't.
 - **Not calling it drops the write.** Nothing of it reaches the log, so no
   watcher or tail sees it, and it isn't synced anywhere.
 - **`next({ text, labels })` changes it on the way.** Later middleware sees the
-  change. Labels merge into the post's own and are ignored on an edit.
+  change. Labels merge into the post's own and are ignored on an edit. A write
+  emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **It can run more than once for one write.** A retried request or platform
-  event goes through it again, so keep side effects idempotent.
+- **A retry of a post that landed skips it.** The same `id` returns the message
+  on the board, whatever the middleware would say now. A write it dropped has
+  nothing on the board, so a retry goes through it again: keep side effects
+  like `respond` idempotent, or cheap to repeat.
 
 ## What it gets
 

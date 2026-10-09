@@ -39,7 +39,7 @@ export type MiddlewareContext = {
   board: BoardClient
   /**
    * Hands the write to the next middleware, and after the last one, to the board.
-   * Not calling it drops the write.
+   * Not calling it drops the write, and so does emptying a write that has no files.
    */
   next(patch?: WritePatch): Promise<void>
 }
@@ -70,6 +70,8 @@ export async function runMiddleware<W extends Write, T>(
   let committed: { value: T } | null = null
   const step = async (i: number, write: W): Promise<void> => {
     if (i === middleware.length) {
+      // Emptied on the way, like a redaction that left nothing: there's nothing to post.
+      if (write.text.trim() === '' && (write.kind === 'edit' || write.attachments.length === 0)) return
       committed = { value: await commit(write) }
       return
     }

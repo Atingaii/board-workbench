@@ -1990,7 +1990,9 @@ what reaches the board, such as prompt injection from a synced platform. Each
 middleware gets the `write`, its `author`, its `source`, `respond(text)`, an
 in-process `board` client, and `next(patch?)`. Calling `next` passes the write on,
 optionally changing its text or a post's labels; not calling it drops the write,
-which never reaches the log.
+which never reaches the log, and so does emptying a write that has no files. A
+retried post whose `id` already landed returns that message without running the
+chain again.
 
 `respond` answers where the write came from: a reply in the platform thread for
 sync, and the message of the `422 dropped` error the API answers with otherwise.
