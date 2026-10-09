@@ -379,7 +379,7 @@ function openBrowser(url: string) {
 }
 
 /** Writes the board link: the project's `.vboard/` (kept out of Git), or the saved default when `root` is null. */
-async function saveLink(root: string | null, url: string) {
+async function saveLink(root: string | null, url: string, extra: Record<string, unknown> = {}) {
   const directory = root === null ? configDir() : join(root, '.vboard')
   if (root !== null) {
     const path = join(root, '.gitignore')
@@ -391,10 +391,17 @@ async function saveLink(root: string | null, url: string) {
       await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.vboard/\n`)
   }
   await mkdir(directory, { recursive: true, mode: 0o700 })
-  await writeFile(join(directory, 'config.json'), `${JSON.stringify({ url }, null, 2)}\n`, { mode: 0o600 })
+  await writeFile(join(directory, 'config.json'), `${JSON.stringify({ url, ...extra }, null, 2)}\n`, { mode: 0o600 })
 }
 
-const isLoopback = (url: string) => ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname)
+/** Whether the project's link was written by `vb serve` (`"serve": true`), so a new run may move it. */
+function linkedByServe(root: string): boolean {
+  try {
+    return JSON.parse(readFileSync(join(root, '.vboard', 'config.json'), 'utf8')).serve === true
+  } catch {
+    return false
+  }
+}
 
 function portFlag(): number | undefined {
   const port = flags.port === undefined ? undefined : Number(flags.port)
@@ -889,10 +896,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       })
       let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
       try {
-        // Link this project, unless it's linked to a board elsewhere: then say how to reach this one.
+        // Link this project, unless it's linked to another board (a remote one, or a \`board()\` dev
+        // server on localhost): then say how to reach this one. A link an earlier \`vb serve\` wrote moves.
         const linked = projectUrl()
-        if (linked === undefined || linked === local.url || isLoopback(linked)) {
-          await saveLink(root, local.url)
+        if (linked === undefined || linked === local.url || linkedByServe(root)) {
+          await saveLink(root, local.url, { serve: true })
           if (linked !== local.url) out(`linked ${root} to ${local.url}`)
         } else out(`${root} stays linked to ${linked}; reach this board with VBOARD_URL=${local.url}`)
         out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)

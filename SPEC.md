@@ -1049,8 +1049,10 @@ computer who don't need it on the internet. No config file: it's flags only.
   `<dir>` is the project's `.vboard/` (already kept out of Git by `link`). The
   log survives restarts. No sync and no watchers: those need `board()` in an app.
 - **Reach.** It listens on 127.0.0.1 only (port 4100), at `/api/board`, links
-  the project to itself (unless the project is linked to a non-local board, when
-  it prints the `VBOARD_URL` to use instead), and opens the inspector.
+  the project to itself, and opens the inspector. The link it writes says
+  `"serve": true`, so the next run may move it to its port; a project linked to
+  any other board (remote, or its own `board()` dev server on localhost) keeps
+  its link, and `serve` prints the `VBOARD_URL` to use instead.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`auth.local` in `board()`), and signs one token for you, the OS user (or
   `--handle`), into `~/.config/vboard/local/<hash of url>.json`, mode 0600, removed

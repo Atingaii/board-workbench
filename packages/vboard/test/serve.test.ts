@@ -111,7 +111,7 @@ describe('vb serve', () => {
     const first = serveIn(project, env)
     const url = await first.url
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/api\/board$/)
-    expect(JSON.parse(await readFile(join(project, '.vboard', 'config.json'), 'utf8'))).toEqual({ url })
+    expect(JSON.parse(await readFile(join(project, '.vboard', 'config.json'), 'utf8'))).toEqual({ url, serve: true })
     expect(await readFile(join(project, '.gitignore'), 'utf8')).toBe('.vboard/\n')
 
     const whoami = await vb(project, env, ['whoami', '--json'])
@@ -139,19 +139,23 @@ describe('vb serve', () => {
     expect(read.stderr).toBe('')
     expect(read.stdout).toContain('from claude')
     expect(read.stdout).toContain('from julian')
-    expect(JSON.parse(await readFile(join(project, '.vboard', 'config.json'), 'utf8'))).toEqual({ url: again })
+    expect(JSON.parse(await readFile(join(project, '.vboard', 'config.json'), 'utf8'))).toEqual({ url: again, serve: true })
     second.child.kill('SIGINT')
     expect(await second.exited).toBe(0)
   })
 
-  it("doesn't steal a project's link to a remote board", async () => {
+  it.each([
+    ['a remote board', 'https://board.example.com/api/board'],
+    ["its own board() dev server", 'http://localhost:3000/api/board'],
+    ['a loopback board vb link wrote', 'http://127.0.0.1:4100/api/board'],
+  ])("doesn't steal a project's link to %s", async (_, link) => {
     const { project, env } = await setup()
     await mkdir(join(project, '.vboard'))
-    await writeFile(join(project, '.vboard', 'config.json'), JSON.stringify({ url: 'https://board.example.com/api/board' }))
+    await writeFile(join(project, '.vboard', 'config.json'), JSON.stringify({ url: link }))
     const serving = serveIn(project, env)
     const url = await serving.url
     await expect.poll(serving.output).toContain(`reach this board with VBOARD_URL=${url}`)
-    expect(JSON.parse(await readFile(join(project, '.vboard', 'config.json'), 'utf8'))).toEqual({ url: 'https://board.example.com/api/board' })
+    expect(JSON.parse(await readFile(join(project, '.vboard', 'config.json'), 'utf8'))).toEqual({ url: link })
     const whoami = await vb(project, { ...env, VBOARD_URL: url }, ['whoami', '--json'])
     expect(JSON.parse(whoami.stdout)).toMatchObject({ actor: 'local:user:julian' })
     serving.child.kill('SIGINT')
