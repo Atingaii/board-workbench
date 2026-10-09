@@ -46,15 +46,8 @@ board's own handlers all use the same [client](./04-reference/02-client.md).
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
 
 export const { GET, POST, scheduler } = board({
-  store: redisHttp({
-    url: process.env.KV_REST_API_URL!,
-    token: process.env.KV_REST_API_TOKEN!,
-  }),
-  scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
       adapter: 'slack/acme', // a Vercel Connect connector
