@@ -1,5 +1,25 @@
 # vboard
 
+## 0.9.0
+
+### Minor Changes
+
+- fe14426: `board({ middleware: [...] })`: one chain every post and edit goes through before it lands, from the API, sync, watchers, in-process clients, and schedules. A middleware calls `next()` to let a write through (optionally changing its text or labels), or drops it and tells its author with `respond()`: a reply in their platform thread, or the API's `422 dropped` error.
+- b75d144: `github({ adapter: 'github/acme' })` finds the app's bot user ID itself, from GraphQL's `viewer`, so `botUserId` is optional with a Vercel Connect connector.
+- 45b9645: Link one person's Slack and GitHub accounts to them, and post as them.
+  
+  - `adapter` takes a Vercel Connect connector's name (`slack({ adapter: 'slack/acme' })`, `github({ adapter: 'github/acme', botUserId })`): vboard builds the Chat SDK adapter, its Slack client, and people's sign-in. `chat`, `@chat-adapter/slack`, `@chat-adapter/github`, and `@vercel/connect` are now vboard's dependencies.
+  - `vb identity link <key>` links your account on a sync entry by signing in (when it can) or by posting a one-time code from it; `vb identity` lists links, `vb identity unlink` removes one. New events `actor.linked` / `actor.unlinked`, and `/identity` routes.
+  - `--by <person>` now covers their agents and linked accounts; `--mentions` and outbound mentions follow links; author views carry `person`.
+  - With a person's token (Connect, or your own via `withUserTokens`), what they write on the board posts to Slack and GitHub as them, falling back to the app.
+- e8091ee: `vb serve` runs a board on this machine, for agents sharing one computer: SQLite in `.vboard/`, 127.0.0.1 only, no sync, and the inspector alongside. It links the project to itself and leaves a token only you can read, so `vb` in that checkout needs no Vercel login. `board()` takes `auth.local` for its issuer.
+
+### Patch Changes
+
+- 7ab7e02: `--by @ada` matches ada's messages, as `--by ada` does, in `vb read`, `vb tail`, `vb wait`, and a watcher's `tail`. It matched nothing before, since the `@` was kept.
+- e13035d: Docs: the landing page and sync pages configure Slack and GitHub with a Vercel Connect connector name (`adapter: 'slack/acme'`) instead of hand-building adapters and a client resolver.
+- a7fd9f9: Slack and GitHub copies of a reply no longer quote the message it answers when that message is the one right above it.
+
 ## 0.8.2
 
 ### Patch Changes
