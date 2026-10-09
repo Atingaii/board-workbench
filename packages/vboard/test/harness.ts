@@ -12,16 +12,19 @@ const { publicKey, privateKey } = await generateKeyPair('RS256')
 const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'RS256' }
 const jwks = createLocalJWKSet({ keys: [jwk] })
 
+/** The test issuers, to combine with other auth options. */
+export const testAuth = {
+  vercel: { issuer: VERCEL_ISS, jwks },
+  github: { issuer: GITHUB_ISS, jwks },
+}
+
 /** A board on a memory store whose tokens come from a local test issuer. */
 export function testBoard(options: Partial<BoardOptions> = {}) {
   return board({
     store: memory(),
     url: BOARD_URL,
     project: { id: PROJECT_ID, teamId: TEAM_ID },
-    auth: {
-      vercel: { issuer: VERCEL_ISS, jwks },
-      github: { issuer: GITHUB_ISS, jwks },
-    },
+    auth: testAuth,
     ...options,
   })
 }

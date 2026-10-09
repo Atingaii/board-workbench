@@ -72,6 +72,26 @@ export function projectUrl(): string | undefined {
   throw new BoardError('invalid_config', `invalid board link at ${path}: expected an http(s) url`, 0)
 }
 
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+/** Where `vb serve` leaves the token for the board it runs at `url`: only this user can read it. */
+export function localTokenFile(url: string): string {
+  const normalized = url.replace(/\/+$/, '')
+  return join(configDir(), 'local', `${createHash('sha256').update(normalized).digest('hex').slice(0, 32)}.json`)
+}
+
+/** The token a local board on this machine left for you, if `url` is one. */
+function localToken(url: string): { token: string; handle: string | null } | null {
+  try {
+    if (!LOOPBACK.has(new URL(url).hostname)) return null
+    const saved = JSON.parse(readFileSync(localTokenFile(url), 'utf8')) as { url?: string; token?: string; handle?: string }
+    if (saved.url !== url.replace(/\/+$/, '') || typeof saved.token !== 'string') return null
+    return { token: saved.token, handle: saved.handle ?? null }
+  } catch {
+    return null
+  }
+}
+
 export type DetectedAgent = { profile: string; session: string | null }
 
 /** Claude Code, Codex, and Grok sessions select their own profile, like Just Chat's CLI. */
@@ -224,8 +244,8 @@ export type NodeClientOptions = Partial<ClientOptions>
 
 /**
  * A client with Node defaults: the URL from `VBOARD_URL`, the project link,
- * or the saved board, and a token from `VBOARD_TOKEN`, GitHub Actions, the Vercel
- * runtime, or your Vercel CLI login, in that order.
+ * or the saved board, and a token from `VBOARD_TOKEN`, a local board's token file
+ * (`vb serve`), GitHub Actions, the Vercel runtime, or your Vercel CLI login, in that order.
  */
 export function createClient(options: NodeClientOptions = {}): BoardClient {
   const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
@@ -247,6 +267,8 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
       const token = process.env.VBOARD_TOKEN
       return { token, expiresAt: expiry(token) }
     }
+    const local = localToken(url)
+    if (local) return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
     const audience = (await discover()).audience
     if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
       const token = await githubActionsToken(audience)

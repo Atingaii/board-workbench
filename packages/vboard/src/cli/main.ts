@@ -83,6 +83,10 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
 
   inspect [--port N] [--no-open]           the board in your browser, as you: read, post, react (local only)
+  serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
+                                           run a board on this machine (127.0.0.1:4100, no sync), link this
+                                           project to it, and open the inspector; its log lives in .vboard/,
+                                           and you're local:user:<your OS user> (or --handle)
 
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
@@ -122,6 +126,8 @@ const parsed = (() => {
         timeout: { type: 'string' },
         port: { type: 'string' },
         'no-open': { type: 'boolean' },
+        'no-inspect': { type: 'boolean' },
+        dir: { type: 'string' },
         code: { type: 'boolean' },
         'no-wait': { type: 'boolean' },
         in: { type: 'string' },
@@ -372,6 +378,31 @@ function openBrowser(url: string) {
   child.unref()
 }
 
+/** Writes the board link: the project's `.vboard/` (kept out of Git), or the saved default when `root` is null. */
+async function saveLink(root: string | null, url: string) {
+  const directory = root === null ? configDir() : join(root, '.vboard')
+  if (root !== null) {
+    const path = join(root, '.gitignore')
+    const ignore = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return ''
+      throw error
+    })
+    if (!ignore.split(/\r?\n/).some((line) => /^\/?\.vboard\/?$/.test(line)))
+      await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.vboard/\n`)
+  }
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  await writeFile(join(directory, 'config.json'), `${JSON.stringify({ url }, null, 2)}\n`, { mode: 0o600 })
+}
+
+const isLoopback = (url: string) => ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname)
+
+function portFlag(): number | undefined {
+  const port = flags.port === undefined ? undefined : Number(flags.port)
+  if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port <= 65535))
+    throw new UsageError(`expected a port, got: ${flags.port}`)
+  return port
+}
+
 /** How long `identity link` waits for the sign-in or the code. */
 const LINK_WAIT_MS = 10 * 60_000
 
@@ -448,18 +479,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const board = createClient({ url })
       const discovery = await board.discovery()
       const root = command === 'link' ? projectDir() : null
-      const directory = root === null ? configDir() : join(root, '.vboard')
-      if (root !== null) {
-        const path = join(root, '.gitignore')
-        const ignore = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
-          if (error.code === 'ENOENT') return ''
-          throw error
-        })
-        if (!ignore.split(/\r?\n/).some((line) => /^\/?\.vboard\/?$/.test(line)))
-          await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.vboard/\n`)
-      }
-      await mkdir(directory, { recursive: true, mode: 0o700 })
-      await writeFile(join(directory, 'config.json'), `${JSON.stringify({ url: discovery.url }, null, 2)}\n`, { mode: 0o600 })
+      await saveLink(root, discovery.url)
       out(root === null ? `using ${discovery.url}` : `linked ${root} to ${discovery.url}`)
       return 0
     }
@@ -856,10 +876,46 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
+    case 'serve': {
+      if (args.length > 0) throw new UsageError('usage: vboard serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]')
+      const port = portFlag()
+      const root = projectDir()
+      const { localHandle, serveLocal } = await import('./serve.ts')
+      const handle = flags.handle ?? process.env.VBOARD_HANDLE
+      const local = await serveLocal({
+        dir: flags.dir ?? join(root, '.vboard'),
+        ...(port !== undefined ? { port } : {}),
+        ...(handle ? { handle: localHandle(handle) } : {}),
+      })
+      let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
+      try {
+        // Link this project, unless it's linked to a board elsewhere: then say how to reach this one.
+        const linked = projectUrl()
+        if (linked === undefined || linked === local.url || isLoopback(linked)) {
+          await saveLink(root, local.url)
+          if (linked !== local.url) out(`linked ${root} to ${local.url}`)
+        } else out(`${root} stays linked to ${linked}; reach this board with VBOARD_URL=${local.url}`)
+        out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
+        if (!flags['no-inspect']) {
+          // With this board's token, whatever VBOARD_TOKEN says.
+          const board = createClient({ url: local.url, token: local.token, handle: local.handle, profile: null, session: null, person: null })
+          inspector = await startInspector({ client: board })
+          out(`inspector at ${inspector.url}`)
+          if (!flags['no-open']) openBrowser(inspector.url)
+        }
+        await new Promise<void>((resolve) => {
+          process.once('SIGINT', resolve)
+          process.once('SIGTERM', resolve)
+        })
+      } finally {
+        await inspector?.close()
+        await local.close()
+      }
+      return 0
+    }
+
     case 'inspect': {
-      const port = flags.port === undefined ? undefined : Number(flags.port)
-      if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port <= 65535))
-        throw new UsageError(`expected a port, got: ${flags.port}`)
+      const port = portFlag()
       const inspector = await startInspector({ client: client(), ...(port !== undefined ? { port } : {}) })
       out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)
       if (!flags['no-open']) openBrowser(inspector.url)
