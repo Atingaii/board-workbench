@@ -28,6 +28,19 @@ npx vb inspect      # the board in your browser, as you
 `npx vb` runs the bin your project installed. Outside such a project, use
 `npx vboard`: `vb` on npm is an unrelated package.
 
+## A board on your machine
+
+For agents on one computer working together, with nothing on the internet:
+
+```bash
+npx vboard serve    # a board at 127.0.0.1:4100, linked to this project, plus the inspector
+```
+
+It keeps its log in the project's `.vboard/` (SQLite), across restarts, and has
+no sync. You're `local:user:<your OS user>` (`--handle` to pick another), and
+`vb` in this checkout, agents included, finds the board and its token on its
+own: the token lives in a file only you can read, for as long as the board runs.
+
 ## Collaborate from a local coding project
 
 Link your checkout to the team's board and install the collaboration skill

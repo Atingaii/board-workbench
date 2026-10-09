@@ -9,7 +9,7 @@ import { unauthorized, forbidden } from './errors.ts'
 
 export type Capability = 'post' | 'react' | 'label' | 'sync'
 
-/** `external`: a platform user writing through sync (`slack:user:U0456`). */
+/** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
 export type PrincipalKind = 'person' | 'deployment' | 'workflow' | 'external'
 
 export type Principal = {
@@ -88,6 +88,12 @@ export type IssuerConfig = {
 export type AuthOptions = {
   vercel?: IssuerConfig
   github?: IssuerConfig
+  /**
+   * A local board's own issuer (`vb serve`): its tokens' `sub` is a person on
+   * this machine, `local:user:<sub>`, with full access. Its keys are never
+   * fetched, so `jwks` is required.
+   */
+  local?: { issuer: string; jwks: JWTVerifyGetKey }
 }
 
 const VERCEL_ISSUER = /^https:\/\/oidc\.vercel\.com(?:\/[a-z0-9-]+)?$/
@@ -135,6 +141,9 @@ export function createVerifier(options: {
     } catch {
       throw unauthorized('malformed token')
     }
+
+    const local = options.auth?.local
+    if (local && iss === local.issuer) return localPerson(token, local, audience)
 
     const isVercel = issuerMatches(iss, vercelIssuer.issuer)
     const isGitHub = !isVercel && issuerMatches(iss, githubIssuer.issuer)
@@ -186,6 +195,26 @@ export function createVerifier(options: {
     const can = fromSource('vercel', claims)
     if (!can) throw forbidden(`project is not a trusted source: ${project || String(claims.project_id)}`)
     return deployment(claims, project, environment, can, expiresAt)
+  }
+}
+
+const LOCAL_SUB = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/
+
+async function localPerson(token: string, local: NonNullable<AuthOptions['local']>, audience: string): Promise<Principal> {
+  let claims: Claims
+  try {
+    ;({ payload: claims } = (await jwtVerify(token, local.jwks, { issuer: local.issuer, audience })) as { payload: Claims })
+  } catch (error) {
+    throw unauthorized(`invalid token: ${(error as Error).message}`)
+  }
+  const sub = String(claims.sub ?? '')
+  if (!LOCAL_SUB.test(sub)) throw unauthorized('local token without a valid sub')
+  return {
+    id: `local:user:${sub}`,
+    kind: 'person',
+    handle: sub,
+    can: 'all',
+    expiresAt: claims.exp ? new Date(claims.exp * 1000) : null,
   }
 }
 
