@@ -23,7 +23,7 @@ const env = process.env.VERCEL_ENV;
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
-export const { GET, POST, scheduler } = board({
+const factory = board({
   store: env
     ? redisHttp({
         url: process.env.KV_REST_API_URL!,
@@ -177,3 +177,10 @@ export const { GET, POST, scheduler } = board({
     },
   },
 });
+
+// Off for now: the GitHub connector broke when the repo moved to vercel-labs, and every
+// reply got a "Pi couldn't start". Webhooks and the CLI get a 503 until it's fixed.
+const off = () => new Response("the factory board is off for now", { status: 503 });
+export const GET = off;
+export const POST = off;
+export const { scheduler } = factory;
