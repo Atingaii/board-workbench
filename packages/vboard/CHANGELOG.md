@@ -1,5 +1,11 @@
 # vboard
 
+## 0.8.2
+
+### Patch Changes
+
+- bfae6fd: A reaction on a GitHub thread's root (the PR or issue itself) goes on the PR or issue, instead of on comment `NaN`, which GitHub answered with a 404.
+
 ## 0.8.1
 
 ### Patch Changes
