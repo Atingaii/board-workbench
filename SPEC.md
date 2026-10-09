@@ -309,6 +309,48 @@ board({
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)).
 
+### Linked accounts
+
+One person shows up as several actors: `vercel:user:u_abc123` on the board,
+`slack:user:U0456` in Slack, `github:user:583231` on GitHub, and their agents
+(`…+claude`). `actor.linked { actor, to, method, by }` says a platform actor
+*is* a principal. It's for display, filtering, and mentions, **never for
+permissions**: a linked Slack account can't do anything its Slack messages
+couldn't already, and history keeps every message's original actor.
+`actor.unlinked { actor, by }` undoes it. Only people link (`vb identity`), and
+only their own accounts.
+
+- **Proof, never a matching name or email.** An account is linked when it shows
+  it's yours, one of two ways:
+  1. **A one-time code.** `vb identity link slack --code` prints a code
+     (`vb-7KQ2-M9XD`, ten minutes, single use). Post it from that account,
+     as a whole message, anywhere the board syncs through that entry. The
+     webhook that delivers it is already verified, so the board knows which
+     account sent the code you asked for. The board links them, reacts with ✅
+     there, and doesn't import the message. Only a hash of the code is kept, in
+     the side session `identity` (`vboard-identity`). If two accounts post it,
+     the first one the log takes wins. An expired, used, or other entry's code is
+     just a message.
+  2. **Signing in.** When an entry can sign people in (a Connect connector, or
+     an adapter with `withUserTokens`, see [Posting as people](#posting-as-people)),
+     `vb identity link slack` prints a sign-in URL for your principal. Only you
+     should open it: whoever completes it binds *their* account to you. Once
+     you approve, the board asks for your token, asks the platform whose it is
+     (Slack's `auth.test`, GitHub's `GET /user`), and links that account
+     (`method: 'consent'`).
+- **What follows the link:**
+  - **`--by <person>`** matches everyone they are: their own actor, their
+    agents (`julian/claude`, by `by.principal`), and every linked account. A
+    linked account's handle (`--by jb`) names the whole person too. An agent, or
+    an unlinked platform actor, is just itself.
+  - **`--mentions <person>`** and `mentions=me` include mentions of their linked
+    accounts, so a Slack `<@U0456>` reaches the person's `--mentions me`.
+  - **Outbound mentions:** a person mentioned on the board renders natively on
+    a platform where they've linked an account (`<@U0456>` in Slack).
+  - **Views:** a linked account's author view (`author`, `/actors`) carries
+    `person: { id, handle, name, avatar }`, and the CLI shows
+    **Julian Benegas (julian)**.
+
 ### Handles and mentions
 
 - **Handles are display hints, not reservations.**
@@ -479,6 +521,17 @@ export const boardContract = contract({
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: ActorKind, handle: Handle, name: z.string(), avatar: z.string().url().optional() }),
+    'actor.linked':      z.object({ actor: ActorId, to: ActorId, method: z.enum(['code', 'consent']), by: Author }), // (server) see Linked accounts
+    'actor.unlinked':    z.object({ actor: ActorId, by: Author }),
+  },
+})
+
+// Linking codes, hashed, in session `identity`.
+export const identityContract = contract({
+  name: 'vboard-identity',
+  events: {
+    'identity.code_issued': z.object({ hash, principal: ActorId, sync: z.string(), expiresAt: z.string() }), // (server)
+    'identity.code_used':   z.object({ hash, actor: ActorId }),                                               // (server) the first wins
   },
 })
 
@@ -753,6 +806,10 @@ status.
 | POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Full access |
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
+| GET | `/identity` | Your linked platform accounts: `{ principal, links: [{ actor, handle, name, method, at }] }` |
+| POST | `/identity/link` | `{ sync, method?: 'code' \| 'consent' }`: start linking your account on that sync entry. Answers `{ method: 'consent', url }` when it can sign you in, otherwise `{ method: 'code', code, expiresAt }`. People only |
+| POST | `/identity/check` | `{ sync }`: after a sign-in, link the account it authorized. Answers `{ linked }`, null until you've approved |
+| POST | `/identity/unlink` | `{ actor }`: an actor ID or handle among your linked accounts |
 | POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
 | GET | `/openapi.json` | Generated from the route table |
 
@@ -950,6 +1007,9 @@ vboard use <url>                                save the default board
 
 vboard channels                                 channels and what they mirror, grouped by path prefix
 vboard actors                                   actors and their handles
+vboard identity                                 your linked Slack and GitHub accounts
+vboard identity link <key> [--code] [--no-wait] link your account on sync entry <key>: sign in, or post the code it prints from that account
+vboard identity unlink <account>                unlink one, by handle or actor ID
 
 vboard read <channel> [filters] [--limit N]     threads in a channel, newest last
 vboard read <id>                                one thread
@@ -1140,27 +1200,15 @@ by the platform's own things: Slack channels, GitHub repos.
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { createSlackAdapter } from '@chat-adapter/slack'
-import { createGitHubAdapter } from '@chat-adapter/github'
-import { connectSlackAdapter, connectGitHubAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
-
-const slackCredentials = connectSlackAdapter('slack/basehub')
-const slackAdapter = createSlackAdapter(slackCredentials)
-const acmeCredentials = connectSlackAdapter('slack/acme')
-const acmeAdapter = createSlackAdapter(acmeCredentials)
 
 export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
-      adapter: slackAdapter,
-      client: async () => slackAdapter.withBotToken(
-        typeof slackCredentials.botToken === 'function' ? await slackCredentials.botToken() : slackCredentials.botToken,
-        () => slackAdapter.webClient,
-      ),
+      adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
       channels: {
         '#errors-www': 'errors-www',
         '#firehose-www': 'firehose-www',
@@ -1173,15 +1221,12 @@ export const { GET, POST, scheduler } = board({
       },
     }),
     acme: slack({                                         // a second Slack workspace
-      adapter: acmeAdapter,
-      client: async () => acmeAdapter.withBotToken(
-        typeof acmeCredentials.botToken === 'function' ? await acmeCredentials.botToken() : acmeCredentials.botToken,
-        () => acmeAdapter.webClient,
-      ),
+      adapter: 'slack/acme',
       channels: { '#support': 'acme-support' },
     }),
     github: github({
-      adapter: createGitHubAdapter({ ...connectGitHubAdapter('github/basehub') }),
+      adapter: 'github/basehub',
+      botUserId: 338721338,                               // Connect can't detect the app's user
       repos: {
         'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
@@ -1449,7 +1494,53 @@ dead-letters and holds up its thread's lane.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
   that without it, the adapter doesn't recognize its own comments and replies to
-  itself in a loop.
+  itself in a loop. A copy posted as a person comes back as theirs, so it's
+  recognized by its receipt instead; one that arrives before its receipt is
+  held back and retried for up to a minute rather than imported twice. That
+  includes a new thread they started, whose platform thread the board learns
+  only from the receipt: a message from them in that channel waits while one of
+  their roots there is still pending.
+
+### Posting as people
+
+A board message a person writes reaches Slack or GitHub *as them*: their name,
+their avatar, no "via" label, and the platform's own notifications. It takes
+their own platform token, which they grant by signing in (`vb identity link
+<key>`), and the same sign-in links the account (see
+[Linked accounts](#linked-accounts)).
+
+```ts
+type UserTokens = {
+  authorize(principal: string): Promise<string>       // a sign-in URL binding whoever completes it to `principal`
+  token(principal: string): Promise<string | null>    // their token, or null when they haven't signed in
+}
+```
+
+- **Where tokens come from:** a connector name uses Vercel Connect's user
+  tokens (`startAuthorization` / `getToken` with `subject: { type: 'user', id:
+  principal }`). Your own OAuth is `withUserTokens(adapter, { authorize, token })`.
+- **The board never stores a token.** It asks for one at each delivery. No
+  token (never signed in, revoked, expired), an error getting one, or a
+  platform that refuses the post (a missing scope) delivers as the app, as
+  before: posting as a person never fails a delivery.
+- **Only once the account they signed in with is linked** (`method: 'consent'` on
+  that platform): a token alone isn't enough. So their copy's echo is
+  recognized as theirs, and `vb identity unlink` stops posting as them even
+  though the platform still has the token. Edits and deletes of copies already
+  posted as them still use the token.
+- **Only what they wrote on the board themselves.** Their agents
+  (`claude via julian`) keep posting as the app, so you can tell them apart.
+  Imported messages never go back out.
+- **The text is theirs:** no name in front, and no custom `render`. Files still
+  upload as the app.
+- **Edits and deletes of a copy posted as them use their token too**
+  (`message.synced` records `asUser: true`): the app can't change their
+  message. Without their token, they're skipped.
+- **Slack** posts through the adapter with the person's token
+  (`withBotToken(token, …)`): the user scope `chat:write`. **GitHub** posts
+  through its REST API with the person's token, not the adapter, which would
+  learn the person as its own bot user. The GitHub App needs user authorization
+  turned on, with Issues and Pull requests write.
 
 ### Typing
 
@@ -1475,20 +1566,36 @@ isn't synced or replayed.
 
 ### Adapters
 
-`adapter` takes a Chat SDK adapter, configured however you like:
+`adapter` takes a Vercel Connect connector's name, or a Chat SDK adapter, like
+the AI SDK's `model` takes a string or a provider:
 
 ```ts
+// Vercel Connect: no platform secrets anywhere, and nothing else to install or wire
+adapter: 'slack/basehub',
+adapter: 'github/basehub', botUserId: 338721338,
+
 // plain Chat SDK: an app you created, secrets in env
 adapter: createSlackAdapter({
   botToken: process.env.SLACK_BOT_TOKEN!,
   signingSecret: process.env.SLACK_SIGNING_SECRET!,
 }),
 
-// Vercel Connect: no platform secrets anywhere
-adapter: createSlackAdapter({ ...connectSlackAdapter('slack/basehub') }),
+// plain Chat SDK, posting as people through your own OAuth
+adapter: withUserTokens(createSlackAdapter({ ... }), { authorize, token }),
 ```
 
-With async tokens, including Connect, a public Slack `client` resolver is required for name lookups, membership,
+- **A connector name** makes vboard build the adapter
+  (`createSlackAdapter({ ...connectSlackAdapter(name) })`), Slack's Web API
+  `client` resolver, and people's sign-in through the same connector (see
+  [Posting as people](#posting-as-people)). `chat`, `@chat-adapter/slack`,
+  `@chat-adapter/github`, and `@vercel/connect` are vboard's own dependencies,
+  so the app installs none of them. On GitHub, pass `botUserId`: Connect can't
+  detect the app's user.
+- **An adapter** is used as given. It posts as the app unless it's wrapped in
+  `withUserTokens` (from `vboard/adapter-slack`, `vboard/adapter-github`, or
+  `vboard/sync`).
+
+With an adapter of your own and async tokens, including Connect, a public Slack `client` resolver is required for name lookups, membership,
 avatars, and file deletion. The resolver obtains the configured bot token and
 returns `adapter.withBotToken(token, () => adapter.webClient)`. Vboard never calls
 the SDK's protected token resolver. Static-token adapters can use their public
@@ -2090,6 +2197,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
 | What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`** (board thread #4100). Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
+| How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |
+| Can Connect user tokens post as a person? | **Assumed yes, not yet verified with a real consent:** both factory connectors answer `user_authorization_required` and return real consent URLs (issue #6). Which scopes the tokens get is unverified until someone signs in; without them, delivery falls back to the app. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release

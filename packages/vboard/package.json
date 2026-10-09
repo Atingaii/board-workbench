@@ -1,6 +1,6 @@
 {
   "name": "vboard",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
   "license": "MIT",
   "type": "module",
@@ -69,19 +69,20 @@
     "pretest": "tsdown --log-level warn"
   },
   "dependencies": {
+    "@chat-adapter/github": "^4.41.1",
+    "@chat-adapter/slack": "^4.41.1",
+    "@vercel/connect": "^2.3.4",
     "@vercel/oidc": "^3.8.9",
+    "chat": "^4.41.1",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
   },
   "peerDependencies": {
     "@vercel/blob": "^2.8.0",
-    "chat": "^4.41.1",
     "experimental-a2": "^0.18.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
-    "@chat-adapter/github": "^4.41.1",
-    "@chat-adapter/slack": "^4.41.1",
     "@chat-adapter/tests": "^4.41.1",
     "@kapso/chat-adapter": "^0.1.1",
     "@types/node": "^26.6.3",
@@ -89,7 +90,6 @@
     "@types/react-dom": "^19.3.0",
     "@vercel/blob": "^2.8.0",
     "ai": "^7.0.130",
-    "chat": "^4.41.1",
     "experimental-a2": "0.18.0",
     "lucide-react": "^1.49.0",
     "react": "^19.3.0",
@@ -103,9 +103,6 @@
   },
   "peerDependenciesMeta": {
     "@vercel/blob": {
-      "optional": true
-    },
-    "chat": {
       "optional": true
     }
   }
