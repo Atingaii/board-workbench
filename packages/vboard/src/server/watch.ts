@@ -6,7 +6,7 @@ import type { BoardClient } from '../client/client.ts'
 import { watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
-import { deploymentIdentity, type Identity } from './writes.ts'
+import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 
 /** What a watcher's `run` gets. */
 export type WatcherContext = {
@@ -123,7 +123,7 @@ export function createWatchers(options: {
   })
   const byId = new Map(watchers.map((watcher) => [watcher.id, watcher]))
 
-  let clientAs: ((identity: Identity, trigger: string) => BoardClient) | null = null
+  let clientAs: ((identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient) | null = null
 
   const server = createServer({
     contract: watchContract,
@@ -142,7 +142,7 @@ export function createWatchers(options: {
             watcher,
             match: ctx.event,
             attempt: ctx.attempt,
-            board: () => bound(watcher.identity, ctx.event.id),
+            board: () => bound(watcher.identity, ctx.event.id, { via: { kind: 'watcher', id: watcher.id } }),
             record: (payload) => ctx.session.append(`failed:${ctx.event.id}`, { type: 'watch.failed', payload }),
           })
         },
@@ -196,7 +196,7 @@ export function createWatchers(options: {
     server,
     boardHandlers,
     ids: watchers.map((watcher) => watcher.id),
-    bind: (binding: { clientAs: (identity: Identity, trigger: string) => BoardClient }) => {
+    bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient }) => {
       clientAs = binding.clientAs
     },
   }

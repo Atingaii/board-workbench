@@ -18,6 +18,8 @@ import type { BoardSession } from './board.ts'
 import { badRequest, forbidden, notFound } from './errors.ts'
 import { view } from './feed.ts'
 import type { ResolvedTarget } from '../sync/provider.ts'
+import type { BoardClient } from '../client/client.ts'
+import { runMiddleware, type Middleware, type WriteSource } from './middleware.ts'
 
 /** Who a write is attributed to. */
 export type Identity = { principal: Principal; author: Author; actor: Actor }
@@ -39,6 +41,26 @@ export type WriteContext = {
   normalizeTarget: (target: string) => Promise<ResolvedTarget>
   /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
   findByEmail?: (email: string) => Promise<Actor | null>
+  /** Runs on every post and edit, in order, before it lands. */
+  middleware?: readonly Middleware[]
+  /** The in-process client middleware writes with. */
+  middlewareClient?: () => BoardClient
+}
+
+/** Where a write came from; `middleware` is the middleware's own client, which skips it. */
+export type Via = WriteSource | { kind: 'middleware' }
+
+/** How a write reaches the middleware: where it's from, and how to answer there. */
+export type WriteOrigin = { via?: Via; respond?: (text: string) => Promise<void> }
+
+const middlewareFor = (ctx: WriteContext, origin: WriteOrigin) =>
+  origin.via?.kind === 'middleware' || !ctx.middleware?.length ? null : ctx.middleware
+
+const sourceOf = (origin: WriteOrigin): WriteSource => (origin.via as WriteSource | undefined) ?? { kind: 'api' }
+
+const middlewareClient = (ctx: WriteContext) => () => {
+  if (!ctx.middlewareClient) throw new Error('middleware used before the board bound it')
+  return ctx.middlewareClient()
 }
 
 /**
@@ -66,7 +88,7 @@ async function withEmailMentions(ctx: WriteContext, text: string): Promise<{ tex
 const knownWith = (actors: ActorsState, found: Actor[]): ActorsState =>
   found.length === 0 ? actors : { ...actors, byId: { ...actors.byId, ...Object.fromEntries(found.map((a) => [a.id, a])) } }
 
-export type PostInput = {
+export type PostInput = WriteOrigin & {
   identity: Identity
   channel?: string | undefined
   re?: number | undefined
@@ -88,10 +110,7 @@ export type PostInput = {
 }
 
 export async function writePost(ctx: WriteContext, input: PostInput) {
-  const [{ state: messages }, { state: actors }] = await Promise.all([
-    ctx.session.state(messagesReducer),
-    ctx.session.state(actorsReducer),
-  ])
+  const { state: messages } = await ctx.session.state(messagesReducer)
   const { identity } = input
   let channel = input.channel
   let re: number | null = null
@@ -112,6 +131,30 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
     thread = id!
   }
 
+  const chain = middlewareFor(ctx, input)
+  if (chain)
+    return runMiddleware(
+      chain,
+      {
+        write: { kind: 'post', channel: channel!, re, text: input.text, labels: input.labels ?? {}, attachments: input.attachments ?? [] },
+        author: identity.actor,
+        source: sourceOf(input),
+        board: middlewareClient(ctx),
+        ...(input.respond ? { respond: input.respond } : {}),
+      },
+      (write) => commitPost(ctx, { ...input, text: write.text, labels: write.labels }, { channel: channel!, re, replyTo, thread, id }),
+    )
+  return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id })
+}
+
+async function commitPost(
+  ctx: WriteContext,
+  input: PostInput,
+  placed: { channel: string; re: number | null; replyTo: number | null; thread: string; id: string | undefined },
+) {
+  const { identity } = input
+  const { channel, re, replyTo, thread, id } = placed
+  const { state: actors } = await ctx.session.state(actorsReducer)
   const targets: { target: string; kind: 'channel' | 'thread'; cause: 'config' | 'request' }[] = []
   if (re === null) {
     const originChannel = input.origin ? input.origin.channel ?? channelOf(input.origin.thread) : null
@@ -181,14 +224,29 @@ async function liveMessage(ctx: WriteContext, id: number): Promise<Message> {
   return message
 }
 
-export async function writeEdit(
-  ctx: WriteContext,
-  input: { identity: Identity; id: number; text: string; from?: string | null; asAuthor?: boolean },
-) {
+export type EditInput = WriteOrigin & { identity: Identity; id: number; text: string; from?: string | null; asAuthor?: boolean }
+
+export async function writeEdit(ctx: WriteContext, input: EditInput) {
   const message = await liveMessage(ctx, input.id)
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
+  const chain = middlewareFor(ctx, input)
+  if (!chain) return commitEdit(ctx, input, message)
+  return runMiddleware(
+    chain,
+    {
+      write: { kind: 'edit', id: message.id, channel: message.channel, re: message.re, text: input.text },
+      author: input.identity.actor,
+      source: sourceOf(input),
+      board: middlewareClient(ctx),
+      ...(input.respond ? { respond: input.respond } : {}),
+    },
+    (write) => commitEdit(ctx, { ...input, text: write.text }, message),
+  )
+}
+
+async function commitEdit(ctx: WriteContext, input: EditInput, message: Message) {
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)

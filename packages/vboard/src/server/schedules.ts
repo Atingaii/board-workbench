@@ -14,6 +14,7 @@ import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
 import { deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
+import { DroppedError } from './middleware.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -44,7 +45,7 @@ export type Schedule = {
   next: number | null
   /** The last message it posted. */
   last: number | null
-  canceled: { by: Author; reason: 'canceled' | 'thread_deleted' } | null
+  canceled: { by: Author; reason: 'canceled' | 'thread_deleted' | 'dropped' } | null
 }
 
 export type SchedulesState = { byId: Record<string, Schedule> }
@@ -175,8 +176,11 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       }
     }
     // A retry after the post landed gets the same event ID, so A2 hands back the message it already posted.
-    const posted = (
+    let posted: number
+    try {
+      posted = (
       await writePost(writes, {
+        via: { kind: 'schedule', id },
         identity: schedule.as,
         id: await idempotentId('vboard-schedule', String(id), String(n)),
         ...(schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }),
@@ -189,6 +193,13 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         lenientMentions: true,
       })
     ).id
+    } catch (error) {
+      if (!(error instanceof DroppedError)) throw error
+      // Its text never changes, so the middleware would drop every send after this one too.
+      console.info(`[vboard] the middleware dropped schedule s${id}: ${error.message}`)
+      await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'dropped' } })
+      return
+    }
     const next = nextSend(schedule, n, at, Date.now())
     await ctx.session.append('fired', { type: 'schedule.fired', payload: { id, n, message: posted, next } })
     if (next !== null) await arm(ctx, 'next', id, n + 1, next)
