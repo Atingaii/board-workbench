@@ -1247,7 +1247,6 @@ export const { GET, POST, scheduler } = board({
     }),
     github: github({
       adapter: 'github/basehub',
-      botUserId: 338721338,                               // Connect can't detect the app's user
       repos: {
         'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
         'basehub-ai/docs': async ({ event, board }) => {
@@ -1513,9 +1512,9 @@ dead-letters and holds up its thread's lane.
   previews; the board keeps the file's own name.
   GitHub has no upload API, so it always gets those lines.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
-  nothing echoes back. On GitHub, set the adapter's `botUserId`; its docs warn
-  that without it, the adapter doesn't recognize its own comments and replies to
-  itself in a loop. A copy posted as a person comes back as theirs, so it's
+  nothing echoes back. On GitHub, the adapter needs the app's bot user ID to
+  recognize its own comments, or it replies to itself in a loop; with a
+  connector, vboard looks it up (below), and `botUserId` pins it. A copy posted as a person comes back as theirs, so it's
   recognized by its receipt instead; one that arrives before its receipt is
   held back and retried for up to a minute rather than imported twice. That
   includes a new thread they started, whose platform thread the board learns
@@ -1593,7 +1592,7 @@ the AI SDK's `model` takes a string or a provider:
 ```ts
 // Vercel Connect: no platform secrets anywhere, and nothing else to install or wire
 adapter: 'slack/basehub',
-adapter: 'github/basehub', botUserId: 338721338,
+adapter: 'github/basehub',
 
 // plain Chat SDK: an app you created, secrets in env
 adapter: createSlackAdapter({
@@ -1610,8 +1609,10 @@ adapter: withUserTokens(createSlackAdapter({ ... }), { authorize, token }),
   `client` resolver, and people's sign-in through the same connector (see
   [Posting as people](#posting-as-people)). `chat`, `@chat-adapter/slack`,
   `@chat-adapter/github`, and `@vercel/connect` are vboard's own dependencies,
-  so the app installs none of them. On GitHub, pass `botUserId`: Connect can't
-  detect the app's user.
+  so the app installs none of them. On GitHub, Chat SDK can't detect the
+  app's bot user from Connect's installation token (REST's `/user` refuses it),
+  so vboard asks GraphQL's `viewer`, which answers for that token, once per
+  instance. `botUserId` skips the call.
 - **An adapter** is used as given. It posts as the app unless it's wrapped in
   `withUserTokens` (from `vboard/adapter-slack`, `vboard/adapter-github`, or
   `vboard/sync`).
@@ -1951,7 +1952,7 @@ vb read issues --label tag.bug                     # issues labeled bug
 3. Subscribe it to these webhooks: Pull requests, Pull request reviews,
    Pull request review comments, Issues, and Issue comments.
 4. Point its trigger path at `/api/board/webhooks/github`.
-5. Set `botUserId`.
+5. Optionally set `botUserId`, which skips looking it up.
 
 **Assumed:** Connect forwards all of these events. Today Connect's GitHub
 connector lists only `pull_request`, which covers opened, ready for review, and

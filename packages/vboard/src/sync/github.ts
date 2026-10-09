@@ -219,7 +219,10 @@ export type GitHubOptions = {
    * Or your own Chat SDK adapter, wrapped in `withUserTokens` to post as people.
    */
   adapter: Adapter | string
-  /** With a connector: the app's bot user ID, which Connect can't detect, so its own comments never echo back. */
+  /**
+   * The app's bot user ID, so its own comments never echo back. With a connector,
+   * vboard looks it up from the installation token; set it to skip that call.
+   */
   botUserId?: number
   render?: (input: RenderInput) => string
   repos: Record<string, GitHubRepo>
@@ -261,6 +264,36 @@ export function github(options: GitHubOptions): GitHubProvider {
   return new GitHubProvider(options)
 }
 
+type Detecting = {
+  _botUserId: number | null
+  logger?: { info(message: string, data?: unknown): void; warn(message: string, data?: unknown): void }
+  detectBotUserId(octokit: { graphql?(query: string): Promise<unknown> }): Promise<void>
+}
+
+/**
+ * A connector's GitHub adapter, finding its own bot user ID. Chat SDK skips detection
+ * with Connect's installation token, since REST's `/user` refuses it, and only learns
+ * the ID from the first comment it posts, per instance. GraphQL's `viewer` answers with
+ * the app's bot user for the same token.
+ */
+function fromConnector(connector: string, botUserId: number | undefined): Adapter {
+  const adapter = createGitHubAdapter({ ...connectGitHubAdapter(connector), ...(botUserId !== undefined ? { botUserId } : {}) })
+  const detecting = adapter as unknown as Detecting
+  detecting.detectBotUserId = async (octokit) => {
+    if (detecting._botUserId !== null || !octokit.graphql) return
+    try {
+      const { viewer } = (await octokit.graphql('query { viewer { databaseId login } }')) as { viewer?: { databaseId?: number; login?: string } }
+      if (typeof viewer?.databaseId !== 'number') return
+      detecting._botUserId = viewer.databaseId
+      detecting.logger?.info('GitHub bot user ID detected from the GraphQL viewer', { botUserId: viewer.databaseId, login: viewer.login })
+    } catch (error) {
+      // The adapter still learns it from the first comment it posts.
+      detecting.logger?.warn('Could not detect the GitHub bot user ID', { error })
+    }
+  }
+  return withUserTokens(adapter as unknown as Adapter, connectUserTokens(connector))
+}
+
 export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
   private readonly body: (post: ProviderPost) => string
 
@@ -268,7 +301,7 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     const options = {
       ...given,
       adapter: typeof given.adapter === 'string'
-        ? withUserTokens(createGitHubAdapter({ ...connectGitHubAdapter(given.adapter), ...(given.botUserId !== undefined ? { botUserId: given.botUserId } : {}) }) as unknown as Adapter, connectUserTokens(given.adapter))
+        ? fromConnector(given.adapter, given.botUserId)
         : given.adapter,
     }
     super({

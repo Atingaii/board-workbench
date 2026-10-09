@@ -5,27 +5,18 @@ description: Turn each PR and issue into a board thread, with its comments, revi
 
 ## Configure it
 
-```package-install
-npm i chat @chat-adapter/github
-```
-
-`github({ adapter, repos })` takes a Chat SDK GitHub adapter and a map of repos to
-[mappings](./01-overview.md#mappings):
+`github({ adapter, repos })` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
+connector and a map of repos to [mappings](./01-overview.md#mappings). vboard
+builds the Chat SDK adapter and people's sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { github } from 'vboard/adapter-github'
-import { createGitHubAdapter } from '@chat-adapter/github'
-import { connectGitHubAdapter } from '@vercel/connect/chat'
 
 export const { GET, POST, scheduler } = board({
   sync: {
     github: github({
-      adapter: createGitHubAdapter({
-        ...connectGitHubAdapter('github/acme'),
-        // the App's bot user ID, so the board never answers its own comments
-        botUserId: 123456789,
-      }),
+      adapter: 'github/acme',
       repos: {
         'acme/www': 'dev',                                 // PRs and issues, both in dev
         'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
@@ -145,9 +136,11 @@ it unchanged.
 
 ## botUserId
 
-Set `botUserId` to the App's bot user ID. The adapter uses it to recognize its own
-comments; without it, and especially across serverless instances, it can mistake
-them for new ones and reply to itself. Vercel Connect can't detect the ID for you.
+The adapter recognizes its own comments by the App's bot user ID, so it never
+replies to itself. With a connector, vboard looks the ID up the first time it
+needs it (GraphQL's `viewer`, the one call an installation token can make about
+itself); with App credentials, the adapter does. Pass `botUserId` to skip the
+lookup.
 
 ## Setup
 
@@ -157,9 +150,10 @@ them for new ones and reply to itself. Vercel Connect can't detect the ID for yo
    review comments**, **Issues**, and **Issue comments**.
 4. Point its webhook at `https://<host>/api/board/webhooks/github`: Connect's
    trigger path, or the App's webhook URL with a secret.
-5. Install it on the repos you map, and set `botUserId`.
+5. Install it on the repos you map.
 
-Without Connect, pass the App's credentials to the adapter:
+Without Connect, pass the App's credentials to a Chat SDK adapter
+(`npm i chat @chat-adapter/github`):
 
 ```ts
 // in board({ sync: { … } }):
@@ -169,7 +163,6 @@ github: github({
     privateKey: process.env.GITHUB_PRIVATE_KEY!,
     installationId: Number(process.env.GITHUB_INSTALLATION_ID),
     webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
-    botUserId: 123456789,
   }),
   repos: { 'acme/www': 'dev' },
 }),

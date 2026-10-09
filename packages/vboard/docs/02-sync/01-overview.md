@@ -22,44 +22,28 @@ two-way mirror) or to a function that handles inbound events however you like.
 
 ## Configure it
 
-```package-install
-npm i chat @chat-adapter/slack @chat-adapter/github @vercel/connect
-```
-
 Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { createSlackAdapter } from '@chat-adapter/slack'
-import { createGitHubAdapter } from '@chat-adapter/github'
-import { connectGitHubAdapter, connectSlackAdapter } from '@vercel/connect/chat'
 import { redisHttp } from 'experimental-a2/store-redis-http'
 import { vercelQueues } from 'experimental-a2/scheduler-vercel'
-
-const slackCredentials = connectSlackAdapter('slack/acme')
-const slackAdapter = createSlackAdapter(slackCredentials)
-const slackToken = slackCredentials.botToken
 
 export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
-      adapter: slackAdapter,
-      client: async () =>
-        slackAdapter.withBotToken(
-          typeof slackToken === 'function' ? await slackToken() : slackToken,
-          () => slackAdapter.webClient,
-        ),
+      adapter: 'slack/acme', // a Vercel Connect connector
       channels: {
         '#errors-www': 'errors-www',
         '#prs': 'prs',
       },
     }),
     github: github({
-      adapter: createGitHubAdapter({ ...connectGitHubAdapter('github/acme'), botUserId: 123456789 }),
+      adapter: 'github/acme',
       repos: {
         'acme/www': { pulls: 'prs', issues: 'issues' },
       },
@@ -77,8 +61,8 @@ export { scheduler as POST } from '@/app/api/board/[[...path]]/route'
 
 A Vercel Queues trigger makes that function private, which is why it can't share
 the board's public route. [Mounting](../01-board/01-mounting.md) covers the store,
-the scheduler, and their routes. The `client` resolver is Slack's; see
-[Slack](./03-slack.md#credentials).
+the scheduler, and their routes. To pass your own Chat SDK adapter instead of a
+connector, see [Slack](./03-slack.md#your-own-adapter) and [GitHub](./04-github.md#setup).
 
 ## Mappings
 

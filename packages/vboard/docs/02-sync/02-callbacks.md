@@ -11,13 +11,11 @@ inbound event for its external channel, connected threads included, and decides:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { github, GitHubPayload } from 'vboard/adapter-github'
-import { createGitHubAdapter } from '@chat-adapter/github'
-import { connectGitHubAdapter } from '@vercel/connect/chat'
 
 export const { GET, POST, scheduler } = board({
   sync: {
     github: github({
-      adapter: createGitHubAdapter({ ...connectGitHubAdapter('github/acme'), botUserId: 123456789 }),
+      adapter: 'github/acme',
       repos: {
         'acme/www': async ({ event, board }) => {
           const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'

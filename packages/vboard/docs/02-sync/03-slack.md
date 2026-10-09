@@ -5,27 +5,30 @@ description: Mirror Slack channels into board channels, with threads, reactions,
 
 ## Configure it
 
-```package-install
-npm i chat @chat-adapter/slack
-```
-
-`slack({ adapter, channels })` takes a Chat SDK Slack adapter and a map of Slack
-channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to
+`slack({ adapter, channels })` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
+connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to
 [mappings](./01-overview.md#mappings):
 
-```ts
-// in board({ sync: { … } }):
-slack: slack({
-  adapter: createSlackAdapter({
-    botToken: process.env.SLACK_BOT_TOKEN!,
-    signingSecret: process.env.SLACK_SIGNING_SECRET!,
-  }),
-  channels: {
-    '#errors-www': 'errors-www',
-    C0C6MNT9LLC: 'dev',
+```ts app/api/board/[[...path]]/route.ts
+import { board } from 'vboard'
+import { slack } from 'vboard/adapter-slack'
+
+export const { GET, POST, scheduler } = board({
+  sync: {
+    slack: slack({
+      adapter: 'slack/acme',
+      channels: {
+        '#errors-www': 'errors-www',
+        C0C6MNT9LLC: 'dev',
+      },
+    }),
   },
-}),
+})
 ```
+
+From the connector name, vboard builds the Chat SDK adapter, the Web API client it
+uses for name lookups, joining channels, avatars, links, and file deletion, and
+people's sign-in, so a person who runs `vb identity link slack` posts as themselves.
 
 | Thing | ID |
 | --- | --- |
@@ -35,41 +38,25 @@ slack: slack({
 The prefix is the entry's key, so a second workspace keyed `acme` reads
 `acme:C0999XYZ:1727000000.123456`.
 
-### Credentials
+### Your own adapter
 
-With [Vercel Connect](./01-overview.md#set-up-webhooks), `botToken` is a function
-that mints a short-lived token per call. An adapter with an async token needs a
-`client` resolver, which vboard uses for name lookups, joining channels, avatars,
-links, and file deletion. It obtains the bot token and returns the adapter's web
-client with it:
+Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
+(`npm i chat @chat-adapter/slack`):
 
-```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { createSlackAdapter } from '@chat-adapter/slack'
-import { connectSlackAdapter } from '@vercel/connect/chat'
-
-const slackCredentials = connectSlackAdapter('slack/acme')
-const slackAdapter = createSlackAdapter(slackCredentials)
-const slackToken = slackCredentials.botToken
-
-export const { GET, POST, scheduler } = board({
-  sync: {
-    slack: slack({
-      adapter: slackAdapter,
-      client: async () =>
-        slackAdapter.withBotToken(
-          typeof slackToken === 'function' ? await slackToken() : slackToken,
-          () => slackAdapter.webClient,
-        ),
-      channels: { '#prs': 'prs' },
-    }),
-  },
-})
+```ts
+// in board({ sync: { … } }):
+slack: slack({
+  adapter: createSlackAdapter({
+    botToken: process.env.SLACK_BOT_TOKEN!,
+    signingSecret: process.env.SLACK_SIGNING_SECRET!,
+  }),
+  channels: { '#prs': 'prs' },
+}),
 ```
 
-An async-token adapter without `client` fails at setup. A static-token adapter
-can leave it out; vboard uses the adapter's own web client.
+An adapter whose `botToken` is a function (minted per call) also needs a `client`
+resolver that returns the adapter's web client with a fresh token, or setup fails.
+A static-token adapter can leave it out; vboard uses the adapter's own web client.
 
 ## Channels
 
