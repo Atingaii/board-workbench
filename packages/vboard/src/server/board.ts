@@ -59,7 +59,9 @@ import {
   deploymentIdentity,
   type Identity,
   type WriteContext,
+  type WriteOrigin,
 } from './writes.ts'
+import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
 
 export type BoardOptions = {
   /** Any A2 store. Omitted: SQLite in development, memory in tests, an error in production. */
@@ -70,6 +72,11 @@ export type BoardOptions = {
   trustedSources?: readonly TrustedSource[]
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
   sync?: Record<string, SyncProvider>
+  /**
+   * Runs on every post and edit before it lands, whatever it came from: the API, sync,
+   * watchers, schedules. Each calls `next()` to pass the write on; one that doesn't drops it.
+   */
+  middleware?: readonly Middleware[]
   /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
   watch?: Record<string, Watcher>
   /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */
@@ -159,6 +166,8 @@ function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
     }
   return combined as BoardHandlers
 }
+
+const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
 
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
 
@@ -255,6 +264,8 @@ export function board(options: BoardOptions = {}) {
       : async () => {
           throw badRequest('this board has no sync configured')
         },
+    middleware: options.middleware ?? [],
+    middlewareClient: () => clientAs(MIDDLEWARE_IDENTITY, null, { via: { kind: 'middleware' } }),
   }
   const verify = createVerifier({
     projectId: () => ownProjectId(options.project),
@@ -320,8 +331,11 @@ export function board(options: BoardOptions = {}) {
     if (!allows(principal, capability)) throw forbidden(`this source may not ${capability}`)
   }
 
-  /** A client for inbound functions: in-process, writing as `identity`, its posts idempotent per trigger. */
-  function clientAs(identity: Identity, trigger: string | null): BoardClient {
+  /**
+   * A client for inbound functions: in-process, writing as `identity`, its posts idempotent
+   * per trigger. Its posts and edits reach the middleware from `origin`.
+   */
+  function clientAs(identity: Identity, trigger: string | null, origin: WriteOrigin): BoardClient {
     let writesMade = 0
     return createBoardClient({
       // Under the configured mount, so `route()` accepts the paths it builds.
@@ -334,7 +348,7 @@ export function board(options: BoardOptions = {}) {
           body.id ??= await idempotentId('vboard-inbound', trigger, 'client', String(writesMade++))
           request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
         }
-        return dispatch(request, identity)
+        return dispatch(request, identity, origin)
       }) as typeof fetch,
     })
   }
@@ -343,7 +357,7 @@ export function board(options: BoardOptions = {}) {
   schedules.bind({ writes })
   watchers?.bind({ clientAs })
 
-  async function dispatch(request: Request, injected: Identity | null): Promise<Response> {
+  async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
     try {
       const url = new URL(request.url)
       const match = route(request.method, url.pathname, options.basePath)
@@ -490,6 +504,7 @@ export function board(options: BoardOptions = {}) {
             noSync: body.noSync,
             id: body.id,
             sync: body.sync,
+            ...origin,
           })
           return json({ message }, 201)
         }
@@ -517,7 +532,7 @@ export function board(options: BoardOptions = {}) {
         case 'edit': {
           require(principal, 'post')
           const body = EditBody.parse(await readJson(request))
-          await writeEdit(writes, { identity, id: match.id!, text: body.text })
+          await writeEdit(writes, { identity, id: match.id!, text: body.text, ...origin })
           return json({ ok: true })
         }
         case 'delete': {
@@ -635,7 +650,7 @@ export function board(options: BoardOptions = {}) {
     client(name: string, clientOptions: { key?: string } = {}): BoardClient {
       if (!ID.test(name)) throw new Error(`client: names use lowercase letters, numbers, - and _, got: ${name}`)
       const key = clientOptions.key === undefined ? null : `client:${name}:${clientOptions.key}`
-      return clientAs(deploymentIdentity(`vboard:client:${name}`, name), key)
+      return clientAs(deploymentIdentity(`vboard:client:${name}`, name), key, { via: { kind: 'client', name } })
     },
     /** For tests and tools. */
     engine,

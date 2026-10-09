@@ -46,7 +46,9 @@ import {
   writeReaction,
   type Identity,
   type WriteContext,
+  type WriteOrigin,
 } from '../server/writes.ts'
+import { DroppedError } from '../server/middleware.ts'
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
@@ -58,7 +60,7 @@ export type BoardBinding = {
   session: BoardSession
   writes: WriteContext
   /** A vboard client writing as `identity`, with write IDs derived from `trigger`. */
-  clientAs(identity: Identity, trigger: string): BoardClient
+  clientAs(identity: Identity, trigger: string, origin: WriteOrigin): BoardClient
 }
 
 /** `files`: a message with files may have no text. */
@@ -345,7 +347,7 @@ export function createSyncEngine(options: {
       if (code && (await claimCode(key, event, code))) return
     }
     const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
-    const board = clientAs(externalIdentity(author), trigger.id)
+    const board = clientAs(externalIdentity(author), trigger.id, originOf(trigger))
     let applied: Promise<SyncResult> | undefined
     let active = true
     const context: SyncContext = {
@@ -353,7 +355,14 @@ export function createSyncEngine(options: {
       apply(channel, overrides = {}) {
         if (!active) throw badRequest('the sync callback has finished')
         if (applied) throw badRequest('an event can only be imported once per callback')
-        applied = applyIncoming(trigger, attempt, ChannelPath.parse(channel), SyncOverrides.parse(overrides))
+        applied = applyIncoming(trigger, attempt, ChannelPath.parse(channel), SyncOverrides.parse(overrides)).catch(async (error: unknown) => {
+          if (!(error instanceof DroppedError)) throw error
+          // Dropped: nothing of it is on the board, though a root fetched for it may be.
+          const { state } = await session.state(syncReducer)
+          const thread = state.byExternalThread[event.thread]
+          const root = thread === undefined ? undefined : state.threads[thread]?.root
+          return { root: root ?? null, message: null }
+        })
         return applied
       },
       client<E extends ProviderEvent>(publicEvent: E) {
@@ -377,6 +386,22 @@ export function createSyncEngine(options: {
       if (channel) await platform.sync(context, channel)
     } finally {
       active = false
+    }
+  }
+
+  /**
+   * Where a platform event's writes come from, for the middleware, and how it answers
+   * there: a reply in the event's own platform thread.
+   */
+  function originOf(trigger: InboxEvent): Required<WriteOrigin> {
+    const { sync: key, event } = trigger.payload
+    const platform = platformOf(key)
+    const thread = ('subthread' in event ? event.subthread : null) ?? event.thread
+    return {
+      via: { kind: 'sync', key, platform: platform.platform, channel: event.channel, thread },
+      respond: async (text) => {
+        await platform.post(native(thread), 'thread', { markdown: text })
+      },
     }
   }
 
@@ -479,6 +504,7 @@ export function createSyncEngine(options: {
 
   async function applyIncoming(trigger: InboxEvent, attempt: number, channel: string, overrides: SyncOverrides): Promise<SyncResult> {
     const { writes, session } = bound()
+    const source = originOf(trigger)
     const { sync: key, event } = trigger.payload
     const platform = platformOf(key)
     const { state: sync } = await session.state(syncReducer)
@@ -515,6 +541,7 @@ export function createSyncEngine(options: {
         const { attachments, notes } = event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
         const links = await resolveLinks(platform, event.links ?? [])
         const base = {
+          ...source,
           ...(links.length ? { links } : {}),
           identity,
           text: clampText(withNotes(overrides.text ?? event.text, notes), attachments.length > 0),
@@ -535,6 +562,7 @@ export function createSyncEngine(options: {
         }
         const draft = rootDraft({ ...fetched, raw: fetched.raw ?? null })
         const root = await writePost(writes, {
+          ...source,
           identity: externalIdentity(fetched.author), channel,
           text: clampText(draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `root:${trigger.id}`, context: null },
@@ -555,7 +583,7 @@ export function createSyncEngine(options: {
           const { state: messages } = await session.state(messagesReducer)
           const stored = messages.byId[id]
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
-          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { identity, id, text, from: key, asAuthor: false })
+          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { ...source, identity, id, text, from: key, asAuthor: false })
           const links = stored ? await resolveLinks(platform, event.links ?? [], stored.links) : []
           if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, id, links, from: key })
         } else {
@@ -582,17 +610,18 @@ export function createSyncEngine(options: {
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
           if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, id: rootId, set, unset })
-          if (event.reply) return result(await writePost(writes, { identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, id: await writeId(1) }))
+          if (event.reply) return result(await writePost(writes, { ...source, identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, id: await writeId(1) }))
           return { root: rootId, message: createdHere ? rootId : null }
         }
         if (!event.createRoot) return { root: null, message: null }
         const draft = rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw })
         const root = await writePost(writes, {
+          ...source,
           identity, channel, text: clampText(event.reply ? draft.text : overrides.text ?? draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(0),
         })
-        if (event.reply) return result(await writePost(writes, { identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, id: await writeId(1) }))
+        if (event.reply) return result(await writePost(writes, { ...source, identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, id: await writeId(1) }))
         return result(root)
       }
     }

@@ -12,6 +12,7 @@ import { shipit } from "./shipit";
 import { autoland } from "./autoland";
 import { owner } from "./owner";
 import { crosspost } from "./crosspost";
+import { guard } from "./guard";
 import { renderForSlack } from "./render";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
@@ -55,6 +56,9 @@ export const { GET, POST, scheduler } = board({
       },
     }),
   },
+  // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
+  // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
+  middleware: [guard({ mode: "shadow" })],
   watch: {
     shipit: shipit({ tellPi }),
     // Shadow mode: labels each reviewed factory PR autoland=would|no, and merges nothing.

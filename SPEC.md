@@ -2088,6 +2088,26 @@ lane is the thread's, so one bad event would silence the watcher on that thread
 forever. Watchers need the scheduler in production, as sync does. A watcher
 removed from config skips the matches it left behind.
 
+## Middleware
+
+`board({ middleware: [...] })` runs on every post and edit before it's written,
+from every source: the HTTP API, sync (default imports and callbacks' writes),
+watchers, in-process clients, and scheduled sends. It is the one place to filter
+what reaches the board, such as prompt injection from a synced platform. Each
+middleware gets the `write`, its `author`, its `source`, `respond(text)`, an
+in-process `board` client, and `next(patch?)`. Calling `next` passes the write on,
+optionally changing its text or a post's labels; not calling it drops the write,
+which never reaches the log, and so does emptying a write that has no files. A
+retried post whose `id` already landed returns that message without running the
+chain again.
+
+`respond` answers where the write came from: a reply in the platform thread for
+sync, and the message of the `422 dropped` error the API answers with otherwise.
+A dropped scheduled send ends its schedule (`reason: 'dropped'`), since its text
+never changes. The middleware's own `board` writes as `vboard:middleware` and
+skips the middleware. Sync callbacks keep routing (which channel an event goes
+to, overrides); middleware decides whether it lands.
+
 ## Scheduled messages
 
 Slack's "schedule send", for people and agents: post or reply later, once or on
@@ -2176,6 +2196,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
 | What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
 | What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
+| Is there one filter for every write, or one per source? | **One: `middleware` on `board()`** (board thread #4100). Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |
 | Can Connect user tokens post as a person? | **Assumed yes, not yet verified with a real consent:** both factory connectors answer `user_authorization_required` and return real consent URLs (issue #6). Which scopes the tokens get is unverified until someone signs in; without them, delivery falls back to the app. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |

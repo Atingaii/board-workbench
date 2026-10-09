@@ -9,3 +9,11 @@ export {
   type AuthOptions,
   type IssuerConfig,
 } from './auth.ts'
+export {
+  DroppedError,
+  type Middleware,
+  type MiddlewareContext,
+  type Write,
+  type WritePatch,
+  type WriteSource,
+} from './middleware.ts'

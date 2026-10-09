@@ -354,8 +354,11 @@ export const schedulesContract = contract({
     'schedule.canceled': z.object({
       id: z.number().int().positive(),
       by: Author,
-      /** `canceled`: someone canceled it; `thread_deleted`: the thread it replies in is gone. */
-      reason: z.enum(['canceled', 'thread_deleted']),
+      /**
+       * `canceled`: someone canceled it; `thread_deleted`: the thread it replies in is gone;
+       * `dropped`: the board's middleware dropped a send, so it would drop the rest.
+       */
+      reason: z.enum(['canceled', 'thread_deleted', 'dropped']),
     }),
     /** (server) A timer: send `n` is due at `at`. */
     'schedule.due': z.object({ id: z.number().int().positive(), n: z.number().int().nonnegative(), at: Millis }),

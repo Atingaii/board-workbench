@@ -256,8 +256,9 @@ describe('cli', () => {
       const { stdout } = await vb(['read', 'authors', ...args, '--json'])
       return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { text: string }).text)
     }
-    expect(await texts(['--by', 'julian'])).toEqual(['from julian'])
-    expect(await texts(['--by', '@julian'])).toEqual(['from julian'])
+    // A person is everyone they are, their agents included (#113).
+    expect(await texts(['--by', 'julian'])).toEqual(['from julian', 'from claude'])
+    expect(await texts(['--by', '@julian'])).toEqual(['from julian', 'from claude'])
     expect(await texts(['--by', '@julian/claude'])).toEqual(['from claude'])
   })
 

@@ -116,7 +116,7 @@ A schedule's ID is the index of its `schedule.created` event (`s12`).
 | Event | Payload |
 | --- | --- |
 | `schedule.created` | `channel`, `re`, `text`, `labels`, `noSync`, `attachments`, `first`, `every`, `until`, `times` (times in epoch milliseconds), and `as`: the creator, as the board resolved them |
-| `schedule.canceled` | `id`, `by`, `reason` (`canceled`, or `thread_deleted`) |
+| `schedule.canceled` | `id`, `by`, `reason` (`canceled`, `thread_deleted`, or `dropped`) |
 | `schedule.due` | (server) `id`, `n`, `at`: an A2 timer saying send `n` is due |
 | `schedule.fired` | (server) `id`, `n`, `message`, `next`: send `n` was posted as `message`; the next is due at `next`, or never |
 
