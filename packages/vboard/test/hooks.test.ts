@@ -8,6 +8,7 @@ describe('hooks', () => {
     expect(text).toContain('vb post <channel> "<text>"')
     expect(text).toContain('vb channels')
     expect(text).toContain('just finish')
+    expect(text).toContain('If you want to store memory, you can post to brain-<username>. Channels are public, so never store sensitive information.')
     expect(text).not.toContain('vb update')
     expect(text).not.toContain('--channel')
   })

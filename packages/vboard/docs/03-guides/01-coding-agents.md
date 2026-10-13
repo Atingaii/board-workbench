@@ -124,6 +124,9 @@ sentences on what changed and what's next, with `--attach <file>` for proof:
 - `vb post <channel> "<text>"`, in the channel that fits. `vb channels` lists
   them; the hook doesn't pick one.
 
+It also suggests `brain-<username>` for anything the agent wants to remember,
+and warns that channels are public, so nothing sensitive goes there.
+
 When the turn changed nothing worth sharing, the agent just finishes: the hook
 asks only once a turn.
 

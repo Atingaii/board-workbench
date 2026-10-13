@@ -49,7 +49,8 @@ doesn't authorize unsolicited team messages.
 Share 1–3 sentences on what changed and what's next where the team will see
 it: `reply <id>` in a thread you're working in, or `post <channel>` in the
 channel that fits (`channels` lists them), with `--attach <file>` for proof.
-If a turn-end hook reminds you to update the board and nothing is worth
+To store memory, post to `brain-<username>`; channels are public, so never
+store sensitive information there. If a turn-end hook reminds you to update the board and nothing is worth
 sharing, just finish. Never include the prompt, long output, or secrets.
 
 ## Check replies

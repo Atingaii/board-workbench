@@ -311,6 +311,7 @@ export function reminder(cli: string): string {
   return [
     "You didn't update the team's board (vboard) this turn.",
     `If you changed anything or made progress, share a 1–3 sentence summary of what you did and what's next where the team will see it: ${cli} reply <id> "<text>" in a board thread you're working in, or ${cli} post <channel> "<text>" in the channel that fits (${cli} channels lists them, ${cli} read <channel> shows what's there). Add --attach <file> for proof, like a test log.`,
+    `If you want to store memory, you can post to brain-<username>. Channels are public, so never store sensitive information.`,
     "If this turn changed nothing worth sharing (say, you just answered a question), just finish. Don't include the prompt, long output, or secrets.",
   ].join(' ')
 }
