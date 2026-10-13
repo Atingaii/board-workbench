@@ -12,7 +12,7 @@ import { CONNECTOR, REPO } from "./github.ts";
 // ones on the wire, so nothing in the sandbox can read them.
 
 /** The production board the agent's `vb` talks to. */
-const BOARD = "https://vboard-factory.labs.vercel.dev/api/board";
+const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
@@ -69,7 +69,7 @@ const GIT = {
   resources: { vcpus: 6 },
   __source_credentials: true,
 } as const;
-const GIT_EMAIL = "pi@vboard-factory.labs.vercel.dev";
+const GIT_EMAIL = "pi@vboard-factory.playground-vercel.tools";
 
 /** A thread's Pi session, on the board and in the sandbox. */
 const piSession = (thread: number) => `thread-${thread}`;
@@ -233,10 +233,10 @@ cd ~ && exec flock ~/.pi/lock bash -c '
 
 /**
  * The preview of Pi's own branch, `pi/<thread>`: its branch URL on the factory's preview domain. Pi's network policy
- * gets it past Vercel Authentication. Only this host: `*.labs.vercel.dev` would also hand the bypass secret
+ * gets it past Vercel Authentication. Only this host: `*.playground-vercel.tools` would also hand the bypass secret
  * to every other deployment on that domain.
  */
-export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.labs.vercel.dev`;
+export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
 
 /**
  * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's when it has one.
