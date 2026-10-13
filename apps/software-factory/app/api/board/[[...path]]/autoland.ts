@@ -17,7 +17,10 @@ export const STAMP = "stamp-hammer";
 /** A user-facing change gets a changeset; the folder's README isn't one. */
 const isChangeset = (path: string) => /^\.changeset\/[^/]+\.md$/.test(path) && path !== ".changeset/README.md";
 
-export type PullRequest = { state: string; merged: boolean; user: { login: string }; head: { sha: string } };
+export type PullRequest = { state: string; merged: boolean; user: { login: string }; head: { sha: string; ref?: string } };
+
+/** The pi-pr workflow opens the PR for each push to a `pi/` branch, as github-actions[bot]. */
+const byWorkflow = (pr: PullRequest) => pr.user.login === "github-actions[bot]" && pr.head.ref?.startsWith("pi/") === true;
 export type ChangedFile = { filename: string; status: string };
 export type CheckRun = { name: string; status: string; conclusion: string | null };
 export type Review = { land?: string | undefined; why?: string | undefined; sha?: string | undefined };
@@ -26,7 +29,7 @@ export type Review = { land?: string | undefined; why?: string | undefined; sha?
 export function decide(review: Review, pr: PullRequest, files: ChangedFile[], checks: CheckRun[], factory: string) {
   const no = (why: string) => ({ would: false, why });
   if (review.land !== "yes") return no(`review: ${review.why || "not landable"}`);
-  if (pr.user.login !== factory) return no(`opened by ${pr.user.login}, not the factory`);
+  if (pr.user.login !== factory && !byWorkflow(pr)) return no(`opened by ${pr.user.login}, not the factory`);
   if (pr.merged || pr.state !== "open") return no(`the PR is ${pr.merged ? "merged" : pr.state}`);
   if (review.sha !== pr.head.sha) return no("new commits since the review");
   const check = checks.find((run) => run.name === CHECK);

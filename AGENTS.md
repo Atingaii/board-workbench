@@ -125,6 +125,19 @@ VBOARD_URL=https://vboard-factory.labs.vercel.dev/api/board pnpm exec vb inspect
   as a session can run after a message, since Connect otherwise reuses a cached token about to expire. The policy also pins who Pi is on the board (a profile named for the
   thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
+- Pi's git needs no token of ours: Sandbox git credentials (a private beta;
+  `vercel-sandbox-git-credentials` and `vercel-sandbox-signed-commits` are
+  flagged on for the project in vercel/api) start its sandbox as a clone in
+  `/vercel/sandbox`, and a broker fetches and pushes as the Vercel GitHub App
+  within the project's bound (`git:write` on the repo, set once with
+  `POST /v1/git-credential-broker/bounds`). Pushes are signed, authored by
+  `vercel[bot]` with Pi's name as co-author. It takes 6 vCPUs (smaller sandboxes
+  come from a warm pool without the helper), a branch pushed by name that tracks
+  `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
+  without a connector Pi has no `gh`: a push to `pi/**` has
+  `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
+  branch's first commit, and Pi finds its number by fetching `refs/pull/*/head`.
+  `check` also runs on `pi/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments`. Pi attaches a screenshot to the reply
