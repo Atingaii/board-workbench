@@ -28,8 +28,8 @@ while the repo is private). The CLI and the API read their version from
 
 ## the software factory (`apps/software-factory`)
 
-vboard running on itself: the board for `basehub-ai/vboard` PRs and Vercel's
-Slack, on `vercel-internal-playground/vboard-factory`. The app is only wiring,
+vboard running on itself: the board for `vercel-labs/vboard` PRs and Vercel's
+Slack, on `vercel-labs/vboard-factory`. The app is only wiring,
 plus the [docs site](#the-docs-packagesvboarddocs) everywhere outside `/api`:
 the board route holds the whole config, and the A2 scheduler route re-exports
 the board's `scheduler`. They're separate routes because the queue trigger
@@ -37,21 +37,24 @@ makes its function private.
 
 ```bash
 cd apps/software-factory
-vercel link --project vboard-factory --scope vercel-internal-playground
+vercel link --project vboard-factory --scope vercel-labs
 pnpm dev                                       # the board at /api/board
-VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
+VBOARD_URL=https://vboard-factory.labs.vercel.dev/api/board pnpm exec vb inspect
 ```
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  The Redis namespace is `vboard-factory-2`, separate from the v0 feedback bot's
-  (`vboard-2`). Both are new with A2 0.17, whose Redis layout an existing prefix
-  can't take; the factory's log under `vboard-factory` was copied over.
-  Slack channel `C0C6MNT9LLC`, GitHub PRs, and GitHub issues all mirror `dev`.
-  Connect uses `slack/vboard-factory` and
-  `github/vboard-factory`, with production triggers at
-  `/api/board/webhooks/slack` and `/api/board/webhooks/github`.
+  The Redis namespace is `vboard-factory-2`, in the project's own Upstash Redis
+  (`vboard-factory-redis`), which started empty when the factory moved to
+  vercel-labs. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
+  and the GitHub connector named by `FACTORY_GITHUB_CONNECTOR` (`github/<name>`),
+  with production triggers at `/api/board/webhooks/slack` and
+  `/api/board/webhooks/github`. Without that variable the board syncs Slack
+  alone and Pi works without GitHub: a GitHub App on vercel-labs needs an org
+  owner to install it (ask IT in #help-it). The app's bot (its login and commit
+  email) comes from GraphQL's `viewer` for its token, so nothing pins its name.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
   judging the whole thread whenever a person posts. Its scope (`classify.ts`) is the
@@ -122,6 +125,19 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   as a session can run after a message, since Connect otherwise reuses a cached token about to expire. The policy also pins who Pi is on the board (a profile named for the
   thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
   can reach.
+- Pi's git needs no token of ours: Sandbox git credentials (a private beta;
+  `vercel-sandbox-git-credentials` and `vercel-sandbox-signed-commits` are
+  flagged on for the project in vercel/api) start its sandbox as a clone in
+  `/vercel/sandbox`, and a broker fetches and pushes as the Vercel GitHub App
+  within the project's bound (`git:write` on the repo, set once with
+  `POST /v1/git-credential-broker/bounds`). Pushes are signed, authored by
+  `vercel[bot]` with Pi's name as co-author. It takes 6 vCPUs (smaller sandboxes
+  come from a warm pool without the helper), a branch pushed by name that tracks
+  `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
+  without a connector Pi has no `gh`: a push to `pi/**` has
+  `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
+  branch's first commit, and Pi finds its number by fetching `refs/pull/*/head`.
+  `check` also runs on `pi/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments`. Pi attaches a screenshot to the reply
@@ -199,7 +215,7 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 
 Markdown in the package, so it ships on npm (`files` has `docs`) and agents can
 read it in `node_modules/vboard/docs`. The software factory serves it at
-https://vboard-factory.playground-vercel.tools: `docs/index.md` is the landing
+https://vboard-factory.labs.vercel.dev: `docs/index.md` is the landing
 page's body, and every page also answers as markdown at its URL plus `.md`. The
 site (`app/` outside `api/`, `components/`, `lib/`) is A2's docs site ported,
 grayscale and Geist Mono; it reads the docs from its installed `vboard`.

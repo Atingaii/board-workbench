@@ -14,6 +14,7 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
+import { CONNECTOR, REPO } from "./github";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
@@ -23,7 +24,7 @@ const env = process.env.VERCEL_ENV;
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
-const factory = board({
+export const { GET, POST, scheduler } = board({
   store: env
     ? redisHttp({
         url: process.env.KV_REST_API_URL!,
@@ -44,16 +45,18 @@ const factory = board({
       adapter: "slack/vboard-factory",
       render: renderForSlack,
       channels: {
-        C0C6MNT9LLC: "dev",
+        // #development-messageboard
+        C0C8XN8SQRG: "dev",
       },
     }),
-    github: github({
-      adapter: "github/vboard-factory",
-      // Pinned, so no instance spends a call looking it up.
-      botUserId: 338721338,
-      repos: {
-        "basehub-ai/vboard": { pulls: "dev", issues: "dev" },
-      },
+    // Only with a GitHub connector: until vercel-labs installs the factory's app, the board is Slack's alone.
+    ...(CONNECTOR && {
+      github: github({
+        adapter: CONNECTOR,
+        repos: {
+          [REPO]: { pulls: "dev", issues: "dev" },
+        },
+      }),
     }),
   },
   // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
@@ -177,10 +180,3 @@ const factory = board({
     },
   },
 });
-
-// Off for now: the GitHub connector broke when the repo moved to vercel-labs, and every
-// reply got a "Pi couldn't start". Webhooks and the CLI get a 503 until it's fixed.
-const off = () => new Response("the factory board is off for now", { status: 503 });
-export const GET = off;
-export const POST = off;
-export const { scheduler } = factory;
