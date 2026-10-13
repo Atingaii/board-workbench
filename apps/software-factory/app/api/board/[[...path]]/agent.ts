@@ -1,8 +1,9 @@
-import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
+import type { NetworkPolicy, NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
 import type { WatcherContext } from "vboard";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import vboard from "vboard/package.json" with { type: "json" };
+import { bot, CONNECTOR, github as githubApi, REPO } from "./github.ts";
 
 // Pi, the coding agent, working on a board thread from its own Vercel Sandbox: the
 // `pi` CLI with `vb`, `gh`, and git, like a developer at a terminal. Each thread gets
@@ -11,7 +12,7 @@ import vboard from "vboard/package.json" with { type: "json" };
 // ones on the wire, so nothing in the sandbox can read them.
 
 /** The production board the agent's `vb` talks to. */
-const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
+const BOARD = "https://vboard-factory.labs.vercel.dev/api/board";
 const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
@@ -55,9 +56,6 @@ const SNAPSHOT_MS = 7 * 24 * 60 * 60_000;
  * message brings a new token, so one valid for SANDBOX_MS covers it. GitHub's last 60 minutes.
  */
 export const GITHUB_TOKEN = { subject: { type: "app" }, validityBufferMs: SANDBOX_MS } as const;
-
-/** Commits are the factory GitHub App's, under its bot account's noreply address. */
-const GIT_AUTHOR = { name: "vboard-factory[bot]", email: "338721338+vboard-factory[bot]@users.noreply.github.com" };
 
 /** A thread's Pi session, on the board and in the sandbox. */
 const piSession = (thread: number) => `thread-${thread}`;
@@ -145,9 +143,9 @@ const DIRECTION = `Your initial task is a starting point. People can redirect yo
 A person's :shipit: or :approved: reaction is a request to complete the merge. Inspect the PR, resolve the blockers you can, mark it ready if needed, and merge it when GitHub's checks and review requirements allow. Carry that intent through without requiring another reaction. If you need someone else's action, ask them in the thread and explain what's still blocking it.
 A person's :security: reaction on a PR is a request for a deepsec review of its diff. React :secure: on the root only when deepsec exits 0.`;
 
-const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
+const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/${REPO}, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
-A thread's kind label (bug, feature, question, task) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone basehub-ai/vboard; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
+A thread's kind label (bug, feature, question, task) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone ${REPO}; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
 Open the PR body with one line saying what triggered it, before anything else: "> 💬 From [<who>'s Slack thread](<link>) · board #<id>" for Slack, "> 🐙 From #<issue> on GitHub · board #<id>" for a GitHub issue (with "Closes #<issue>" below when the PR fixes it), or "> From board #<id>" when the thread has no source. Your task message gives the source link and who posted it.
 Before you plan or build for a bug or feature, look for related work: search earlier threads with vb read dev --text <keywords> and pull requests with gh pr list --state all --search <keywords>. If a thread or PR already covers it, link it in your reply and build on it (comment there, push to its branch, or ask to merge it) instead of starting over with a duplicate.
 For a bug report:
@@ -160,18 +158,21 @@ For a task (someone asks you to do something, like a recap or an investigation):
 Show your work only when it's worth looking at: when the change is something people can see and you can capture it, attach a screenshot to the reply that links the PR, with --attach <file> (up to 4 MB). When a change touches UI, prefer showing people it works over telling them: for a flow they click through, attach a captioned video of it working instead, using the ui-video skill and your computer tool. Don't attach test runs or logs of your own checks: the tests go in the PR, and for a bug, name the test that reproduces it in the PR body. People see attachments in Slack and vb inspect; GitHub gets a line pointing at the board.
 vb read lists a message's files as file lines with an ID; vb download <id> saves one, so look at screenshots and logs people attach.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you.
-Your PR's reviewer posts its verdict in your thread after each review; that's for you. If it found problems, read the review on GitHub (gh pr view <N> --comments), check for commits since it (someone in the PR thread may already be fixing them), fix what's left on the PR's branch, and push. Then reply in the PR's board thread (the root labeled pr=basehub-ai/vboard#<N>) in one line saying what you pushed: a push alone doesn't reach the board, and that reply is what gets the reviewer to look again. Unless a person said otherwise, don't reply to a review that found nothing to fix.`;
+Your PR's reviewer posts its verdict in your thread after each review; that's for you. If it found problems, read the review on GitHub (gh pr view <N> --comments), check for commits since it (someone in the PR thread may already be fixing them), fix what's left on the PR's branch, and push. Then reply in the PR's board thread (the root labeled pr=${REPO}#<N>) in one line saying what you pushed: a push alone doesn't reach the board, and that reply is what gets the reviewer to look again. Unless a person said otherwise, don't reply to a review that found nothing to fix.`;
 
-const REVIEW = `Your initial task is to review a pull request for vboard (github.com/basehub-ai/vboard, private), a message board library and CLI.
+const REVIEW = `Your initial task is to review a pull request for vboard (github.com/${REPO}, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack and the PR on GitHub), vb label <id> k=v labels it. Run vb help for the rest.
 For a pull request (its board thread's root has a pr=owner/repo#N label):
 Before anything else, react to the PR thread's root with vb react <root id> looking-bunny, so people see a review is underway, also when you start reviewing again after new commits. Take it off with vb react <root id> looking-bunny --remove once you've labeled land in step 4.
-1. Clone with gh repo clone basehub-ai/vboard, then gh pr checkout <N>. Read gh pr view <N> and gh pr diff <N>, and SPEC.md and AGENTS.md for the parts it touches.
+1. Clone with gh repo clone ${REPO}, then gh pr checkout <N>. Read gh pr view <N> and gh pr diff <N>, and SPEC.md and AGENTS.md for the parts it touches.
 2. Run pnpm install and pnpm check. Try the change where you can: a test that should fail without it, or the CLI by hand.
-3. Put the detail on GitHub, attached to the code: submit one review with gh api repos/basehub-ai/vboard/pulls/<N>/reviews --input review.json (event COMMENT, REQUEST_CHANGES or APPROVE, with comments on file:line for each problem and suggestion). You review as vboard-factory[bot], and GitHub rejects APPROVE and REQUEST_CHANGES on that account's own PRs, so on a PR it opened use COMMENT and put the verdict in the body. Inline comments must be on lines the diff touches, or GitHub rejects the whole review; put anything else in the body. Always put the verdict in the body, even when the problems are all inline (a review with an empty body never reaches the board), and keep the body short: the verdict (good to merge, or the blocking problems in a line each), with the detail in the inline comments. The review shows up in the board thread and on Slack on its own, so don't restate it there: reply in the board thread only to add what it lacks, in a line (the mention of whoever asked, or what you tried by hand attached with --attach <file>, a log or a screenshot, up to 4 MB each), or not at all. vb read lists files people attached as file lines; vb download <id> saves one.
+3. Put the detail on GitHub, attached to the code: submit one review with gh api repos/${REPO}/pulls/<N>/reviews --input review.json (event COMMENT, REQUEST_CHANGES or APPROVE, with comments on file:line for each problem and suggestion). You review as the factory GitHub App's bot, and GitHub rejects APPROVE and REQUEST_CHANGES on that account's own PRs, so on a PR it opened use COMMENT and put the verdict in the body. Inline comments must be on lines the diff touches, or GitHub rejects the whole review; put anything else in the body. Always put the verdict in the body, even when the problems are all inline (a review with an empty body never reaches the board), and keep the body short: the verdict (good to merge, or the blocking problems in a line each), with the detail in the inline comments. The review shows up in the board thread and on Slack on its own, so don't restate it there: reply in the board thread only to add what it lacks, in a line (the mention of whoever asked, or what you tried by hand attached with --attach <file>, a log or a screenshot, up to 4 MB each), or not at all. vb read lists files people attached as file lines; vb download <id> saves one.
 4. After each review, say whether the PR could land without a person, in one command on the PR thread's root: vb label <root id> land=yes|no land.why="<one line>" land.sha=<the head SHA you reviewed>. Say yes only when all of these hold: it fixes a bug or does what a person clearly asked for (not something you or its author had to interpret); your review found nothing to fix; and it has no caveats, open questions, or negative tradeoffs (in its body, in the thread, or that you see). Otherwise say no, and land.why says which one failed. When unsure, say no. The board checks the rest itself: who opened it, CI, and whether it changes vboard core for users.
 5. Tell the thread the work started in. When the PR was built for another board thread (its branch is pi/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you: answer questions, and review again if new commits landed (gh pr view <N> --json commits), labeling land again.`;
+
+/** Until the factory has a GitHub connector (`CONNECTOR`), Pi works from the board and the published package. */
+export const NO_GITHUB = `GitHub isn't connected to the factory yet, so you can't clone ${REPO}, push, or open, review or merge PRs. Work from the board and the published vboard package (npm i vboard ships its docs and built code), and when a task needs the repo, say so in one line instead of trying.`;
 
 export const INSTRUCTIONS: Record<Task, string> = {
   thread: `${THREAD}\n${PRESENCE}\n${PROGRESS}\n${DIRECTION}`,
@@ -213,22 +214,27 @@ cd ~ && exec flock ~/.pi/lock bash -c '
 
 /**
  * The preview of Pi's own branch, `pi/<thread>`: its branch URL on the factory's preview domain. Pi's network policy
- * gets it past Vercel Authentication. Only this host: `*.playground-vercel.tools` would also hand the bypass secret
+ * gets it past Vercel Authentication. Only this host: `*.labs.vercel.dev` would also hand the bypass secret
  * to every other deployment on that domain.
  */
-export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
+export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.labs.vercel.dev`;
 
 /**
- * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
+ * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's when it has one.
  * On the board, the policy also sets who Pi is, so nothing in the sandbox can post as anyone else.
  */
 export function policy(
   thread: number,
-  tokens: { gateway: string; board: string; github: string },
+  tokens: { gateway: string; board: string; github: string | null },
   bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
 ): NetworkPolicy {
-  const basic = Buffer.from(`x-access-token:${tokens.github}`).toString("base64");
   const protection = bypass ? { "x-vercel-protection-bypass": bypass } : {};
+  const github: Record<string, NetworkPolicyRule[]> = tokens.github
+    ? {
+        "github.com": [{ transform: [{ headers: { authorization: `Basic ${Buffer.from(`x-access-token:${tokens.github}`).toString("base64")}` } }] }],
+        "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
+      }
+    : {};
   return {
     allow: {
       // Pi speaks the Anthropic messages API to AI Gateway, which reads x-api-key.
@@ -251,8 +257,7 @@ export function policy(
         },
       ],
       ...(bypass ? { [piPreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
-      "github.com": [{ transform: [{ headers: { authorization: `Basic ${basic}` } }] }],
-      "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
+      ...github,
       "*": [],
     },
   };
@@ -361,8 +366,10 @@ async function deliver({ task, thread, key, message }: PiMessage) {
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),
     getVercelOidcToken({ audience: BOARD }),
-    getToken("github/vboard-factory", GITHUB_TOKEN),
+    CONNECTOR ? getToken(CONNECTOR, GITHUB_TOKEN) : null,
   ]);
+  // Commits are the factory GitHub App's, under its bot account's noreply address.
+  const author = github ? await bot(await githubApi({ token: async () => github })) : null;
   await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
   // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
   const extend = extension(sandbox.expiresAt, Date.now());
@@ -373,14 +380,16 @@ async function deliver({ task, thread, key, message }: PiMessage) {
     env: {
       MODEL,
       SESSION: piSession(thread),
-      INSTRUCTIONS: `${INSTRUCTIONS[task]}\nOn the board you're ${piName(thread)}: the Pi for thread #${thread} only. Other threads have their own Pi, with names of their own.`,
+      INSTRUCTIONS: `${INSTRUCTIONS[task]}\nOn the board you're ${piName(thread)}: the Pi for thread #${thread} only. Other threads have their own Pi, with names of their own.${github ? "" : `\n${NO_GITHUB}`}`,
       KEY: key,
       MESSAGE: message,
       // Over any git config Pi writes: otherwise it picks an identity, and GitHub credits a stranger.
-      GIT_AUTHOR_NAME: GIT_AUTHOR.name,
-      GIT_AUTHOR_EMAIL: GIT_AUTHOR.email,
-      GIT_COMMITTER_NAME: GIT_AUTHOR.name,
-      GIT_COMMITTER_EMAIL: GIT_AUTHOR.email,
+      ...(author && {
+        GIT_AUTHOR_NAME: author.login,
+        GIT_AUTHOR_EMAIL: author.email,
+        GIT_COMMITTER_NAME: author.login,
+        GIT_COMMITTER_EMAIL: author.email,
+      }),
     },
     detached: true,
   });

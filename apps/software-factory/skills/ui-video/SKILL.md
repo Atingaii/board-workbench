@@ -29,7 +29,7 @@ Use whichever shows the change best:
 
 - **The PR's preview deployment**, when the change needs real data,
   sign-in or the deployed setup. A factory PR's branch `pi/<thread>` deploys to
-  `https://vboard-factory-git-pi-<thread>.playground-vercel.tools`
+  `https://vboard-factory-git-pi-<thread>.labs.vercel.dev`
   (for example `pi-3100`). The sandbox's network policy adds the Vercel
   Authentication bypass to that host, so it opens without signing in to Vercel.
   Other preview hosts still ask for Vercel login, so use a local server for
