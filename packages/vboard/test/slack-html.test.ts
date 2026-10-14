@@ -68,5 +68,6 @@ describe('withoutHtml', () => {
   it("leaves code, Slack's own <@U123> and <https://…> syntax, and comparisons alone", () => {
     const text = 'use `<a href="x">` and\n\n```html\n<picture></picture>\n```\n\nping <@U123> at <https://x.dev|x> if a < b > c'
     expect(withoutHtml(text)).toBe(text)
+    expect(withoutHtml('see ``a `<b>` c`` <b>x</b>')).toBe('see ``a `<b>` c`` **x**')
   })
 })

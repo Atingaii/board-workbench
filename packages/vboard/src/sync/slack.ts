@@ -99,9 +99,9 @@ export function withoutHtml(markdown: string): string {
     return out
   }
   // Fenced blocks and inline code keep their HTML: it's what someone wanted shown.
-  const parts = markdown.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/)
+  const parts = markdown.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|``[^\n]*?``|`[^`\n]+`)/)
   const result = parts.map((part, i) => (i % 2 ? part : prose(part))).join('')
-  return changed ? result.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim() : markdown
+  return changed ? result.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '') : markdown
 }
 
 /**
