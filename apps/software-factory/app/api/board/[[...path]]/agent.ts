@@ -1,4 +1,4 @@
-import type { NetworkPolicy, NetworkPolicyRule, Sandbox } from "@vercel/sandbox";
+import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 import type { WatcherContext } from "vboard";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -185,14 +185,6 @@ Before anything else, react to the PR thread's root with vb react <root id> look
 5. Tell the thread the work started in. When the PR was built for another board thread (its branch is pi/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you: answer questions, and review again if new commits landed (gh pr view <N> --json commits), labeling land again.`;
 
-/**
- * Until the factory has a GitHub connector (`CONNECTOR`), Pi has git but not GitHub's API: a push to `pi/*` has
- * the pi-pr workflow open its pull request, and Pi finds the number from the pull refs, with git alone.
- */
-export const NO_GITHUB = `GitHub's API isn't connected to the factory yet, so gh and api.github.com don't work here: you can't comment on, review, label, close, or merge anything on GitHub, so don't try, and say so in one line when someone asks for it. git works. /vercel/sandbox is already a clone of ${REPO} (use it instead of gh repo clone, git fetch origin to update it), and a second git clone https://github.com/${REPO}.git works too.
-To open a pull request: make your branch with git checkout --track -b pi/<thread id> origin/main, commit, and push it with git push origin pi/<thread id> (no -q, no --force; push only the branch you have checked out). A push to a pi/ branch opens its pull request on its own, titled and described by the branch's first commit: make that commit's subject the PR title and its body the PR body, starting with the trigger line. Later pushes update the same PR. To get its link, run: for i in $(seq 30); do git fetch -q origin '+refs/pull/*/head:refs/remotes/origin/pull/*'; n=$(git for-each-ref --points-at HEAD --format='%(refname:lstrip=4)' refs/remotes/origin/pull | head -1); [ -n "$n" ] && break; sleep 10; done; echo https://github.com/${REPO}/pull/$n
-To find related pull requests without gh, read the board (vb read dev --text <keywords>) and the branches (git branch -r).`;
-
 export const INSTRUCTIONS: Record<Task, string> = {
   thread: `${THREAD}\n${PRESENCE}\n${PROGRESS}\n${DIRECTION}`,
   review: `${REVIEW}\n${PRESENCE}\n${DIRECTION}`,
@@ -239,19 +231,16 @@ cd ~ && exec flock ~/.pi/lock bash -c '
 export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
 
 /**
- * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's when it has one.
+ * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
  * On the board, the policy also sets who Pi is, so nothing in the sandbox can post as anyone else.
  */
 export function policy(
   thread: number,
-  tokens: { gateway: string; board: string; github: string | null },
+  tokens: { gateway: string; board: string; github: string },
   bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
 ): NetworkPolicy {
   const protection = bypass ? { "x-vercel-protection-bypass": bypass } : {};
   // git itself goes through the sandbox's git credentials (`GIT`), so only the API gets the app's token.
-  const github: Record<string, NetworkPolicyRule[]> = tokens.github
-    ? { "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }] }
-    : {};
   return {
     allow: {
       // Pi speaks the Anthropic messages API to AI Gateway, which reads x-api-key.
@@ -274,7 +263,7 @@ export function policy(
         },
       ],
       ...(bypass ? { [piPreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
-      ...github,
+      "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "*": [],
     },
   };
@@ -386,7 +375,7 @@ async function deliver({ task, thread, key, message }: PiMessage) {
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),
     getVercelOidcToken({ audience: BOARD }),
-    CONNECTOR ? getToken(CONNECTOR, GITHUB_TOKEN) : null,
+    getToken(CONNECTOR, GITHUB_TOKEN),
   ]);
   await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
   // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
@@ -398,7 +387,7 @@ async function deliver({ task, thread, key, message }: PiMessage) {
     env: {
       MODEL,
       SESSION: piSession(thread),
-      INSTRUCTIONS: `${INSTRUCTIONS[task]}\nOn the board you're ${piName(thread)}: the Pi for thread #${thread} only. Other threads have their own Pi, with names of their own.${github ? "" : `\n${NO_GITHUB}`}`,
+      INSTRUCTIONS: `${INSTRUCTIONS[task]}\nOn the board you're ${piName(thread)}: the Pi for thread #${thread} only. Other threads have their own Pi, with names of their own.`,
       KEY: key,
       MESSAGE: message,
     },

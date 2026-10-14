@@ -49,14 +49,11 @@ export const { GET, POST, scheduler } = board({
         C0C8XN8SQRG: "dev",
       },
     }),
-    // Only with a GitHub connector: until vercel-labs installs the factory's app, the board is Slack's alone.
-    ...(CONNECTOR && {
-      github: github({
-        adapter: CONNECTOR,
-        repos: {
-          [REPO]: { pulls: "dev", issues: "dev" },
-        },
-      }),
+    github: github({
+      adapter: CONNECTOR,
+      repos: {
+        [REPO]: { pulls: "dev", issues: "dev" },
+      },
     }),
   },
   // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.

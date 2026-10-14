@@ -37,6 +37,12 @@ test("policy: Pi's own branch preview gets past Vercel Authentication, and no ot
   assert.equal(policy(3100, tokens, undefined).allow[piPreview(3100)], undefined);
 });
 
+test("policy: Pi's GitHub API calls always carry the factory GitHub App's token", () => {
+  assert.deepEqual(policy(3100, tokens, undefined).allow["api.github.com"], [
+    { transform: [{ headers: { authorization: "Bearer h" } }] },
+  ]);
+});
+
 // ui-video with fake Xvfb, ffmpeg and AI Gateway: what it records, which captions it burns in, and when.
 function recorder() {
   const dir = mkdtempSync(join(tmpdir(), "ui-video-"));
