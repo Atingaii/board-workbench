@@ -3,7 +3,7 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, FilterInput } from './provider.ts'
+import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput } from './provider.ts'
 
 type Raw = { kapso?: { transcript?: { text?: unknown } } } | null
 type Sent = { responses?: { messages?: { id?: string }[] }[] } | null
@@ -21,8 +21,6 @@ export type KapsoHandler = SyncHandler<WhatsAppEvent>
 export type KapsoOptions = {
   adapter: Adapter
   render?: (input: RenderInput) => string
-  /** Which board messages go to this platform: return false to keep one on the board. */
-  filter?: (input: FilterInput) => boolean
   markRead: MarkRead
   numbers: Record<string, EventMapping<WhatsAppEvent>>
 }
@@ -45,7 +43,6 @@ export class KapsoProvider extends ChatSyncProvider<WhatsAppEvent> {
     super({
       fileIds,
       render: options.render,
-      filter: options.filter,
       platform: 'whatsapp',
       adapter: options.adapter,
       canStartThreads: false,

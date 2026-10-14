@@ -214,22 +214,3 @@ The default renderer reads no labels, so labels alone never edit a copy. Renderi
 applies to roots, replies, backfills, and edits; changing it affects future
 deliveries, not copies already sent. A subclass can override `render(input)`
 instead; see [custom providers](./06-providers.md).
-
-## Filter
-
-Every provider also takes `filter`, which decides which board messages it gets.
-It receives immutable copies of the message, its thread's root (the message
-itself, for a root), and the destination, and returns `false` to keep the
-message on the board:
-
-```ts
-// in slack({ … }): inline review threads and quiet threads stay on the board
-filter: ({ message, root }) => !message.origin?.subthread && root.labels.quiet === undefined,
-```
-
-The board keeps every message either way; only that platform's copy is skipped.
-A root it turns down never starts a thread there, so nothing in that thread is
-delivered. It runs when a message is delivered, backfills included: a message it
-turned down isn't sent later when the filter changes, and edits and reactions
-only reach copies that were sent. A subclass can override `accepts(input)`
-instead.

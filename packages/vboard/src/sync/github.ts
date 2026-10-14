@@ -4,7 +4,7 @@ import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ReceivedEvent, ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, FilterInput, ProviderPost, ProviderDelivery } from './provider.ts'
+import type { ReceivedEvent, ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, ProviderPost, ProviderDelivery } from './provider.ts'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectGitHubAdapter } from '@vercel/connect/chat'
 import { connectUserTokens, withUserTokens } from './users.ts'
@@ -226,8 +226,6 @@ export type GitHubOptions = {
    */
   botUserId?: number
   render?: (input: RenderInput) => string
-  /** Which board messages go to this platform: return false to keep one on the board. */
-  filter?: (input: FilterInput) => boolean
   repos: Record<string, GitHubRepo>
 }
 
@@ -309,7 +307,6 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     }
     super({
       render: options.render,
-      filter: options.filter,
       platform: 'github',
       adapter: options.adapter,
       canStartThreads: false,
@@ -432,7 +429,12 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     }
   }
 
-  // As a person, straight to GitHub's API: through the adapter, their comment would teach it that
+  // An inline review thread (comments on lines of code) is a conversation about the diff: it stays on GitHub and the board.
+  override boardOnly(event: ExternalEvent): boolean {
+    return event.kind === 'message' && event.subthread !== null
+  }
+
+    // As a person, straight to GitHub's API: through the adapter, their comment would teach it that
   // they're the bot, and their own comments would stop syncing.
   override async whoAmI(token: string) {
     const user = (await asPerson(token, 'GET', '/user')) as User

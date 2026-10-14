@@ -22,7 +22,6 @@ function setup(
     channels?: SlackChannels
     slackClient?: unknown
     slackRender?: import('../src/sync/provider.ts').ProviderOptions['render']
-    slackFilter?: import('../src/sync/provider.ts').ProviderOptions['filter']
     asyncToken?: boolean
     githubClient?: unknown
     repos?: Parameters<typeof github>[0]['repos']
@@ -37,7 +36,6 @@ function setup(
       slack: slack({
         adapter: s.adapter,
         render: options.slackRender,
-        filter: options.slackFilter,
         ...(options.slackClient ? { client: async () => options.slackClient as import('../src/sync/slack.ts').SlackClient } : {}),
         channels: { C1: 'firehose', C2: 'prs', ...(options.alerts ? { C3: options.alerts } : {}), ...options.channels },
       }),
@@ -648,12 +646,8 @@ describe('sync', () => {
     await vi.waitFor(() => expect(reactions.deleteForIssue).toHaveBeenCalledExactlyOnceWith({ ...where, reaction_id: 10 }))
   })
 
-  it("delivers only what a platform's filter accepts, backfills included", async () => {
-    const { board, s, webhook } = setup({
-      githubClient: { rest: { pulls: { get: vi.fn() } } },
-      // Inline review threads and threads labeled quiet stay on the board.
-      slackFilter: ({ message, root }) => !message.origin?.subthread && root.labels.quiet === undefined,
-    })
+  it("keeps a PR's inline review threads on GitHub and the board, out of Slack", async () => {
+    const { board, s, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
     const julian = caller(board.fetch, await personToken())
     const repository = { full_name: 'basehub-ai/vboard' }
     const pr = { number: 40, title: 'Review me', html_url: 'https://github.com/basehub-ai/vboard/pull/40' }
@@ -664,20 +658,15 @@ describe('sync', () => {
     await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(3))
     await vi.waitFor(() => expect(s.posts).toHaveLength(1))
     expect(JSON.parse(s.posts[0]!.text).markdown).toContain('Ready for another look')
-    const [root, inline] = await read(julian, 'prs')
-    expect(inline).toMatchObject({ text: 'Fixed in abc123', noSync: false }) // the board keeps it as it was
+    const [root, inline, top] = await read(julian, 'prs')
+    expect(inline).toMatchObject({ text: 'Fixed in abc123', noSync: true })
+    expect(top).toMatchObject({ noSync: false })
 
-    // A backfill skips it too.
+    // A backfill leaves it out too.
     await julian('POST', `/messages/${root!.id}/sync`, { target: 'slack:C1' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
     await vi.waitFor(() => expect(s.posts).toHaveLength(2))
     expect(s.posts.map((p) => p.text).join('\n')).not.toContain('Fixed in abc123')
-
-    // A root the filter turns down never starts a Slack thread.
-    await julian('POST', '/messages', { channel: 'prs', text: 'shh', labels: { quiet: 'yes' } })
-    await julian('POST', '/messages', { channel: 'prs', text: 'loud' })
-    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(3))
-    expect(s.channelPosts.map((p) => p.text).join('\n')).not.toContain('shh')
   })
 
   it("mirrors Vercel's deployment comment to Slack as a line per deployment, keeping the original on the board", async () => {
@@ -726,10 +715,13 @@ describe('sync', () => {
     expect(body.message.origin).toMatchObject({ thread: `github:basehub-ai/vboard:${issue ? 'issue:' : ''}50`, subthread: null, context: null })
     expect(body.replies[0].origin).toMatchObject({ subthread: thread.endsWith(':rc:123') ? `github:${thread}` : null, context: 'src/index.ts:12' })
     expect(get).toHaveBeenCalledExactlyOnceWith({ owner: 'basehub-ai', repo: 'vboard', [issue ? 'issue_number' : 'pull_number']: 50 })
-    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
-    expect(s.channelPosts).toHaveLength(1)
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     expect(s.channelPosts[0]!.text).toContain('Root first')
-    expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
+    if (thread.endsWith(':rc:123')) expect(s.posts).toHaveLength(0) // an inline review comment stays on GitHub and the board
+    else {
+      await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+      expect(s.posts[0]!.threadId).toBe(`slack:C2:${s.channelPosts[0]!.id}`)
+    }
     expect(g.posts).toHaveLength(0)
 
     await webhook('github', { action: 'opened', repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' },
