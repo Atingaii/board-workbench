@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMessage, formatSchedule } from '../src/cli/format.ts'
+import { formatMessage, formatSchedule, formatThreadSummaries } from '../src/cli/format.ts'
 import type { MessageView, ScheduleView } from '../src/api/routes.ts'
 
 const by = { actor: 'vercel:user:j', principal: 'vercel:user:j', profile: null, session: null }
@@ -29,5 +29,19 @@ describe('CLI output has no emoji', () => {
     const out = formatSchedule(schedule)
     expect(out).not.toMatch(pictograph)
     expect(out).toMatch(/^s12  new thread in dev · once · next in 2m \(.+\) · 2 files · by Julian\n    ping$/)
+  })
+})
+
+describe('read --threads', () => {
+  it("cuts a root's first line to fit 80 columns, and marks that more follows", () => {
+    const root = (text: string) =>
+      ({
+        id: 812, channel: 'dev', text, re: null, labels: {}, reactions: {}, mentions: [], by, from: null,
+        createdAt: new Date().toISOString(), deleted: false, attachments: [], author,
+      }) as unknown as MessageView
+    const shown = (text: string) => formatThreadSummaries([{ message: root(text), replies: 0, last: null }]).split('\n')[1]!
+    for (const text of ['x'.repeat(73) + '\nmore', 'x'.repeat(74) + '\nmore', 'x'.repeat(200)]) expect(shown(text)).toBe(`      ${'x'.repeat(73)}…`)
+    expect(shown('x'.repeat(74))).toBe(`      ${'x'.repeat(74)}`)
+    expect(shown('flaky test\r\nsecond line')).toBe('      flaky test …')
   })
 })

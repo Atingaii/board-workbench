@@ -101,9 +101,9 @@ function firstLine(message: MessageView): string {
   const text = displayText(message.text, message.by.actor).trim()
   const files = message.attachments?.length ?? 0
   if (!text) return files ? `(${files} ${files === 1 ? 'file' : 'files'})` : '(no text)'
-  const lines = text.split('\n')
-  const line = lines[0]!
-  return line.length > 74 ? `${line.slice(0, 73)}…` : lines.length > 1 ? `${line} …` : line
+  const [line = '', ...rest] = text.split(/\r?\n/)
+  const shown = rest.length ? `${line.trimEnd()} …` : line
+  return shown.length > 74 ? `${line.slice(0, 73)}…` : shown
 }
 
 /**
