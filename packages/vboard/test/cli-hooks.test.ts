@@ -189,6 +189,37 @@ describe('cli hooks', () => {
     expect(await reminds(stop(`s2-${Date.now()}`, false, { VBOARD_URL: '' }))).toBeNull()
   }, 60_000)
 
+  it('offers, once per board, to link the person\'s accounts: a question the agent asks, after its first reminder', async () => {
+    const repo = await tmp('vboard-repo-')
+    execFileSync('git', ['init', '-q', '-b', 'feat/link'], { cwd: repo })
+    // Its own config directory: whether the offer was made outlasts the temp directory's markers.
+    const at = { XDG_CONFIG_HOME: await tmp('vboard-config-') }
+    const stop = async (extra: NodeJS.ProcessEnv = {}) => {
+      const payload = JSON.stringify({ session_id: `l-${Math.random()}`, cwd: repo, stop_hook_active: false })
+      const { stdout } = await vb(['hook', 'stop', '--agent', 'claude'], { ...at, ...extra }, payload)
+      return JSON.parse(stdout).hookSpecificOutput.additionalContext as string
+    }
+
+    const first = await stop()
+    expect(first).toContain(' post <channel> "<text>"')
+    expect(first).toContain(' identity link <key> --no-wait')
+    expect(first).toContain('ask the person in one short question')
+    expect(first).toContain('only they should open or post it')
+    // Every later reminder, in any session, is just the reminder.
+    const later = await stop()
+    expect(later).toContain(' post <channel> "<text>"')
+    expect(later).not.toContain('identity')
+    // Another board gets its own offer.
+    expect(await stop({ VBOARD_URL: `${url}?other` })).toContain(' identity link <key> --no-wait')
+
+    // When `hooks install` finds nothing to link (this board syncs nowhere), agents never ask.
+    const fresh = { XDG_CONFIG_HOME: await tmp('vboard-config-'), HOME: await tmp('vboard-home-') }
+    const installed = await vb(['hooks', 'install', 'claude'], fresh)
+    expect(installed.stdout).not.toContain('offer')
+    const payload = JSON.stringify({ session_id: `l-${Math.random()}`, cwd: repo, stop_hook_active: false })
+    expect(JSON.parse((await vb(['hook', 'stop', '--agent', 'claude'], fresh, payload)).stdout).hookSpecificOutput.additionalContext).not.toContain('identity')
+  })
+
   it('reminds Cursor with a follow-up message, keyed by project since its shell has no session', async () => {
     const home = await tmp('vboard-home-')
     expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor  ~/.cursor/hooks.json\n  added the turn-end hook\n')

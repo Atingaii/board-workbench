@@ -18,6 +18,7 @@ import {
   AGENTS,
   allow,
   allowRules,
+  claimLinkOffer,
   cliOf,
   codexNetwork,
   decideStop,
@@ -25,6 +26,7 @@ import {
   installedHook,
   installHook,
   legacyRules,
+  linkOffer,
   markPosted,
   reminder,
   stopOutput,
@@ -368,6 +370,30 @@ function portFlag(): number | undefined {
   return port
 }
 
+/** The board's sync entries on a platform you haven't linked an account on. */
+const unlinkedKeys = (sync: { key: string; platform: string }[], links: { actor: string }[]) =>
+  sync.filter((entry) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`))).map((entry) => entry.key)
+
+/**
+ * For `hooks install`: the sync entries you could still link on the project's
+ * board, or null when there's none or it doesn't answer within a few seconds.
+ * Nothing left to link marks the agents' offer made, so they never ask.
+ */
+async function unlinkedAccounts(): Promise<string[] | null> {
+  const url = process.env.VBOARD_URL || projectUrl()
+  if (!url) return null
+  try {
+    const board = client()
+    const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out')), 5000).unref())
+    const [discovery, view] = await Promise.race([Promise.all([board.discovery(), board.identity()]), timeout])
+    const open = unlinkedKeys(discovery.sync ?? [], view.links)
+    if (open.length === 0) claimLinkOffer(url)
+    return open
+  } catch {
+    return null
+  }
+}
+
 /** How long `identity link` waits for the sign-in or the code. */
 const LINK_WAIT_MS = 10 * 60_000
 
@@ -377,8 +403,10 @@ async function identity(args: string[]): Promise<number> {
   if (sub === undefined) {
     const view = await board.identity()
     if (flags.json) return printJson(view), 0
-    if (view.links.length === 0) return out('no linked accounts: `vb identity link <key>` links one, where <key> is a sync entry such as slack or github'), 0
+    if (view.links.length === 0) out('no linked accounts')
     for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
+    const open = unlinkedKeys((await board.discovery()).sync ?? [], view.links)
+    if (open.length > 0) out(`not linked  ${open.join(', ')}  (vb identity link <key>)`)
     return 0
   }
   if (sub === 'unlink') {
@@ -655,6 +683,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
       out('The hooks remind once per turn without a board update.')
       out('They stay quiet outside projects linked with `vb link <url>`.')
+      const unlinked = await unlinkedAccounts()
+      // Says what's coming, so the agent's question isn't a surprise; `vb identity link` does it now.
+      if (unlinked?.length) out(`Your agent will offer, once, to link your ${new Intl.ListFormat('en').format(unlinked)} account${unlinked.length > 1 ? 's' : ''}.`)
       return 0
     }
 
@@ -677,11 +708,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const cwd = payload.cwd ?? payload.workspace_roots?.[0]
         if (cwd && existsSync(cwd)) process.chdir(cwd)
         const session = turnKey(agent, agent === 'cursor' ? null : (payload.session_id ?? null))
-        if (!session || !(process.env.VBOARD_URL || projectUrl())) return 0
+        const boardUrl = process.env.VBOARD_URL || projectUrl()
+        if (!session || !boardUrl) return 0
         if (payload.status && payload.status !== 'completed') return 0
         const continuing = payload.stop_hook_active === true || (payload.loop_count ?? 0) > 0
         if (decideStop(session, continuing) === 'ask') {
-          const text = reminder(cliCommand().command)
+          const cli = cliCommand().command
+          // The first reminder on this board also offers, once, to link the person's accounts.
+          const text = claimLinkOffer(boardUrl) ? `${reminder(cli)}\n\n${linkOffer(cli)}` : reminder(cli)
           printJson(stopOutput(agent, text))
         }
       } catch {}

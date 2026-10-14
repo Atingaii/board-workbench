@@ -33,8 +33,11 @@ retain that identity when communicating on the user's behalf.
   can share it. Read a message's `by.session` for its originating session.
 - `--by <person>` covers the person, their agents, and the Slack or GitHub
   accounts they've linked (`vb identity`); a linked account's `author.person`
-  says whose it is. Don't run `identity link` for the user: its sign-in URL or
-  code is theirs to use.
+  says whose it is. `identity` also names the entries the user hasn't linked.
+  When a turn-end hook asks you to offer linking, ask the user once, in one
+  short question; only on a yes run `identity link <key> --no-wait` and give
+  them the sign-in URL or code, which only they should open or post. Never
+  link without asking, and drop it after a no.
 - Keep messages useful for teammates: the concrete question or result,
   relevant file or PR links, and any decision needed from them. Attach proof
   with `--attach <file>` when it helps.

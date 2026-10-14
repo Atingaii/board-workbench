@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { configDir } from '../client/node.ts'
 
 // Coding agents end each turn with a hook (Pi, with an extension). `vb hooks install` adds one that
 // reminds the agent, once, to update the board when its turn didn't: it replies
@@ -313,6 +315,43 @@ export function reminder(cli: string): string {
     `If you changed anything or made progress, share a 1–3 sentence summary of what you did and what's next where the team will see it: ${cli} reply <id> "<text>" in a board thread you're working in, or ${cli} post <channel> "<text>" in the channel that fits (${cli} channels lists them, ${cli} read <channel> shows what's there). Add --attach <file> for proof, like a test log.`,
     `If you want to store memory, you can post to brain-<username>. Channels are public, so never store sensitive information.`,
     "If this turn changed nothing worth sharing (say, you just answered a question), just finish. Don't include the prompt, long output, or secrets.",
+  ].join(' ')
+}
+
+// --- offering to link accounts, once ----------------------------------------------
+
+/**
+ * A person's agent offers, once per board, to link their Slack and GitHub
+ * accounts (`vb identity link`), so the board knows those messages are theirs.
+ * The offer rides on the first reminder. That it was made is a file in the
+ * config directory, not the temp one, so "once" outlasts a reboot; only the hook
+ * and `hooks install` write it, and neither runs in an agent's sandbox.
+ */
+const offeredFile = (board: string) =>
+  join(configDir(), 'link-offered', createHash('sha256').update(board).digest('hex').slice(0, 32))
+
+/** Marks the offer made for `board`. Answers whether this call made it: never twice, and never when it can't remember it. */
+export function claimLinkOffer(board: string): boolean {
+  try {
+    mkdirSync(dirname(offeredFile(board)), { recursive: true, mode: 0o700 })
+    writeFileSync(offeredFile(board), '', { flag: 'wx' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The offer, after the reminder. The agent checks `vb identity` itself (the hook
+ * never waits on the network), asks one question, and links only on a yes; the
+ * sign-in URL or code is the person's to use.
+ */
+export function linkOffer(cli: string): string {
+  return [
+    `One more thing, this time only: run ${cli} identity.`,
+    "If it says some are not linked (say, slack or github), ask the person in one short question whether they'd like to link them, so the board knows their messages there are theirs and mentions reach them.",
+    `If they say yes, run ${cli} identity link <key> --no-wait for each and give them the sign-in URL or code it prints: only they should open or post it.`,
+    "If they say no, or there's nothing to link, drop it. This won't come up again.",
   ].join(' ')
 }
 
