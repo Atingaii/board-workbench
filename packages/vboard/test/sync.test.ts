@@ -596,6 +596,22 @@ describe('sync', () => {
     expect(g.posts).toHaveLength(0)
   })
 
+  it('keeps a draft PR a draft when it is closed and reopened', async () => {
+    const { board, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const sender = { id: 42, login: 'julianbenegas' }
+    const pr = { number: 39, title: 'Spike', html_url: 'https://github.com/basehub-ai/vboard/pull/39', draft: true }
+    const send = (action: string, extra = {}) =>
+      webhook('github', { action, repository, sender, pull_request: { ...pr, ...extra } }, { 'x-github-event': 'pull_request', 'x-github-delivery': `draft-${action}` })
+    await send('opened')
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.labels.state).toBe('draft'))
+    await send('closed', { merged: false })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.labels.state).toBe('closed'))
+    await send('reopened')
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.labels.state).toBe('draft'))
+  })
+
   it.each([
     { name: 'PR', key: 'pull_request', event: 'pull_request' },
     { name: 'issue', key: 'issue', event: 'issues' },
