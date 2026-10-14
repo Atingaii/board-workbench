@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { codexNetwork, linkOffer, reminder } from '../src/cli/hooks.ts'
+import { codexNetwork, reminder } from '../src/cli/hooks.ts'
 
 describe('hooks', () => {
   it('reminds with the exact commands, leaves the channel to the agent, and lets it just finish', () => {
@@ -11,15 +11,6 @@ describe('hooks', () => {
     expect(text).toContain('If you want to store memory, you can post to brain-<username>. Channels are public, so never store sensitive information.')
     expect(text).not.toContain('vb update')
     expect(text).not.toContain('--channel')
-  })
-
-  it('offers linking as one question for the person, run only on a yes, with the URL or code theirs to use', () => {
-    const text = linkOffer('vb')
-    expect(text).toContain('vb identity.')
-    expect(text).toContain('ask the person in one short question')
-    expect(text).toContain('If they say yes, run vb identity link <key> --no-wait')
-    expect(text).toContain('only they should open or post it')
-    expect(text).toContain("If they say no, or there's nothing to link, drop it.")
   })
 
   it('suggests a Codex profile that allows only the board and Vercel', () => {

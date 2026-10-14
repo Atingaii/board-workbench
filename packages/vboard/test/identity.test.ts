@@ -109,6 +109,7 @@ describe('linking accounts with a one-time code', () => {
     await vi.waitFor(async () => expect(await read(julian, 'channel=firehose')).toHaveLength(3))
     // Before linking, the Slack account is someone else; your agents are already you.
     expect((await read(julian, 'by=julian')).map((m) => m.text)).toEqual(['from the board', 'from my agent'])
+    expect((await julian('GET', '/identity')).body.unlinked).toEqual(['slack', 'github'])
 
     const challenge = (await julian('POST', '/identity/link', { sync: 'slack' })).body
     expect(challenge).toMatchObject({ method: 'code', sync: 'slack', platform: 'slack', code: expect.stringMatching(/^vb-[A-Z2-9]{4}-[A-Z2-9]{4}$/) })
@@ -118,6 +119,7 @@ describe('linking accounts with a one-time code', () => {
     expect((await julian('GET', '/identity')).body).toMatchObject({
       principal: 'vercel:user:u_julian',
       links: [{ actor: 'slack:user:U_JULIAN', handle: 'jb', method: 'code' }],
+      unlinked: ['github'],
     })
     // The code never reaches the board, and Slack gets a check mark on it.
     expect((await read(julian, 'channel=firehose')).map((m) => m.text)).not.toContain(challenge.code)
@@ -434,10 +436,9 @@ describe('vb identity', () => {
     try {
       const url = `${server.origin}/api/board`
       const token = await personToken('u_julian', url)
-      // It names what's left to link: the board's sync entries, so an agent knows what to offer.
+      // It names the sync entries left to link, so an agent knows what to offer.
       expect(await run(url, token, ['identity'])).toMatchObject({ code: 0, stdout: 'no linked accounts\nnot linked  slack, github  (vb identity link <key>)\n' })
-      // Installing the hooks says the agent will offer to link them, so its question isn't a surprise.
-      expect((await run(url, token, ['hooks', 'install', 'claude'])).stdout).toMatch(/\nyour agent will offer once to link slack and github\n$/)
+      expect(JSON.parse((await run(url, token, ['identity', '--json'])).stdout).unlinked).toEqual(['slack', 'github'])
 
       let posted: Promise<Response> | undefined
       const linking = await run(url, token, ['identity', 'link', 'slack'], (line) => {
@@ -448,7 +449,6 @@ describe('vb identity', () => {
       expect(linking.stdout).toMatch(/^From your slack account, post this as a message anywhere the board syncs, within 10 minutes:\n\n  vb-[A-Z2-9]{4}-[A-Z2-9]{4}\n\nlinked @jb \(slack:user:U_JULIAN\)\n$/)
 
       expect((await run(url, token, ['identity'])).stdout).toMatch(/^@jb  slack:user:U_JULIAN  by code · \d{4}-\S+\nnot linked  github  \(vb identity link <key>\)\n$/)
-      expect((await run(url, token, ['hooks', 'install', 'claude'])).stdout).toMatch(/\nyour agent will offer once to link github\n$/)
       expect(await run(url, token, ['identity', 'unlink', '@jb'])).toMatchObject({ code: 0, stdout: 'unlinked slack:user:U_JULIAN\n' })
       expect((await run(url, token, ['identity', 'nope'])).code).toBe(2)
     } finally {

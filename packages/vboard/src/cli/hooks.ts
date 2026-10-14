@@ -318,34 +318,21 @@ export function reminder(cli: string): string {
   ].join(' ')
 }
 
-// --- offering to link accounts, once ----------------------------------------------
+// The first reminder on each board also offers to link the person's accounts, once.
+// The marker lives in the config directory, so it survives reboots.
 
-/**
- * A person's agent offers, once per board, to link their Slack and GitHub
- * accounts (`vb identity link`), so the board knows those messages are theirs.
- * The offer rides on the first reminder. That it was made is a file in the
- * config directory, not the temp one, so "once" outlasts a reboot; only the hook
- * and `hooks install` write it, and neither runs in an agent's sandbox.
- */
-const offeredFile = (board: string) =>
-  join(configDir(), 'link-offered', createHash('sha256').update(board).digest('hex').slice(0, 32))
-
-/** Marks the offer made for `board`. Answers whether this call made it: never twice, and never when it can't remember it. */
+/** Marks the offer made for `board`. True only for the call that made it, and never when it can't be saved. */
 export function claimLinkOffer(board: string): boolean {
+  const file = join(configDir(), 'link-offered', createHash('sha256').update(board).digest('hex').slice(0, 32))
   try {
-    mkdirSync(dirname(offeredFile(board)), { recursive: true, mode: 0o700 })
-    writeFileSync(offeredFile(board), '', { flag: 'wx' })
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+    writeFileSync(file, '', { flag: 'wx' })
     return true
   } catch {
     return false
   }
 }
 
-/**
- * The offer, after the reminder. The agent checks `vb identity` itself (the hook
- * never waits on the network), asks one question, and links only on a yes; the
- * sign-in URL or code is the person's to use.
- */
 export function linkOffer(cli: string): string {
   return [
     `One more thing, this time only: run ${cli} identity.`,

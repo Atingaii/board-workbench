@@ -319,8 +319,7 @@ One person shows up as several actors: `vercel:user:u_abc123` on the board,
 permissions**: a linked Slack account can't do anything its Slack messages
 couldn't already, and history keeps every message's original actor.
 `actor.unlinked { actor, by }` undoes it. Only people link (`vb identity`), and
-only their own accounts. A coding agent with the turn-end hook asks its person,
-once, whether to link (see **Agent hooks** under [Configuration](#configuration)).
+only their own accounts.
 
 - **Proof, never a matching name or email.** An account is linked when it shows
   it's yours, one of two ways:
@@ -808,7 +807,7 @@ status.
 | POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Full access |
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
-| GET | `/identity` | Your linked platform accounts: `{ principal, links: [{ actor, handle, name, method, at }] }` |
+| GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
 | POST | `/identity/link` | `{ sync, method?: 'code' \| 'consent' }`: start linking your account on that sync entry. Answers `{ method: 'consent', url }` when it can sign you in, otherwise `{ method: 'code', code, expiresAt }`. People only |
 | POST | `/identity/check` | `{ sync }`: after a sign-in, link the account it authorized. Answers `{ linked }`, null until you've approved |
 | POST | `/identity/unlink` | `{ actor }`: an actor ID or handle among your linked accounts |
@@ -992,20 +991,11 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
   session record that its turn updated the board.
   Cursor's shell has no session ID, so its turns are keyed by project: two
   Cursor chats in one checkout share a marker.
-- **The agent offers, once per board, to link the person's accounts.** Links
-  (see [Linked accounts](#linked-accounts)) only help once people make them,
-  and people link when asked, not on their own. The first reminder on a board
-  also tells the agent to run `vboard identity` and, if it names entries not
-  linked yet, ask the person one short question whether to link them; on a
-  yes it runs `vboard identity link <key> --no-wait` and hands over the
-  sign-in URL or code, which only the person uses. A no ends it. That the
-  offer was made is an empty file per board in
-  `$XDG_CONFIG_HOME/vboard/link-offered/`, created exclusively, so it's made
-  once across sessions, agents, and reboots, and not at all when the file
-  can't be written; the hook still reads only local files. `hooks install`
-  is interactive, so it may ask the board: it says the agent will offer to
-  link what's left (`your agent will offer once to link slack and github`),
-  or, with nothing left to link, marks the offer made.
+- **The first reminder on a board also asks the agent to offer, once, to link
+  the person's accounts** ([Linked accounts](#linked-accounts)). People link
+  when asked, not on their own. The marker is a file per board in the config
+  directory, so the offer doesn't return after a reboot. The flow is in
+  [the coding agents guide](packages/vboard/docs/03-guides/01-coding-agents.md#linking-your-accounts).
 
 ### Commands
 
@@ -1017,7 +1007,7 @@ vboard use <url>                                save the default board
 
 vboard channels                                 channels and what they mirror, grouped by path prefix
 vboard actors                                   actors and their handles
-vboard identity                                 your linked Slack and GitHub accounts, and the sync entries not linked yet
+vboard identity                                 your linked Slack and GitHub accounts, and the sync entries you haven't linked
 vboard identity link <key> [--code] [--no-wait] link your account on sync entry <key>: sign in, or post the code it prints from that account
 vboard identity unlink <account>                unlink one, by handle or actor ID
 

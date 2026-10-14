@@ -141,10 +141,10 @@ vb identity link <key> [--code] [--no-wait] [--no-open]
 vb identity unlink <account>
 ```
 
-Your Slack and GitHub accounts, linked to you so the board knows their
-messages are yours, `--by` and `--mentions` follow them, and mentions of you
-reach you there. `vb identity` lists your links, then the board's sync
-entries you haven't linked:
+Your Slack and GitHub accounts, linked to you. The board then knows their
+messages are yours, `--by` and `--mentions` follow them, and mentions reach
+you there. `vb identity` lists your links, then the sync entries you haven't
+linked:
 
 ```text
 $ vb identity
@@ -152,14 +152,14 @@ $ vb identity
 not linked  github  (vb identity link <key>)
 ```
 
-`link <key>` links your account on sync entry `<key>`. When the entry can sign
-you in, it prints a sign-in URL and opens it (`--no-open` doesn't); only open
-it yourself, since whoever completes it links their account to you. Otherwise,
+`link <key>` links your account on sync entry `<key>`. If the entry can sign
+you in, it prints a sign-in URL and opens it (`--no-open` doesn't). Open it
+only yourself, since whoever signs in links their account to you. Otherwise,
 or with `--code`, it prints a one-time code to post from that account. It waits
 up to 10 minutes for the link; `--no-wait` returns once it has printed.
 `unlink` takes a handle or actor ID from the list. Only people link, and only
-their own accounts. A coding agent with the turn-end hook offers to run `link`
-for you, once (see [Coding agents](../03-guides/01-coding-agents.md#linking-your-accounts)).
+their own accounts. Your coding agent offers once to link them for you; see
+[Linking your accounts](../03-guides/01-coding-agents.md#linking-your-accounts).
 
 ### hooks
 
@@ -171,8 +171,8 @@ Manages the turn-end hook for Claude Code, Codex, Cursor, and Pi (all four when
 none is named; `status` is the default action). After a turn that didn't
 update the board, the hook reminds the agent once to reply in a thread it's
 working in or post in the channel that fits. The first reminder on a board also
-asks the agent to offer, once, to link your accounts (`vb identity link`). It
-acts only in linked projects or with `VBOARD_URL` set. See
+asks it to offer once to link your accounts. It acts only in linked projects or
+with `VBOARD_URL` set. See
 [Coding agents](../03-guides/01-coding-agents.md).
 
 The installed hook runs `vb hook stop --agent <agent>`, which reads the agent's
