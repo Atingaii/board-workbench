@@ -50,11 +50,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   (`vboard-2`). Both are new with A2 0.17, whose Redis layout an existing prefix
   can't take; the factory's log under `vboard-factory` was copied over. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
-  and the GitHub connector named by `FACTORY_GITHUB_CONNECTOR` (`github/<name>`),
-  with production triggers at `/api/board/webhooks/slack` and
-  `/api/board/webhooks/github`. Without that variable the board syncs Slack
-  alone and Pi works without GitHub: a GitHub App on vercel-labs needs an org
-  owner to install it (ask IT in #help-it). The app's bot (its login and commit
+  and `github/vboard-factory`, with production triggers at
+  `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
+  app's bot (its login and commit
   email) comes from GraphQL's `viewer` for its token, so nothing pins its name.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
@@ -135,9 +133,10 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `vercel[bot]` with Pi's name as co-author. It takes 6 vCPUs (smaller sandboxes
   come from a warm pool without the helper), a branch pushed by name that tracks
   `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
-  without a connector Pi has no `gh`: a push to `pi/**` has
-  `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
-  branch's first commit, and Pi finds its number by fetching `refs/pull/*/head`.
+  Pi's `gh` goes through `github/vboard-factory`: the sandbox's network policy
+  adds the app's token to requests to `api.github.com`. A push to `pi/**` also
+  has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
+  branch's first commit if it has none yet.
   `check` also runs on `pi/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
