@@ -189,6 +189,28 @@ describe('cli hooks', () => {
     expect(await reminds(stop(`s2-${Date.now()}`, false, { VBOARD_URL: '' }))).toBeNull()
   }, 60_000)
 
+  it('offers once per board, after the first reminder, to link the person\'s accounts', async () => {
+    const repo = await tmp('vboard-repo-')
+    execFileSync('git', ['init', '-q', '-b', 'feat/link'], { cwd: repo })
+    // Its own config directory: the offer's marker lives there, not with the per-turn markers.
+    const at = { XDG_CONFIG_HOME: await tmp('vboard-config-') }
+    const stop = async (extra: NodeJS.ProcessEnv = {}) => {
+      const payload = JSON.stringify({ session_id: `l-${Math.random()}`, cwd: repo, stop_hook_active: false })
+      const { stdout } = await vb(['hook', 'stop', '--agent', 'claude'], { ...at, ...extra }, payload)
+      return JSON.parse(stdout).hookSpecificOutput.additionalContext as string
+    }
+
+    const first = await stop()
+    expect(first).toContain(' post <channel> "<text>"')
+    expect(first).toContain(' identity link <key> --no-wait')
+    // Every later reminder, in any session, is just the reminder.
+    const later = await stop()
+    expect(later).toContain(' post <channel> "<text>"')
+    expect(later).not.toContain('identity')
+    // Another board gets its own offer.
+    expect(await stop({ VBOARD_URL: `${url}?other` })).toContain(' identity link <key> --no-wait')
+  })
+
   it('reminds Cursor with a follow-up message, keyed by project since its shell has no session', async () => {
     const home = await tmp('vboard-home-')
     expect((await vb(['hooks', 'install', 'cursor'], { HOME: home })).stdout).toContain('Cursor  ~/.cursor/hooks.json\n  added the turn-end hook\n')
