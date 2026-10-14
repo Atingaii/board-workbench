@@ -75,7 +75,10 @@ reply in an existing thread rather than starting one.
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
   `review-pi` hands each new `dev --label pr` thread to Pi to review the PR (Pi wears `:looking-bunny:` on the PR root while it reviews), and tells it when
-  someone other than a bot replies. Pi hears every reply in its threads but stays quiet when one is
+  someone other than a bot replies. A draft waits until it's ready (`review.ts`): Pi
+  reviews it once, when its root's `state` turns from `draft` to `open`, and until then
+  only a reply that names Pi (`pi`, `@pi`, or the thread's Pi), or a reminder Pi
+  scheduled, wakes it. Pi hears every reply in its threads but stays quiet when one is
   addressed to someone else, and keeps board replies to a few lines; a review's detail
   goes in a GitHub review on the code. Review is its initial task; people can redirect
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
@@ -156,7 +159,11 @@ reply in an existing thread rather than starting one.
   limit sandboxes share.
 - Pi's sandbox also gets the factory's own skills and extensions, from
   `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
-  every turn (add a new file to `PI_FILES` in `agent.ts`). The `computer`
+  every turn (add a new file to `PI_FILES` in `agent.ts`). `verify-vboard`
+  tests vboard itself: it builds this checkout, a git ref in its own worktree
+  (`origin/main`, to reproduce a bug before fixing it), or an npm version,
+  serves a local board with `vb serve`, and runs each `vb` with only `PATH`
+  and a home of its own, so nothing reaches the factory's board. The `computer`
   extension is computer use, done the way Codex does it: one tool, sequential,
   that does one action on a virtual desktop (Xvfb) per call, with the mouse and
   keyboard through XTEST (`xinput.py`, using ctypes because the sandbox has no
