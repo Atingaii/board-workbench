@@ -43,6 +43,12 @@ pnpm dev                                       # the board at /api/board
 VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
+This repo's board is the factory. `.vboard/` is gitignored, so each checkout
+links itself: `vb whoami` says "no board URL" until you run
+`vb link https://vboard-factory.playground-vercel.tools/api/board` at the
+root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
+reply in an existing thread rather than starting one.
+
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
