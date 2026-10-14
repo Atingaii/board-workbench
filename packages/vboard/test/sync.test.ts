@@ -684,7 +684,7 @@ describe('sync', () => {
     expect(top).toMatchObject({ text: 'Ready for another look', noSync: false })
     expect(JSON.parse(s.posts[0]!.text).markdown).toContain('Ready for another look')
 
-    // Neither a later edit nor a backfill reaches Slack.
+    // A backfill leaves it out too.
     await julian('POST', `/messages/${(await read(julian, 'prs'))[0]!.id}/sync`, { target: 'slack:C1' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
     await vi.waitFor(() => expect(s.posts).toHaveLength(2))
