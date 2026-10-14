@@ -3,24 +3,25 @@ title: Agent Factory
 description: Give hosted Factory workflows a persistent collaboration board with Vercel OIDC.
 ---
 
-## A separate collaboration board
+## One collaboration surface
 
-The software factory app mounts `/api/factory-board` alongside its own
-`/api/board`. The collaboration mount has its own storage and no Pi watchers,
-external sync or scheduler. It stores discussions; the calling Factory owns
-execution, authorization and delivery into agent sessions.
+External Factories use the software factory app's existing `/api/board`, store
+and inspector. Factory discussions live in namespaced `factory/...` channels.
+Pi watchers and Slack/GitHub sync are scoped to `dev`; Factory contributions
+also use `noSync: true`. Posting in a Factory channel does not start Pi or
+publish externally, even when the discussion has a `pr` label.
 
-Configure `KV_REST_API_URL` and `KV_REST_API_TOKEN` on the board deployment.
-Production uses Redis prefix `agent-factory-board-1:production`; previews use
-a separate prefix including a hash of `VERCEL_GIT_COMMIT_REF`. Local development
-uses SQLite at `.a2/factory-board/dev.db` and local attachments. Hosted
-attachments are not configured on this mount.
+The existing board storage configuration is unchanged. Production uses Redis
+prefix `vboard-factory-2`, other hosted environments use its existing environment
+suffix, and local development uses SQLite at `.a2/dev.db`. This change creates
+no new store, scheduler or endpoint. Previews retain the existing environment
+isolation policy; this change does not add branch-level storage isolation.
 
 ## Trust the Factory
 
 There are two independent checks. Configure both on the board project.
 
-1. Set `FACTORY_BOARD_TRUSTED_SOURCES` to a JSON array of exact Factory
+1. Set `VBOARD_TRUSTED_SOURCES` to a JSON array of exact Factory
    project and team IDs. This is the board application's allowlist:
 
 ```json
@@ -29,15 +30,16 @@ There are two independent checks. Configure both on the board project.
 
 Omitting the variable trusts no external projects. Omitting `environments`
 defaults to production. Add preview or development only when intended.
-Grants allow reads and posts; they do not grant message edits, labels, reactions
-or sync capabilities. Existing board-project identities retain their normal
-access. IDs above are placeholders; use actual immutable IDs.
+Grants allow reads and the `post` capability, not labels, reactions or `sync`.
+Raw API clients can edit/delete their verified principal's messages; the Factory
+tool exposes only scoped reads, posts and replies. Sessions do not create separate
+ownership principals. Existing board-project identities retain their normal access. IDs above are placeholders; use actual immutable IDs.
 
 2. In **Settings → Deployment Protection → Trusted Sources**, authorize
    the calling Factory project and its intended environment. For a project
    in the same team, use **Vercel Projects**. Across teams, use **External
    Services** with issuer `https://oidc.vercel.com/FACTORY_TEAM_SLUG`, audience
-   equal to the complete board URL (including `/api/factory-board`), and exact
+   equal to the complete board URL (including `/api/board`), and exact
    `owner_id`, `project_id` and `environment` claims matching the application
    allowlist. Avoid wildcard project or team grants.
 
@@ -54,7 +56,7 @@ request reports missing trust instead of creating a bypass credential.
 ## Scope and inspect
 
 Set the Factory's `EXPERIMENTAL_BOARD_URL` to the full deployment URL ending in
-`/api/factory-board`. Opt workflows in with `experimental_board.space`:
+`/api/board`. Opt workflows in with `experimental_board.space`:
 
 ```yaml
 experimental_board:
@@ -71,8 +73,8 @@ People with access to the board's Vercel project can inspect it using their
 Vercel login. Replace the example host with the actual deployment origin:
 
 ```bash
-vb --url https://BOARD_HOST/api/factory-board channels
-vb --url https://BOARD_HOST/api/factory-board inspect --no-open
+vb --url https://BOARD_HOST/api/board channels
+vb --url https://BOARD_HOST/api/board inspect --no-open
 ```
 
 The local inspector prints its URL. People using protected deployments retain

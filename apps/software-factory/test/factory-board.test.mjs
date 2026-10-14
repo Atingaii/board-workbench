@@ -1,23 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { factoryBoardStorePrefix, factoryBoardTrustedSources } from "../app/api/factory-board/[[...path]]/config.ts";
+import { vercelTrustedSources } from "../app/api/board/[[...path]]/trusted-sources.ts";
 import { caller, deploymentToken, personToken, testBoard, TEAM_ID } from "../../../packages/vboard/test/harness.ts";
 
-const URL = "http://board.test/api/factory-board";
+const URL = "http://board.test/api/board";
 const grants = JSON.stringify([{ projectId: "prj_factory", teamId: TEAM_ID }]);
-const options = { url: URL, trustedSources: factoryBoardTrustedSources(grants) };
+const options = { url: URL, trustedSources: vercelTrustedSources(grants) };
 const token = (environment = "production", overrides) => deploymentToken("factory", "prj_factory", environment, { audience: URL, ...overrides });
 
 test("requires explicit immutable project/team grants and defaults to production", () => {
-  assert.deepEqual(factoryBoardTrustedSources(undefined), []);
-  assert.deepEqual(factoryBoardTrustedSources(""), []);
+  assert.deepEqual(vercelTrustedSources(undefined), []);
+  assert.deepEqual(vercelTrustedSources(""), []);
   for (const grant of [
     { projectId: "factory", teamId: TEAM_ID },
     { projectId: "prj_factory" },
     { projectId: "prj_factory", teamId: TEAM_ID, environments: [] },
     { projectId: "prj_factory", teamId: TEAM_ID, can: ["sync"] },
-  ]) assert.throws(() => factoryBoardTrustedSources(JSON.stringify([grant])));
-  assert.throws(() => factoryBoardTrustedSources("not JSON"));
+  ]) assert.throws(() => vercelTrustedSources(JSON.stringify([grant])));
+  assert.throws(() => vercelTrustedSources("not JSON"));
 });
 
 test("trusted Factory sessions discover, post, review and respond with verified provenance", async () => {
@@ -60,28 +60,85 @@ test("refuses unconfigured projects, wrong teams, environments, audiences and ma
     await token("preview"),
     await token("development"),
   ]) assert.equal((await caller(board.fetch, candidate)("GET", "/me")).status, 403);
-  assert.equal((await caller(board.fetch, await token("production", { audience: "http://board.test/api/board" }))("GET", "/me")).status, 401);
+  assert.equal((await caller(board.fetch, await token("production", { audience: "http://other.test/api/board" }))("GET", "/me")).status, 401);
   assert.equal((await caller(board.fetch, "not-a-jwt")("GET", "/me")).status, 401);
 });
 
-test("board-project users can inspect while another board's token and history stay separate", async () => {
+test("operators inspect Factory and software-factory discussions in one board", async () => {
   const board = testBoard(options);
   const inspector = caller(board.fetch, await personToken("u_operator", URL));
   assert.equal((await inspector("GET", "/me")).body.kind, "person");
-  assert.equal((await caller(board.fetch, await personToken())("GET", "/me")).status, 401);
-  const softwareBoard = testBoard();
-  const original = caller(softwareBoard.fetch, await personToken());
-  await original("POST", "/messages", { channel: "dev", text: "Existing software factory work" });
-  assert.deepEqual((await inspector("GET", "/messages")).body.messages, []);
+  await inspector("POST", "/messages", { channel: "dev", text: "Existing software factory work" });
+  const factory = caller(board.fetch, await token());
+  await factory("POST", "/messages", { channel: "factory/project/repo/ci-health", text: "Shared Factory evidence", noSync: true });
+  const channels = (await inspector("GET", "/channels")).body.channels.map(c => c.path);
+  assert.deepEqual(channels.sort(), ["dev", "factory/project/repo/ci-health"]);
+  assert.equal((await inspector("GET", "/messages")).body.messages.length, 2);
 });
 
-test("explicit preview grants work and preview storage is separated by branch", async () => {
-  const board = testBoard({ url: URL, trustedSources: factoryBoardTrustedSources(JSON.stringify([
+test("explicit preview grants work on the same endpoint", async () => {
+  const board = testBoard({ url: URL, trustedSources: vercelTrustedSources(JSON.stringify([
     { projectId: "prj_factory", teamId: TEAM_ID, environments: ["preview"] },
   ])) });
   assert.equal((await caller(board.fetch, await token("preview"))("GET", "/me")).status, 200);
-  assert.notEqual(factoryBoardStorePrefix("production"), "vboard-factory-2");
-  assert.notEqual(factoryBoardStorePrefix("production"), factoryBoardStorePrefix("preview", "main"));
-  assert.notEqual(factoryBoardStorePrefix("preview", "feature-a"), factoryBoardStorePrefix("preview", "feature-b"));
-  assert.throws(() => factoryBoardStorePrefix("preview"));
+});
+
+test("PR-labeled Factory discussions stay off dev automation and external sync", async () => {
+  const { autoland } = await import("../app/api/board/[[...path]]/autoland.ts");
+  const { shipit } = await import("../app/api/board/[[...path]]/shipit.ts");
+  const { security } = await import("../app/api/board/[[...path]]/security.ts");
+  const { owner } = await import("../app/api/board/[[...path]]/owner.ts");
+  const { crosspost } = await import("../app/api/board/[[...path]]/crosspost.ts");
+  const { fakePlatform } = await import("../../../packages/vboard/test/sync-fixtures.ts");
+  const { slack } = await import("../../../packages/vboard/src/sync/slack.ts");
+  const { github } = await import("../../../packages/vboard/src/sync/github.ts");
+  const slackPlatform = fakePlatform("slack");
+  const githubPlatform = fakePlatform("github");
+  const watched = [];
+  const noPi = async () => { throw new Error("must not start a live agent"); };
+  const watchers = { autoland: autoland(), shipit: shipit({ tellPi: noPi }), security: security({ tellPi: noPi }), owner: owner(), crosspost: crosspost() };
+  const board = testBoard({
+    ...options,
+    sync: {
+      slack: slack({ adapter: slackPlatform.adapter, channels: { C1: "dev" } }),
+      github: github({ adapter: githubPlatform.adapter, repos: { "vercel-labs/vboard": { pulls: "dev", issues: "dev" } } }),
+    },
+    watch: Object.fromEntries(Object.entries(watchers).map(([name, watcher]) => [name, {
+      ...watcher, run: ({ event }) => { watched.push([name, event.message?.channel]); },
+    }])),
+  });
+  const operator = caller(board.fetch, await personToken());
+  const factory = caller(board.fetch, await token());
+  const labels = { pr: "vercel-labs/vboard#123", kind: "bug" };
+  const posted = await factory("POST", "/messages", { channel: "factory/project/repo/ci-health", text: "Review evidence", labels, noSync: true });
+  assert.equal(posted.status, 201);
+  await operator("POST", `/messages/${posted.body.message.id}/reactions`, { emoji: "shipit" });
+  // Test channel routing independently of the Factory's noSync safeguard too.
+  await operator("POST", "/messages", { channel: "factory/project/repo/ci-health", text: "Internal evidence", labels });
+  await operator("POST", "/messages", { channel: "dev", text: "Existing dev behavior", labels });
+  const deadline = Date.now() + 5000;
+  while ((new Set(watched.map(([name]) => name)).size !== 5 || slackPlatform.channelPosts.length !== 1) && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(new Set(watched.map(([name]) => name)).size, 5);
+  assert.ok(watched.every(([, channel]) => channel === "dev"));
+  assert.equal(slackPlatform.channelPosts.length, 1);
+  assert.equal(githubPlatform.channelPosts.length, 0);
+  assert.equal(githubPlatform.posts.length, 0);
+  assert.match(slackPlatform.channelPosts[0].text, /Existing dev behavior/);
+  await board.fetch(new Request(`${URL}/webhooks/github`, {
+    method: "POST", headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-github-delivery": "existing-dev-pr" },
+    body: JSON.stringify({ action: "opened", repository: { full_name: "vercel-labs/vboard" }, sender: { login: "reviewer", id: 42 },
+      pull_request: { number: 123, title: "Existing GitHub work", html_url: "https://github.com/vercel-labs/vboard/pull/123", draft: false, merged: false } }),
+  }));
+  let githubRoot;
+  const until = Date.now() + 5000;
+  while (!githubRoot && Date.now() < until) {
+    githubRoot = (await operator("GET", "/messages?channel=dev&text=Existing%20GitHub%20work")).body.messages[0];
+    if (!githubRoot) await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(githubRoot);
+  await operator("POST", "/messages", { re: githubRoot.re ?? githubRoot.id, text: "Existing dev response" });
+  while (githubPlatform.posts.length === 0 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(githubPlatform.posts.length, 1);
+  assert.match(githubPlatform.posts[0].text, /Existing dev response/);
 });

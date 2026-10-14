@@ -15,6 +15,7 @@ import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
 import { CONNECTOR, REPO } from "./github";
+import { vercelTrustedSources } from "./trusted-sources";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
 // there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db and attachments are
@@ -25,6 +26,7 @@ const env = process.env.VERCEL_ENV;
 export const maxDuration = 300;
 
 export const { GET, POST, scheduler } = board({
+  trustedSources: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
   store: env
     ? redisHttp({
         url: process.env.KV_REST_API_URL!,
