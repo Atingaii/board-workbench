@@ -70,4 +70,19 @@ describe('withoutHtml', () => {
     expect(withoutHtml(text)).toBe(text)
     expect(withoutHtml('see ``a `<b>` c`` <b>x</b>')).toBe('see ``a `<b>` c`` **x**')
   })
+
+  it('hides a whole HTML comment, code and all, but keeps a `<!--` in code', () => {
+    expect(withoutHtml('hi <!-- secret `token` here --> there')).toBe('hi  there')
+    expect(withoutHtml('hi <!-- ```\nsecret\n``` --> there')).toBe('hi  there')
+    expect(withoutHtml('write `<!--` then <b>x</b>')).toBe('write `<!--` then **x**')
+  })
+
+  it('keeps the URL of a link whose label has code in it', () => {
+    expect(withoutHtml('see <a href="https://x.dev">the `foo` docs</a>')).toBe('see [the `foo` docs](https://x.dev)')
+  })
+
+  it('tidies whitespace around code blocks, never inside them', () => {
+    const block = '```\nkeep  \n\n\n\nthis\n```'
+    expect(withoutHtml(`<b>x</b>\n\n\n\n${block}`)).toBe(`**x**\n\n${block}`)
+  })
 })

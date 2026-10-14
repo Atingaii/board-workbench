@@ -71,37 +71,40 @@ const HTML_TAGS = new Set(
   'a abbr b bdi bdo blockquote br caption center cite code dd del details dfn div dl dt em figcaption figure font h1 h2 h3 h4 h5 h6 hr i img ins kbd li mark ol p picture pre q rp rt ruby s samp section small source span strike strong sub summary sup table tbody td tfoot th thead time tr tt u ul var video wbr'.split(' '),
 )
 const MARKS: Record<string, string> = { b: '**', strong: '**', i: '_', em: '_', code: '`', kbd: '`', s: '~~', del: '~~', strike: '~~' }
+const BLOCKS = new Set(['p', 'div', 'details', 'table', 'tr', 'ul', 'ol', 'li', 'blockquote', 'pre', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 const attribute = (attrs: string, name: string) => new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(attrs)?.slice(1).find((v) => v !== undefined) ?? ''
 
 /** GitHub's markdown allows inline HTML, which Slack shows as raw tags: as markdown instead, outside code. */
 export function withoutHtml(markdown: string): string {
-  if (!/<\/?[a-z!]/i.test(markdown)) return markdown
-  let changed = false
-  const prose = (text: string) => {
-    const out = text
-      .replace(/<!--[\s\S]*?(?:-->|$)/g, '')
-      .replace(/<img\b([^>]*)>/gi, (_, attrs: string) => attribute(attrs, 'alt'))
-      .replace(/<source\b[^>]*>/gi, '')
-      .replace(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi, (whole, attrs: string, inner: string) => {
-        const href = attribute(attrs, 'href')
-        const label = inner.replace(/<[^>]*>/g, '').trim()
-        return href ? (label ? `[${label}](${href})` : href) : label
-      })
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/?([a-z][a-z0-9]*)\b(?:\s[^<>]*)?\/?>/gi, (tag, name: string) => {
-        const lower = name.toLowerCase()
-        if (!HTML_TAGS.has(lower)) return tag
-        const closing = tag.startsWith('</')
-        if (lower === 'summary') return closing ? '**\n\n' : '**'
-        return MARKS[lower] ?? (['p', 'div', 'details', 'table', 'tr', 'ul', 'ol', 'li', 'blockquote', 'pre', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(lower) && closing ? '\n' : '')
-      })
-    if (out !== text) changed = true
-    return out
-  }
-  // Fenced blocks and inline code keep their HTML: it's what someone wanted shown.
-  const parts = markdown.split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|``[^\n]*?``|`[^`\n]+`)/)
-  const result = parts.map((part, i) => (i % 2 ? part : prose(part))).join('')
-  return changed ? result.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '') : markdown
+  if (!/<\/?[a-z!]/i.test(markdown) || /[\uE000\uE001]/.test(markdown)) return markdown
+  // Code keeps its HTML, byte for byte: it's what someone wanted shown. Read left to right, so a
+  // code span's `<!--` stays code and a comment hides everything in it, backticks and all.
+  const code: string[] = []
+  let hidden = false
+  const text = markdown.replace(
+    /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|``[^\n]*?``|`[^`\n]+`)|<!--[\s\S]*?(?:-->|$)/g,
+    (_, span: string | undefined) => (span === undefined ? ((hidden = true), '') : `\uE000${code.push(span) - 1}\uE001`),
+  )
+  const out = text
+    .replace(/<img\b([^>]*)>/gi, (_, attrs: string) => attribute(attrs, 'alt'))
+    .replace(/<source\b[^>]*>/gi, '')
+    .replace(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi, (_, attrs: string, inner: string) => {
+      const href = attribute(attrs, 'href')
+      const label = inner.replace(/<[^>]*>/g, '').trim()
+      return href ? (label ? `[${label}](${href})` : href) : label
+    })
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?([a-z][a-z0-9]*)\b(?:\s[^<>]*)?\/?>/gi, (tag, name: string) => {
+      const lower = name.toLowerCase()
+      if (!HTML_TAGS.has(lower)) return tag
+      const closing = tag.startsWith('</')
+      if (lower === 'summary') return closing ? '**\n\n' : '**'
+      return MARKS[lower] ?? (BLOCKS.has(lower) && closing ? '\n' : '')
+    })
+  if (!hidden && out === text) return markdown
+  // Tidied around the code, never inside it: each span is still one placeholder here.
+  const tidy = out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '')
+  return tidy.replace(/\uE000(\d+)\uE001/g, (_, i: string) => code[Number(i)]!)
 }
 
 /**
