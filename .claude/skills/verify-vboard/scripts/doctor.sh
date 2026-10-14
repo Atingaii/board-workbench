@@ -11,7 +11,7 @@ ev=$(evidence_dir "$name")
 fail=0
 row() { printf '%-8s  %s\n' "$1" "$2" | tee -a "$ev/doctor.txt"; }
 
-status=$("$SB" ls 2>/dev/null | awk -v n="$name" '$1 == n { print $2 }')
+status=$(sandbox_status "$name") || status="unknown (sandbox ls failed)"
 if [[ $status == running ]]; then row sandbox "$name running"; else
   row sandbox "$name ${status:-not found}"
   exit 1
@@ -20,7 +20,7 @@ fi
 want=$(sed -n 's/^version=//p' "$ev/meta" 2>/dev/null)
 [[ -n $want ]] || want=$(node -p "require('$ROOT/packages/vboard/package.json').version")
 have=$("$SB" exec "$name" -- "$VB" --version 2>/dev/null | tail -1)
-if [[ $have == *"$want"* ]]; then row vb "$have"; else
+if [[ $have == "$want" ]]; then row vb "$have"; else
   row vb "$have, expected $want"
   fail=1
 fi

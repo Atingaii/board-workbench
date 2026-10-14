@@ -17,9 +17,19 @@ die() {
   exit 1
 }
 
-# Only sandboxes these scripts created: verify-vboard-<timestamp>.
+# Only sandboxes these scripts created: verify-vboard-<UTC timestamp>-<4 hex>.
+# The random suffix keeps parallel runs started in the same second apart.
 need_name() {
-  [[ ${1:-} =~ ^verify-vboard-[0-9]{8}-[0-9]{6}$ ]] || die "expected a sandbox name like verify-vboard-20261014-093000, got: ${1:-nothing}"
+  [[ ${1:-} =~ ^verify-vboard-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$ ]] || die "expected a sandbox name like verify-vboard-20261014-093000-3f2a, got: ${1:-nothing}"
+}
+
+# sandbox_status <sandbox>: prints its status (running, stopped, ...), or
+# nothing when the scope has no sandbox by that name. Looks at every state, not
+# just running (ls's default), and fails when the sandbox CLI does.
+sandbox_status() {
+  local list
+  list=$("$SB" ls --all --name-prefix "$1" 2>/dev/null) || return 1
+  awk -v n="$1" '$1 == n { print $2 }' <<<"$list"
 }
 
 # .verify/vboard/<timestamp>/ for a sandbox name; outlives the sandbox.

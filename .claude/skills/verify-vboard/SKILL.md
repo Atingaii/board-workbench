@@ -22,7 +22,7 @@ S=$($V/up.sh)                     # this checkout, working tree included (uncomm
 S=$($V/up.sh --published 0.9.0)   # or: vboard from npm, exactly what users install
 ```
 
-`up.sh` prints progress on stderr and the sandbox name (`verify-vboard-<UTC timestamp>`) as its
+`up.sh` prints progress on stderr and the sandbox name (`verify-vboard-<UTC timestamp>-<4 hex>`, distinct across parallel runs) as its
 last stdout line. It:
 
 1. creates the sandbox: `npx --yes sandbox@4.8.1 create --scope vercel-labs --name <name> --timeout 45m --vcpus 4`
@@ -52,12 +52,12 @@ $V/doctor.sh "$S"
 ```
 
 ```
-sandbox   verify-vboard-20261014-205253 running
+sandbox   verify-vboard-20261014-205253-3f2a running
 vb        0.9.0
 board     http://127.0.0.1:4100/api/board as ubuntu (local:user:ubuntu)
 ```
 
-It checks that `sandbox ls` shows the sandbox `running`, that the sandbox's `vb --version` matches
+It checks that `sandbox ls --all` shows the sandbox `running`, that the sandbox's `vb --version` equals
 the version under test (`packages/vboard/package.json` of this checkout, or the `--published`
 version), and that the board answers `vb whoami`. Exit 1 on any miss. A `stopped` sandbox hit its
 timeout: tear it down and launch again.
@@ -129,14 +129,14 @@ Proof standards:
 ## Cleanup
 
 ```bash
-$V/down.sh "$S"              # collect evidence, rm the sandbox, confirm `sandbox ls` no longer lists it
+$V/down.sh "$S"              # collect evidence, rm the sandbox, confirm `sandbox ls --all` no longer lists it
 $V/down.sh "$S" --no-collect # when the sandbox is already broken
 ```
 
 Remove only the sandbox you created, by its exact name. `down.sh` refuses anything that isn't
-`verify-vboard-<YYYYMMDD-HHMMSS>`, and never removes by pattern: other agents may be running their
+`verify-vboard-<YYYYMMDD-HHMMSS>-<hex>`, and never removes by pattern: other agents may be running their
 own sandboxes in the same scope. After a failed attempt, run `down.sh` before trying again, then
-check `$V/sb.sh ls` for your name. Never commit `.verify/`.
+check `$V/sb.sh ls --all --name-prefix "$S"` for your name. Never commit `.verify/`.
 
 ## Helpers
 

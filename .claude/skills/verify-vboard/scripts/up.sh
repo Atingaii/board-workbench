@@ -16,7 +16,7 @@ elif [[ $# -gt 0 ]]; then
   die "usage: up.sh [--published <version>]"
 fi
 
-name="verify-vboard-$(date -u +%Y%m%d-%H%M%S)"
+name="verify-vboard-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
 ev=$(evidence_dir "$name")
 log="$ev/up.log"
 echo "sandbox  $name" >&2
