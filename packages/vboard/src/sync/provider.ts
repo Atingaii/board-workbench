@@ -148,9 +148,6 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     return context.apply(channel, overrides)
   }
 
-  /** Whether an incoming reply stays on the board, like `vb reply --no-sync`: no other platform gets it. */
-  boardOnly(_event: ExternalEvent): boolean { return false }
-
   render(input: RenderInput): string {
     return this.options.render?.(input) ?? `**${input.label}**: ${input.message.text}`
   }

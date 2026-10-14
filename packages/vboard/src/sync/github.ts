@@ -429,12 +429,7 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     }
   }
 
-  // An inline review thread (comments on lines of code) is a conversation about the diff: it stays on GitHub and the board.
-  override boardOnly(event: ExternalEvent): boolean {
-    return event.kind === 'message' && event.subthread !== null
-  }
-
-    // As a person, straight to GitHub's API: through the adapter, their comment would teach it that
+  // As a person, straight to GitHub's API: through the adapter, their comment would teach it that
   // they're the bot, and their own comments would stop syncing.
   override async whoAmI(token: string) {
     const user = (await asPerson(token, 'GET', '/user')) as User

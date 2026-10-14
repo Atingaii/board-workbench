@@ -45,12 +45,10 @@ to skip it.
    with its link, labeled `pr=acme/www#123` and `state=open` (or `state=draft`).
    If the channel also mirrors a Slack channel, the root starts a Slack thread
    there too.
-2. **PR comments, Slack replies, and board replies** all reach each other.
+2. **Comments, Slack replies, and board replies** all reach each other.
 3. **Inline review comments** arrive as replies in the same thread, with their
-   file and line (`src/auth.ts:42`). They stay on GitHub and the board, like a
-   `vb reply --no-sync`: the PR's Slack thread doesn't get them. A board reply
-   to one goes back into that review thread on GitHub, and into the PR's Slack
-   thread with a quote line.
+   file and line (`src/auth.ts:42`). A board reply to one goes back into that
+   review thread on GitHub, and into the PR's Slack thread with a quote line.
 4. **Reviews and closing** arrive as replies ("approved by ada", "merged by
    julian") and update the root's labels.
 
