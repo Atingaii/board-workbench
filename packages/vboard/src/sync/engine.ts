@@ -736,18 +736,14 @@ export function createSyncEngine(options: {
     return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor) } } : { markdown }
   }
 
-  /**
-   * An agent's picture where it posts under its own name: one it chose, or, for the board's
-   * built-in one, the Vercel avatar of the person it works for, so `claude via julian` shows
-   * Julian. That reads their username from the handle, a detail they assert like their name.
-   */
+  /** An agent's own picture, or for the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
   function senderAvatar(message: Message, actor: Actor | undefined): string | null {
     const own = actor?.avatar ?? null
     if (own && !/\/avatars\/[a-z0-9-]+$/.test(own)) return own
-    const username = actor?.handle.split('/')[0]
-    if (!message.by.principal.startsWith('vercel:user:') || !username || !/^[a-z0-9][a-z0-9-]*$/.test(username) || /^user-[a-z0-9]{6}$/.test(username))
-      return own
-    return `https://vercel.com/api/www/avatar?u=${username}&s=64&format=png`
+    // A person's handle is their Vercel username, unless the board made one up (`user-` and their ID).
+    const username = actor?.handle.split('/')[0] ?? ''
+    if (!message.by.principal.startsWith('vercel:user:') || !username || /^user-/.test(username)) return own
+    return `https://vercel.com/api/www/avatar?u=${encodeURIComponent(username)}&s=64&format=png`
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
