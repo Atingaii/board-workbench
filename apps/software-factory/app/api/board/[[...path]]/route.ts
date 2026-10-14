@@ -4,7 +4,7 @@ import { github } from "vboard/adapter-github";
 import { vercelBlob } from "vboard/adapter-vercel-blob";
 import { redisHttp } from "experimental-a2/store-redis-http";
 import { vercelQueues } from "experimental-a2/scheduler-vercel";
-import { byPi, byWatcher, taskMessage, tellPi } from "./agent";
+import { byAgent, byPi, byWatcher, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { isPiKind, PI_KINDS, piTask, scheduled, scheduledThread } from "./kinds";
 import { security } from "./security";
@@ -68,8 +68,10 @@ export const { GET, POST, scheduler } = board({
     // A factory PR's Slack thread and the Slack thread it was built for link to each other.
     crosspost: crosspost(),
     security: security({ tellPi }),
-    // Every non-PR dev thread gets a kind, judged from all of it,
+    // Every non-PR dev thread gets a kind, judged from all of it whenever a person posts,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.
+    // An agent's post (a coding agent sharing progress) isn't judged: a thread an agent
+    // opens gets a kind once a person replies in it.
     "triage-gpt": {
       tail: "dev",
       run: async ({ event, board }) => {
@@ -79,6 +81,7 @@ export const { GET, POST, scheduler } = board({
           !message ||
           byPi(message.re ?? message.id, message.by) ||
           byWatcher(message.by) ||
+          byAgent(message.by) ||
           scheduledThread(message)
         ) {
           return;

@@ -114,6 +114,12 @@ export const byPi = (thread: number, by: { profile: string | null; session: stri
  */
 export const byWatcher = (by: { actor: string }) => by.actor.startsWith("vboard:watch:");
 
+/**
+ * Whether a message was written by an agent profile (someone's coding agent, like `julian/claude`, or a Pi), not
+ * a person: a coding agent sharing its progress in `dev` shouldn't get a kind, and with it, Pi.
+ */
+export const byAgent = (by: { profile: string | null }) => by.profile !== null;
+
 /** The Slack workspace the factory syncs with. */
 const SLACK = "https://vercel.slack.com";
 
