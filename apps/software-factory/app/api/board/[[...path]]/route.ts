@@ -14,6 +14,7 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
+import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 
 // The software factory: vboard running on its own repo and Vercel's Slack. Locally
@@ -145,17 +146,19 @@ export const { GET, POST, scheduler } = board({
         }
       },
     },
-    // Pi reviews PRs: a PR's thread opens in `dev` when it's opened or marked ready, and
-    // Pi hears when anyone but a bot (Vercel's deploy comments, CI) replies there. Only PR
-    // threads: `--label pr` matches a reply by its root's labels too.
+    // Pi reviews PRs once they're ready: a PR opened ready when its thread opens in `dev`, a
+    // draft when it's marked ready (its root relabeled state=open). Pi hears when anyone but a
+    // bot (Vercel's deploy comments, CI) replies there, except that in a draft only a reply
+    // asking Pi itself, or a reminder Pi scheduled, wakes it. Only PR threads: `--label pr` matches a reply by its root's
+    // labels too.
     "review-pi": {
       tail: "dev --label pr",
       run: async ({ event, board }) => {
         const message = event.message;
-        if (event.type !== "message.posted" || !message) {
+        if (!message) {
           return;
         }
-        if (message.re === null) {
+        if (reviewStarts(event)) {
           await tellPi({
             board,
             task: "review",
@@ -164,9 +167,15 @@ export const { GET, POST, scheduler } = board({
             message: `There's a pull request to review in board thread #${message.id}.`,
           });
         } else if (
+          event.type === "message.posted" &&
+          message.re !== null &&
           (scheduled(message) || !byPi(message.re, message.by)) &&
           !message.author?.handle.endsWith("[bot]") &&
-          !byWatcher(message.by)
+          !byWatcher(message.by) &&
+          // In a draft, a reminder Pi scheduled for itself still reaches it.
+          ((scheduled(message) && byPi(message.re, message.by)) ||
+            asksPi(message.re, message.text) ||
+            !isDraft((await board.thread(message.re)).message.labels))
         ) {
           await tellPi({
             board,

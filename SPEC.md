@@ -1876,7 +1876,7 @@ the rest of the GitHub App's webhooks:
 | Event | Mirror behavior |
 | --- | --- |
 | `pr.opened` | A root, labeled `pr=owner/repo#123` and `state=open` or `state=draft`, joined to the PR thread |
-| `pr.ready`, `pr.draft`, `pr.reopened` | Updates `state` (`open`, `draft`, `open`) |
+| `pr.ready`, `pr.draft`, `pr.reopened` | Updates `state` (`open`, `draft`, and `open` or `draft` for a reopen) |
 | `issue.opened` | A root, labeled `issue=owner/repo#45` and `state=open` |
 | `issue.closed`, `issue.reopened` | Updates `state` (`closed`, `open`) |
 | `comment` | A reply. This covers issue comments, PR comments, and inline review comments, which carry `context: { path, line }` |

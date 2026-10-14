@@ -246,7 +246,7 @@ export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.pl
 export function policy(
   thread: number,
   tokens: { gateway: string; board: string; github: string },
-  bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+  bypass: string | undefined,
 ): NetworkPolicy {
   const protection = bypass ? { "x-vercel-protection-bypass": bypass } : {};
   // git itself goes through the sandbox's git credentials (`GIT`), so only the API gets the app's token.
@@ -386,7 +386,8 @@ async function deliver({ task, thread, key, message }: PiMessage) {
     getVercelOidcToken({ audience: BOARD }),
     getToken(CONNECTOR, GITHUB_TOKEN),
   ]);
-  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }, bypass) });
   // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
   const extend = extension(sandbox.expiresAt, Date.now());
   if (extend > 0) await sandbox.extendTimeout(extend);
