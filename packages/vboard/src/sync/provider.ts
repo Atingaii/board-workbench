@@ -42,9 +42,7 @@ export type ProviderMapping = {
 export type RenderInput = {
   message: Readonly<Message>
   author: Readonly<Actor> | null
-  /** The author's native mention here, from their own account or one their person linked; null when there's none. */
-  mention: string | null
-  /** Any actor's native mention here, the same way: for an actor a label names. */
+  /** How this platform mentions an actor, through linked accounts; null when it can't. */
   mentionOf: (actor: string) => string | null
   label: string
   target: string

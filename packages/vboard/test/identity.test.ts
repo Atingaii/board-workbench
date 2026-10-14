@@ -10,7 +10,7 @@ import { fakePlatform } from './sync-fixtures.ts'
 import { slack } from '../src/sync/slack.ts'
 import { github } from '../src/sync/github.ts'
 import { withUserTokens, type UserTokens } from '../src/sync/users.ts'
-import type { ProviderOptions, RenderInput } from '../src/sync/provider.ts'
+import type { ProviderOptions } from '../src/sync/provider.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 
 type Read = { id: number; text: string; by: { actor: string }; author: { handle: string; person?: { id: string; handle: string } } | null }
@@ -156,12 +156,12 @@ describe('linking accounts with a one-time code', () => {
     expect((await read(julian, 'mentions=me')).map((m) => m.text)).toEqual(['@julian can you look?', '@jb ping'])
   })
 
-  it('carries a person across platforms: their GitHub account reads as their Slack one, and renderers get it', async () => {
-    const seen: Pick<RenderInput, 'mention'>[] = []
+  it('carries a person across platforms: their GitHub account reads as their Slack one', async () => {
+    const seen: (string | null)[] = []
     let owner: string | null = null
     const { board, s, webhook } = setup({
-      slackRender: ({ message, label, mention, mentionOf }) => {
-        seen.push({ mention })
+      slackRender: ({ message, label, mentionOf }) => {
+        seen.push(mentionOf(message.by.actor))
         owner = mentionOf('vercel:user:u_julian')
         return `**${label}**: ${message.text}`
       },
@@ -193,21 +193,21 @@ describe('linking accounts with a one-time code', () => {
     await vi.waitFor(() => expect(s.channelPosts.map((p) => p.channelId)).toEqual(['slack:C9']))
     // The default label stays the name; a renderer that wants the person gets their Slack mention.
     expect(JSON.parse(s.channelPosts[0]!.text).markdown).toMatch(/^\*\*julianbenegas \(github\)\*\*: PR #8: Links/)
-    expect(seen.at(-1)).toEqual({ mention: '<@U_JULIAN>' })
+    expect(seen.at(-1)).toBe('<@U_JULIAN>')
     expect(owner).toBe('<@U_JULIAN>')
 
     // A mention of the GitHub account reads as the Slack one.
     await ada('POST', '/messages', { re: root!.id, text: '@[github:user:42] can you look?' })
     await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toContainEqual(expect.stringContaining('<@U_JULIAN> can you look?')))
     // Someone with no Slack account has no mention there.
-    expect(seen.at(-1)).toEqual({ mention: null })
+    expect(seen.at(-1)).toBeNull()
 
     // Unlinked, the GitHub account is just itself again.
     await julian('POST', '/identity/unlink', { actor: 'github:user:42' })
     seen.length = 0
     await ada('POST', `/messages/${root!.id}/labels`, { set: { review: 'yes' } })
     await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
-    expect(seen.every(({ mention }) => mention === null)).toBe(true)
+    expect(seen.every((mention) => mention === null)).toBe(true)
     await ada('POST', '/messages', { re: root!.id, text: '@[github:user:42] again' })
     await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toContainEqual(expect.stringContaining('julianbenegas again')))
   })

@@ -666,16 +666,20 @@ export function createSyncEngine(options: {
   }
 
   /**
-   * How `platform` mentions an actor: its own account there, or, through the person it's
-   * linked to (or is), any account they've linked there, so a GitHub account reads as its
-   * person's `<@U0456>` in Slack. Links are for display only; an agent is just itself.
+   * How `platform` mentions an actor: its own account, its person's, or any account
+   * its person linked there. An agent is just itself.
    */
   function nativeMention(platform: SyncProvider, actor: string, actors: ActorsState): string | null {
-    const person = actors.links[actor]?.to ?? actor
-    for (const id of [actor, person, ...linkedTo(actors, person)]) {
+    const native = (id: string) => {
       const account = actors.byId[id]
-      const native = account ? platform.mention(account) : null
-      if (native) return native
+      return account ? platform.mention(account) : null
+    }
+    const person = actors.links[actor]?.to ?? actor
+    const direct = native(actor) ?? (person === actor ? null : native(person))
+    if (direct) return direct
+    for (const id of linkedTo(actors, person)) {
+      const linked = native(id)
+      if (linked) return linked
     }
     return null
   }
@@ -738,7 +742,6 @@ export function createSyncEngine(options: {
     const body = platform.render(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
       author: actor ? { ...actor } : null,
-      mention: nativeMention(platform, message.by.actor, actors),
       mentionOf: (id: string) => nativeMention(platform, id, actors),
       label: name,
       target,

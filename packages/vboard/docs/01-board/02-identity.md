@@ -205,6 +205,6 @@ A handle nobody has is `error: unknown mention @x`. Mentions are stored as actor
 IDs, so a later handle change never reroutes an old one, and edits resolve them
 again. Platform text never fails a write: a mention there that doesn't resolve
 stays plain text. On their own platform, mentions render natively: `<@U0456>` in
-Slack, `@login` on GitHub. A person who linked their accounts (`vb identity
-link`) renders natively wherever they linked one, whichever of their actors was
-mentioned: `@julian`, or their GitHub account, reads as `<@U0456>` in Slack.
+Slack, `@login` on GitHub. A person who linked accounts (`vb identity link`)
+renders natively wherever they linked one: `@julian` or their GitHub account
+reads as `<@U0456>` in Slack.

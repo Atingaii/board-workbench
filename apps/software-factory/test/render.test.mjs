@@ -2,18 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderForSlack } from "../app/api/board/[[...path]]/render.ts";
 
-/** How Slack mentions an actor, as the board resolves it through linked accounts. */
-const SLACK = {
-  "slack:user:U0AP7QRUM7E": "<@U0AP7QRUM7E>",
-  "vercel:user:u_martin": "<@U0AP7QRUM7E>",
-  "github:user:70239736": "<@U0AP7QRUM7E>",
-};
-
 const input = (message, extra = {}) => ({
   label: "julianbenegas (github)",
   author: { name: "julianbenegas" },
-  mention: null,
-  mentionOf: (actor) => SLACK[actor] ?? null,
+  mentionOf: (actor) => (actor === "slack:user:U0AP7QRUM7E" ? "<@U0AP7QRUM7E>" : null),
   target: "slack:C0C6MNT9LLC",
   ...extra,
   message: {
@@ -41,16 +33,12 @@ test("a PR root labeled with its owner says whose it is", () => {
   assert.ok(renderForSlack(input({ labels })).endsWith(") · for <@U0AP7QRUM7E>"));
   const github = { ...labels, owner: "github:user:40034115", "owner.name": "julianbenegas" };
   assert.ok(renderForSlack(input({ labels: github })).endsWith(") · for julianbenegas"));
-  // A person on the board, or on GitHub, who linked a Slack account is mentioned there.
-  for (const owner of ["vercel:user:u_martin", "github:user:70239736"]) {
-    assert.ok(renderForSlack(input({ labels: { ...labels, owner } })).endsWith(") · for <@U0AP7QRUM7E>"));
-  }
 });
 
-test("a PR root mentions its author where they have a Slack account", () => {
-  const martin = input({ by: { actor: "github:user:70239736" } }, { author: { name: "martinsione" }, mention: "<@U0AP7QRUM7E>" });
+test("a PR root mentions its author where Slack can", () => {
+  const martin = input({ by: { actor: "slack:user:U0AP7QRUM7E" } }, { author: { name: "martinsione" } });
   assert.ok(renderForSlack(martin).endsWith(") · <@U0AP7QRUM7E>"));
-  // Replies keep the default label, without pinging anyone.
+  // Replies keep the default label.
   assert.equal(renderForSlack({ ...martin, message: { ...martin.message, re: 68, text: "fixed" } }), "**julianbenegas (github)**: fixed");
 });
 

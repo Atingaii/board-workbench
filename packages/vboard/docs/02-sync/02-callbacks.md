@@ -224,16 +224,14 @@ render: ({ message, label }) =>
     : `**${label}**: ${message.text}`,
 ```
 
-A renderer can name people the way the platform does. `mention` is the author's
-native mention there (`<@U0456>` in Slack), from their own account or one their
-person linked, and null when there's none. `mentionOf(actor)` finds one for any
-other actor, such as one a label names. The default label stays the author's
-name, so nobody gets pinged unless a renderer asks:
+`mentionOf(actor)` returns how the platform mentions an actor (`<@U0456>` in
+Slack), through any account their person linked, or null. The default label is
+the author's name, so nobody gets pinged unless a renderer asks:
 
 ```ts
 // in slack({ … }): a PR's root mentions its owner, or its author
-render: ({ message, label, mention, mentionOf }) => {
-  const who = (message.labels.owner && mentionOf(message.labels.owner)) ?? mention
+render: ({ message, label, mentionOf }) => {
+  const who = (message.labels.owner && mentionOf(message.labels.owner)) ?? mentionOf(message.by.actor)
   return message.re === null && message.labels.pr && who
     ? `${message.text} · ${who}`
     : `**${label}**: ${message.text}`
