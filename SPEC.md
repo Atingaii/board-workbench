@@ -347,7 +347,10 @@ only their own accounts.
   - **`--mentions <person>`** and `mentions=me` include mentions of their linked
     accounts, so a Slack `<@U0456>` reaches the person's `--mentions me`.
   - **Outbound mentions:** a person mentioned on the board renders natively on
-    a platform where they've linked an account (`<@U0456>` in Slack).
+    a platform where they've linked an account (`<@U0456>` in Slack), and so
+    does a mention of any account they linked: their GitHub account reads as
+    `<@U0456>` in Slack. Renderers get the same lookup as `mentionOf` (see
+    [Outgoing presentation](#outgoing-presentation)).
   - **Views:** a linked account's author view (`author`, `/actors`) carries
     `person: { id, handle, name, avatar }`, and the CLI shows
     **Julian Benegas (julian)**.
@@ -1377,7 +1380,9 @@ connection; these callbacks do not run for every outgoing message.
 Each provider accepts a synchronous `render` function, or a subclass can override
 its `render` method. It receives immutable copies of the board message (its text in the readable
 form for known bot messages) and actor,
-the default author label, and the actual resolved destination. It returns the
+the default author label, the actual resolved destination, and
+`mentionOf(actor)`, which returns an actor's native mention there through linked
+accounts, or null. It returns the
 message body as markdown; vboard still adds quoted context and attachment notes.
 The board's stored message and verified author are unchanged. Resolved mentions
 are converted to the destination's native form in the rendered body, after the
