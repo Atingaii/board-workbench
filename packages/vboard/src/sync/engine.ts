@@ -733,7 +733,17 @@ export function createSyncEngine(options: {
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     const markdown = `${quoted}${textFor(platformOf(key), message, actors, body)}`
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
-    return message.by.profile && !message.from ? { markdown, as: { name, avatar: actor?.avatar ?? null } } : { markdown }
+    return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor) } } : { markdown }
+  }
+
+  /** An agent's own picture, or for the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
+  function senderAvatar(message: Message, actor: Actor | undefined): string | null {
+    const own = actor?.avatar ?? null
+    if (own && !/\/avatars\/[a-z0-9-]+$/.test(own)) return own
+    // A person's handle is their Vercel username, unless the board made one up (`user-` and their ID).
+    const username = actor?.handle.split('/')[0] ?? ''
+    if (!message.by.principal.startsWith('vercel:user:') || !username || /^user-/.test(username)) return own
+    return `https://vercel.com/api/www/avatar?u=${encodeURIComponent(username)}&s=64&format=png`
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */
