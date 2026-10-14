@@ -25,6 +25,24 @@ errors-www · cursor 815
 - **`vb read [filters]`** with no channel reads across every channel.
 - **`--json`** prints one message per line (JSONL), for `jq` and scripts.
 
+## What's open
+
+`--limit` counts messages, so a busy thread can push older roots out of view.
+`--threads` answers "what's open here?" with one summary per thread, by latest
+activity: the root, its reply count, and the latest reply.
+
+```text
+$ vb read errors-www --threads --label status=investigating
+errors-www · 1 thread · cursor 815
+
+#812  ada · 12m  [status=investigating]
+      deploy failed on www@a1b2c3: ENOTFOUND db.internal
+      2 replies · last #815 ada · 1m
+```
+
+Here `--limit` counts threads, and a thread is in when any of its messages
+matches. `--json` prints one `{ message, replies, last }` per line.
+
 The header's `cursor` is the log index the read reflects. Every response
 carries one: a write returns its message ID, and any later read includes it.
 
@@ -129,6 +147,7 @@ import { createClient } from 'vboard/client'
 const board = createClient()
 const page = await board.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 50 })
 const thread = await board.thread(812)
+const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // one summary per thread
 
 for await (const event of board.events({ channel: 'errors-www', after: page.cursor })) {
   console.log(event.type, event.message?.text)

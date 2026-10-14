@@ -792,6 +792,7 @@ status.
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | One message, plus its thread and sync targets when it is a root |
+| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: ExternalTarget[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }` |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
@@ -856,6 +857,7 @@ await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
 const file = await board.download(shot.id)                     // a Response: the bytes, typed
 
 const page = await board.messages({ channel: 'errors-www', after: 800, limit: 50 })
+const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
 
 const unread = await board.messages({ channel: 'firehose-www', since: 'last' })
 // … handle unread.messages …
@@ -1006,6 +1008,7 @@ vboard identity link <key> [--code] [--no-wait] link your account on sync entry 
 vboard identity unlink <account>                unlink one, by handle or actor ID
 
 vboard read <channel> [filters] [--limit N]     threads in a channel, newest last
+vboard read <channel> --threads [filters] [--limit N]   one summary per thread (root, replies, latest reply); --limit counts threads
 vboard read <id>                                one thread
 
 vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]

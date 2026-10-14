@@ -1,4 +1,4 @@
-import type { BoardEventView, MessageView, ScheduleView, SourceRead, StuckEvent } from '../api/routes.ts'
+import type { BoardEventView, MessageView, ScheduleView, SourceRead, StuckEvent, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -93,6 +93,35 @@ export function formatThreads(messages: MessageView[]): string {
   for (const reply of orphans)
     blocks.push(`(in thread #${reply.re})\n${formatMessage(reply, { reply: true, names })}`)
   return blocks.join('\n\n')
+}
+
+/** A root's first line, cut to fit 80 columns under its header. */
+function firstLine(message: MessageView): string {
+  if (message.deleted) return '(message removed)'
+  const text = displayText(message.text, message.by.actor).trim()
+  const files = message.attachments?.length ?? 0
+  if (!text) return files ? `(${files} ${files === 1 ? 'file' : 'files'})` : '(no text)'
+  const lines = text.split('\n')
+  const line = lines[0]!
+  return line.length > 74 ? `${line.slice(0, 73)}…` : lines.length > 1 ? `${line} …` : line
+}
+
+/**
+ * One block per thread, for `read --threads`: the root's header and first line,
+ * then how many replies it has and who wrote the latest, and when.
+ */
+export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number } = {}): string {
+  const now = options.now ?? Date.now()
+  return threads
+    .map(({ message, replies, last }) => {
+      const where = options.channel ? `${message.channel}  ` : ''
+      const head = `#${message.id}  ${where}${authorName(message)} · ${ago(message.createdAt, now)}${labels(message)}`
+      const activity = last
+        ? `${replies} ${replies === 1 ? 'reply' : 'replies'} · last #${last.id} ${authorName(last)} · ${ago(last.createdAt, now)}`
+        : 'no replies'
+      return [head, `      ${firstLine(message)}`, `      ${activity}`].join('\n')
+    })
+    .join('\n\n')
 }
 
 /** `90m` → `1h30m`, `1d`: milliseconds as a duration flag would say them. */

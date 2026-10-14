@@ -238,6 +238,38 @@ describe('cli', () => {
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['deploy failed on a1b2c3', 'rolled back to d4e5f6'])
   })
 
+  it('reads a channel as thread summaries, counting threads, with --json one summary per line', async () => {
+    const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
+    const second = (await vb(['post', 'open-work', 'docs typo'])).stdout.trim()
+    for (const n of [1, 2, 3]) expect((await vb(['reply', second, `note ${n}`, '--as', 'claude'])).code).toBe(0)
+    expect((await vb(['reply', first, 'still flaky'])).code).toBe(0)
+
+    // By messages, two replies leave the oldest thread without its root.
+    expect((await vb(['read', 'open-work', '--limit', '2'])).stdout).toContain(`(in thread #${second})`)
+
+    const read = await vb(['read', 'open-work', '--threads', '--limit', '1'])
+    expect(read).toMatchObject({ code: 0, stderr: '' })
+    expect(read.stdout).toMatch(new RegExp(`^open-work · 1 thread · cursor \\d+\n\n#${first}  julian · \\d+s  \\[state=open\\]\n      flaky test in ci …\n      1 reply · last #\\d+ julian · \\d+s\n$`))
+
+    const all = await vb(['read', 'open-work', '--threads'])
+    expect(all.stdout).toContain(`#${second}  julian`)
+    expect(all.stdout).toMatch(/3 replies · last #\d+ claude via julian · \d+s/)
+    expect(all.stdout.indexOf(`#${second}`)).toBeLessThan(all.stdout.indexOf(`#${first}`))
+
+    const json = await vb(['read', 'open-work', '--threads', '--json'])
+    const lines = json.stdout.trim().split('\n').map((line) => JSON.parse(line))
+    expect(lines.map((t: { message: { id: number }; replies: number; last: { text: string } }) => [t.message.id, t.replies, t.last.text])).toEqual([
+      [Number(second), 3, 'note 3'],
+      [Number(first), 1, 'still flaky'],
+    ])
+
+    const open = await vb(['read', 'open-work', '--threads', '--label', 'state=open', '--json'])
+    expect(open.stdout.trim().split('\n').map((line) => JSON.parse(line).message.id)).toEqual([Number(first)])
+    // Across channels, each summary names its channel.
+    expect((await vb(['read', '--threads', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
+    expect(await vb(['read', first, '--threads'])).toMatchObject({ code: 2, stderr: 'error: --threads reads a channel: vboard read <channel> --threads\n' })
+  }, 20_000)
+
   it('filters by mentions of me, or of a handle', async () => {
     await vb(['post', 'pings', 'hello'])
     await vb(['post', 'pings', 'hey @julian, look', '--as', 'claude'])
@@ -360,6 +392,8 @@ describe('cli', () => {
       const read = await vb(['sources', 'slack', 'read', '#general'], { VBOARD_URL: `${old.origin}/api/board` })
       expect(read.code).toBe(1)
       expect(read.stderr).toContain("this board can't read sources yet")
+      const threads = await vb(['read', 'errors-www', '--threads'], { VBOARD_URL: `${old.origin}/api/board` })
+      expect(threads).toMatchObject({ code: 1, stderr: "error: this board can't list threads yet: update vboard where the board is deployed\n" })
     } finally {
       await old.close()
     }
