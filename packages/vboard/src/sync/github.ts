@@ -4,7 +4,7 @@ import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ReceivedEvent, ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, ProviderPost, ProviderDelivery } from './provider.ts'
+import type { ReceivedEvent, ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, FilterInput, ProviderPost, ProviderDelivery } from './provider.ts'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectGitHubAdapter } from '@vercel/connect/chat'
 import { connectUserTokens, withUserTokens } from './users.ts'
@@ -226,6 +226,8 @@ export type GitHubOptions = {
    */
   botUserId?: number
   render?: (input: RenderInput) => string
+  /** Which board messages go to this platform: return false to keep one on the board. */
+  filter?: (input: FilterInput) => boolean
   repos: Record<string, GitHubRepo>
 }
 
@@ -307,6 +309,7 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     }
     super({
       render: options.render,
+      filter: options.filter,
       platform: 'github',
       adapter: options.adapter,
       canStartThreads: false,

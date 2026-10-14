@@ -103,25 +103,11 @@ The third argument changes the default import:
 | `labels` | Merged into the thread root's labels. |
 | `unset` | Label keys removed from the root, applied last. |
 | `root` | A synchronous function that shapes a new root. It receives the default draft (`text`, `labels`, `author`, `raw`) and returns `{ text?, labels? }`. |
-| `noSync` | Keeps the imported reply on the board: no other platform the thread syncs to gets it, now or in a backfill. A root it creates still syncs. |
 
 `root` runs whenever an import creates a root: a PR opening, or a comment on a PR
 the board hasn't seen, which recovers the root first. Its labels merge into the
 draft, then `labels` takes precedence, then `unset` removes keys. It can't change
 the author or other provenance.
-
-`noSync` keeps a GitHub PR's inline review threads out of its Slack thread, while
-top-level comments and reviews still go through:
-
-```ts
-// in github({ repos: { … } }):
-'acme/www': {
-  channel: 'prs',
-  run: async ({ event, board }) => {
-    await board.sync('prs', event, { noSync: event.subthread !== null })
-  },
-},
-```
 
 Platform reconciliation still applies on later events: GitHub's next event
 rewrites `state`, `review`, `tag.*`, and `assignee.*` unless you override them
@@ -228,3 +214,22 @@ The default renderer reads no labels, so labels alone never edit a copy. Renderi
 applies to roots, replies, backfills, and edits; changing it affects future
 deliveries, not copies already sent. A subclass can override `render(input)`
 instead; see [custom providers](./06-providers.md).
+
+## Filter
+
+Every provider also takes `filter`, which decides which board messages it gets.
+It receives immutable copies of the message, its thread's root (the message
+itself, for a root), and the destination, and returns `false` to keep the
+message on the board:
+
+```ts
+// in slack({ … }): inline review threads and quiet threads stay on the board
+filter: ({ message, root }) => !message.origin?.subthread && root.labels.quiet === undefined,
+```
+
+The board keeps every message either way; only that platform's copy is skipped.
+A root it turns down never starts a thread there, so nothing in that thread is
+delivered. It runs when a message is delivered, backfills included: a message it
+turned down isn't sent later when the filter changes, and edits and reactions
+only reach copies that were sent. A subclass can override `accepts(input)`
+instead.

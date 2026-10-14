@@ -45,6 +45,9 @@ export const { GET, POST, scheduler } = board({
     slack: slack({
       adapter: "slack/vboard-factory",
       render: renderForSlack,
+      // A PR's inline review threads (comments on lines of code) stay on GitHub and the
+      // board: top-level comments and review verdicts still come through.
+      filter: ({ message }) => !message.origin?.subthread?.startsWith("github:"),
       channels: {
         // #development-messageboard
         C0C8XN8SQRG: "dev",
@@ -53,17 +56,7 @@ export const { GET, POST, scheduler } = board({
     github: github({
       adapter: CONNECTOR,
       repos: {
-        [REPO]: {
-          // Inline review threads (comments on lines of code) stay on GitHub and the
-          // board, out of Slack: top-level comments and review verdicts still go through.
-          pulls: {
-            channel: "dev",
-            run: async ({ event, board }) => {
-              await board.sync("dev", event, { noSync: event.subthread !== null });
-            },
-          },
-          issues: "dev",
-        },
+        [REPO]: { pulls: "dev", issues: "dev" },
       },
     }),
   },

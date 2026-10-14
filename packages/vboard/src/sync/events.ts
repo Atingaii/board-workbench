@@ -49,7 +49,6 @@ export const SyncOverrides = z.object({
   text: z.string().optional(),
   labels: Labels.optional(),
   unset: z.array(LabelKey).optional(),
-  noSync: z.boolean().optional(),
 }).strict()
 
 export type SyncOverrides = z.infer<typeof SyncOverrides>

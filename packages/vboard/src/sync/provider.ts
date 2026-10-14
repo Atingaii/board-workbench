@@ -40,6 +40,8 @@ export type ProviderMapping = {
 }
 
 export type RenderInput = { message: Readonly<Message>; author: Readonly<Actor> | null; label: string; target: string }
+/** A message on its way to a platform, its thread's root (the message itself, for a root), and where it's going. */
+export type FilterInput = { message: Readonly<Message>; root: Readonly<Message>; target: string }
 export type EventMapping<E extends ProviderEvent> = string | SyncHandler<E> | { channel: string; run: SyncHandler<E> }
 
 export type FileDelivery = { message: string; files: string[] }
@@ -70,6 +72,8 @@ export type ProviderOptions = {
   singleReaction?: boolean
   uploadsFiles?: boolean
   render?: (input: RenderInput) => string
+  /** Which board messages this platform gets: return false to keep one on the board. Every message by default. */
+  filter?: (input: FilterInput) => boolean
   /** People's own tokens, to post as them and to link accounts by signing in. */
   users?: UserTokens | null
 }
@@ -146,6 +150,11 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
 
   sync(context: SyncContext, channel: string, overrides?: SyncOverrides): Promise<SyncResult> {
     return context.apply(channel, overrides)
+  }
+
+  /** Whether a board message is delivered here: `filter`, or every message. */
+  accepts(input: FilterInput): boolean {
+    return this.options.filter?.(input) ?? true
   }
 
   render(input: RenderInput): string {

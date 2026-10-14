@@ -3,7 +3,7 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
+import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type FilterInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
 import type { SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
@@ -238,6 +238,8 @@ export type SlackOptions = {
    */
   adapter: Adapter | string
   render?: (input: RenderInput) => string
+  /** Which board messages go to this platform: return false to keep one on the board. */
+  filter?: (input: FilterInput) => boolean
   /** Not needed with a connector. */
   client?: () => Promise<SlackClient>
   channels: Record<string, EventMapping<SlackEvent>>
@@ -425,6 +427,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         return { ...file, fetchMetadata: rest }
       },
       render: options.render,
+      filter: options.filter,
       platform: 'slack',
       adapter: options.adapter,
       canStartThreads: true,
