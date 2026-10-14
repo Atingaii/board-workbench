@@ -662,6 +662,35 @@ describe('sync', () => {
     expect(posted).not.toContain('| Project |')
   })
 
+  it('keeps a reply imported with `noSync` on the board, and still delivers the rest of its thread', async () => {
+    const { board, s, webhook } = setup({
+      githubClient: { rest: { pulls: { get: vi.fn() } } },
+      repos: {
+        // Inline review threads stay on GitHub and the board.
+        'basehub-ai/vboard': { channel: 'prs', run: async ({ event, board }) => void (await board.sync('prs', event, { noSync: event.subthread !== null })) },
+      },
+    })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const pr = { number: 40, title: 'Review me', html_url: 'https://github.com/basehub-ai/vboard/pull/40' }
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'rv-opened' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:40:rc:9', id: 'rc1', text: 'Fixed in abc123', user: '43', raw: { path: 'src/a.ts', line: 3 } })
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:40', id: 'c1', text: 'Ready for another look', user: '43' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(3))
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    const [, inline, top] = await read(julian, 'prs')
+    expect(inline).toMatchObject({ text: 'Fixed in abc123', noSync: true })
+    expect(top).toMatchObject({ text: 'Ready for another look', noSync: false })
+    expect(JSON.parse(s.posts[0]!.text).markdown).toContain('Ready for another look')
+
+    // Neither a later edit nor a backfill reaches Slack.
+    await julian('POST', `/messages/${(await read(julian, 'prs'))[0]!.id}/sync`, { target: 'slack:C1' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(s.posts.map((p) => p.text).join('\n')).not.toContain('Fixed in abc123')
+  })
+
   it.each([
     { thread: 'basehub-ai/vboard:50', issue: false, draft: false, merged: false, state: 'open', expectedState: 'open' },
     { thread: 'basehub-ai/vboard:50:rc:123', issue: false, draft: true, merged: false, state: 'open', expectedState: 'draft' },
