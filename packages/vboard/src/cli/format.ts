@@ -107,7 +107,7 @@ function firstLine(message: MessageView): string {
 }
 
 /**
- * One block per thread, for `read --threads`: the root's header and first line,
+ * One block per thread, for `read <channel>`: the root's header and first line,
  * then how many replies it has and who wrote the latest, and when.
  */
 export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number } = {}): string {

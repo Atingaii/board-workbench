@@ -7,6 +7,34 @@ description: Read threads, follow the board live, or block until the next messag
 
 ```text
 $ vb read errors-www
+errors-www · 2 threads · cursor 815
+
+#809  ada · 2h
+      flaky e2e on checkout
+      no replies
+
+#812  ada · 12m  [status=investigating]
+      deploy failed on www@a1b2c3: ENOTFOUND db.internal
+      2 replies · last #815 ada · 1m
+```
+
+- **`vb read <channel>`** shows one summary per thread, the way Slack shows a
+  channel: the root's header and first line, its reply count, and the latest
+  reply. The latest activity comes last. It shows the newest 50 threads;
+  `--limit` counts threads and takes up to 500. A thread is in when any of its
+  messages matches the filters.
+- **`vb read <id>`** shows one whole thread, from any message in it, plus its
+  pending [scheduled messages](./06-schedules.md).
+- **`vb read`** with no channel reads across every channel, and each summary
+  names its channel.
+- **`--json`** prints one `{ message, replies, last }` per line (JSONL): the
+  root, its reply count, and its latest reply or `null`. `vb read <id> --json`
+  prints one message per line.
+
+## Every message
+
+```text
+$ vb read errors-www --messages
 errors-www · cursor 815
 
 #812  ada · 12m  [status=investigating]
@@ -18,30 +46,10 @@ errors-www · cursor 815
     thanks, fixing the env now
 ```
 
-- **`vb read <channel>`** shows the newest 50 messages, oldest first, grouped
-  into threads. `--limit` takes up to 500.
-- **`vb read <id>`** shows one whole thread, from any message in it, plus its
-  pending [scheduled messages](./06-schedules.md).
-- **`vb read [filters]`** with no channel reads across every channel.
-- **`--json`** prints one message per line (JSONL), for `jq` and scripts.
-
-## What's open
-
-`--limit` counts messages, so a busy thread can push older roots out of view.
-`--threads` answers "what's open here?" with one summary per thread, by latest
-activity: the root, its reply count, and the latest reply.
-
-```text
-$ vb read errors-www --threads --label status=investigating
-errors-www · 1 thread · cursor 815
-
-#812  ada · 12m  [status=investigating]
-      deploy failed on www@a1b2c3: ENOTFOUND db.internal
-      2 replies · last #815 ada · 1m
-```
-
-Here `--limit` counts threads, and a thread is in when any of its messages
-matches. `--json` prints one `{ message, replies, last }` per line.
+`--messages` reads the messages themselves, oldest first, grouped into threads.
+Here `--limit` counts messages, so a busy thread can push older roots out of
+view, and `--json` prints one message per line. With no channel, it needs a
+filter.
 
 The header's `cursor` is the log index the read reflects. Every response
 carries one: a write returns its message ID, and any later read includes it.
@@ -59,7 +67,7 @@ carries one: a write returns its message ID, and any later read includes it.
 | `--from <source>` | where it was written: a sync key (`slack`, `github`), or `board` |
 | `--label <key>` | messages with that label; `key=value`, or `key=a\|b` for either |
 | `--text <words>` | text containing the words, case-insensitive (a substring, not search) |
-| `--after <id>` | messages after that index |
+| `--after <id>` | messages after that index; for `read`, threads with activity after it |
 
 ```bash
 vb read prs --label state=open                  # what's pending
@@ -134,7 +142,8 @@ last=$(jq -r .index <<<"$next")
 ```
 
 `read` reports a `cursor` too, the index it reflects: `vb read firehose-www
---after 815` reads only what's new since.
+--after 815` lists only the threads with activity since, and `--messages
+--after 815` reads only the messages.
 
 ## In code
 

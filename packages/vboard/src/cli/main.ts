@@ -7,7 +7,7 @@ import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
-import { type Filters, type ProfileOption } from '../client/client.ts'
+import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { configDir, createClient, detectAgent, projectDir, projectUrl } from '../client/node.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
@@ -47,10 +47,11 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   identity link <key> [--code] [--no-wait] link your account on sync entry <key> (e.g. slack): sign in, or post a code from it
   identity unlink <account>                unlink one, by handle or actor ID
 
-  read <channel> [filters] [--limit N]     the latest messages, as threads, newest last (no channel: every channel)
-  read <channel> --threads [filters] [--limit N]
-                                           the latest N threads, one summary each: root, replies, latest reply
-  read <id>                                one thread
+  read [channel] [filters] [--limit N]     the latest threads, one each: root, replies, latest reply
+                                           (no channel: every channel)
+  read <channel> --messages [filters] [--limit N]
+                                           the latest messages instead, grouped by thread
+  read <id>                                one thread, every message
 
   post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
   reply <id> ["<text>"] [--attach <file>]... [--id <key>] [--no-sync]
@@ -92,7 +93,8 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
-json:     one object per line (JSONL): a message for read, { message, replies, last } for read --threads
+json:     one object per line (JSONL): { message, replies, last } for read <channel>,
+          a message for read <id> and read --messages
 text:     pass "-" to read it from stdin; it may be left out when you --attach
 env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
@@ -124,7 +126,7 @@ const parsed = (() => {
         after: { type: 'string' },
         limit: { type: 'string' },
         all: { type: 'boolean' },
-        threads: { type: 'boolean' },
+        messages: { type: 'boolean' },
         timeout: { type: 'string' },
         port: { type: 'string' },
         'no-open': { type: 'boolean' },
@@ -500,36 +502,34 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'read': {
       const target = args[0]
       const filtering = !!(flags.re || flags.by || flags.from || flags.text || flags.mentions || flags.label?.length)
-      if (!target && !filtering && !flags.threads) throw new UsageError('usage: vboard read <channel|id> [filters], or read [filters] across channels')
+      if (!target && !filtering && flags.messages)
+        throw new UsageError('usage: vboard read <channel> --messages [filters], or read --messages [filters] across channels')
       const board = client()
       if (target && /^#?\d+$/.test(target)) {
-        if (flags.threads) throw new UsageError('--threads reads a channel: vboard read <channel> --threads')
         const thread = await board.thread(messageId(target))
         if (flags.json) return [thread.message, ...thread.replies].forEach(printJson), 0
         out(formatThreads([thread.message, ...thread.replies]))
         for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
-      if (flags.threads) {
-        const page = await board.threads({
-          ...filters(target),
-          ...(flags.limit ? { limit: Number(flags.limit) } : {}),
-        })
-        if (!Array.isArray((page as { threads?: unknown }).threads))
-          throw new Error("this board can't list threads yet: update vboard where the board is deployed")
-        if (flags.json) return page.threads.forEach(printJson), 0
-        const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
-        out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}\n`)
-        if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
+      const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
+      if (flags.messages) {
+        const page = await board.messages(query)
+        if (flags.json) return page.messages.forEach(printJson), 0
+        out(`${target ?? 'all channels'} · cursor ${page.cursor}\n`)
+        out(page.messages.length ? formatThreads(page.messages) : 'no messages')
         return 0
       }
-      const page = await board.messages({
-        ...filters(target),
-        ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+      // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
+      const old = new Error("this board can't list threads: update its vboard, or read --messages")
+      const page = await board.threads(query).catch((error: unknown) => {
+        throw error instanceof BoardError && error.status === 404 ? old : error
       })
-      if (flags.json) return page.messages.forEach(printJson), 0
-      out(`${target ?? 'all channels'} · cursor ${page.cursor}\n`)
-      out(page.messages.length ? formatThreads(page.messages) : 'no messages')
+      if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
+      if (flags.json) return page.threads.forEach(printJson), 0
+      const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
+      out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}\n`)
+      if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
       return 0
     }
 
@@ -927,7 +927,7 @@ if (parsed === null) {
 /**
  * Exits once stdout and stderr have flushed. On a pipe, writes can still be
  * queued when a command returns, and `process.exit` would drop them: a long
- * `read --json` would reach a slow reader cut off.
+ * `read <id> --json` would reach a slow reader cut off.
  */
 function exit(code: number) {
   let pending = 2

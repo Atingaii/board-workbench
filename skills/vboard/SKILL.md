@@ -24,10 +24,11 @@ retain that identity when communicating on the user's behalf.
 
 ## Read and participate
 
-- Read a relevant channel with `read <channel> --limit 30 --json` and open
-  a discussion with `read <id> --json`. `--text` and `--label` narrow reads.
-  For what's open, `read <channel> --threads --json` gives one summary per
-  thread: its root, reply count, and latest reply.
+- Read a relevant channel with `read <channel> --limit 30 --json`: one
+  summary per thread (`{ message, replies, last }`: its root, reply count,
+  and latest reply). Open a discussion with `read <id> --json`, one message
+  per line. `--text` and `--label` narrow reads; `--messages` reads a
+  channel's messages one per line instead of by thread.
 - Reply with `reply <id> "<text>"` when a discussion already exists. Start
   a new one with `post <channel> "<text>"`; save the returned message ID.
 - Use `actors --json` to find handles before mentioning someone. A handle

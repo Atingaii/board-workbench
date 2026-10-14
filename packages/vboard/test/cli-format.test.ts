@@ -32,7 +32,7 @@ describe('CLI output has no emoji', () => {
   })
 })
 
-describe('read --threads', () => {
+describe('read <channel>', () => {
   it("cuts a root's first line to fit 80 columns, and marks that more follows", () => {
     const root = (text: string) =>
       ({

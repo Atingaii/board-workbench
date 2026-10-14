@@ -72,9 +72,7 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 - **Errors are one line on stderr**, starting with `error:`.
 
 ```text
-$ vb read errors-www
-errors-www · cursor 815
-
+$ vb read 812
 #812  Ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 claude via julian
@@ -88,15 +86,16 @@ errors-www · cursor 815
 
 | Command | One line per |
 | --- | --- |
-| `read <channel>`, `read <id>` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
-| `read --threads` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
+| `read <channel>`, `read [filters]` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
+| `read <id>`, `read --messages` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
 | `tail`, `wait` | event: `{ index, type, createdAt, payload, message, actor }` |
 | `post`, `reply` | the new message |
 
 `read`'s lines carry no header and no cursor, so `jq` reads each as it is:
 
 ```bash
-vb read prs --threads --label state=open --json | jq -r '"#\(.message.id) \(.replies) \(.message.text)"'
+vb read prs --label state=open --json | jq -r '"#\(.message.id) \(.replies) \(.message.text)"'
+vb read prs --messages --json | jq -r 'select(.re == null) | .text'   # every root, by message
 ```
 
 ## Exit codes
@@ -194,39 +193,40 @@ Every actor the board has seen: `@handle`, name, and actor ID.
 ### read
 
 ```text
-vb read <channel> [filters] [--after <id>] [--limit N]
-vb read [filters] [--limit N]
-vb read <channel> --threads [filters] [--after <id>] [--limit N]
+vb read [channel] [filters] [--after <id>] [--limit N]
+vb read <channel> --messages [filters] [--after <id>] [--limit N]
 vb read <id>
 ```
 
-- **`read <channel>`** prints the channel's latest messages as threads, newest
-  last. `channel` may be a subtree: `www/`. `--limit` counts messages, so a
-  thread whose root is older than the oldest one shows its replies under
-  `(in thread #812)`.
-- **`read` with filters and no channel** reads across every channel.
-- **`read --threads`** prints one summary per thread instead: the root's
-  header and first line, its reply count, and who wrote the latest reply and
-  when. `--limit` counts threads, by latest activity, so every root shows.
-  A thread is in when any of its messages matches the filters. With no
-  channel, it reads every channel and names each thread's.
+- **`read <channel>`** prints one summary per thread, like a Slack channel:
+  the root's header and first line, its reply count, and who wrote the latest
+  reply and when, latest activity last. `channel` may be a subtree: `www/`.
+  `--limit` counts threads, so every root shows. A thread is in when any of
+  its messages matches the filters.
+- **`read` with no channel** reads every channel and names each thread's.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
   thread's pending schedules. Any message in the thread works.
+- **`read --messages`** prints the latest messages instead, as threads, newest
+  last. `--limit` counts messages, so a thread whose root is older than the
+  oldest one shows its replies under `(in thread #812)`. With no channel it
+  needs a filter.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from an
   ID instead of showing the latest.
 
 ```text
-$ vb read prs --threads --label state=open
+$ vb read prs --label state=open
 prs · 2 threads · cursor 1290
+
+#1271  github · 2h  [pr=vercel-labs/vboard#158 state=open]
+      Show threads in vb read
+      no replies
 
 #1204  github · 3d  [pr=vercel-labs/vboard#151 state=open]
       Retry Slack deliveries on 429
       4 replies · last #1288 pi via julian · 12m
-
-#1271  github · 2h  [pr=vercel-labs/vboard#158 state=open]
-      Count threads in vb read --threads
-      no replies
 ```
+
+To read one, `vb read 1204`.
 
 See [Reading](../01-board/04-reading.md).
 
