@@ -71,7 +71,8 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `review-pi` hands each new `dev --label pr` thread to Pi to review the PR (Pi wears `:looking-bunny:` on the PR root while it reviews), and tells it when
   someone other than a bot replies. A draft waits until it's ready (`review.ts`): Pi
   reviews it once, when its root's `state` turns from `draft` to `open`, and until then
-  only a reply that names Pi (`pi`, `@pi`, or the thread's Pi) wakes it. Pi hears every reply in its threads but stays quiet when one is
+  only a reply that names Pi (`pi`, `@pi`, or the thread's Pi), or a reminder Pi
+  scheduled, wakes it. Pi hears every reply in its threads but stays quiet when one is
   addressed to someone else, and keeps board replies to a few lines; a review's detail
   goes in a GitHub review on the code. Review is its initial task; people can redirect
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
