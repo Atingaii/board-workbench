@@ -27,6 +27,7 @@ import {
   legacyRules,
   markPosted,
   reminder,
+  stopOutput,
   tilde,
   uninstallHook,
   type HookAgent,
@@ -681,7 +682,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const continuing = payload.stop_hook_active === true || (payload.loop_count ?? 0) > 0
         if (decideStop(session, continuing) === 'ask') {
           const text = reminder(cliCommand().command)
-          printJson(agent === 'cursor' ? { followup_message: text } : { decision: 'block', reason: text })
+          printJson(stopOutput(agent, text))
         }
       } catch {}
       return 0

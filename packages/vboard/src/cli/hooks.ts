@@ -315,3 +315,16 @@ export function reminder(cli: string): string {
     "If this turn changed nothing worth sharing (say, you just answered a question), just finish. Don't include the prompt, long output, or secrets.",
   ].join(' ')
 }
+
+/**
+ * The reminder as each agent reads it from the hook's stdout. Claude Code
+ * shows a stop's `additionalContext` once, as hook feedback, and continues the
+ * turn; a blocked stop would also show it as a hook error. Codex and Pi's
+ * extension read a blocked stop's `reason`; Cursor, whose stop can't block,
+ * a `followup_message`.
+ */
+export function stopOutput(agent: string, text: string): Record<string, unknown> {
+  if (agent === 'claude') return { hookSpecificOutput: { hookEventName: 'Stop', additionalContext: text } }
+  if (agent === 'cursor') return { followup_message: text }
+  return { decision: 'block', reason: text }
+}
