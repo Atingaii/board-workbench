@@ -551,9 +551,11 @@ export function createSyncEngine(options: {
           lenientMentions: true,
           id: await writeId(0),
         }
+        // A reply kept on the board: no other platform gets it. A root always syncs, so its thread can.
+        const reply = { ...base, ...(overrides.noSync ? { noSync: true } : {}) }
         if (rootId !== undefined) {
           await setExtraLabels(identity, rootId)
-          return result(await writePost(writes, { ...base, re: rootId }))
+          return result(await writePost(writes, { ...reply, re: rootId }))
         }
         const fetched = await platform.fetchRoot(native(event.thread))
         if (fetched === null) {
@@ -568,7 +570,7 @@ export function createSyncEngine(options: {
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `root:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(1),
         })
-        return result(await writePost(writes, { ...base, re: root.id }))
+        return result(await writePost(writes, { ...reply, re: root.id }))
       }
       case 'edited':
       case 'deleted':
@@ -610,7 +612,7 @@ export function createSyncEngine(options: {
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
           if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, id: rootId, set, unset })
-          if (event.reply) return result(await writePost(writes, { ...source, identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, id: await writeId(1) }))
+          if (event.reply) return result(await writePost(writes, { ...source, identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
           return { root: rootId, message: createdHere ? rootId : null }
         }
         if (!event.createRoot) return { root: null, message: null }
@@ -621,7 +623,7 @@ export function createSyncEngine(options: {
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(0),
         })
-        if (event.reply) return result(await writePost(writes, { ...source, identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, id: await writeId(1) }))
+        if (event.reply) return result(await writePost(writes, { ...source, identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
         return result(root)
       }
     }
@@ -744,7 +746,21 @@ export function createSyncEngine(options: {
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     const markdown = `${quoted}${textFor(platform, message, actors, body)}`
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
-    return message.by.profile && !message.from ? { markdown, as: { name, avatar: actor?.avatar ?? null } } : { markdown }
+    return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
+  }
+
+  /** An agent's own picture, or for the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */
+  function senderAvatar(message: Message, actor: Actor | undefined, actors: ActorsState): string | null {
+    const builtIn = (avatar: string | null | undefined) => !avatar || /\/avatars\/[a-z0-9-]+$/.test(avatar)
+    const own = actor?.avatar ?? null
+    if (!builtIn(own)) return own
+    // The person's own picture, which their CLI sends from Vercel, when they've posted as themselves.
+    const person = actors.byId[message.by.principal]?.avatar
+    if (!builtIn(person)) return person!
+    // Otherwise their handle, which is their Vercel username unless they changed it or the board made one up.
+    const username = actor?.handle.split('/')[0] ?? ''
+    if (!message.by.principal.startsWith('vercel:user:') || !username || /^user-/.test(username)) return own
+    return `https://vercel.com/api/www/avatar?u=${encodeURIComponent(username)}&s=64&format=png`
   }
 
   /** What a platform shows for files it didn't get: one line each, so a reader knows they're on the board. */

@@ -35,11 +35,14 @@ const FFMPEG_STATIC = "5.2.0";
 const PI_USER = "vercel-sandbox";
 /**
  * What Pi gets on top of its own, written into `~/.pi/agent` every turn from this app's folders of the same names:
- * the ui-video skill, and the computer tool (an extension) it records.
+ * the ui-video skill, and the computer tool (an extension) it records, and the verify-vboard skill, which runs
+ * vboard on a local board to reproduce and check changes to it.
  */
 const PI_FILES = [
   "skills/ui-video/SKILL.md",
   "skills/ui-video/scripts/ui-video",
+  "skills/verify-vboard/SKILL.md",
+  "skills/verify-vboard/scripts/verify-vboard",
   "extensions/computer/index.ts",
   "extensions/computer/xinput.py",
 ];
@@ -243,7 +246,7 @@ export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.pl
 export function policy(
   thread: number,
   tokens: { gateway: string; board: string; github: string },
-  bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+  bypass: string | undefined,
 ): NetworkPolicy {
   const protection = bypass ? { "x-vercel-protection-bypass": bypass } : {};
   // git itself goes through the sandbox's git credentials (`GIT`), so only the API gets the app's token.
@@ -383,7 +386,8 @@ async function deliver({ task, thread, key, message }: PiMessage) {
     getVercelOidcToken({ audience: BOARD }),
     getToken(CONNECTOR, GITHUB_TOKEN),
   ]);
-  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }) });
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  await sandbox.update({ networkPolicy: policy(thread, { gateway, board, github }, bypass) });
   // A message landing late in a session (say, one started by an earlier turn) still gets a full SANDBOX_MS.
   const extend = extension(sandbox.expiresAt, Date.now());
   if (extend > 0) await sandbox.extendTimeout(extend);
