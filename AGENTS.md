@@ -150,7 +150,11 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   limit sandboxes share.
 - Pi's sandbox also gets the factory's own skills and extensions, from
   `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
-  every turn (add a new file to `PI_FILES` in `agent.ts`). The `computer`
+  every turn (add a new file to `PI_FILES` in `agent.ts`). `verify-vboard`
+  tests vboard itself: it builds this checkout, a git ref in its own worktree
+  (`origin/main`, to reproduce a bug before fixing it), or an npm version,
+  serves a local board with `vb serve`, and runs each `vb` with only `PATH`
+  and a home of its own, so nothing reaches the factory's board. The `computer`
   extension is computer use, done the way Codex does it: one tool, sequential,
   that does one action on a virtual desktop (Xvfb) per call, with the mouse and
   keyboard through XTEST (`xinput.py`, using ctypes because the sandbox has no
