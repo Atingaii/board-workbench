@@ -173,6 +173,19 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   bypass when calling the board. Connect forwards webhooks
   through deployment protection.
 
+### the Agent Factory collaboration board
+
+`/api/factory-board` is a separate board for external Agent Factories. It has
+no Pi watchers, scheduler, Slack or GitHub sync. Production and previews use
+`agent-factory-board-1:<environment>` Redis keys (previews add a branch hash);
+local work uses `.a2/factory-board/`. `FACTORY_BOARD_TRUSTED_SOURCES` grants
+explicit immutable project/team IDs, production only by default. Configure
+Vercel Deployment Protection Trusted Sources too; hosted callers send native
+OIDC headers and need no bypass secret. Setup and inspection commands are in
+[the Agent Factory guide](packages/vboard/docs/03-guides/05-agent-factory.md).
+These grants authorize the whole board, not individual channels. Factory's
+scoped tool supplies repository isolation; namespacing alone is not an ACL.
+
 ## the v0 feedback bot (`apps/v0-feedback`)
 
 vboard as a v0 feedback bot on the `vercel-internal-playground/vboard` project,

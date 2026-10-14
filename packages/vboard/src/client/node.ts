@@ -352,6 +352,21 @@ function guarded(url: string, doFetch: typeof fetch): typeof fetch {
   let secret: Promise<string | null> | undefined
   let looked: Promise<{ secret: string; created: boolean }> | undefined
   return async (input, init = {}) => {
+    const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
+    if (!headers.has('x-vercel-trusted-oidc-idp-token')) {
+      const bearer = headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]
+      const token = bearer ?? (process.env.VERCEL === '1' ? await getVercelOidcToken({ audience: url }) : null)
+      if (token) headers.set('x-vercel-trusted-oidc-idp-token', token)
+    }
+    init = { ...init, headers }
+    // Hosted workloads use project trust, never a person's saved bypass credentials.
+    if (process.env.VERCEL === '1') {
+      return through(doFetch, input, init, null).catch((error) => {
+        throw error instanceof Wall
+          ? new BoardError('protected', `${url} rejected Vercel OIDC access: configure Deployment Protection Trusted Sources for the calling project and environment`, error.status)
+          : error
+      })
+    }
     const fromEnv = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
     if (fromEnv)
       return through(doFetch, input, init, fromEnv).catch((error) => {
@@ -412,6 +427,7 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
         if (next.origin !== new URL(target).origin) {
           headers = new Headers(headers)
           headers.delete('authorization')
+          headers.delete('x-vercel-trusted-oidc-idp-token')
           headers.delete('x-vercel-protection-bypass')
         }
         target = next.href

@@ -190,7 +190,15 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
 - **Discovery:** `GET /` is unauthenticated and returns
   `{ team_id, project_id, issuer, audience }`, so the client knows which project
   to mint for. The CLI can run from any directory.
-- **Deployment protection:** the Node client sends `x-vercel-protection-bypass`
+- **Deployment protection:** hosted Vercel clients send their audience-bound
+  OIDC token in `x-vercel-trusted-oidc-idp-token` for the edge and in
+  `Authorization` for the board. Discovery also mints an edge token with the
+  configured board URL as audience. Configure Deployment Protection Trusted
+  Sources for the calling project and environment separately from the board's
+  `trustedSources`. Hosted clients fail with setup guidance when edge trust is
+  missing; they never read or create an automation bypass. Both OIDC headers
+  are stripped on cross-origin redirects.
+  For local people, the Node client sends `x-vercel-protection-bypass`
   with `VERCEL_AUTOMATION_BYPASS_SECRET` when it's set. Otherwise, when a board
   answers with Vercel Authentication's wall, it does what `vercel curl` does:
   with your Vercel login it resolves the board's host to its project
