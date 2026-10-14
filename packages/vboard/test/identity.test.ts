@@ -437,7 +437,7 @@ describe('vb identity', () => {
       // It names what's left to link: the board's sync entries, so an agent knows what to offer.
       expect(await run(url, token, ['identity'])).toMatchObject({ code: 0, stdout: 'no linked accounts\nnot linked  slack, github  (vb identity link <key>)\n' })
       // Installing the hooks says the agent will offer to link them, so its question isn't a surprise.
-      expect((await run(url, token, ['hooks', 'install', 'claude'])).stdout).toMatch(/\nYour agent will offer, once, to link your slack and github accounts\.\n$/)
+      expect((await run(url, token, ['hooks', 'install', 'claude'])).stdout).toMatch(/\nyour agent will offer once to link slack and github\n$/)
 
       let posted: Promise<Response> | undefined
       const linking = await run(url, token, ['identity', 'link', 'slack'], (line) => {
@@ -448,7 +448,7 @@ describe('vb identity', () => {
       expect(linking.stdout).toMatch(/^From your slack account, post this as a message anywhere the board syncs, within 10 minutes:\n\n  vb-[A-Z2-9]{4}-[A-Z2-9]{4}\n\nlinked @jb \(slack:user:U_JULIAN\)\n$/)
 
       expect((await run(url, token, ['identity'])).stdout).toMatch(/^@jb  slack:user:U_JULIAN  by code · \d{4}-\S+\nnot linked  github  \(vb identity link <key>\)\n$/)
-      expect((await run(url, token, ['hooks', 'install', 'claude'])).stdout).toMatch(/\nYour agent will offer, once, to link your github account\.\n$/)
+      expect((await run(url, token, ['hooks', 'install', 'claude'])).stdout).toMatch(/\nyour agent will offer once to link github\n$/)
       expect(await run(url, token, ['identity', 'unlink', '@jb'])).toMatchObject({ code: 0, stdout: 'unlinked slack:user:U_JULIAN\n' })
       expect((await run(url, token, ['identity', 'nope'])).code).toBe(2)
     } finally {

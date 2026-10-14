@@ -685,7 +685,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       out('They stay quiet outside projects linked with `vb link <url>`.')
       const unlinked = await unlinkedAccounts()
       // Says what's coming, so the agent's question isn't a surprise; `vb identity link` does it now.
-      if (unlinked?.length) out(`Your agent will offer, once, to link your ${new Intl.ListFormat('en').format(unlinked)} account${unlinked.length > 1 ? 's' : ''}.`)
+      if (unlinked?.length) out(`your agent will offer once to link ${new Intl.ListFormat('en').format(unlinked)}`)
       return 0
     }
 

@@ -151,7 +151,7 @@ The offer comes once per board, across sessions and agents. `hooks install`
 says it's coming:
 
 ```text
-Your agent will offer, once, to link your slack and github accounts.
+your agent will offer once to link slack and github
 ```
 
 When you've already linked everything the board syncs, install marks the

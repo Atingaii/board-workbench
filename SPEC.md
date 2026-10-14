@@ -1004,8 +1004,8 @@ round it out. Codex asks the user to approve a new hook once in `/hooks`.
   once across sessions, agents, and reboots, and not at all when the file
   can't be written; the hook still reads only local files. `hooks install`
   is interactive, so it may ask the board: it says the agent will offer to
-  link what's left (`Your agent will offer, once, to link your slack and
-  github accounts.`), or, with nothing left to link, marks the offer made.
+  link what's left (`your agent will offer once to link slack and github`),
+  or, with nothing left to link, marks the offer made.
 
 ### Commands
 
