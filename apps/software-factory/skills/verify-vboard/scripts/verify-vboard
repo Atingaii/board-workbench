@@ -32,7 +32,8 @@ RUN="$ROOT/$name"
 
 # vb, as built for this run, with nothing from Pi's environment.
 local_vb() {
-  (cd "$RUN/work" && env -i PATH="$PATH" HOME="$RUN/home" TERM=dumb node "$(cat "$RUN/cli")" "$@")
+  # From where it's called, so paths like `--attach ./shot.png` mean what they say; the board comes from VBOARD_URL.
+  env -i PATH="$PATH" HOME="$RUN/home" TERM=dumb VBOARD_URL="$(cat "$RUN/url")" node "$(cat "$RUN/cli")" "$@"
 }
 
 alive() { [ -f "$RUN/pid" ] && kill -0 "$(cat "$RUN/pid")" 2>/dev/null; }

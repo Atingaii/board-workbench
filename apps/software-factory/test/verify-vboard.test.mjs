@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -38,6 +38,11 @@ test("verify-vboard: a local board driven by this checkout's vb, with Pi's board
   assert.deepEqual(messages.map((m) => m.text), ["hello from the report", "a reply"]);
   // A person on the local board, not Pi's profile.
   assert.deepEqual(messages.map((m) => m.by.profile), [null, null]);
+
+  // Paths mean what they say from where it's called, not the run's scratch repo.
+  writeFileSync(join(dir, "note.txt"), "proof");
+  const attach = spawnSync(script, ["vb", "--name", "t", "reply", id, "with a file", "--attach", "note.txt"], { env, encoding: "utf8", cwd: dir });
+  assert.equal(attach.status, 0, attach.stdout);
 
   const missing = run("vb", "--name", "t", "read", "999");
   assert.equal(missing.status, 1);
