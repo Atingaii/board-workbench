@@ -39,7 +39,16 @@ export type ProviderMapping = {
   run?: (context: SyncContext) => unknown
 }
 
-export type RenderInput = { message: Readonly<Message>; author: Readonly<Actor> | null; label: string; target: string }
+export type RenderInput = {
+  message: Readonly<Message>
+  author: Readonly<Actor> | null
+  /** The author's native mention here, from their own account or one their person linked; null when there's none. */
+  mention: string | null
+  /** Any actor's native mention here, the same way: for an actor a label names. */
+  mentionOf: (actor: string) => string | null
+  label: string
+  target: string
+}
 export type EventMapping<E extends ProviderEvent> = string | SyncHandler<E> | { channel: string; run: SyncHandler<E> }
 
 export type FileDelivery = { message: string; files: string[] }

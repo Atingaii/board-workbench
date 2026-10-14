@@ -659,13 +659,18 @@ export function createSyncEngine(options: {
         token.kind === 'actor'
           ? mentioned.find((candidate) => candidate.id === token.actor)
           : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
-      return actor ? (platform.mention(actor) ?? linkedMention(platform, actor, actors) ?? actor.name) : null
+      return actor ? (nativeMention(platform, actor.id, actors) ?? actor.name) : null
     })
   }
 
-  /** A person mentioned on the board reads natively where they've linked an account. */
-  function linkedMention(platform: SyncProvider, person: Actor, actors: ActorsState): string | null {
-    for (const id of linkedTo(actors, person.id)) {
+  /**
+   * How `platform` mentions an actor: its own account there, or, through the person it's
+   * linked to (or is), any account they've linked there, so a GitHub account reads as its
+   * person's `<@U0456>` in Slack. Links are for display only; an agent is just itself.
+   */
+  function nativeMention(platform: SyncProvider, actor: string, actors: ActorsState): string | null {
+    const person = actors.links[actor]?.to ?? actor
+    for (const id of [actor, person, ...linkedTo(actors, person)]) {
       const account = actors.byId[id]
       const native = account ? platform.mention(account) : null
       if (native) return native
@@ -727,9 +732,17 @@ export function createSyncEngine(options: {
     const quoted = quote
       ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${displayText(quote.text, quote.by.actor).slice(0, 140).replace(/\n/g, ' ')}\n\n`
       : ''
-    const body = platformOf(key).render(immutable({ message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) }, author: actor ? { ...actor } : null, label: name, target }))
+    const platform = platformOf(key)
+    const body = platform.render(immutable({
+      message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
+      author: actor ? { ...actor } : null,
+      mention: nativeMention(platform, message.by.actor, actors),
+      mentionOf: (id: string) => nativeMention(platform, id, actors),
+      label: name,
+      target,
+    }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = `${quoted}${textFor(platformOf(key), message, actors, body)}`
+    const markdown = `${quoted}${textFor(platform, message, actors, body)}`
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
     return message.by.profile && !message.from ? { markdown, as: { name, avatar: actor?.avatar ?? null } } : { markdown }
   }

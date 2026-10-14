@@ -347,7 +347,16 @@ only their own accounts.
   - **`--mentions <person>`** and `mentions=me` include mentions of their linked
     accounts, so a Slack `<@U0456>` reaches the person's `--mentions me`.
   - **Outbound mentions:** a person mentioned on the board renders natively on
-    a platform where they've linked an account (`<@U0456>` in Slack).
+    a platform where they've linked an account (`<@U0456>` in Slack). So does
+    any of their linked accounts: a mention of `github:user:583231` hops to its
+    principal, then to the account they linked on the target platform, so it
+    reads as `<@U0456>` in Slack. An agent, or an unlinked platform actor, is
+    just itself.
+  - **Rendering:** a provider's `render` gets `mention`, the author's native
+    mention on its platform found the same way (null when there's none), and
+    `mentionOf(actor)` for any other actor, such as one a label names. The
+    default label stays the author's name, so links never start pinging people;
+    a renderer opts in.
   - **Views:** a linked account's author view (`author`, `/actors`) carries
     `person: { id, handle, name, avatar }`, and the CLI shows
     **Julian Benegas (julian)**.
@@ -1371,7 +1380,10 @@ connection; these callbacks do not run for every outgoing message.
 Each provider accepts a synchronous `render` function, or a subclass can override
 its `render` method. It receives immutable copies of the board message (its text in the readable
 form for known bot messages) and actor,
-the default author label, and the actual resolved destination. It returns the
+the default author label, the actual resolved destination, the author's native
+`mention` there (null when there's none), and `mentionOf(actor)` for any other
+actor, both resolved through linked accounts (see
+[Linked accounts](#linked-accounts)). It returns the
 message body as markdown; vboard still adds quoted context and attachment notes.
 The board's stored message and verified author are unchanged. Resolved mentions
 are converted to the destination's native form in the rendered body, after the
