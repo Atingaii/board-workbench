@@ -410,6 +410,7 @@ when there was no HTTP response.
 | Code | When |
 | --- | --- |
 | `no_board` | no URL to use, or nothing answers discovery there |
+| `wrong_audience` | the board's discovery names another URL: use that one |
 | `no_project` | the board doesn't know its Vercel project, so the client can't mint a token for it |
 | `missing_options` | the default build was called without `url` and `token` |
 | `not_logged_in` | no Vercel login to mint a token: run `vercel login` |

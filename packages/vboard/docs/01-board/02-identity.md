@@ -25,6 +25,11 @@ The CLI and the Node SDK find a token themselves. The first match wins:
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your `vercel login`, minted for the board's project and exchanged for its audience | `vercel:user:<user_id>` |
 
+Every token the CLI and the Node SDK get is for the URL they send it to. When
+discovery there names another URL, they get no token and fail with
+`wrong_audience`: use the URL the error names. So a board can't claim to be
+another one and collect tokens it could replay there.
+
 Other runtimes pass `url` and `token` to `createClient` themselves; see the
 [client reference](../04-reference/02-client.md).
 
@@ -32,7 +37,7 @@ Other runtimes pass `url` and `token` to `createClient` themselves; see the
 
 There's no login command. The CLI reads the board's discovery document, asks
 Vercel for a development token for the board's project with your Vercel CLI
-login, and exchanges it for one whose audience is the board's URL. It caches
+login, and exchanges it for one whose audience is the URL it talks to. It caches
 the result in `~/.config/vboard/tokens` (or under `$XDG_CONFIG_HOME`) for its
 12-hour life.
 

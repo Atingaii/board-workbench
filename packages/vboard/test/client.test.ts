@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createClient } from '../src/client/index.ts'
 import { BOARD_URL, personToken, testBoard } from './harness.ts'
-import { detectAgent } from '../src/client/node.ts'
+import { createClient as createNodeClient, detectAgent } from '../src/client/node.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
   const board = testBoard()
@@ -102,5 +106,83 @@ describe('agent detection', () => {
     expect(detectAgent({ AI_AGENT: 'OpenCode' })).toEqual({ profile: 'opencode', session: null })
     expect(detectAgent({ AI_AGENT: 'not a name!' })).toBeNull()
     expect(detectAgent({})).toBeNull()
+  })
+})
+
+describe('the audience a Node client mints for', () => {
+  const EVIL = 'https://evil.example/api/board'
+  const VICTIM = 'https://victim.example/api/board'
+  let config: string
+  beforeEach(async () => {
+    config = await mkdtemp(join(tmpdir(), 'vboard-audience-'))
+    for (const key of Object.keys(process.env))
+      if (/^(VBOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key)) vi.stubEnv(key, '')
+    vi.stubEnv('XDG_CONFIG_HOME', config)
+  })
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+    await rm(config, { recursive: true, force: true })
+  })
+
+  // A board at EVIL whose discovery claims `audience`, recording every bearer it's sent.
+  function board(audience: string) {
+    const bearers: string[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const bearer = request.headers.get('authorization')
+      if (bearer) bearers.push(bearer)
+      if (request.method === 'GET' && request.url === EVIL)
+        return Response.json({ version: '0', url: audience, audience, team_id: 'team_victim', project_id: 'prj_victim', sync: [] })
+      return Response.json({ channels: [] })
+    }) as typeof globalThis.fetch
+    return { fetch, bearers }
+  }
+  const against = (fetch: typeof globalThis.fetch) =>
+    createNodeClient({ url: EVIL, fetch, handle: null, profile: null, session: null, person: null })
+
+  // GitHub Actions, minting a token for whatever audience it's asked for.
+  function actions() {
+    const asked: string[] = []
+    vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_URL', 'https://actions.example/token')
+    vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'actions-request-token')
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const audience = new URL(String(input)).searchParams.get('audience')!
+      asked.push(audience)
+      return Response.json({ value: `token-for-${audience}` })
+    })
+    return asked
+  }
+
+  it('asks GitHub Actions for the URL it talks to', async () => {
+    const asked = actions()
+    const { fetch, bearers } = board(EVIL)
+    await against(fetch).channels()
+    expect(asked).toEqual([EVIL])
+    expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
+  })
+
+  it("refuses a board whose discovery claims another board's audience", async () => {
+    const asked = actions()
+    const { fetch, bearers } = board(VICTIM)
+    await expect(against(fetch).channels()).rejects.toMatchObject({
+      code: 'wrong_audience',
+      message: `the board at ${EVIL} says its URL is ${VICTIM}: use that URL`,
+    })
+    expect(asked).toEqual([])
+    expect(bearers).toEqual([])
+  })
+
+  it("never sends a person's cached token for another board to the one it talks to", async () => {
+    const victimToken = 'cached-person-token-for-victim'
+    const tokens = join(config, 'vboard', 'tokens')
+    await mkdir(tokens, { recursive: true })
+    await writeFile(
+      join(tokens, `${createHash('sha256').update(VICTIM).digest('hex').slice(0, 32)}.json`),
+      JSON.stringify({ token: victimToken, expiresAt: Date.now() + 12 * 3600_000, handle: 'julian', name: 'Julian', avatar: null }),
+    )
+    const { fetch, bearers } = board(VICTIM)
+    await expect(against(fetch).channels()).rejects.toMatchObject({ code: 'wrong_audience' })
+    expect(bearers).toEqual([])
   })
 })
