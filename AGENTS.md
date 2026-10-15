@@ -20,7 +20,9 @@ runs real `jose` verification against an injected JWKS; there is no bypass.
 
 ## release it
 
-A change people will notice gets a changeset (`pnpm changeset`). On `main`,
+A change people will notice gets a changeset (`pnpm changeset`), and its PR
+description leads with it and shows it working: see the pr-description skill
+(`.claude/skills/pr-description`, and the factory's copy for Pi). On `main`,
 `.github/workflows/release.yml` opens a "Version Packages" PR; merging it
 publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMessage, formatSchedule, formatThreadSummaries } from '../src/cli/format.ts'
+import { formatMessage, formatSchedule, formatThreads, formatThreadSummaries } from '../src/cli/format.ts'
 import type { MessageView, ScheduleView } from '../src/api/routes.ts'
 
 const by = { actor: 'vercel:user:j', principal: 'vercel:user:j', profile: null, session: null }
@@ -43,5 +43,17 @@ describe('read <channel>', () => {
     for (const text of ['x'.repeat(73) + '\nmore', 'x'.repeat(74) + '\nmore', 'x'.repeat(200)]) expect(shown(text)).toBe(`      ${'x'.repeat(73)}…`)
     expect(shown('x'.repeat(74))).toBe(`      ${'x'.repeat(74)}`)
     expect(shown('flaky test\r\nsecond line')).toBe('      flaky test …')
+  })
+})
+
+describe('reactions', () => {
+  it('name the first three, count the rest, and use names from outside the thread', () => {
+    const reactors = Array.from({ length: 12 }, (_, n) => `vercel:user:u${n}`)
+    const message = {
+      id: 812, channel: 'dev', text: 'hi', re: null, labels: {}, reactions: { eyes: reactors, tada: [by.actor] }, mentions: [], by,
+      from: null, createdAt: new Date().toISOString(), deleted: false, attachments: [], author,
+    } as unknown as MessageView
+    const out = formatThreads([message], new Map([['vercel:user:u0', 'Ada'], ['vercel:user:u1', 'claude via ada']]))
+    expect(out.split('\n').at(-1)).toMatch(/^      \S+ Ada, claude via ada, vercel:user:u2 \+9   \S+ Julian$/)
   })
 })

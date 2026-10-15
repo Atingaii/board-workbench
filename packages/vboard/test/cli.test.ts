@@ -280,6 +280,10 @@ describe('cli', () => {
     expect(byLabel.stdout).toContain('flaky test in ci')
     expect(byLabel.stdout).not.toContain('still flaky')
 
+    // A reaction from someone who hasn't written in the thread shows their name, not their actor ID.
+    expect((await vb(['react', first, 'eyes', '--as', 'codex'])).code).toBe(0)
+    expect((await vb(['read', first])).stdout).toContain('👀 codex via julian')
+
     // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: 'error: no channel open-wrok: vboard channels lists them\n' })
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n$/) })

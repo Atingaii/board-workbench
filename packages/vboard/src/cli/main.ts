@@ -13,7 +13,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { formatEvent, formatSchedule, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
+import { actorName, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -506,7 +506,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           ? (await board.messages({ ...filters(), re: thread.message.id, limit: 500 })).messages.filter((m) => m.re !== null)
           : thread.replies
         if (flags.json) return [thread.message, ...replies].forEach(printJson), 0
-        out(formatThreads([thread.message, ...replies]))
+        // Reactions name people who may not have written here: look up the ones that show.
+        const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
+        const unnamed = reactionNames([thread.message, ...replies]).filter((id) => !authors.has(id))
+        const known = unnamed.length
+          ? new Map((await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, actorName(a)]))
+          : new Map<string, string>()
+        out(formatThreads([thread.message, ...replies], known))
         if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
