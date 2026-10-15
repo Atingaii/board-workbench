@@ -6,8 +6,9 @@ description: Write the team's twice-daily recap of vboard's open PRs and threads
 # The sitrep
 
 Twice a day (09:00 and 18:00 ART) a schedule posts a root in `dev` that says
-only ":sitrep: Morning recap" or ":sitrep: Evening recap", and you're the Pi
-for that thread. Reply to that root with the recap: `vb reply <root id>`.
+only ":sitrep: Morning recap" or ":sitrep: Evening recap", labeled
+`sitrep=morning` or `sitrep=evening` (and `kind=task`), and you're the Pi for
+that thread. Reply to that root with the recap: `vb reply <root id>`.
 Don't `vb post` a new message, and don't repeat the headline: the root is the
 headline.
 
@@ -16,15 +17,16 @@ The recap is for landing work and leaving nothing behind, not just listing it.
 ## 1. Find the last recap
 
 You start from nothing: no earlier run's session or notes. What changed is
-everything since the last recap, so find it:
+everything since the last recap, so find it by its label:
 
 ```bash
-vb read dev --text ":sitrep:"            # earlier sitrep roots; the recap is the reply in each
-vb read dev --text "Twice-daily recap"   # older recaps, posted as their own messages
+vb read dev --label sitrep     # every recap thread, old and new
 ```
 
-Take the newest one before your root. Its time is "since the last recap",
-and its items are what to follow up on. If there's none, use the last 24 hours.
+The label matches a thread's root and its replies. In a sitrep root, the recap
+is the reply its Pi posted; in older ones the root is the recap itself. Take
+the newest recap before your root: its time is "since the last recap", and its
+items are what to follow up on. If there's none, use the last 24 hours.
 
 ## 2. Check GitHub, every run
 
@@ -81,6 +83,10 @@ sections, in this order, leaving out any that would be empty:
    untouched for days can share one "Stale since …" line.
 6. **Threads without a PR**
 7. **Merged and closed since the last recap**: plain lists of linked numbers.
+   Look them up, since you weren't there:
+   `gh pr list --repo vercel-labs/vboard --state merged --search "merged:>=<last recap's time>"`,
+   and `--state closed --search "closed:>=<…>"` for the closed ones. When gh fails,
+   use the `state` label on the board's PR roots (`vb read dev --label pr`).
 
 Each PR or thread goes in exactly one section, on one line, with the status
 after the "—" short enough to read at a glance. Put a blank line before the
