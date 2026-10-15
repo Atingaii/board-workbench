@@ -280,10 +280,13 @@ schedules that reply in that thread. `--all` adds done and canceled ones.
 ### post
 
 ```text
-vb post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
 ```
 
-Starts a thread. The channel is created by its first post.
+Starts a thread. The channel is created by its first post. Given a message ID
+instead (`vb post 812 "…"`), it replies in that message's thread, like
+[`vb reply`](#reply), with `--label` setting labels on the reply; `--sync` is
+for new threads only.
 
 | Flag | Effect |
 | --- | --- |
