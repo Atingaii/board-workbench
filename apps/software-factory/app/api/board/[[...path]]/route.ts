@@ -14,7 +14,7 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
-import { boardOnly } from "./quiet";
+import { boardOnly, unseenPr } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 
@@ -57,9 +57,11 @@ export const { GET, POST, scheduler } = board({
         [REPO]: {
           // Inline review threads and "closed by …" replies stay on GitHub and the board,
           // out of Slack: top-level comments, review verdicts and merges still go through.
+          // Comments on a PR the board has no thread for stay on GitHub.
           pulls: {
             channel: "dev",
             run: async ({ event, board }) => {
+              if (await unseenPr(event, board, "dev")) return;
               await board.sync("dev", event, { noSync: boardOnly(event) });
             },
           },
