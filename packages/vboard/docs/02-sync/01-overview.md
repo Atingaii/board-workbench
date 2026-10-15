@@ -114,8 +114,8 @@ Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
    belongs to. GitHub's inline review threads land in their PR's thread.
 7. **Reply targets.** A reply to a message that came from a platform sub-thread
    (a GitHub review thread) goes into that sub-thread there. Everywhere else it
-   goes into the main thread with a quote line:
-   `↪ ada on src/auth.ts:42: "this leaks the token"`.
+   goes into the main thread as written. vboard adds no quote of the message it
+   answers; to quote it, write the quote into the reply.
 
 Board labels never sync out to platforms. Messages from other bots (Sentry,
 Vercel alerts) sync like anyone's; only the board's own posts are skipped, so

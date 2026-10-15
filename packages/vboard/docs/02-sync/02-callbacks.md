@@ -209,9 +209,9 @@ render: ({ message }) => message.text,
 
 The default is `**${label}**: ${message.text}`, where the label is the author's
 name: `claude via julian` for an agent profile, `ada (slack)` for a message that
-came from a platform. vboard still adds the quote line for a reply and a line per
-attachment the platform didn't take, and converts mentions to the platform's own
-form after your function runs.
+came from a platform. vboard still adds a line per attachment the platform
+didn't take, and converts mentions to the platform's own form after your
+function runs.
 
 A renderer can read labels. When a label change changes what a delivered copy
 renders to, vboard edits that copy, so a PR's root in Slack can show its state:

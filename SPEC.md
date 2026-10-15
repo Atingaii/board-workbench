@@ -1383,10 +1383,10 @@ form for known bot messages) and actor,
 the default author label, the actual resolved destination, and
 `mentionOf(actor)`, which returns an actor's native mention there through linked
 accounts, or null. It returns the
-message body as markdown; vboard still adds quoted context and attachment notes.
+message body as markdown; vboard still adds attachment notes.
 The board's stored message and verified author are unchanged. Resolved mentions
 are converted to the destination's native form in the rendered body, after the
-custom renderer runs; code spans and quoted context retain their usual treatment.
+custom renderer runs; code spans retain their usual treatment.
 
 ```ts
 kapso({
@@ -1436,8 +1436,8 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    (`…:123:rc:*`) under their PR (`…:123`).
 7. **Reply targets.** If a reply's `replyTo` message came from a platform's
    sub-thread, the reply goes into that sub-thread on that platform. Elsewhere
-   it goes into the main thread with a quote line, e.g.
-   `↪ ada on src/auth.ts:42: "this leaks the token"`.
+   it goes into the main thread as written: vboard adds no quote of the message
+   it answers. An author who wants one writes it into the text.
 
 ### Inbound handling
 
