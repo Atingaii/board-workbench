@@ -543,7 +543,7 @@ export const identityContract = contract({
   name: 'vboard-identity',
   events: {
     'identity.code_issued': z.object({ hash, principal: ActorId, sync: z.string(), expiresAt: z.string() }), // (server)
-    'identity.code_used':   z.object({ hash, actor: ActorId }),                                               // (server) the first wins
+    'identity.code_used':   z.object({ hash, actor: ActorId, message: z.string().optional() }),              // (server) the first wins; only a retry of its message claims it again
   },
 })
 

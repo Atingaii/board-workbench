@@ -392,7 +392,12 @@ export const identityContract = contract({
       expiresAt: z.string().max(64),
     }),
     /** The first account to post it wins; any later post is just a message. */
-    'identity.code_used': z.object({ hash: z.string().min(1).max(128), actor: ActorId }),
+    'identity.code_used': z.object({
+      hash: z.string().min(1).max(128),
+      actor: ActorId,
+      /** The message that used it (`externalMessageKey`): only a retry of that one claims it again. */
+      message: z.string().max(1024).optional(),
+    }),
   },
 })
 

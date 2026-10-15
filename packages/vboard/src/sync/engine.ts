@@ -27,6 +27,7 @@ import {
   type Actor,
   type ActorsState,
   type ExternalCopy,
+  type IdentityCode,
   type Message,
 } from '../contract/reducers.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
@@ -462,10 +463,13 @@ export function createSyncEngine(options: {
     const hash = hashCode(code)
     const issued = (await codes().state(identityCodesReducer)).state[hash]
     if (!issued || issued.sync !== key) return false
-    if (issued.usedBy === null ? Date.parse(issued.expiresAt) < Date.now() : issued.usedBy !== event.author.id) return false
-    await codes().append({ type: 'identity.code_used', id: `used:${hash}`, payload: { hash, actor: event.author.id } })
-    // Two accounts posting it at once: the one the log took first wins.
-    if ((await codes().state(identityCodesReducer)).state[hash]?.usedBy !== event.author.id) return false
+    const message = externalMessageKey(event.subthread ?? event.thread, event.message)
+    // A used code claims again only for a retry of the message that used it.
+    const usedHere = (used: IdentityCode | undefined) => used?.usedBy === event.author.id && used.usedIn === message
+    if (issued.usedBy === null ? Date.parse(issued.expiresAt) < Date.now() : !usedHere(issued)) return false
+    await codes().append({ type: 'identity.code_used', id: `used:${hash}`, payload: { hash, actor: event.author.id, message } })
+    // Two posts of it at once: the one the log took first wins.
+    if (!usedHere((await codes().state(identityCodesReducer)).state[hash])) return false
     await link(event.author, issued.principal, 'code', externalIdentity(event.author).author, `link:${hash}`)
     await platformOf(key).react(native(event.subthread ?? event.thread), event.message, 'check', true).catch((error: unknown) =>
       console.warn(`[vboard] couldn't confirm a linking code on ${key}:`, describe(error)),
