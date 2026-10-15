@@ -681,6 +681,38 @@ describe('sync', () => {
     expect(s.posts.map((p) => p.text).join('\n')).not.toContain('Fixed in abc123')
   })
 
+  it("keeps a PR's `noSync` lifecycle reply on the board, and still re-renders its root in Slack", async () => {
+    const { board, s, webhook } = setup({
+      githubClient: { rest: { pulls: { get: vi.fn() } } },
+      slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}`,
+      repos: {
+        'basehub-ai/vboard': {
+          channel: 'prs',
+          run: async ({ event, board }) =>
+            void (await board.sync('prs', event, { noSync: event.type === 'pr.closed' && event.labels?.state === 'closed' })),
+        },
+      },
+    })
+    const julian = caller(board.fetch, await personToken())
+    const pr = (action: string, merged = false) => ({
+      action, repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' },
+      pull_request: { number: 44, title: 'Stale', html_url: 'https://github.com/basehub-ai/vboard/pull/44', draft: false, merged },
+    })
+    const send = (action: string, delivery: string, merged = false) =>
+      webhook('github', pr(action, merged), { 'x-github-event': 'pull_request', 'x-github-delivery': delivery })
+    await send('opened', 'q-opened')
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+
+    await send('closed', 'q-closed')
+    await vi.waitFor(() => expect(s.edits.map((e) => e.text)).toEqual([expect.stringContaining('[closed] PR #44')]))
+    const [, closed] = await read(julian, 'prs')
+    expect(closed).toMatchObject({ text: 'closed by julianbenegas', noSync: true })
+
+    await send('reopened', 'q-reopened')
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('reopened by julianbenegas')]))
+    expect(s.posts.map((p) => p.text).join('\n')).not.toContain('closed by')
+  })
+
   it.each([
     { thread: 'basehub-ai/vboard:50', issue: false, draft: false, merged: false, state: 'open', expectedState: 'open' },
     { thread: 'basehub-ai/vboard:50:rc:123', issue: false, draft: true, merged: false, state: 'open', expectedState: 'draft' },

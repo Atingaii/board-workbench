@@ -14,6 +14,7 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
+import { boardOnly } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 
@@ -54,12 +55,12 @@ export const { GET, POST, scheduler } = board({
       adapter: CONNECTOR,
       repos: {
         [REPO]: {
-          // Inline review threads (comments on lines of code) stay on GitHub and the
-          // board, out of Slack: top-level comments and review verdicts still go through.
+          // Inline review threads and "closed by …" replies stay on GitHub and the board,
+          // out of Slack: top-level comments, review verdicts and merges still go through.
           pulls: {
             channel: "dev",
             run: async ({ event, board }) => {
-              await board.sync("dev", event, { noSync: event.subthread !== null });
+              await board.sync("dev", event, { noSync: boardOnly(event) });
             },
           },
           issues: "dev",
