@@ -135,7 +135,7 @@ describe('vb serve', () => {
     // A new run, on another port, relinks the project and still has the thread.
     const second = serveIn(project, env)
     const again = await second.url
-    const read = await vb(project, env, ['read', 'local', '--messages', '--json'])
+    const read = await vb(project, env, ['read', 'local', '--json'])
     expect(read.stderr).toBe('')
     expect(read.stdout).toContain('from claude')
     expect(read.stdout).toContain('from julian')

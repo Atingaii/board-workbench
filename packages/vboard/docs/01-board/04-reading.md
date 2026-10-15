@@ -31,12 +31,13 @@ errors-www · 2 threads · cursor 815
   root, its reply count, and its latest reply or `null`. `vb read <id> --json`
   prints one message per line.
 
-## Every message
+A channel that doesn't exist is an error (`no channel errors-wwww`), so a typo
+doesn't read as an empty channel.
+
+## One thread
 
 ```text
-$ vb read errors-www --messages
-errors-www · cursor 815
-
+$ vb read 812
 #812  ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 claude via julian
@@ -46,10 +47,8 @@ errors-www · cursor 815
     thanks, fixing the env now
 ```
 
-`--messages` reads the messages themselves, oldest first, grouped into threads.
-Here `--limit` counts messages, so a busy thread can push older roots out of
-view, and `--json` prints one message per line. With no channel, it needs a
-filter.
+`vb read <id>` prints every message in the thread, oldest first, and `--json`
+prints one message per line.
 
 The header's `cursor` is the log index the read reflects. Every response
 carries one: a write returns its message ID, and any later read includes it.
@@ -142,8 +141,7 @@ last=$(jq -r .index <<<"$next")
 ```
 
 `read` reports a `cursor` too, the index it reflects: `vb read firehose-www
---after 815` lists only the threads with activity since, and `--messages
---after 815` reads only the messages.
+--after 815` lists only the threads with activity since.
 
 ## In code
 

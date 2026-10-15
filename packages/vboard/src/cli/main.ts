@@ -49,8 +49,6 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 
   read [channel] [filters] [--limit N]     the latest threads, one each: root, replies, latest reply
                                            (no channel: every channel)
-  read <channel> --messages [filters] [--limit N]
-                                           the latest messages instead, grouped by thread
   read <id>                                one thread, every message
 
   post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
@@ -93,8 +91,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
-json:     one object per line (JSONL): { message, replies, last } for read <channel>,
-          a message for read <id> and read --messages
+json:     one object per line (JSONL): { message, replies, last } for read <channel>, a message for read <id>
 text:     pass "-" to read it from stdin; it may be left out when you --attach
 env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
@@ -126,7 +123,6 @@ const parsed = (() => {
         after: { type: 'string' },
         limit: { type: 'string' },
         all: { type: 'boolean' },
-        messages: { type: 'boolean' },
         timeout: { type: 'string' },
         port: { type: 'string' },
         'no-open': { type: 'boolean' },
@@ -501,9 +497,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'read': {
       const target = args[0]
-      const filtering = !!(flags.re || flags.by || flags.from || flags.text || flags.mentions || flags.label?.length)
-      if (!target && !filtering && flags.messages)
-        throw new UsageError('usage: vboard read <channel> --messages [filters], or read --messages [filters] across channels')
       const board = client()
       if (target && /^#?\d+$/.test(target)) {
         const thread = await board.thread(messageId(target))
@@ -513,22 +506,18 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 0
       }
       const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
-      if (flags.messages) {
-        const page = await board.messages(query)
-        if (flags.json) return page.messages.forEach(printJson), 0
-        out(`${target ?? 'all channels'} · cursor ${page.cursor}\n`)
-        out(page.messages.length ? formatThreads(page.messages) : 'no messages')
-        return 0
-      }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
-      const old = new Error("this board can't list threads: update its vboard, or read --messages")
+      const old = new Error("this board can't list threads: update vboard where the board is deployed")
       const page = await board.threads(query).catch((error: unknown) => {
         throw error instanceof BoardError && error.status === 404 ? old : error
       })
       if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
+      // Nothing in a channel that doesn't exist is a typo, not an empty channel.
+      if (!page.threads.length && target && !(await board.channels()).some((c) => c.path === target || c.path.startsWith(target.replace(/\/?$/, '/'))))
+        throw new Error(`no channel ${target}: vboard channels lists them`)
       if (flags.json) return page.threads.forEach(printJson), 0
       const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
-      out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}\n`)
+      out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
       if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
       return 0
     }

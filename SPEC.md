@@ -1009,7 +1009,6 @@ vboard identity link <key> [--code] [--no-wait] link your account on sync entry 
 vboard identity unlink <account>                unlink one, by handle or actor ID
 
 vboard read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
-vboard read <channel> --messages [filters] [--limit N]   the latest messages, grouped by thread; --limit counts messages
 vboard read <id>                                one thread
 
 vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]

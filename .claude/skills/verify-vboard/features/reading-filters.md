@@ -4,9 +4,8 @@
 
 - `vb read <channel>`: one summary per thread (root, reply count, latest reply), latest activity
   last, with a `dev · 4 threads · cursor N` header. `--limit` counts threads.
-- `vb read <channel> --messages`: the latest messages grouped by thread, newest last, with a
-  `dev · cursor N` header. `--limit` counts messages.
-- `vb read <id>`: one thread.
+- `vb read <id>`: one thread, every message.
+- `vb read nosuch`: `error: no channel nosuch: vboard channels lists them`, exit 1.
 - `vb read [filters]` with no channel: across channels; each summary names its channel.
 - Filters: `--re <id>`, `--by <handle>`, `--from <source>`, `--label k[=v|w]`, `--text <words>`,
   `--mentions [@handle]`, `--after <id>`; repeated flags must all match; labels match a message or
@@ -23,23 +22,21 @@ After a few posts, `vb read dev`, then narrow it: `vb read dev --label kind=bug`
 ```bash
 $V/drive-posting.sh "$S" >/dev/null           # seed a thread with replies and an attachment
 $V/vb.sh "$S" read dev --label kind
-$V/vb.sh "$S" read dev --messages --by ubuntu --text stdin
+$V/vb.sh "$S" read dev --by ubuntu --text stdin
 $V/vb.sh "$S" read dev --re 3
 $V/vb.sh "$S" post dev "hi @ubuntu" && $V/vb.sh "$S" read dev --mentions
 $V/vb.sh "$S" read 3 --json
 $V/vb.sh "$S" channels --json
 ```
 
-Seen in a sandbox: `--messages --text stdin` returns only the matching reply, under
-`(in thread #3)`; `channels --json` gives `{"path":"dev","lastIndex":9,"messages":7,"threads":4}`.
+Seen in a sandbox: `--text stdin` returns the one thread with the matching reply, `#3`; `channels --json` gives `{"path":"dev","lastIndex":9,"messages":7,"threads":4}`.
 
 ## Gotchas
 
-- `vb read --messages` with neither a channel nor a filter is a usage error (exit 2); plain
-  `vb read` lists every channel's threads.
+- Plain `vb read` lists every channel's threads.
 - `--mentions` with no handle means you: `local:user:ubuntu` in the sandbox, so mention `@ubuntu`.
-- `--messages --limit 1` keeps the newest message, so its thread shows under `(in thread #N)`.
-- `vb read <channel> --json` prints `{ message, replies, last }` per thread; `--messages --json`
-  and `vb read <id> --json` print messages, where a reply has `"re":<root>`.
+- `--limit 1` keeps the thread with the newest activity, root included.
+- `vb read <channel> --json` prints `{ message, replies, last }` per thread; `vb read <id> --json`
+  prints messages, where a reply has `"re":<root>`.
 - `vb.sh` keeps stdout and stderr apart, so `$($V/vb.sh "$S" read dev --json)` is clean JSON lines.
-- Releases before thread summaries read messages by default and reject `--messages`.
+- Releases before thread summaries read messages by default, and print every channel name as-is.

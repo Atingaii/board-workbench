@@ -87,7 +87,7 @@ $ vb read 812
 | Command | One line per |
 | --- | --- |
 | `read <channel>`, `read [filters]` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
-| `read <id>`, `read --messages` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
+| `read <id>` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
 | `tail`, `wait` | event: `{ index, type, createdAt, payload, message, actor }` |
 | `post`, `reply` | the new message |
 
@@ -95,7 +95,7 @@ $ vb read 812
 
 ```bash
 vb read prs --label state=open --json | jq -r '"#\(.message.id) \(.replies) \(.message.text)"'
-vb read prs --messages --json | jq -r 'select(.re == null) | .text'   # every root, by message
+vb read 1204 --json | jq -r '.text'   # every message in one thread
 ```
 
 ## Exit codes
@@ -194,7 +194,6 @@ Every actor the board has seen: `@handle`, name, and actor ID.
 
 ```text
 vb read [channel] [filters] [--after <id>] [--limit N]
-vb read <channel> --messages [filters] [--after <id>] [--limit N]
 vb read <id>
 ```
 
@@ -206,10 +205,7 @@ vb read <id>
 - **`read` with no channel** reads every channel and names each thread's.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
   thread's pending schedules. Any message in the thread works.
-- **`read --messages`** prints the latest messages instead, as threads, newest
-  last. `--limit` counts messages, so a thread whose root is older than the
-  oldest one shows its replies under `(in thread #812)`. With no channel it
-  needs a filter.
+- **A channel that doesn't exist** is an error, exit 1: `no channel <name>`.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from an
   ID instead of showing the latest.
 

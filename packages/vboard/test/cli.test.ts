@@ -8,7 +8,7 @@ import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 
 useBoard()
 
-const OLD_THREADS = "error: this board can't list threads: update its vboard, or read --messages\n"
+const OLD_THREADS = "error: this board can't list threads: update vboard where the board is deployed\n"
 
 describe('cli', () => {
   it('links a checkout from a subdirectory, ignores the link, and reads it from other subdirectories', async () => {
@@ -230,7 +230,7 @@ describe('cli', () => {
     expect(await vb(['typing', id, 'running', 'tests…'])).toMatchObject({ code: 0, stdout: '', stderr: '' })
     expect((await vb(['label', id, 'status=investigating'])).code).toBe(0)
 
-    const read = await vb(['read', 'errors-www', '--messages'])
+    const read = await vb(['read', id])
     expect(read.code).toBe(0)
     expect(read.stdout).toContain(`#${id}  julian`)
     expect(read.stdout).toContain('[status=investigating]')
@@ -245,7 +245,7 @@ describe('cli', () => {
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['deploy failed on a1b2c3', 'rolled back to d4e5f6'])
   })
 
-  it('reads a channel as thread summaries, counting threads, and as messages with --messages', async () => {
+  it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
     const second = (await vb(['post', 'open-work', 'docs typo'])).stdout.trim()
     for (const n of [1, 2, 3]) expect((await vb(['reply', second, `note ${n}`, '--as', 'claude'])).code).toBe(0)
@@ -273,21 +273,18 @@ describe('cli', () => {
     expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
 
-    // --messages counts messages, so two replies leave the oldest thread without its root.
-    expect((await vb(['read', 'open-work', '--messages', '--limit', '2'])).stdout).toContain(`(in thread #${second})`)
-    const flat = await vb(['read', 'open-work', '--messages', '--json'])
-    expect(flat.stdout.trim().split('\n').map((line) => JSON.parse(line).text)).toEqual([
-      'flaky test in ci\nsecond line', 'docs typo', 'note 1', 'note 2', 'note 3', 'still flaky',
-    ])
-    expect((await vb(['read', '--messages'])).code).toBe(2)
+    // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
+    expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: 'error: no channel open-wrok: vboard channels lists them\n' })
+    expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n$/) })
+    expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
   }, 20_000)
 
   it('filters by mentions of me, or of a handle', async () => {
     await vb(['post', 'pings', 'hello'])
     await vb(['post', 'pings', 'hey @julian, look', '--as', 'claude'])
     const texts = async (args: string[]) => {
-      const { stdout } = await vb(['read', 'pings', '--messages', ...args, '--json'])
-      return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { text: string }).text)
+      const { stdout } = await vb(['read', 'pings', ...args, '--json'])
+      return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { message: { text: string } }).message.text)
     }
     expect(await texts(['--mentions'])).toEqual(['hey @julian, look'])
     expect(await texts(['--mentions', '@julian'])).toEqual(['hey @julian, look'])
@@ -297,8 +294,8 @@ describe('cli', () => {
     await vb(['post', 'authors', 'from julian'])
     await vb(['post', 'authors', 'from claude', '--as', 'claude'])
     const texts = async (args: string[]) => {
-      const { stdout } = await vb(['read', 'authors', '--messages', ...args, '--json'])
-      return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { text: string }).text)
+      const { stdout } = await vb(['read', 'authors', ...args, '--json'])
+      return stdout.trim().split('\n').map((line) => (JSON.parse(line) as { message: { text: string } }).message.text)
     }
     // A person is everyone they are, their agents included (#113).
     expect(await texts(['--by', 'julian'])).toEqual(['from julian', 'from claude'])

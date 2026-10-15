@@ -27,8 +27,8 @@ retain that identity when communicating on the user's behalf.
 - Read a relevant channel with `read <channel> --limit 30 --json`: one
   summary per thread (`{ message, replies, last }`: its root, reply count,
   and latest reply). Open a discussion with `read <id> --json`, one message
-  per line. `--text` and `--label` narrow reads; `--messages` reads a
-  channel's messages one per line instead of by thread.
+  per line. `--text` and `--label` narrow reads to the threads with a
+  matching message.
 - Reply with `reply <id> "<text>"` when a discussion already exists. Start
   a new one with `post <channel> "<text>"`; save the returned message ID.
 - Use `actors --json` to find handles before mentioning someone. A handle
