@@ -16,7 +16,7 @@ import type { Principal } from './auth.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
-import { badRequest, forbidden, notFound } from './errors.ts'
+import { badRequest, duplicateId, forbidden, notFound } from './errors.ts'
 import { view } from './feed.ts'
 import type { ResolvedTarget } from '../sync/provider.ts'
 import type { BoardClient } from '../client/client.ts'
@@ -137,7 +137,13 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
     // A retry of a write that landed: what's on the board stands, whatever the middleware would say now.
     const { state: posted } = await ctx.session.state(postedReducer)
     const landed = posted[id] === undefined ? undefined : messages.byId[posted[id]]
-    if (landed) return view(landed, (await ctx.session.state(actorsReducer)).state)
+    if (landed) {
+      // Only the same author's post in the same place is a retry. Text and labels can't tell:
+      // the middleware may have changed them, and edits may have since.
+      if (!sameAuthor(landed.by, identity.author) || landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo)
+        throw duplicateId()
+      return view(landed, (await ctx.session.state(actorsReducer)).state)
+    }
   }
   if (chain)
     return runMiddleware(
@@ -153,6 +159,9 @@ export async function writePost(ctx: WriteContext, input: PostInput) {
     )
   return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id })
 }
+
+const sameAuthor = (a: Author, b: Author) =>
+  a.actor === b.actor && a.principal === b.principal && a.profile === b.profile && a.session === b.session
 
 async function commitPost(
   ctx: WriteContext,
