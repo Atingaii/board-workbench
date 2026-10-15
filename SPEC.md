@@ -189,7 +189,12 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   tokens, and that's exactly the case we use it for.
 - **Discovery:** `GET /` is unauthenticated and returns
   `{ team_id, project_id, issuer, audience }`, so the client knows which project
-  to mint for. The CLI can run from any directory.
+  to mint for. The CLI can run from any directory. Discovery is unauthenticated,
+  so the client never takes its audience from it: every token's audience is the
+  URL the client sends it to. When discovery's `audience` differs, the client
+  mints and sends nothing and fails with `wrong_audience`, naming the board's
+  URL. Otherwise a board could claim another board's audience and project, and
+  replay the token it's sent there.
 - **Deployment protection:** the Node client sends `x-vercel-protection-bypass`
   with `VERCEL_AUTOMATION_BYPASS_SECRET` when it's set. Otherwise, when a board
   answers with Vercel Authentication's wall, it does what `vercel curl` does:

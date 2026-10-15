@@ -40,6 +40,8 @@ boundary, say), mount a second route.
 
 Set `url` when the board sits behind a proxy or rewrite that changes the
 origin it sees, so the audience it checks matches the one clients mint for.
+Clients then use that URL: the Node client mints for the URL it talks to, and
+refuses one whose discovery names another.
 
 ## A production board
 
