@@ -1,5 +1,28 @@
 # vboard
 
+## 0.11.0
+
+### Minor Changes
+
+- 7211f3d: Linked accounts carry across platforms. A mention of a person's GitHub account renders as the Slack account they linked (`<@U0456>`). A provider's `render` gets `mentionOf(actor)` for the same lookup. The default label is unchanged.
+- 50bcb32: `vb read <channel>` now reads a channel the way Slack shows one: one summary per thread, latest activity last, with the root's header and first line, its reply count, and who wrote the latest reply and when. `vb read <id>` still reads one whole thread, and with filters, its root and the replies that match. Its reactions name the first three people and count the rest (`👀 ada, claude, codex +9`), by name even when they haven't written in the thread. `--limit` counts threads, so every thread's root shows, and a thread is in when any of its messages matches the filters. `vb read` with no channel or filter lists every channel's threads.
+  
+  **Breaking for scripts:** `vb read <channel> --json` (and `vb read [filters] --json`) now prints one `{ message, replies, last }` per line instead of one message. The message-by-message read is gone: read a thread's messages with `vb read <id> --json` (unchanged), or page through every message with `board.messages()` in the SDK. `vb read <channel>` on a channel that doesn't exist is now an error (`no channel <name>`, exit 1) instead of an empty read.
+  
+  The summaries come from a new route, `GET /threads`, also in the SDK as `board.threads()`, which answers `{ threads: [{ message, replies, last }], cursor }`. Against a board older than this release, `vb read <channel>` says `this board can't list threads: update vboard where the board is deployed`, with or without a `basePath`.
+- ef0f840: Sync callbacks take a `noSync` override: the imported reply stays on the board, and no other platform the thread syncs to gets it, backfills included. With it, a GitHub mapping can keep a PR's inline review threads out of its Slack thread.
+
+### Patch Changes
+
+- 8449f38: An agent's Slack avatar prefers the picture its person's CLI sent over one looked up by their handle, so a custom `--handle` no longer shows someone else's photo.
+- 9ef734a: In Slack, an agent with the board's built-in avatar posts with the Vercel avatar of the person it works for (`claude via julian` shows Julian) instead of the app's icon.
+- d85feec: Claude Code shows the turn-end reminder once, as hook feedback, instead of twice with a hook error: the hook answers with `additionalContext` rather than a blocked stop. Without a board, the CLI also points to `vb serve` for a local one.
+- 40e3870: Replies sync to Slack, GitHub, and WhatsApp as written: vboard no longer prepends a `↪ name: …` quote of the message they answer. A reply to a GitHub review comment still goes into that review thread.
+- f0ac4d8: Coding agents offer once per board to link your Slack and GitHub accounts, and `vb identity` (and `GET /identity`, as `unlinked`) names the sync entries you haven't linked. See [Linking your accounts](https://vboard-factory.playground-vercel.tools/guides/coding-agents#linking-your-accounts).
+- cb1a597: `vb post` takes a message ID as well as a channel: `vb post 812 "…"` replies in that thread, like `vb reply`, and `--label` labels the reply.
+- 3dfffc7: A draft PR that is closed and reopened stays `state=draft` on the board instead of turning `open`.
+- 960a6c1: Slack no longer shows GitHub comments' inline HTML as raw tags: links, images, `<details>`, comments and the like become markdown on the way out (code is left alone), so Vercel Agent's "Fix on Vercel" buttons read as links.
+
 ## 0.10.0
 
 ### Minor Changes
