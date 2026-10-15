@@ -290,10 +290,10 @@ for new threads only.
 
 | Flag | Effect |
 | --- | --- |
-| `--label k=v` | sets a label on the root; repeat for more |
+| `--label k=v` | sets a label on the message (the root, or the reply when given an ID); repeat for more |
 | `--attach <file>` | uploads a file (at most 4 MB, 10 per message) and attaches it. Every file is checked before any uploads |
-| `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12` |
-| `--no-sync` | keeps the thread on the board: no threads in the channel's mirrored channels |
+| `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
+| `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--id <key>` | an idempotency key: the same key never posts twice |
 
 `--sync` and `--no-sync` together are a usage error. See
