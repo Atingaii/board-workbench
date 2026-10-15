@@ -24,9 +24,12 @@ export type Principal = {
 
 type Claims = JWTPayload & Record<string, unknown>
 
+/** What a rule may compare claims to: the board's own Vercel team, when it's known. */
+export type MatchContext = { teamId: string | null }
+
 export type TrustedSource = {
   issuer: 'vercel' | 'github'
-  matches(claims: Claims): boolean
+  matches(claims: Claims, context: MatchContext): boolean
   can?: readonly Capability[]
 }
 
@@ -34,7 +37,12 @@ const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) 
   allowed === undefined ||
   (typeof value === 'string' && (typeof allowed === 'string' ? [allowed] : allowed).includes(value))
 
-/** Trust another Vercel project's deployments. Matches project by name or ID. */
+/**
+ * Trust another Vercel project's deployments. Matches project by name or ID.
+ * A name is only unique within a team, so without `team` it means the board's
+ * own team, and matches nothing when that isn't known. An ID is unique on
+ * Vercel, so it matches on any team.
+ */
 export function vercel(options: {
   project: string
   team?: string
@@ -44,11 +52,12 @@ export function vercel(options: {
   return {
     issuer: 'vercel',
     can: options.can,
-    matches: (claims) =>
-      (claims.project === options.project || claims.project_id === options.project) &&
-      (options.team === undefined ||
-        claims.owner === options.team ||
-        claims.owner_id === options.team) &&
+    matches: (claims, { teamId }) =>
+      (claims.project_id === options.project ||
+        (claims.project === options.project &&
+          (options.team === undefined
+            ? teamId !== null && claims.owner_id === teamId
+            : claims.owner === options.team || claims.owner_id === options.team))) &&
       oneOf(claims.environment, options.environments),
   }
 }
@@ -117,6 +126,8 @@ async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
 
 export function createVerifier(options: {
   projectId: () => Promise<string | null>
+  /** The board's team from config or the environment; the platform's token is the fallback. */
+  teamId: () => Promise<string | null>
   trustedSources: readonly TrustedSource[]
   auth?: AuthOptions
 }) {
@@ -126,15 +137,34 @@ export function createVerifier(options: {
   const fromSource = (
     issuer: TrustedSource['issuer'],
     claims: Claims,
+    context: MatchContext,
   ): ReadonlySet<Capability> | 'all' | null => {
     const source = options.trustedSources.find(
-      (candidate) => candidate.issuer === issuer && candidate.matches(claims),
+      (candidate) => candidate.issuer === issuer && candidate.matches(claims, context),
     )
     if (!source) return null
     return source.can ? new Set(source.can) : 'all'
   }
 
-  return async function verify(token: string, audience: string): Promise<Principal> {
+  let platformTeam: string | null = null
+  /**
+   * The team on a Vercel-signed token for the board's own project. Project IDs
+   * are unique, so its `owner_id` is the board's team, whoever sent the token.
+   */
+  async function teamFrom(platformToken: string | undefined, ownProject: string | null) {
+    if (platformTeam !== null || !platformToken || ownProject === null) return platformTeam
+    try {
+      const iss = String(decodeJwt(platformToken).iss ?? '')
+      if (!issuerMatches(iss, vercelIssuer.issuer)) return null
+      const keys = vercelIssuer.jwks ?? (await keysFor(iss))
+      const { payload } = await jwtVerify(platformToken, keys, { issuer: iss })
+      if (payload.project_id === ownProject && typeof payload.owner_id === 'string') platformTeam = payload.owner_id
+    } catch {}
+    return platformTeam
+  }
+
+  /** `platformToken`: the board's own OIDC token, which Vercel sends with each request. */
+  return async function verify(token: string, audience: string, platformToken?: string): Promise<Principal> {
     let iss: string
     try {
       iss = String(decodeJwt(token).iss ?? '')
@@ -163,7 +193,7 @@ export function createVerifier(options: {
     const expiresAt = claims.exp ? new Date(claims.exp * 1000) : null
 
     if (isGitHub) {
-      const can = fromSource('github', claims)
+      const can = fromSource('github', claims, { teamId: null })
       if (!can) throw forbidden(`workflow is not a trusted source: ${String(claims.repository)}`)
       return {
         id: `github:repo:${String(claims.repository_id)}`,
@@ -192,7 +222,10 @@ export function createVerifier(options: {
       }
       return deployment(claims, project, environment, 'all', expiresAt)
     }
-    const can = fromSource('vercel', claims)
+    const teamId = options.trustedSources.some((source) => source.issuer === 'vercel')
+      ? ((await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)))
+      : null
+    const can = fromSource('vercel', claims, { teamId })
     if (!can) throw forbidden(`project is not a trusted source: ${project || String(claims.project_id)}`)
     return deployment(claims, project, environment, can, expiresAt)
   }
