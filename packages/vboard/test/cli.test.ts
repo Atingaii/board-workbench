@@ -273,6 +273,13 @@ describe('cli', () => {
     expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
 
+    // Filters on a thread keep its root and the replies that match.
+    const narrowed = await vb(['read', second, '--by', '@julian/claude', '--text', 'note 2', '--json'])
+    expect(narrowed.stdout.trim().split('\n').map((line) => JSON.parse(line).text)).toEqual(['docs typo', 'note 2'])
+    const byLabel = await vb(['read', first, '--label', 'state=open', '--by', '@julian/claude'])
+    expect(byLabel.stdout).toContain('flaky test in ci')
+    expect(byLabel.stdout).not.toContain('still flaky')
+
     // A typo'd channel is an error, not an empty read; an empty read in a real channel isn't.
     expect(await vb(['read', 'open-wrok'])).toMatchObject({ code: 1, stdout: '', stderr: 'error: no channel open-wrok: vboard channels lists them\n' })
     expect(await vb(['read', 'open-work', '--text', 'nothing like this'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^open-work · 0 threads · cursor \d+\n$/) })

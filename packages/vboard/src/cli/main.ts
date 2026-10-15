@@ -49,7 +49,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 
   read [channel] [filters] [--limit N]     the latest threads, one each: root, replies, latest reply
                                            (no channel: every channel)
-  read <id>                                one thread, every message
+  read <id>                                one thread, every message (filters: the root and the replies that match)
 
   post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
   reply <id> ["<text>"] [--attach <file>]... [--id <key>] [--no-sync]
@@ -500,9 +500,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const board = client()
       if (target && /^#?\d+$/.test(target)) {
         const thread = await board.thread(messageId(target))
-        if (flags.json) return [thread.message, ...thread.replies].forEach(printJson), 0
-        out(formatThreads([thread.message, ...thread.replies]))
-        for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
+        // With filters, the root and only the replies that match them.
+        const narrowed = Object.keys(filters()).length > 0
+        const replies = narrowed
+          ? (await board.messages({ ...filters(), re: thread.message.id, limit: 500 })).messages.filter((m) => m.re !== null)
+          : thread.replies
+        if (flags.json) return [thread.message, ...replies].forEach(printJson), 0
+        out(formatThreads([thread.message, ...replies]))
+        if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
       const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }

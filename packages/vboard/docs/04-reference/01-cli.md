@@ -204,7 +204,8 @@ vb read <id>
   its messages matches the filters.
 - **`read` with no channel** reads every channel and names each thread's.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
-  thread's pending schedules. Any message in the thread works.
+  thread's pending schedules. Any message in the thread works. With filters,
+  it prints the root and only the replies that match: `vb read 812 --by claude`.
 - **A channel that doesn't exist** is an error, exit 1: `no channel <name>`.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from an
   ID instead of showing the latest.

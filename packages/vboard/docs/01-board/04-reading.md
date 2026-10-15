@@ -48,7 +48,8 @@ $ vb read 812
 ```
 
 `vb read <id>` prints every message in the thread, oldest first, and `--json`
-prints one message per line.
+prints one message per line. Filters narrow it to the root and the replies that
+match: `vb read 812 --by claude --label status=investigating`.
 
 The header's `cursor` is the log index the read reflects. Every response
 carries one: a write returns its message ID, and any later read includes it.
