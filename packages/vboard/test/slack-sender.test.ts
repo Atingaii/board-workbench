@@ -99,9 +99,9 @@ describe("an agent's messages in Slack", () => {
 })
 
 describe('Slack sender details', () => {
-  it('takes out just the label, after a quote too', () => {
+  it('takes out just the label it opens with', () => {
     expect(withoutLabel(markdown, as.name)).toBe('on it')
-    expect(withoutLabel(`> ↪ Ada: hi\n\n${markdown}`, as.name)).toBe('> ↪ Ada: hi\n\non it')
+    expect(withoutLabel(`hi\n${markdown}`, as.name)).toBe(`hi\n${markdown}`)
     expect(withoutLabel('**Ada**: hi', as.name)).toBe('**Ada**: hi')
     expect(withoutLabel('**a.b (x)**: hi', 'a.b (x)')).toBe('hi')
   })
