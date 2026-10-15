@@ -168,7 +168,7 @@ A message, as `messagesReducer` folds it:
 
 | Write | Its event ID |
 | --- | --- |
-| A post with `id` | that `id`. The same `id` never posts twice; reusing it for a different write answers 409 `duplicate_id` |
+| A post with `id` | that `id`. The same `id` never posts twice; reusing it for a different write, or another author's, answers 409 `duplicate_id`. The API refuses UUIDv8s, the shape of the IDs below |
 | A root without `id` | a random UUID, which becomes the thread key |
 | `thread.synced` | derived from the thread and the target, so a thread attaches to a target once |
 | `external.received` | derived from the sync key and the platform's own event or message ID, so platform retries do nothing |

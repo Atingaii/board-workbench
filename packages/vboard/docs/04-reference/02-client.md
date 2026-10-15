@@ -102,8 +102,8 @@ await board.post('errors-www', {
 | `attachments` | Files from `upload`, or their IDs, at most 10 |
 
 `noSync` and `sync` together are rejected. A retry with the same `id` doesn't
-post twice; a retry whose write differs from the first fails with
-`duplicate_id`.
+post twice; a retry whose write differs from the first, or someone else's post
+with that `id`, fails with `duplicate_id`.
 
 ### reply
 

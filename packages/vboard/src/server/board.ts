@@ -171,6 +171,12 @@ function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
 
 const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
 
+/**
+ * `idempotentId`'s shape, a UUIDv8: the IDs the board derives for its own writes (schedule
+ * sends, watchers, sync). They're guessable, so an API caller can't post with one and take it first.
+ */
+const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
 
 function route(method: string, pathname: string, basePath?: string): Match | null {
@@ -520,6 +526,8 @@ export function board(options: BoardOptions = {}) {
           require(principal, 'post')
           const body = PostBody.parse(await readJson(request))
           if (body.sync?.length) require(principal, 'sync')
+          if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
+            throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
           const message = await writePost(writes, {
             attachments,

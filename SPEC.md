@@ -575,6 +575,10 @@ export const schedulesContract = contract({
   [Scheduled messages](#scheduled-messages)).
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
+    The same `id` from another author, or on a different write, answers 409
+    `duplicate_id`. The API refuses UUIDv8s: `idempotentId` derives the board's
+    own IDs in that shape, and they're guessable, so a caller can't take one
+    first.
   - `external.received` uses the platform's event or message ID as its event
     ID. A2 event IDs are unique across the whole store, so platform retries do
     nothing.
@@ -2134,8 +2138,9 @@ middleware gets the `write`, its `author`, its `source`, `respond(text)`, an
 in-process `board` client, and `next(patch?)`. Calling `next` passes the write on,
 optionally changing its text or a post's labels; not calling it drops the write,
 which never reaches the log, and so does emptying a write that has no files. A
-retried post whose `id` already landed returns that message without running the
-chain again.
+retried post whose `id` already landed, by the same author in the same channel
+or thread, returns that message without running the chain again; anyone else's
+answers 409 `duplicate_id`.
 
 `respond` answers where the write came from: a reply in the platform thread for
 sync, and the message of the `422 dropped` error the API answers with otherwise.

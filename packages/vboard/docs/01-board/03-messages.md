@@ -158,8 +158,9 @@ vb post deploys "a1b2c3 is live" --id deploy-a1b2c3
 ```
 
 The same ID with the same write returns the message it already posted. The same
-ID with a different write fails with `duplicate_id`. IDs are up to 200
-characters. Your own server code gets this through the
+ID with a different write fails with `duplicate_id`, and so does someone else's
+post with your ID. IDs are up to 200 characters. UUIDv8s are the board's own,
+for the writes it makes itself, so the API refuses them. Your own server code gets this through the
 [in-process client's `key`](./01-mounting.md#the-in-process-client).
 
 ## Keeping a message on the board

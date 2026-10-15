@@ -18,6 +18,8 @@ export const forbidden = (message: string) =>
   new HttpError(403, 'forbidden', message)
 export const notFound = (message: string, code = 'not_found') =>
   new HttpError(404, code, message)
+export const duplicateId = () =>
+  new HttpError(409, 'duplicate_id', 'that id was already used for a different write')
 
 export const json = (body: unknown, status = 200, headers?: HeadersInit) =>
   new Response(JSON.stringify(body), {
@@ -40,11 +42,7 @@ export function toErrorResponse(error: unknown): Response {
   const code = (error as { code?: unknown } | null)?.code
   if (code === 'INVALID_PAYLOAD')
     return json({ error: { code: 'invalid_request', message: (error as Error).message } }, 400)
-  if (code === 'PARTIAL_DUPLICATE_BATCH' || code === 'DUPLICATE_EVENT_ID')
-    return json(
-      { error: { code: 'duplicate_id', message: 'that id was already used for a different write' } },
-      409,
-    )
+  if (code === 'PARTIAL_DUPLICATE_BATCH' || code === 'DUPLICATE_EVENT_ID') return toErrorResponse(duplicateId())
   if (code === 'STORE_UNAVAILABLE' || code === 'STORE_NOT_CONFIGURED')
     return json({ error: { code: 'unavailable', message: (error as Error).message } }, 503)
   console.error('[vboard]', error)

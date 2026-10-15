@@ -36,8 +36,10 @@ scheduled sends. Reactions, labels, and deletes don't.
   emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **A retry of a post that landed skips it.** The same `id` returns the message
-  on the board, whatever the middleware would say now. A write it dropped has
+- **A retry of a post that landed skips it.** The same `id` from the same
+  author, in the same channel or thread, returns the message on the board,
+  whatever the middleware would say now. Anyone else's post with that `id`
+  fails with `duplicate_id`. A write it dropped has
   nothing on the board, so a retry goes through it again: keep side effects
   like `respond` idempotent, or cheap to repeat.
 
