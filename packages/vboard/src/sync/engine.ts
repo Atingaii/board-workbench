@@ -705,24 +705,21 @@ export function createSyncEngine(options: {
   }
 
   /** What a message says as its author: no name in front, since it's theirs. */
-  function renderAsPerson(target: string, message: Message, actors: ActorsState, quote?: Message) {
+  function renderAsPerson(target: string, message: Message, actors: ActorsState) {
     const platform = platformOf(keyOf(target))
-    const quoted = quote
-      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${displayText(quote.text, quote.by.actor).slice(0, 140).replace(/\n/g, ' ')}\n\n`
-      : ''
-    const markdown = `${quoted}${textFor(platform, message, actors, displayText(message.text, message.by.actor))}`
+    const markdown = textFor(platform, message, actors, displayText(message.text, message.by.actor))
     const lines = message.attachments.length > 0 && (!platform.uploadsFiles || !options.blob)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown }
   }
 
   /** Posts as the message's author when they've signed in; null to post as the app. */
-  async function postAsPerson(target: string, place: string, kind: ResolvedTarget['kind'], message: Message, actors: ActorsState, quote?: Message) {
+  async function postAsPerson(target: string, place: string, kind: ResolvedTarget['kind'], message: Message, actors: ActorsState) {
     const platform = platformOf(keyOf(target))
     if (!message.text.trim()) return null
     const token = await personToken(platform, message, actors)
     if (!token) return null
     try {
-      return await platform.postAs(token, native(place), kind, renderAsPerson(target, message, actors, quote))
+      return await platform.postAs(token, native(place), kind, renderAsPerson(target, message, actors))
     } catch (error) {
       console.warn(`[vboard] couldn't post #${message.id} to ${target} as its author; posting as the app:`, describe(error))
       return null
@@ -730,14 +727,11 @@ export function createSyncEngine(options: {
   }
 
   /** A board message as markdown for a platform, which converts it to its own format. */
-  function render(key: string, target: string, message: Message, actors: ActorsState, quote?: Message): { markdown: string; as?: ProviderSender } {
+  function render(key: string, target: string, message: Message, actors: ActorsState): { markdown: string; as?: ProviderSender } {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
     if (message.from) name = `${name} (${platformOf(message.from).platform})`
-    const quoted = quote
-      ? `> ↪ ${actors.byId[quote.by.actor]?.name ?? 'someone'}${quote.origin?.context ? ` on ${quote.origin.context}` : ''}: ${displayText(quote.text, quote.by.actor).slice(0, 140).replace(/\n/g, ' ')}\n\n`
-      : ''
     const platform = platformOf(key)
     const body = platform.render(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
@@ -747,7 +741,7 @@ export function createSyncEngine(options: {
       target,
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = `${quoted}${textFor(platform, message, actors, body)}`
+    const markdown = textFor(platform, message, actors, body)
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
     return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
   }
@@ -774,9 +768,9 @@ export function createSyncEngine(options: {
    * `render`, with a line per file where the files won't follow: on a platform
    * that takes no uploads, or one that refused them (`noted`).
    */
-  const renderFor = (target: string, message: Message, actors: ActorsState, quote?: Message, noted = false) => {
+  const renderFor = (target: string, message: Message, actors: ActorsState, noted = false) => {
     const key = keyOf(target)
-    const { markdown, as } = render(key, target, message, actors, quote)
+    const { markdown, as } = render(key, target, message, actors)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles || !options.blob)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
@@ -799,16 +793,12 @@ export function createSyncEngine(options: {
     target: string,
     externalThread: string,
   ) {
-    // No quote for the message right above this one: it's already what the reply reads as answering.
-    const replyTo = message.replyTo === null || message.replyTo === previousIn(state, message, target, externalThread)
-      ? undefined
-      : state.messages.byId[message.replyTo]
     const replyCopy = message.replyTo === null ? undefined : state.sync.copies[message.replyTo]?.[target]
-    // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere it quotes it.
+    // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere into the main thread, as written.
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
     const platform = platformOf(keyOf(target))
-    let body = renderFor(target, message, state.actors, inSubthread ? undefined : replyTo)
+    let body = renderFor(target, message, state.actors)
     let files: string[] | null | undefined
     let sentId: string
     if (!body.markdown.trim() && message.attachments.length && options.blob && platformOf(keyOf(target)).uploadsFiles) {
@@ -818,12 +808,12 @@ export function createSyncEngine(options: {
         files = sent.files
       } catch (error) {
         if (!platformOf(keyOf(target)).refusesFiles(error)) throw error
-        body = renderFor(target, message, state.actors, inSubthread ? undefined : replyTo, true)
+        body = renderFor(target, message, state.actors, true)
         sentId = (await platform.post(native(place), 'thread', body)).message
         files = null
       }
     } else {
-      const asPerson = await postAsPerson(target, place, 'thread', message, state.actors, inSubthread ? undefined : replyTo)
+      const asPerson = await postAsPerson(target, place, 'thread', message, state.actors)
       if (asPerson) {
         const external: ExternalCopy = { thread: place, message: asPerson.message, asUser: true }
         await recordDelivery(ctx, message, target, external)
@@ -835,15 +825,6 @@ export function createSyncEngine(options: {
     const external = { thread: place, message: sentId, ...(files !== undefined ? { files } : {}) }
     await recordDelivery(ctx, message, target, external)
     return external
-  }
-
-  /** The thread's last message before this one that's in this platform thread, deleted ones aside. */
-  function previousIn(state: Awaited<ReturnType<typeof latest>>, message: Message, target: string, externalThread: string): number | undefined {
-    const { messages, sync } = state
-    if (message.re === null) return undefined
-    const ids = [message.re, ...(messages.replies[message.re] ?? [])]
-    const before = ids.slice(0, Math.max(0, ids.indexOf(message.id)))
-    return before.reverse().find((id) => !messages.byId[id]?.deleted && sync.copies[id]?.[target]?.thread === externalThread)
   }
 
   async function recordDelivery(ctx: Ctx<keyof BoardEvents>, message: Message, target: string, copy: ExternalCopy) {
@@ -880,7 +861,7 @@ export function createSyncEngine(options: {
       if (!platform.refusesFiles(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
-      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, undefined, true)).catch((edit: unknown) =>
+      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, true)).catch((edit: unknown) =>
         console.warn(`[vboard] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
@@ -952,7 +933,7 @@ export function createSyncEngine(options: {
           } catch (error) {
             if (!platformOf(keyOf(target)).refusesFiles(error)) throw error
             uploaded = null
-            return platform.post(native(target), 'channel', renderFor(target, root, state.actors, undefined, true))
+            return platform.post(native(target), 'channel', renderFor(target, root, state.actors, true))
           }
         }
         const sent = await post()
@@ -1033,7 +1014,7 @@ export function createSyncEngine(options: {
         }
         if (event.type === 'message.edited' && message)
           if (token) await platform.editAs(token, thread, copy.message, renderAsPerson(target, message, state.actors))
-          else await platform.edit(thread, copy.message, renderFor(target, message, state.actors, undefined, copy.files === null))
+          else await platform.edit(thread, copy.message, renderFor(target, message, state.actors, copy.files === null))
         else if (event.type === 'message.deleted') {
           if (token) await platform.deleteAs(token, thread, copy.message)
           else await platform.delete(thread, copy.message)
@@ -1062,8 +1043,8 @@ export function createSyncEngine(options: {
     const previous = { ...message, labels: before.byId[id]?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
       try {
-        const body = renderFor(target, message, state.actors, undefined, copy.files === null)
-        if (body.markdown === renderFor(target, previous, state.actors, undefined, copy.files === null).markdown) continue
+        const body = renderFor(target, message, state.actors, copy.files === null)
+        if (body.markdown === renderFor(target, previous, state.actors, copy.files === null).markdown) continue
         await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
       } catch (error) {
         console.warn(`[vboard] skipped labels.changed on ${target}:`, describe(error))

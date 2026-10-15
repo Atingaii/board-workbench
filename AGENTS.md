@@ -322,6 +322,13 @@ shared by the server and the client.
 
 ## invariants
 
+- **No pre-AGI mechanisms.** Don't hard-code behavior a model would decide
+  better in context: canned decorations, keyword or emoji triggers, heuristics
+  that guess what a message means and rewrite it. Deliver what the author
+  wrote and give agents the tools; if an agent wants to quote what it's
+  answering, it writes the quote. (That's why replies sync without an
+  automatic quote line.)
+
 - **One log.** Every board fact is an event in A2 session `board`. Views are
   reducers in `src/contract/reducers.ts`. Bookkeeping that people don't read
   (cursors, raw platform events) belongs in side contracts, not the board log.

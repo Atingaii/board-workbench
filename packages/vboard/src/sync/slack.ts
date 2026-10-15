@@ -62,8 +62,8 @@ type SlackInternals = Omit<Adapter, 'decodeThreadId'> & {
 
 /** The `**name**: ` a message's text opens with, taken out when Slack shows the name as the sender. */
 export function withoutLabel(markdown: string, name: string): string {
-  const label = new RegExp(`(^|\\n)\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*: `)
-  return markdown.replace(label, '$1')
+  const label = new RegExp(`^\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*: `)
+  return markdown.replace(label, '')
 }
 
 /** HTML elements GitHub renders in comments; anything else in angle brackets (`<@U123>`, `<https://…>`, `a < b`) is left alone. */
