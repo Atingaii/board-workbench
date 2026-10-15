@@ -47,7 +47,7 @@ import { avatarSvg } from './avatars.ts'
 import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
-import { discoveryIdentity, ownProjectId } from './identity.ts'
+import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
 import { createSchedules } from './schedules.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
@@ -271,6 +271,7 @@ export function board(options: BoardOptions = {}) {
   }
   const verify = createVerifier({
     projectId: () => ownProjectId(options.project),
+    teamId: () => ownTeamId(options.project),
     trustedSources: options.trustedSources ?? [],
     ...(options.auth ? { auth: options.auth } : {}),
   })
@@ -280,7 +281,7 @@ export function board(options: BoardOptions = {}) {
     const header = request.headers.get('authorization') ?? ''
     const token = header.match(/^Bearer\s+(.+)$/i)?.[1]
     if (!token) throw unauthorized('missing bearer token')
-    return verify(token, boardUrl)
+    return verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
   }
 
   /** The sessions whose handlers run on lanes, so a dead letter there stops the rest of its lane. */

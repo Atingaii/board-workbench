@@ -242,6 +242,14 @@ board({
 - **Matching uses names for readability** (`project`, `repository`, `workflow`).
   Renaming a project or repo changes those claims, so the principal is stored by
   ID (`project_id`, `repository_id`).
+- **A Vercel project name is scoped to a team.** Anyone can make a project
+  named `marketing` on their own team and mint a token for the board's
+  audience, so `vercel({ project })` without `team` matches only the board's own
+  team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
+  knows its team from `board({ project: { teamId } })`, `VERCEL_ORG_ID`, or
+  `.vercel/project.json`, and on Vercel from the platform's
+  `x-vercel-oidc-token`, verified and for its own `project_id`. When none of
+  them says, a name without `team` matches nothing.
 - **`githubActions()` matches the `repository`, `event`, `workflow`, and `ref`
   claims.** A `pull_request` run's token carries `ref: refs/pull/<n>/merge`, so a
   rule pinned to `refs/heads/main` rejects it. Match on `event` and `workflow`
