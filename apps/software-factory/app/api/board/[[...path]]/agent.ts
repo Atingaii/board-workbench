@@ -36,13 +36,14 @@ const PI_USER = "vercel-sandbox";
 /**
  * What Pi gets on top of its own, written into `~/.pi/agent` every turn from this app's folders of the same names:
  * the ui-video skill, and the computer tool (an extension) it records, the verify-vboard skill, which runs
- * vboard on a local board to reproduce and check changes to it, and the pr-description skill, for the PRs Pi opens.
+ * vboard on a local board to reproduce and check changes to it, the sitrep skill, and the pr-description skill, for the PRs Pi opens.
  */
 const PI_FILES = [
   "skills/ui-video/SKILL.md",
   "skills/ui-video/scripts/ui-video",
   "skills/verify-vboard/SKILL.md",
   "skills/verify-vboard/scripts/verify-vboard",
+  "skills/sitrep/SKILL.md",
   "skills/pr-description/SKILL.md",
   "extensions/computer/index.ts",
   "extensions/computer/xinput.py",

@@ -224,6 +224,20 @@ render: ({ message, label }) =>
     : `**${label}**: ${message.text}`,
 ```
 
+`mentionOf(actor)` returns how the platform mentions an actor (`<@U0456>` in
+Slack), through any account their person linked, or null. The default label is
+the author's name, so nobody gets pinged unless a renderer asks:
+
+```ts
+// in slack({ … }): a PR's root mentions its owner, or its author
+render: ({ message, label, mentionOf }) => {
+  const who = (message.labels.owner && mentionOf(message.labels.owner)) ?? mentionOf(message.by.actor)
+  return message.re === null && message.labels.pr && who
+    ? `${message.text} · ${who}`
+    : `**${label}**: ${message.text}`
+},
+```
+
 The default renderer reads no labels, so labels alone never edit a copy. Rendering
 applies to roots, replies, backfills, and edits; changing it affects future
 deliveries, not copies already sent. A subclass can override `render(input)`
