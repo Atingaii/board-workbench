@@ -240,6 +240,28 @@ describe('linking accounts with a one-time code', () => {
     expect((await julian('GET', '/identity')).body.links).toHaveLength(1)
   })
 
+  it('imports a used code reposted by the account that used it as a message, with no check mark', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'a thread', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'channel=firehose')).toHaveLength(1))
+    const { code } = (await julian('POST', '/identity/link', { sync: 'slack' })).body
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '101', text: code, user: 'U_JULIAN' })
+    await vi.waitFor(async () => expect((await julian('GET', '/identity')).body.links).toHaveLength(1))
+    await julian('POST', '/identity/unlink', { actor: 'slack:user:U_JULIAN' })
+
+    // Long after its ten minutes, the same account posts the used code again: it's just a message.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 20 * 60_000)
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '105', text: code, user: 'U_JULIAN' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '106', text: 'after', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await read(julian, 'channel=firehose')).map((m) => m.text)).toContain('after'))
+    vi.useRealTimers()
+    expect((await read(julian, 'channel=firehose')).map((m) => m.text)).toEqual(['a thread', code, 'after'])
+    expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '101', emoji: 'check', added: true }])
+    expect((await julian('GET', '/identity')).body.links).toEqual([])
+  })
+
   it('unlinks an account, by handle; only people link, and only their own accounts', async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
