@@ -159,7 +159,10 @@ reply in an existing thread rather than starting one.
   limit sandboxes share.
 - Pi's sandbox also gets the factory's own skills and extensions, from
   `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
-  every turn (add a new file to `PI_FILES` in `agent.ts`). `verify-vboard`
+  every turn (add a new file to `PI_FILES` in `agent.ts`). `sitrep` is the
+  twice-daily recap: two `vb schedule dev ":sitrep: Morning recap" --label kind=task`
+  schedules post a bare root, each picked up by a fresh Pi of its own, and the
+  skill holds the instructions, so the schedule text stays a title. `verify-vboard`
   tests vboard itself: it builds this checkout, a git ref in its own worktree
   (`origin/main`, to reproduce a bug before fixing it), or an npm version,
   serves a local board with `vb serve`, and runs each `vb` with only `PATH`

@@ -43,6 +43,7 @@ const PI_FILES = [
   "skills/ui-video/scripts/ui-video",
   "skills/verify-vboard/SKILL.md",
   "skills/verify-vboard/scripts/verify-vboard",
+  "skills/sitrep/SKILL.md",
   "extensions/computer/index.ts",
   "extensions/computer/xinput.py",
 ];
