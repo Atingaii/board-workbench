@@ -1,58 +1,64 @@
 ---
 name: sitrep
-description: Write the team's twice-daily recap of vboard's open PRs and threads, and move each one forward. Use when your thread is a scheduled ":sitrep: Morning recap" or ":sitrep: Evening recap" root, or when someone asks you for a recap or sit rep.
+description: Do a sitrep for vboard, a recap that moves the project forward. Go through every open PR and recent thread, unstick what's stuck, land what's ready, close what's dead, and post a recap of what's left and who has to act. Use when you're asked for a sitrep or recap.
 ---
 
-# The sitrep
+# Sitrep
 
-Twice a day (09:00 and 18:00 ART) a schedule posts a root in `dev` that says
-only ":sitrep: Morning recap" or ":sitrep: Evening recap", labeled
-`sitrep=morning` or `sitrep=evening` (and `kind=task`), and you're the Pi for
-that thread. Reply to that root with the recap: `vb reply <root id>`.
-Don't `vb post` a new message, and don't repeat the headline: the root is the
-headline.
+A sitrep is project management, not a report. The goal is that after it,
+less is open and nothing is stuck: work that's ready lands, dead work is
+closed, stalled threads move again, and everyone who has to act knows exactly
+what's being asked of them. The recap you post at the end is the record of
+what's left.
 
-The recap is for landing work and leaving nothing behind, not just listing it.
+Post the recap as a reply in your thread. Its root is the headline, so don't
+repeat it.
 
-## 1. Find the last recap
+## 1. Pick up from the last sitrep
 
-You start from nothing: no earlier run's session or notes. What changed is
-everything since the last recap, so find it by its label:
+You don't remember earlier sitreps, so find the last one:
 
 ```bash
-vb read dev --label sitrep     # every recap thread, old and new
+vb read dev --label sitrep     # sitrep threads, old and new
 ```
 
-The label matches a thread's root and its replies. In a sitrep root, the recap
-is the reply its Pi posted; in older ones the root is the recap itself. Take
-the newest recap before your root: its time is "since the last recap", and its
-items are what to follow up on. If there's none, use the last 24 hours.
+The label matches a thread's root and its replies. The recap is the reply a
+Pi posted under the root, or in older threads the root itself. Take the newest
+recap before yours. Use its time as "since the last recap", and its items as
+the list to follow up on: anything it said was blocked or waiting, check
+whether it moved. If there's none, use the last 24 hours.
 
-## 2. Check GitHub, every run
+## 2. See what's open
 
 Run `gh pr list --repo vercel-labs/vboard --state open` yourself, every time.
-Don't carry over what an earlier recap said about GitHub access: an error
-from another run says nothing about yours. If gh does fail, quote the
-error it printed (status and message) in the recap, in one line. When gh fails,
-find the open PRs from the board instead: the PR threads (`vb read dev --label pr`,
-the root labeled `pr=vercel-labs/vboard#<n>` with its state label) and the
-`pi/` branches (`git branch -r` in a clone).
+Don't trust what an earlier recap said about GitHub access: an error from
+another run says nothing about yours. If gh fails, quote the error it printed
+(status and message) in the recap, in one line. Then find the open PRs on the
+board instead: the PR threads (`vb read dev --label pr`, the root labeled
+`pr=vercel-labs/vboard#<n>` with its state label) and the `pi/` branches
+(`git branch -r` in a clone).
+
+Then read each open PR's board and Slack threads, and the threads in `dev`
+from the last few days that are still open.
 
 ## 3. Move each one forward
 
-Before you post, read each open PR's board and Slack threads, and the open
-threads in `dev` from the last few days. For each one:
+This is most of the job. For each PR and thread:
 
-- Answer what you can, and push fixes for blockers you can resolve.
-- In the thread itself, ping the one person whose answer or review unblocks
-  it, and say exactly what you need.
-- When GitHub works, merge what is approved and green, and close PRs that are
-  clearly dead or superseded. When it doesn't, list those under "Ready to merge"
-  or "Left behind" and say in one line that you couldn't merge or close them.
-- Anything nobody is moving is left behind: say what you propose (close it, or
-  who should pick it up).
+- **Ready**: approved and green. Merge it when GitHub lets you.
+- **Dead or superseded**: close it, linking what replaced it.
+- **Blocked on something you can fix** (a conflict, a review comment, a failing
+  check): fix it and push, or ask the thread's own Pi to.
+- **Blocked on a person**: ping the one person whose answer or review unblocks
+  it, in that thread, and say exactly what you need from them.
+- **Stuck with nobody moving it**: restart it. Ask the question that gets it
+  going, or propose closing it or who should pick it up.
+- **A thread with no answer**: answer it if you can.
 
-## 4. Write it
+When gh doesn't work, you can't merge or close: list those under "Ready to
+merge" or "Left behind", and say so in one line.
+
+## 4. Write the recap
 
 List every open PR of vercel-labs/vboard, drafts and RFCs included, even when
 nothing changed: none may drop out of the recap while it's open.
@@ -85,11 +91,9 @@ sections, in this order, leaving out any that would be empty:
 7. **Merged and closed since the last recap**: plain lists of linked numbers.
    Look them up, since you weren't there:
    `gh pr list --repo vercel-labs/vboard --state merged --search "merged:>=<last recap's time>"`,
-   and `--state closed --search "closed:>=<…>"` for the closed ones. When gh fails,
-   use the `state` label on the board's PR roots (`vb read dev --label pr`).
+   and `--state closed --search "is:unmerged closed:>=<…>"` for the closed ones
+   (without `is:unmerged`, merged PRs show up too). When gh fails, use the
+   `state` label on the board's PR roots (`vb read dev --label pr`).
 
 Each PR or thread goes in exactly one section, on one line, with the status
-after the "—" short enough to read at a glance. Put a blank line before the
-footer, and end with:
-
-`_Twice-daily recap (09:00 and 18:00 ART), from the sitrep skill_`
+after the "—" short enough to read at a glance.
