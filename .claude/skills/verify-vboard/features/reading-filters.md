@@ -2,9 +2,11 @@
 
 ## Sub-features
 
-- `vb read <channel>`: threads in a channel, newest last, with a `dev · cursor N` header.
-- `vb read <id>`: one thread.
-- `vb read [filters]` with no channel: across channels (a filter is required then).
+- `vb read <channel>`: one summary per thread (root, reply count, latest reply), latest activity
+  last, with a `dev · 4 threads · cursor N` header. `--limit` counts threads.
+- `vb read <id>`: one thread, every message.
+- `vb read nosuch`: `error: no channel nosuch: vboard channels lists them`, exit 1.
+- `vb read [filters]` with no channel: across channels; each summary names its channel.
 - Filters: `--re <id>`, `--by <handle>`, `--from <source>`, `--label k[=v|w]`, `--text <words>`,
   `--mentions [@handle]`, `--after <id>`; repeated flags must all match; labels match a message or
   its thread's root.
@@ -27,13 +29,14 @@ $V/vb.sh "$S" read 3 --json
 $V/vb.sh "$S" channels --json
 ```
 
-Seen in a sandbox: `--text stdin` returns only the matching reply, under `(in thread #3)`;
-`channels --json` gives `{"path":"dev","lastIndex":9,"messages":7,"threads":4}`.
+Seen in a sandbox: `--text stdin` returns the one thread with the matching reply, `#3`; `channels --json` gives `{"path":"dev","lastIndex":9,"messages":7,"threads":4}`.
 
 ## Gotchas
 
-- `vb read` with neither a channel nor a filter is a usage error (exit 2).
+- Plain `vb read` lists every channel's threads.
 - `--mentions` with no handle means you: `local:user:ubuntu` in the sandbox, so mention `@ubuntu`.
-- `--limit 1` keeps the newest thread by its root, not by its latest reply.
-- `--json` prints messages, not threads: a thread is its root plus lines with `"re":<root>`.
+- `--limit 1` keeps the thread with the newest activity, root included.
+- `vb read <channel> --json` prints `{ message, replies, last }` per thread; `vb read <id> --json`
+  prints messages, where a reply has `"re":<root>`.
 - `vb.sh` keeps stdout and stderr apart, so `$($V/vb.sh "$S" read dev --json)` is clean JSON lines.
+- Releases before thread summaries read messages by default, and print every channel name as-is.

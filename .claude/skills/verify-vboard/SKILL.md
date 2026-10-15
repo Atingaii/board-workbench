@@ -110,7 +110,7 @@ teardown:
 | `up.log` | setup output: create, install, build, serve |
 | `doctor.txt` | each doctor run |
 | `transcript.txt` | every `vb.sh`/`sh.sh` call: `$ command`, output, `[exit N]` when nonzero |
-| `files/` | from `collect.sh` (run by `down.sh`): `.vboard/` (`board.db` + WAL, `attachments/`, `config.json`), `serve.log`, `read.json` (`vb read --json` of every channel), `files.txt` |
+| `files/` | from `collect.sh` (run by `down.sh`): `.vboard/` (`board.db` + WAL, `attachments/`, `config.json`), `serve.log`, `read.json` (`vb read <id> --json` of every thread), `files.txt` |
 | `down.txt` | the removal |
 
 Proof standards:

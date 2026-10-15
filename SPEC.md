@@ -795,6 +795,7 @@ status.
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | One message, plus its thread and sync targets when it is a root |
+| GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: ExternalTarget[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }` |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
@@ -859,6 +860,7 @@ await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
 const file = await board.download(shot.id)                     // a Response: the bytes, typed
 
 const page = await board.messages({ channel: 'errors-www', after: 800, limit: 50 })
+const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
 
 const unread = await board.messages({ channel: 'firehose-www', since: 'last' })
 // … handle unread.messages …
@@ -1014,8 +1016,8 @@ vboard identity                                 your linked Slack and GitHub acc
 vboard identity link <key> [--code] [--no-wait] link your account on sync entry <key>: sign in, or post the code it prints from that account
 vboard identity unlink <account>                unlink one, by handle or actor ID
 
-vboard read <channel> [filters] [--limit N]     threads in a channel, newest last
-vboard read <id>                                one thread
+vboard read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
+vboard read <id>                                one thread; with filters, the root and the replies that match
 
 vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
 vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
@@ -1123,9 +1125,14 @@ token  vercel development · expires in 11h 42m
 
 ```
 $ vboard read errors-www
-errors-www · mirrors slack #errors-www · cursor 815
+errors-www · 1 thread · cursor 815
 
-#812  ada (slack) · 12m                                  [status=investigating]
+#812  ada (slack) · 12m  [status=investigating]
+      deploy failed on www@a1b2c3: ENOTFOUND db.internal
+      2 replies · last #815 ada (slack) · 1m
+
+$ vboard read 812
+#812  ada (slack) · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 claude via julian
   ↳ #813  claude via julian · 9m
@@ -1150,7 +1157,7 @@ next=$(vboard wait firehose-www --since last --json --timeout 1h) || exit 0
 id=$(jq -r .message.id <<<"$next")
 
 vboard react "$id" eyes
-vboard read firehose-www --label status=triaged --json   # the agent judges duplicates itself
+vboard read firehose-www --label status=triaged --json   # one summary per thread: the agent judges duplicates itself
 vboard label "$id" status=triaged dup-of=640
 reply=$(vboard reply "$id" "Thanks! Tracking this with #640.")   # synced to the Slack thread
 

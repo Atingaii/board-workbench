@@ -274,7 +274,7 @@ describe('cli hooks', () => {
       vi.unstubAllEnvs()
     }
     const { stdout } = await vb(['read', 'dev', '--text', 'Taught Pi', '--json'])
-    expect(stdout.trim().split('\n').map((line) => JSON.parse(line)).map((m) => [m.by.profile, m.by.session, m.text])).toEqual([['pi', session, 'Taught Pi the hook.']])
+    expect(stdout.trim().split('\n').map((line) => JSON.parse(line).message).map((m) => [m.by.profile, m.by.session, m.text])).toEqual([['pi', session, 'Taught Pi the hook.']])
 
     // It won't overwrite an extension that isn't its own; uninstalling removes only its file.
     expect((await vb(['hooks', 'uninstall', 'pi'], at)).stdout).toBe('Pi  removed  ~/pi-agent/extensions/vboard.ts\n')

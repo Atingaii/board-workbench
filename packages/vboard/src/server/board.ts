@@ -14,6 +14,7 @@ import {
   SourceReadQuery,
   LabelBody,
   MessagesQuery,
+  ThreadsQuery,
   PostBody,
   ReactBody,
   RedriveBody,
@@ -122,6 +123,7 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'message', pattern: /\/messages\/(\d+)$/ },
   { method: 'GET', name: 'messages', pattern: /\/messages$/ },
   { method: 'POST', name: 'post', pattern: /\/messages$/ },
+  { method: 'GET', name: 'threads', pattern: /\/threads$/ },
   { method: 'POST', name: 'cancelSchedule', pattern: /\/schedules\/s?(\d+)\/cancel$/ },
   { method: 'GET', name: 'schedules', pattern: /\/schedules$/ },
   { method: 'POST', name: 'schedule', pattern: /\/schedules$/ },
@@ -480,6 +482,28 @@ export function board(options: BoardOptions = {}) {
               ? found.filter((m) => m.id > query.after!).slice(0, limit)
               : found.slice(-limit)
           return json({ messages: found.map((m) => view(m, actors)), cursor: index })
+        }
+        case 'threads': {
+          const query = ThreadsQuery.parse(queryObject(url))
+          const [{ state, index }, { state: actors }] = await Promise.all([
+            session.state(messagesReducer),
+            session.state(actorsReducer),
+          ])
+          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
+          const roots = new Set<number>()
+          for (const message of Object.values(state.byId)) if (matches(message)) roots.add(message.re ?? message.id)
+          let found = [...roots].map((id) => {
+            const replies = (state.replies[id] ?? []).map((reply) => state.byId[reply]!).filter((reply) => !reply.deleted)
+            const last = replies.at(-1) ?? null
+            return { root: state.byId[id]!, replies: replies.length, last, at: last?.id ?? id }
+          })
+          found.sort((a, b) => a.at - b.at)
+          const limit = query.limit ?? 50
+          found = query.after !== undefined ? found.filter((t) => t.at > query.after!).slice(0, limit) : found.slice(-limit)
+          return json({
+            threads: found.map((t) => ({ message: view(t.root, actors), replies: t.replies, last: t.last && view(t.last, actors) })),
+            cursor: index,
+          })
         }
         case 'message': {
           const [{ state, index }, { state: actors }] = await Promise.all([

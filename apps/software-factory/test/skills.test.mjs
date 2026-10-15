@@ -11,7 +11,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "skills/ui-video/scripts/ui-video");
 const tokens = { gateway: "g", board: "b", github: "h" };
 
-test("piFiles: the ui-video, verify-vboard and sitrep skills and the computer tool go in Pi's home, scripts executable", async () => {
+test("piFiles: the ui-video, verify-vboard, sitrep and pr-description skills and the computer tool go in Pi's home, scripts executable", async () => {
   const files = await piFiles(root);
   const home = "/home/vercel-sandbox/.pi/agent";
   assert.deepEqual(
@@ -22,6 +22,7 @@ test("piFiles: the ui-video, verify-vboard and sitrep skills and the computer to
       [`${home}/skills/verify-vboard/SKILL.md`, 0o644],
       [`${home}/skills/verify-vboard/scripts/verify-vboard`, 0o755],
       [`${home}/skills/sitrep/SKILL.md`, 0o644],
+      [`${home}/skills/pr-description/SKILL.md`, 0o644],
       [`${home}/extensions/computer/index.ts`, 0o644],
       [`${home}/extensions/computer/xinput.py`, 0o755],
     ],
@@ -29,7 +30,8 @@ test("piFiles: the ui-video, verify-vboard and sitrep skills and the computer to
   assert.match(String(files[0].content), /^---\nname: ui-video\ndescription: .+\n---\n/);
   assert.match(String(files[2].content), /^---\nname: verify-vboard\ndescription: .+\n---\n/);
   assert.match(String(files[4].content), /^---\nname: sitrep\ndescription: .+\n---\n/);
-  assert.match(String(files[5].content), /registerTool\(computer\)/);
+  assert.match(String(files[5].content), /^---\nname: pr-description\ndescription: .+\n---\n/);
+  assert.match(String(files[6].content), /registerTool\(computer\)/);
 });
 
 test("policy: Pi's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {

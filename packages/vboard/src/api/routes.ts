@@ -49,6 +49,12 @@ export const MessagesQuery = Filters.extend({
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
+/** `limit` counts threads: each thread with a matching message, by its latest reply. */
+export const ThreadsQuery = Filters.extend({
+  after: z.coerce.number().int().nonnegative().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+})
+
 export const EventsQuery = Filters.extend({
   after: z.coerce.number().int().nonnegative().optional(),
   wait: z.coerce.number().min(0).max(300).optional(),
@@ -176,6 +182,7 @@ export const LabelBody = z
 
 export type FiltersInput = z.input<typeof Filters>
 export type MessagesQueryInput = z.input<typeof MessagesQuery>
+export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
 export type PostInput = z.input<typeof PostBody>
 export type ScheduleInput = z.input<typeof ScheduleBody>
@@ -287,6 +294,9 @@ export type ThreadView = {
   /** The pending schedules that reply in this thread. Boards older than schedules leave it out. */
   schedules?: ScheduleView[]
 }
+/** A thread at a glance: its root, how many replies it has, and the latest one (null when none). Deleted replies don't count. */
+export type ThreadSummaryView = { message: MessageView; replies: number; last: MessageView | null }
+export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: number }
 export type EventsPage = { events: BoardEventView[]; cursor: number }
 
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
@@ -359,6 +369,8 @@ export const routes = {
   actors: { method: 'GET', path: '/actors' },
   messages: { method: 'GET', path: '/messages', query: MessagesQuery },
   message: { method: 'GET', path: '/messages/:id' },
+  /** Threads with a matching message, one summary each, by latest activity. */
+  threads: { method: 'GET', path: '/threads', query: ThreadsQuery },
   post: { method: 'POST', path: '/messages', body: PostBody },
   edit: { method: 'POST', path: '/messages/:id/edit', body: EditBody },
   delete: { method: 'POST', path: '/messages/:id/delete', body: DeleteBody },

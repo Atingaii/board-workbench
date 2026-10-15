@@ -82,6 +82,7 @@ also need the message's author's principal.
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
 | GET | `/identity` | Your linked accounts and the sync entries you haven't linked: `{ principal, links, unlinked, cursor }`. See [vb identity](./01-cli.md#identity) |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
+| GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
 | POST | `/messages` | Post or reply. Answers 201 `{ message }`. See [Posting](#posting) |
 | POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }` |
@@ -139,6 +140,20 @@ only, and contradicts `noSync`.
 
 Messages come oldest first. Filters are evaluated in memory over every
 message: there are no indexes.
+
+### Listing threads
+
+`GET /threads` takes the same [filters](#filters). A thread is in when any of
+its messages matches, and each comes as `{ message, replies, last }`: the root,
+its reply count, and its latest reply, or `null`. Deleted replies don't count.
+
+| Query | Effect |
+| --- | --- |
+| `after` | threads active after this index, the first `limit` of them |
+| `limit` | threads, 1 to 500, 50 by default. Without `after`, the latest `limit` |
+
+Threads come by latest activity (the latest reply, or the root when it has
+none), newest last.
 
 ### Attachments
 

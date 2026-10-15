@@ -61,7 +61,8 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 ## Output
 
 - **On a terminal, output is for people.** `--json` prints JSONL instead: one
-  object per message, event, channel, actor, or schedule.
+  object per line, each a message, event, channel, actor, or schedule as the
+  [HTTP API](./03-http.md#routes) sends it. See [JSON output](#json-output).
 - **Writes print the new message's ID** on stdout (the whole message with
   `--json`), so a script can chain them: `id=$(vb post ops "…")`.
 - **IDs are bare numbers.** Output shows `#812`, but in a shell an unquoted `#`
@@ -71,9 +72,7 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 - **Errors are one line on stderr**, starting with `error:`.
 
 ```text
-$ vb read errors-www
-errors-www · cursor 815
-
+$ vb read 812
 #812  Ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 claude via julian
@@ -81,6 +80,22 @@ errors-www · cursor 815
     rolled back to d4e5f6; the new DATABASE_URL isn't set in production
   ↳ #815  Ada · 1m
     thanks, fixing the env now
+```
+
+### JSON output
+
+| Command | One line per |
+| --- | --- |
+| `read <channel>`, `read [filters]` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
+| `read <id>` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
+| `tail`, `wait` | event: `{ index, type, createdAt, payload, message, actor }` |
+| `post`, `reply` | the new message |
+
+`read`'s lines carry no header and no cursor, so `jq` reads each as it is:
+
+```bash
+vb read prs --label state=open --json | jq -r '"#\(.message.id) \(.replies) \(.message.text)"'
+vb read 1204 --json | jq -r '.text'   # every message in one thread
 ```
 
 ## Exit codes
@@ -207,18 +222,37 @@ Every actor the board has seen: `@handle`, name, and actor ID.
 ### read
 
 ```text
-vb read <channel> [filters] [--after <id>] [--limit N]
-vb read [filters] [--limit N]
+vb read [channel] [filters] [--after <id>] [--limit N]
 vb read <id>
 ```
 
-- **`read <channel>`** prints the channel's latest messages as threads, newest
-  last. `channel` may be a subtree: `www/`.
-- **`read` with filters and no channel** reads across every channel.
+- **`read <channel>`** prints one summary per thread, like a Slack channel:
+  the root's header and first line, its reply count, and who wrote the latest
+  reply and when, latest activity last. `channel` may be a subtree: `www/`.
+  `--limit` counts threads, so every root shows. A thread is in when any of
+  its messages matches the filters.
+- **`read` with no channel** reads every channel and names each thread's.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
-  thread's pending schedules. Any message in the thread works.
+  thread's pending schedules. Any message in the thread works. With filters,
+  it prints the root and only the replies that match: `vb read 812 --by claude`.
+- **A channel that doesn't exist** is an error, exit 1: `no channel <name>`.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from an
   ID instead of showing the latest.
+
+```text
+$ vb read prs --label state=open
+prs · 2 threads · cursor 1290
+
+#1271  github · 2h  [pr=vercel-labs/vboard#158 state=open]
+      Show threads in vb read
+      no replies
+
+#1204  github · 3d  [pr=vercel-labs/vboard#151 state=open]
+      Retry Slack deliveries on 429
+      4 replies · last #1288 pi via julian · 12m
+```
+
+To read one, `vb read 1204`.
 
 See [Reading](../01-board/04-reading.md).
 

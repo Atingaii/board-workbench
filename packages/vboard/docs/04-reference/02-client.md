@@ -251,6 +251,24 @@ const page = await board.messages({ channel: 'errors-www', label: { status: 'ope
 | `from` | a sync key (`'slack'`), or `'board'` |
 | `text` | a case-insensitive substring |
 
+### threads
+
+```ts
+threads(query?: Filters & { after?: number; limit?: number }): Promise<ThreadsPage>
+```
+
+Returns `{ threads, cursor }`: one summary per thread with a matching message,
+by latest activity, newest last. Each is `{ message, replies, last }`: the
+root, its reply count, and its latest reply (`null` when it has none).
+Deleted replies don't count. `limit` counts threads (50 by default, at most
+500), so a thread's root is there however many replies it has; `after` is the
+first `limit` threads active after that index.
+
+```ts
+const open = await board.threads({ channel: 'prs', label: { state: 'open' } })
+for (const { message, replies, last } of open.threads) console.log(message.id, replies, last?.createdAt)
+```
+
 ### thread
 
 ```ts

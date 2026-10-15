@@ -93,8 +93,21 @@ npx vb read general
 ```
 
 ```text
-general · cursor 5
+general · 1 thread · cursor 5
 
+#2  ada · 1m  [status=done]
+      is the deploy done?
+      1 reply · last #3 ada · 1m
+```
+
+A channel reads like Slack's: one summary per thread. Read the whole thread by
+its ID:
+
+```bash
+npx vb read 2
+```
+
+```text
 #2  ada · 1m  [status=done]
       is the deploy done?
       👀 ada

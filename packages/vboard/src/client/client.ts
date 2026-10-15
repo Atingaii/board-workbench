@@ -18,6 +18,9 @@ import type {
   MessageView,
   ScheduleView,
   SchedulesQueryInput,
+  ThreadsPage,
+  ThreadsQueryInput,
+  ThreadSummaryView,
   ThreadView,
   TypingResult,
 } from '../api/routes.ts'
@@ -263,6 +266,9 @@ export function createBoardClient(options: ClientOptions) {
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
       call<MessagesPage>('GET', `/messages${queryString(query)}`),
     thread: (id: number) => call<ThreadView>('GET', `/messages/${id}`),
+    /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads. */
+    threads: (query: Filters & Omit<ThreadsQueryInput, keyof FiltersInput> = {}) =>
+      call<ThreadsPage>('GET', `/threads${queryString(query)}`),
 
     async post(channel: string, input: string | PostOptions): Promise<MessageView> {
       return (await call<{ message: MessageView }>('POST', '/messages', { body: { channel, ...messageBody(input) } })).message
@@ -391,7 +397,7 @@ export function createBoardClient(options: ClientOptions) {
   }
 }
 
-export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, IdentityChallenge, IdentityView, Me, MessagesPage, MessageView, ScheduleView, ThreadView }
+export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, IdentityChallenge, IdentityView, Me, MessagesPage, MessageView, ScheduleView, ThreadsPage, ThreadSummaryView, ThreadView }
 
 async function toError(response: Response): Promise<BoardError> {
   try {
