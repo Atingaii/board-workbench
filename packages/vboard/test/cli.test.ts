@@ -245,6 +245,17 @@ describe('cli', () => {
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['deploy failed on a1b2c3', 'rolled back to d4e5f6'])
   })
 
+  it('posts to a message ID as a reply in its thread, labels and all', async () => {
+    const id = (await vb(['post', 'post-replies', 'export is broken'])).stdout.trim()
+    const reply = await vb(['post', id, 'fixed in a1b2c3', '--label', 'step=fix', '--json'])
+    expect(reply.code).toBe(0)
+    expect(JSON.parse(reply.stdout)).toMatchObject({ re: Number(id), channel: 'post-replies', text: 'fixed in a1b2c3', labels: { step: 'fix' } })
+    expect((await vb(['post', `#${id}`, 'and deployed'])).code).toBe(0)
+    const lines = (await vb(['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
+    expect(lines.map((m: { text: string }) => m.text)).toEqual(['export is broken', 'fixed in a1b2c3', 'and deployed'])
+    expect(await vb(['post', id, 'x', '--sync', 'slack:#incidents'])).toMatchObject({ code: 2, stderr: 'error: --sync attaches whole threads: post to a channel, or use vb sync <id> <target>\n' })
+  })
+
   it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
     const second = (await vb(['post', 'open-work', 'docs typo'])).stdout.trim()

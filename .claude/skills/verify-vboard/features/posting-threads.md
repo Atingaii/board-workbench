@@ -3,6 +3,8 @@
 ## Sub-features
 
 - `vb post <channel> "<text>"` starts a thread and prints its id; `--label k=v` labels the root.
+- `vb post <id> "<text>"` replies in that message's thread instead, like `vb reply`; `--label` labels the
+  reply, and `--sync` with an id exits 2.
 - `vb reply <id> "<text>"` adds to a thread; replying to a reply files it in the same thread.
 - Text from stdin with `-`; text may be left out with `--attach`.
 - `--attach <file>` (repeatable) uploads files; `vb download <attachment> [path|-]` gets one back.
@@ -46,6 +48,6 @@ sidecars); `collect.sh` copies it out.
   next post's id skips ahead. Read the id from `post`'s output; don't predict it.
 - `edit`, `delete`, `react`, and `label` print nothing on success: follow each with a read.
 - A repeated `--id` key returns the first post's id and posts nothing new.
-- Errors: `vb post` with no channel exits 2 (`error: usage: vboard post <channel> "<text>"`);
+- Errors: `vb post` with no channel exits 2 (`error: usage: vboard post <channel|id> "<text>"`);
   `vb reply 999999 …` exits 1 (`error: message not found: #999999`).
 - `--attach` paths resolve in `/vercel/proj` (the wrappers' working directory).

@@ -53,7 +53,8 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            (no channel: every channel)
   read <id>                                one thread, every message (filters: the root and the replies that match)
 
-  post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+  post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+                                           a new thread in a channel, or with an id, a reply in its thread
   reply <id> ["<text>"] [--attach <file>]... [--id <key>] [--no-sync]
   schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N]
            [--label k=v]... [--attach <file>]... [--no-sync]
@@ -537,20 +538,24 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'post': {
-      const [channel, body] = args
-      if (!channel) throw new UsageError('usage: vboard post <channel> "<text>"')
+      const [target, body] = args
+      if (!target) throw new UsageError('usage: vboard post <channel|id> "<text>"')
+      const re = /^#?\d+$/.test(target) ? messageId(target) : undefined
+      if (re !== undefined && flags.sync?.length) throw new UsageError('--sync attaches whole threads: post to a channel, or use vb sync <id> <target>')
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
       const files = await attachments(board)
-      const message = await board.post(channel, {
+      const options = {
         text: content,
         ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags.id ? { id: flags.id } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
-        ...(flags.sync?.length ? { sync: flags.sync } : {}),
-      })
+      }
+      const message = re === undefined
+        ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
+        : await board.reply(re, options)
       wrote()
       printMessage(message)
       return 0

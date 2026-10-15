@@ -1019,7 +1019,7 @@ vboard identity unlink <account>                unlink one, by handle or actor I
 vboard read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 vboard read <id>                                one thread; with filters, the root and the replies that match
 
-vboard post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+vboard post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
 vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
 vboard schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 vboard schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
