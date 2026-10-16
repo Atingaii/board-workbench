@@ -111,9 +111,16 @@ export function piName(thread: number) {
 export const piAvatar = (thread: number) =>
   `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(piName(thread))}`;
 
-/** Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). */
-export const byPi = (thread: number, by: { profile: string | null; session: string | null }) =>
-  (by.profile === piName(thread) || by.profile === "pi") && by.session === piSession(thread);
+/**
+ * Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). Every Pi
+ * posts as the factory's production deployment, whose OIDC token its network policy adds; its profile and session
+ * are headers anyone who can write may send, so they only say which thread's Pi it is.
+ */
+export const byPi = (thread: number, by: { principal: string; profile: string | null; session: string | null }) =>
+  !!process.env.VERCEL_PROJECT_ID &&
+  by.principal === `vercel:project:${process.env.VERCEL_PROJECT_ID}:production` &&
+  (by.profile === piName(thread) || by.profile === "pi") &&
+  by.session === piSession(thread);
 
 /**
  * Whether a message is one of the board's watchers' own notes (a crosspost, `:security:`'s answer, or saying Pi
