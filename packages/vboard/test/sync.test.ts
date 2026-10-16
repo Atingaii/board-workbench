@@ -144,7 +144,7 @@ describe('sync', () => {
     expect(s.channelPosts).toHaveLength(0) // a thread that came from Slack is never re-posted to its channel
   })
 
-  it('quotes the message a reply answers in Slack, unless it is the one right above it', async () => {
+  it('posts a reply to Slack as written, with no quote of the message it answers', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
 
@@ -155,24 +155,14 @@ describe('sync', () => {
     const [, bob] = await read(julian, 'firehose')
 
     await julian('POST', '/messages', { re: bob!.id, text: 'which browser?' })
-    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
-    expect(s.posts[0]!.text).toContain('which browser?')
-    expect(s.posts[0]!.text).not.toContain('↪')
-
     await julian('POST', '/messages', { re: bob!.id, text: 'and which version?' })
     await vi.waitFor(() => expect(s.posts).toHaveLength(2))
-    expect(s.posts[1]!.text).toContain('↪')
-    expect(s.posts[1]!.text).toContain('same here')
-
-    // A note that stays on the board doesn't count: on Slack, Bob's reply above is still the last one.
-    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '102', text: 'chrome 130', user: 'U_BOB' })
-    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(5))
-    const bob2 = (await read(julian, 'firehose')).at(-1)!
-    await julian('POST', '/messages', { re: bob2.id, text: 'note to self: check 130', noSync: true })
-    await julian('POST', '/messages', { re: bob2.id, text: 'thanks, on it' })
-    await vi.waitFor(() => expect(s.posts).toHaveLength(3))
-    expect(s.posts[2]!.text).toContain('thanks, on it')
-    expect(s.posts[2]!.text).not.toContain('↪')
+    // Bob's message is no longer the one right above, and still nothing quotes it.
+    expect(s.posts[1]!.text).toContain('and which version?')
+    expect(s.posts[1]!.text).not.toContain('↪')
+    expect(s.posts[1]!.text).not.toContain('same here')
+    const [, , , second] = await read(julian, 'firehose')
+    expect(second).toMatchObject({ replyTo: bob!.id })
   })
 
   it('uploads attachments to Slack after the text, and notes them on GitHub, which takes no uploads', async () => {
@@ -224,6 +214,11 @@ describe('sync', () => {
     await vi.waitFor(() => expect(g.posts).toHaveLength(1))
     expect(g.posts[0]!.text).toContain(`📎 proof.png (3 B, on the board: #${proof.id})`)
     expect(g.posts[0]!.text).not.toContain('"files"')
+
+    // A handle no one on the board has stays plain text, and GitHub can't make it ping its login.
+    await julian('POST', '/messages', { re: pr!.id, text: 'cc @TK, not `@tk`' })
+    await vi.waitFor(() => expect(g.posts).toHaveLength(2))
+    expect(g.posts[1]!.text).toContain('cc @\u2060TK, not `@tk`')
   })
 
   it('brings files posted in Slack onto the board, fetched through the adapter', async () => {
@@ -596,6 +591,22 @@ describe('sync', () => {
     expect(g.posts).toHaveLength(0)
   })
 
+  it('keeps a draft PR a draft when it is closed and reopened', async () => {
+    const { board, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const sender = { id: 42, login: 'julianbenegas' }
+    const pr = { number: 39, title: 'Spike', html_url: 'https://github.com/basehub-ai/vboard/pull/39', draft: true }
+    const send = (action: string, extra = {}) =>
+      webhook('github', { action, repository, sender, pull_request: { ...pr, ...extra } }, { 'x-github-event': 'pull_request', 'x-github-delivery': `draft-${action}` })
+    await send('opened')
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.labels.state).toBe('draft'))
+    await send('closed', { merged: false })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.labels.state).toBe('closed'))
+    await send('reopened')
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.labels.state).toBe('draft'))
+  })
+
   it.each([
     { name: 'PR', key: 'pull_request', event: 'pull_request' },
     { name: 'issue', key: 'issue', event: 'issues' },
@@ -644,6 +655,67 @@ describe('sync', () => {
     expect(posted).toContain('**▲ Vercel**\n- ⏳ **[vboard-factory](https://vercel.com/vercel-internal-playground/vboard-factory)** · [Building]')
     expect(posted).not.toContain('[vc]:')
     expect(posted).not.toContain('| Project |')
+  })
+
+  it('keeps a reply imported with `noSync` on the board, and still delivers the rest of its thread', async () => {
+    const { board, s, webhook } = setup({
+      githubClient: { rest: { pulls: { get: vi.fn() } } },
+      repos: {
+        // Inline review threads stay on GitHub and the board.
+        'basehub-ai/vboard': { channel: 'prs', run: async ({ event, board }) => void (await board.sync('prs', event, { noSync: event.subthread !== null })) },
+      },
+    })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'basehub-ai/vboard' }
+    const pr = { number: 40, title: 'Review me', html_url: 'https://github.com/basehub-ai/vboard/pull/40' }
+    await webhook('github', { action: 'opened', repository, sender: { id: 42, login: 'julianbenegas' }, pull_request: pr }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'rv-opened' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:40:rc:9', id: 'rc1', text: 'Fixed in abc123', user: '43', raw: { path: 'src/a.ts', line: 3 } })
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:40', id: 'c1', text: 'Ready for another look', user: '43' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(3))
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    const [, inline, top] = await read(julian, 'prs')
+    expect(inline).toMatchObject({ text: 'Fixed in abc123', noSync: true })
+    expect(top).toMatchObject({ text: 'Ready for another look', noSync: false })
+    expect(JSON.parse(s.posts[0]!.text).markdown).toContain('Ready for another look')
+
+    // A backfill leaves it out too.
+    await julian('POST', `/messages/${(await read(julian, 'prs'))[0]!.id}/sync`, { target: 'slack:C1' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
+    await vi.waitFor(() => expect(s.posts).toHaveLength(2))
+    expect(s.posts.map((p) => p.text).join('\n')).not.toContain('Fixed in abc123')
+  })
+
+  it("keeps a PR's `noSync` lifecycle reply on the board, and still re-renders its root in Slack", async () => {
+    const { board, s, webhook } = setup({
+      githubClient: { rest: { pulls: { get: vi.fn() } } },
+      slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}`,
+      repos: {
+        'basehub-ai/vboard': {
+          channel: 'prs',
+          run: async ({ event, board }) =>
+            void (await board.sync('prs', event, { noSync: event.type === 'pr.closed' && event.labels?.state === 'closed' })),
+        },
+      },
+    })
+    const julian = caller(board.fetch, await personToken())
+    const pr = (action: string, merged = false) => ({
+      action, repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' },
+      pull_request: { number: 44, title: 'Stale', html_url: 'https://github.com/basehub-ai/vboard/pull/44', draft: false, merged },
+    })
+    const send = (action: string, delivery: string, merged = false) =>
+      webhook('github', pr(action, merged), { 'x-github-event': 'pull_request', 'x-github-delivery': delivery })
+    await send('opened', 'q-opened')
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+
+    await send('closed', 'q-closed')
+    await vi.waitFor(() => expect(s.edits.map((e) => e.text)).toEqual([expect.stringContaining('[closed] PR #44')]))
+    const [, closed] = await read(julian, 'prs')
+    expect(closed).toMatchObject({ text: 'closed by julianbenegas', noSync: true })
+
+    await send('reopened', 'q-reopened')
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toEqual([expect.stringContaining('reopened by julianbenegas')]))
+    expect(s.posts.map((p) => p.text).join('\n')).not.toContain('closed by')
   })
 
   it.each([

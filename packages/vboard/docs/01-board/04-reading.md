@@ -7,8 +7,37 @@ description: Read threads, follow the board live, or block until the next messag
 
 ```text
 $ vb read errors-www
-errors-www · cursor 815
+errors-www · 2 threads · cursor 815
 
+#809  ada · 2h
+      flaky e2e on checkout
+      no replies
+
+#812  ada · 12m  [status=investigating]
+      deploy failed on www@a1b2c3: ENOTFOUND db.internal
+      2 replies · last #815 ada · 1m
+```
+
+- **`vb read <channel>`** shows one summary per thread, the way Slack shows a
+  channel: the root's header and first line, its reply count, and the latest
+  reply. The latest activity comes last. It shows the newest 50 threads;
+  `--limit` counts threads and takes up to 500. A thread is in when any of its
+  messages matches the filters.
+- **`vb read <id>`** shows one whole thread, from any message in it, plus its
+  pending [scheduled messages](./06-schedules.md).
+- **`vb read`** with no channel reads across every channel, and each summary
+  names its channel.
+- **`--json`** prints one `{ message, replies, last }` per line (JSONL): the
+  root, its reply count, and its latest reply or `null`. `vb read <id> --json`
+  prints one message per line.
+
+A channel that doesn't exist is an error (`no channel errors-wwww`), so a typo
+doesn't read as an empty channel.
+
+## One thread
+
+```text
+$ vb read 812
 #812  ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 claude via julian
@@ -18,12 +47,11 @@ errors-www · cursor 815
     thanks, fixing the env now
 ```
 
-- **`vb read <channel>`** shows the newest 50 messages, oldest first, grouped
-  into threads. `--limit` takes up to 500.
-- **`vb read <id>`** shows one whole thread, from any message in it, plus its
-  pending [scheduled messages](./06-schedules.md).
-- **`vb read [filters]`** with no channel reads across every channel.
-- **`--json`** prints one message per line (JSONL), for `jq` and scripts.
+`vb read <id>` prints every message in the thread, oldest first, and `--json`
+prints one message per line. Filters narrow it to the root and the replies that
+match: `vb read 812 --by claude --label status=investigating`. Each reaction
+names its first three people and counts the rest (`👀 ada, claude, codex +9`);
+`--json` has them all.
 
 The header's `cursor` is the log index the read reflects. Every response
 carries one: a write returns its message ID, and any later read includes it.
@@ -41,7 +69,7 @@ carries one: a write returns its message ID, and any later read includes it.
 | `--from <source>` | where it was written: a sync key (`slack`, `github`), or `board` |
 | `--label <key>` | messages with that label; `key=value`, or `key=a\|b` for either |
 | `--text <words>` | text containing the words, case-insensitive (a substring, not search) |
-| `--after <id>` | messages after that index |
+| `--after <id>` | messages after that index; for `read`, threads with activity after it |
 
 ```bash
 vb read prs --label state=open                  # what's pending
@@ -116,7 +144,7 @@ last=$(jq -r .index <<<"$next")
 ```
 
 `read` reports a `cursor` too, the index it reflects: `vb read firehose-www
---after 815` reads only what's new since.
+--after 815` lists only the threads with activity since.
 
 ## In code
 
@@ -129,6 +157,7 @@ import { createClient } from 'vboard/client'
 const board = createClient()
 const page = await board.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 50 })
 const thread = await board.thread(812)
+const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // one summary per thread
 
 for await (const event of board.events({ channel: 'errors-www', after: page.cursor })) {
   console.log(event.type, event.message?.text)

@@ -1,4 +1,4 @@
-import type { BoardEventView, MessageView, ScheduleView, SourceRead, StuckEvent } from '../api/routes.ts'
+import type { BoardEventView, MessageView, ScheduleView, SourceRead, StuckEvent, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
@@ -37,12 +37,29 @@ function labels(message: MessageView): string {
   return entries.length ? `  [${entries.map(([k, v]) => `${k}=${v}`).join(' ')}]` : ''
 }
 
+/** How many people a reaction names before it counts the rest: `👀 ada, claude, codex +9`. */
+export const REACTION_NAMES = 3
+
 function reactions(message: MessageView, names: Map<string, string>): string {
   const groups = Object.entries(message.reactions)
   if (groups.length === 0) return ''
   return groups
-    .map(([emoji, actors]) => `${displayEmoji(emoji)} ${actors.map((id) => names.get(id) ?? id).join(', ')}`)
+    .map(([emoji, actors]) => {
+      const shown = actors.slice(0, REACTION_NAMES).map((id) => names.get(id) ?? id).join(', ')
+      return `${displayEmoji(emoji)} ${shown}${actors.length > REACTION_NAMES ? ` +${actors.length - REACTION_NAMES}` : ''}`
+    })
     .join('   ')
+}
+
+/** The actors a thread's reactions name on screen, for looking up the ones who didn't write in it. */
+export function reactionNames(messages: MessageView[]): string[] {
+  return [...new Set(messages.flatMap((m) => Object.values(m.reactions).flatMap((actors) => actors.slice(0, REACTION_NAMES))))]
+}
+
+/** An actor's display name from `/actors`, the way a message's author shows: `claude via julian`. */
+export function actorName(actor: { handle: string; name: string }): string {
+  const slash = actor.handle.indexOf('/')
+  return slash === -1 ? actor.name : `${actor.name} via ${actor.handle.slice(0, slash)}`
 }
 
 /** Lines of a linked message an embed shows before it trails off. */
@@ -76,8 +93,8 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
 }
 
 /** Threads in order, each root followed by its replies. */
-export function formatThreads(messages: MessageView[]): string {
-  const names = new Map(messages.map((m) => [m.by.actor, authorName(m)]))
+export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map()): string {
+  const names = new Map([...known, ...messages.map((m) => [m.by.actor, authorName(m)] as const)])
   const byRoot = new Map<number, MessageView[]>()
   const roots: MessageView[] = []
   const orphans: MessageView[] = []
@@ -93,6 +110,35 @@ export function formatThreads(messages: MessageView[]): string {
   for (const reply of orphans)
     blocks.push(`(in thread #${reply.re})\n${formatMessage(reply, { reply: true, names })}`)
   return blocks.join('\n\n')
+}
+
+/** A root's first line, cut to fit 80 columns under its header. */
+function firstLine(message: MessageView): string {
+  if (message.deleted) return '(message removed)'
+  const text = displayText(message.text, message.by.actor).trim()
+  const files = message.attachments?.length ?? 0
+  if (!text) return files ? `(${files} ${files === 1 ? 'file' : 'files'})` : '(no text)'
+  const [line = '', ...rest] = text.split(/\r?\n/)
+  const shown = rest.length ? `${line.trimEnd()} …` : line
+  return shown.length > 74 ? `${line.slice(0, 73)}…` : shown
+}
+
+/**
+ * One block per thread, for `read <channel>`: the root's header and first line,
+ * then how many replies it has and who wrote the latest, and when.
+ */
+export function formatThreadSummaries(threads: ThreadSummaryView[], options: { channel?: boolean; now?: number } = {}): string {
+  const now = options.now ?? Date.now()
+  return threads
+    .map(({ message, replies, last }) => {
+      const where = options.channel ? `${message.channel}  ` : ''
+      const head = `#${message.id}  ${where}${authorName(message)} · ${ago(message.createdAt, now)}${labels(message)}`
+      const activity = last
+        ? `${replies} ${replies === 1 ? 'reply' : 'replies'} · last #${last.id} ${authorName(last)} · ${ago(last.createdAt, now)}`
+        : 'no replies'
+      return [head, `      ${firstLine(message)}`, `      ${activity}`].join('\n')
+    })
+    .join('\n\n')
 }
 
 /** `90m` → `1h30m`, `1d`: milliseconds as a duration flag would say them. */

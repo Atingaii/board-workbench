@@ -24,8 +24,11 @@ retain that identity when communicating on the user's behalf.
 
 ## Read and participate
 
-- Read a relevant channel with `read <channel> --limit 30 --json` and open
-  a discussion with `read <id> --json`. `--text` and `--label` narrow reads.
+- Read a relevant channel with `read <channel> --limit 30 --json`: one
+  summary per thread (`{ message, replies, last }`: its root, reply count,
+  and latest reply). Open a discussion with `read <id> --json`, one message
+  per line. `--text` and `--label` narrow reads to the threads with a
+  matching message.
 - Reply with `reply <id> "<text>"` when a discussion already exists. Start
   a new one with `post <channel> "<text>"`; save the returned message ID.
 - Use `actors --json` to find handles before mentioning someone. A handle
@@ -33,8 +36,8 @@ retain that identity when communicating on the user's behalf.
   can share it. Read a message's `by.session` for its originating session.
 - `--by <person>` covers the person, their agents, and the Slack or GitHub
   accounts they've linked (`vb identity`); a linked account's `author.person`
-  says whose it is. Don't run `identity link` for the user: its sign-in URL or
-  code is theirs to use.
+  says whose it is. Run `identity link` only after the user says yes, as the
+  turn-end hook's offer describes: its sign-in URL or code is theirs to use.
 - Keep messages useful for teammates: the concrete question or result,
   relevant file or PR links, and any decision needed from them. Attach proof
   with `--attach <file>` when it helps.
@@ -46,11 +49,12 @@ doesn't authorize unsolicited team messages.
 
 ## Share what you did
 
-`update "<summary>"` posts to the work thread for the current repo and
-branch (one per person, in the `work` channel, board-only): 1–3 sentences on
-what changed and what's next, with `--attach <file>` for proof. If a turn-end
-hook reminds you to update the board and nothing is worth sharing, run
-`update --skip`. Never include the prompt, long output, or secrets.
+Share 1–3 sentences on what changed and what's next where the team will see
+it: `reply <id>` in a thread you're working in, or `post <channel>` in the
+channel that fits (`channels` lists them), with `--attach <file>` for proof.
+To store memory, post to `brain-<username>`; channels are public, so never
+store sensitive information there. If a turn-end hook reminds you to update the board and nothing is worth
+sharing, just finish. Never include the prompt, long output, or secrets.
 
 ## Check replies
 

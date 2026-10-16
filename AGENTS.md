@@ -20,7 +20,9 @@ runs real `jose` verification against an injected JWKS; there is no bypass.
 
 ## release it
 
-A change people will notice gets a changeset (`pnpm changeset`). On `main`,
+A change people will notice gets a changeset (`pnpm changeset`), and its PR
+description leads with it and shows it working: see the pr-description skill
+(`.claude/skills/pr-description`, and the factory's copy for Pi). On `main`,
 `.github/workflows/release.yml` opens a "Version Packages" PR; merging it
 publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from
@@ -43,6 +45,12 @@ pnpm dev                                       # the board at /api/board
 VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
+This repo's board is the factory. `.vboard/` is gitignored, so each checkout
+links itself: `vb whoami` says "no board URL" until you run
+`vb link https://vboard-factory.playground-vercel.tools/api/board` at the
+root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
+reply in an existing thread rather than starting one.
+
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
@@ -50,11 +58,9 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   (`vboard-2`). Both are new with A2 0.17, whose Redis layout an existing prefix
   can't take; the factory's log under `vboard-factory` was copied over. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
-  and the GitHub connector named by `FACTORY_GITHUB_CONNECTOR` (`github/<name>`),
-  with production triggers at `/api/board/webhooks/slack` and
-  `/api/board/webhooks/github`. Without that variable the board syncs Slack
-  alone and Pi works without GitHub: a GitHub App on vercel-labs needs an org
-  owner to install it (ask IT in #help-it). The app's bot (its login and commit
+  and `github/vboard-factory`, with production triggers at
+  `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
+  app's bot (its login and commit
   email) comes from GraphQL's `viewer` for its token, so nothing pins its name.
 - Watchers do the work. `triage-gpt` labels each non-PR dev thread's `kind` with
   GPT-6 Luna's decision model (`openai/gpt-6-luna-decisions`),
@@ -71,7 +77,10 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
   `review-pi` hands each new `dev --label pr` thread to Pi to review the PR (Pi wears `:looking-bunny:` on the PR root while it reviews), and tells it when
-  someone other than a bot replies. Pi hears every reply in its threads but stays quiet when one is
+  someone other than a bot replies. A draft waits until it's ready (`review.ts`): Pi
+  reviews it once, when its root's `state` turns from `draft` to `open`, and until then
+  only a reply that names Pi (`pi`, `@pi`, or the thread's Pi), or a reminder Pi
+  scheduled, wakes it. Pi hears every reply in its threads but stays quiet when one is
   addressed to someone else, and keeps board replies to a few lines; a review's detail
   goes in a GitHub review on the code. Review is its initial task; people can redirect
   Pi in the thread to fix, push, approve, mark ready, merge, or close the PR.
@@ -123,8 +132,14 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
   every message. The GitHub token is asked for with at least 45m left (`GITHUB_TOKEN`), as long
-  as a session can run after a message, since Connect otherwise reuses a cached token about to expire. The policy also pins who Pi is on the board (a profile named for the
-  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else. Its `vb` talks to the production board, the only one a sandbox
+  as a session can run after a message, since Connect otherwise reuses a cached token about to expire.
+  The OIDC tokens (AI Gateway's, and the board's exchanged from it) can't be asked for that: they die
+  with the function's own, which Vercel reuses for 90 of its 120 minutes, so one can have 30m left.
+  When they'd die before the session ends, an A2 timer (`tokens.ts`, on the board's queue) puts new
+  ones in the policy 15m before they do. The policy also pins who Pi is on the board (a profile named for the
+  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else.
+  Anyone who can write can send those headers, so `byPi` also needs the factory's production deployment as the
+  principal (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Pi's policy adds). Its `vb` talks to the production board, the only one a sandbox
   can reach.
 - Pi's git needs no token of ours: Sandbox git credentials (a private beta;
   `vercel-sandbox-git-credentials` and `vercel-sandbox-signed-commits` are
@@ -135,9 +150,10 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   `vercel[bot]` with Pi's name as co-author. It takes 6 vCPUs (smaller sandboxes
   come from a warm pool without the helper), a branch pushed by name that tracks
   `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
-  without a connector Pi has no `gh`: a push to `pi/**` has
-  `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
-  branch's first commit, and Pi finds its number by fetching `refs/pull/*/head`.
+  Pi's `gh` goes through `github/vboard-factory`: the sandbox's network policy
+  adds the app's token to requests to `api.github.com`. A push to `pi/**` also
+  has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
+  branch's first commit if it has none yet.
   `check` also runs on `pi/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
@@ -151,7 +167,15 @@ VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb
   limit sandboxes share.
 - Pi's sandbox also gets the factory's own skills and extensions, from
   `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
-  every turn (add a new file to `PI_FILES` in `agent.ts`). The `computer`
+  every turn (add a new file to `PI_FILES` in `agent.ts`). `sitrep` is how Pi
+  does a recap that moves work forward. A schedule like `vb schedule dev
+  ":sitrep: Morning recap" --label kind=task --label sitrep=morning` posts a
+  bare root that a fresh Pi picks up, so the schedule text stays a title and
+  the skill holds the how. A run finds the last recap by its `sitrep` label. `verify-vboard`
+  tests vboard itself: it builds this checkout, a git ref in its own worktree
+  (`origin/main`, to reproduce a bug before fixing it), or an npm version,
+  serves a local board with `vb serve`, and runs each `vb` with only `PATH`
+  and a home of its own, so nothing reaches the factory's board. The `computer`
   extension is computer use, done the way Codex does it: one tool, sequential,
   that does one action on a virtual desktop (Xvfb) per call, with the mouse and
   keyboard through XTEST (`xinput.py`, using ctypes because the sandbox has no
@@ -316,6 +340,13 @@ through `createClient`. Request schemas live in `src/api/routes.ts` and are
 shared by the server and the client.
 
 ## invariants
+
+- **No pre-AGI mechanisms.** Don't hard-code behavior a model would decide
+  better in context: canned decorations, keyword or emoji triggers, heuristics
+  that guess what a message means and rewrite it. Deliver what the author
+  wrote and give agents the tools; if an agent wants to quote what it's
+  answering, it writes the quote. (That's why replies sync without an
+  automatic quote line.)
 
 - **One log.** Every board fact is an event in A2 session `board`. Views are
   reducers in `src/contract/reducers.ts`. Bookkeeping that people don't read

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -14,22 +13,25 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { formatEvent, formatSchedule, formatSourceRead, formatStuck, formatThreads, who } from './format.ts'
+import { actorName, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
   allowRules,
+  claimLinkOffer,
   cliOf,
   codexNetwork,
   decideStop,
   disallow,
   installedHook,
   installHook,
+  legacyRules,
+  linkOffer,
   markPosted,
   reminder,
+  stopOutput,
   tilde,
   uninstallHook,
-  workOf,
   type HookAgent,
 } from './hooks.ts'
 
@@ -47,10 +49,12 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   identity link <key> [--code] [--no-wait] link your account on sync entry <key> (e.g. slack): sign in, or post a code from it
   identity unlink <account>                unlink one, by handle or actor ID
 
-  read <channel> [filters] [--limit N]     threads in a channel, newest last (no channel: every channel)
-  read <id>                                one thread
+  read [channel] [filters] [--limit N]     the latest threads, one each: root, replies, latest reply
+                                           (no channel: every channel)
+  read <id>                                one thread, every message (filters: the root and the replies that match)
 
-  post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+  post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+                                           a new thread in a channel, or with an id, a reply in its thread
   reply <id> ["<text>"] [--attach <file>]... [--id <key>] [--no-sync]
   schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N]
            [--label k=v]... [--attach <file>]... [--no-sync]
@@ -75,7 +79,6 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            e.g. sources slack read '#general', or a Slack permalink (full access only)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
 
-  update ["<text>"] [--attach <file>]...   post a summary to this branch's work thread (channel \`work\`); --skip if there's none
   hooks [install|uninstall|status] [claude|codex|cursor|pi]...
                                            after a turn that didn't update the board, remind the agent to (linked projects only)
 
@@ -91,6 +94,7 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
 global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
+json:     one object per line (JSONL): { message, replies, last } for read <channel>, a message for read <id>
 text:     pass "-" to read it from stdin; it may be left out when you --attach
 env:      VBOARD_URL  VBOARD_TOKEN  VBOARD_AS  VBOARD_AVATAR  VBOARD_HANDLE`
 
@@ -116,7 +120,6 @@ const parsed = (() => {
         'no-sync': { type: 'boolean' },
         sync: { type: 'string', multiple: true },
         attach: { type: 'string', multiple: true },
-        skip: { type: 'boolean' },
         channel: { type: 'string' },
         agent: { type: 'string' },
         remove: { type: 'boolean' },
@@ -306,46 +309,6 @@ function cliCommand(): { command: string; note?: string } {
   }
 }
 
-/**
- * One thread per person, repo, and branch, in `work` (or `--channel`): every
- * agent's updates on a branch land together. Created on first use; board-only.
- */
-async function postUpdate(board: ReturnType<typeof client>, content: string, files: Attachment[] = []) {
-  const channel = flags.channel ?? 'work'
-  const work = workOf(process.cwd())
-  const me = await board.me()
-  // The label matches replies too, so a busy branch can push the root past one page: page back to it.
-  const find = async () => {
-    let before: number | undefined
-    for (let page = 0; page < 20; page++) {
-      const { messages } = await board.messages({ channel, label: { work: work.key }, limit: 500, ...(before ? { before } : {}) })
-      const root = messages.filter((m) => m.re === null && !m.deleted && m.by.principal === me.principal).at(-1)
-      if (root || messages.length < 500) return root
-      before = messages[0]!.id
-    }
-    return undefined
-  }
-  const create = () =>
-    board.post(channel, {
-      text: `**${work.repo}** · \`${work.branch}\``,
-      labels: { work: work.key, repo: work.repo, branch: work.branch },
-      noSync: true,
-      // One root per person and branch: a second agent creating it at the same moment gets a conflict, not a twin.
-      // Hashed, since ids are at most 200 characters and a principal and branch can be longer.
-      id: `work:${createHash('sha256').update(`${me.principal}\n${work.key}`).digest('base64url')}`,
-    })
-  let root = await find()
-  if (!root)
-    try {
-      root = await create()
-    } catch (error) {
-      if (!(error instanceof BoardError && error.code === 'duplicate_id')) throw error
-      root = await find()
-    }
-  if (!root || root.deleted) throw new BoardError('no_work_thread', `couldn't find or start the work thread for ${work.key}`, 0)
-  return board.reply(root.id, { text: content, noSync: true, ...(files.length ? { attachments: files } : {}) })
-}
-
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = []
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
@@ -357,6 +320,15 @@ function hookAgents(names: string[]): HookAgent[] {
   for (const name of names)
     if (!known.includes(name as HookAgent)) throw new UsageError(`unknown agent: ${name} (known: ${known.join(', ')})`)
   return names.length ? (names as HookAgent[]) : known
+}
+
+/** A write went through, but some handles in it matched no one: they stayed plain text. */
+function warnUnknownMentions(handles: string[] | undefined) {
+  if (!handles?.length) return
+  const names = handles.map((handle) => `@${handle}`)
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  const one = names.length === 1
+  process.stderr.write(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one\n`)
 }
 
 function printMessage(message: MessageView) {
@@ -419,8 +391,9 @@ async function identity(args: string[]): Promise<number> {
   if (sub === undefined) {
     const view = await board.identity()
     if (flags.json) return printJson(view), 0
-    if (view.links.length === 0) return out('no linked accounts: `vb identity link <key>` links one, where <key> is a sync entry such as slack or github'), 0
+    if (view.links.length === 0) out('no linked accounts')
     for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
+    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (vb identity link <key>)`)
     return 0
   }
   if (sub === 'unlink') {
@@ -537,42 +510,63 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'read': {
       const target = args[0]
-      const filtering = !!(flags.re || flags.by || flags.from || flags.text || flags.mentions || flags.label?.length)
-      if (!target && !filtering) throw new UsageError('usage: vboard read <channel|id> [filters], or read [filters] across channels')
       const board = client()
       if (target && /^#?\d+$/.test(target)) {
         const thread = await board.thread(messageId(target))
-        if (flags.json) return [thread.message, ...thread.replies].forEach(printJson), 0
-        out(formatThreads([thread.message, ...thread.replies]))
-        for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
+        // With filters, the root and only the replies that match them.
+        const narrowed = Object.keys(filters()).length > 0
+        const replies = narrowed
+          ? (await board.messages({ ...filters(), re: thread.message.id, limit: 500 })).messages.filter((m) => m.re !== null)
+          : thread.replies
+        if (flags.json) return [thread.message, ...replies].forEach(printJson), 0
+        // Reactions name people who may not have written here: look up the ones that show.
+        const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
+        const unnamed = reactionNames([thread.message, ...replies]).filter((id) => !authors.has(id))
+        const known = unnamed.length
+          ? new Map((await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, actorName(a)]))
+          : new Map<string, string>()
+        out(formatThreads([thread.message, ...replies], known))
+        if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
         return 0
       }
-      const page = await board.messages({
-        ...filters(target),
-        ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+      const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
+      // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
+      const old = new Error("this board can't list threads: update vboard where the board is deployed")
+      const page = await board.threads(query).catch((error: unknown) => {
+        throw error instanceof BoardError && error.status === 404 ? old : error
       })
-      if (flags.json) return page.messages.forEach(printJson), 0
-      out(`${target ?? 'all channels'} · cursor ${page.cursor}\n`)
-      out(page.messages.length ? formatThreads(page.messages) : 'no messages')
+      if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
+      // Nothing in a channel that doesn't exist is a typo, not an empty channel.
+      if (!page.threads.length && target && !(await board.channels()).some((c) => c.path === target || c.path.startsWith(target.replace(/\/?$/, '/'))))
+        throw new Error(`no channel ${target}: vboard channels lists them`)
+      if (flags.json) return page.threads.forEach(printJson), 0
+      const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
+      out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
+      if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
       return 0
     }
 
     case 'post': {
-      const [channel, body] = args
-      if (!channel) throw new UsageError('usage: vboard post <channel> "<text>"')
+      const [target, body] = args
+      if (!target) throw new UsageError('usage: vboard post <channel|id> "<text>"')
+      const re = /^#?\d+$/.test(target) ? messageId(target) : undefined
+      if (re !== undefined && flags.sync?.length) throw new UsageError('--sync attaches whole threads: post to a channel, or use vb sync <id> <target>')
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
       const files = await attachments(board)
-      const message = await board.post(channel, {
+      const options = {
         text: content,
         ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags.id ? { id: flags.id } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
-        ...(flags.sync?.length ? { sync: flags.sync } : {}),
-      })
+      }
+      const message = re === undefined
+        ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
+        : await board.reply(re, options)
       wrote()
+      warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
     }
@@ -589,6 +583,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags['no-sync'] ? { noSync: true } : {}),
       })
       wrote()
+      warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
     }
@@ -623,6 +618,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(times !== undefined ? { times } : {}),
       })
       wrote()
+      warnUnknownMentions(schedule.unknownMentions)
       if (flags.json) printJson(schedule)
       else out(formatSchedule(schedule))
       return 0
@@ -641,19 +637,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'update': {
-      if (flags.skip) {
-        wrote()
-        out('skipped: nothing to share this turn')
-        return 0
-      }
-      const board = client()
-      const content = args[0] === undefined && flags.attach?.length ? '' : await text(args[0])
-      const message = await postUpdate(board, content, await attachments(board))
-      wrote()
-      printMessage(message)
-      return 0
-    }
+    case 'update':
+      throw new UsageError('`vb update` is gone: reply in the thread you\'re working in (vb reply <id>), or post where it fits (vb post <channel>)')
 
     case 'hooks': {
       const [action = 'status', ...names] = args
@@ -670,8 +655,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (action === 'uninstall') {
         for (const agent of agents) {
           const installed = installedHook(agent)
-          const rules = installed ? allowRules(agent, cliOf(installed)) : null
-          if (rules) disallow(rules.file, rules.rules)
+          const cli = installed ? cliOf(installed) : null
+          const rules = cli ? allowRules(agent, cli) : null
+          if (rules) disallow(rules.file, [...rules.rules, ...legacyRules(agent, cli!)])
           row(agent, uninstallHook(agent) ? 'removed' : 'not installed', installed ? tilde(AGENTS[agent].file()) : '')
         }
         return 0
@@ -680,13 +666,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const { command: cli, note } = cliCommand()
       // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
-        const changed = installHook(agent, cli, flags.channel ? ` --channel ${flags.channel}` : '')
+        const changed = installHook(agent, cli)
         out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
         out(`  ${changed ? 'added the turn-end hook' : 'already installed'}`)
-        // The reminder asks for `vb update`, `vb reply`, and `vb read`: no permission prompt for each.
+        // The reminder asks for `vb reply`, `vb post`, `vb read`, and `vb channels`: no permission prompt for each.
         const rules = allowRules(agent, cli)
         const added = rules ? allow(rules.file, rules.rules) : []
-        if (added.length > 0) out(`  ${agent === 'claude' ? 'update, reply, and read run without asking' : 'vb runs without asking'}`)
+        if (rules) disallow(rules.file, legacyRules(agent, cli))
+        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
         if (agent === 'cursor' && !rules) out('  npm i -g vboard lets Cursor run vb without asking')
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
@@ -728,19 +715,23 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const cwd = payload.cwd ?? payload.workspace_roots?.[0]
         if (cwd && existsSync(cwd)) process.chdir(cwd)
         const session = turnKey(agent, agent === 'cursor' ? null : (payload.session_id ?? null))
-        if (!session || !(process.env.VBOARD_URL || projectUrl())) return 0
+        const boardUrl = process.env.VBOARD_URL || projectUrl()
+        if (!session || !boardUrl) return 0
         if (payload.status && payload.status !== 'completed') return 0
         const continuing = payload.stop_hook_active === true || (payload.loop_count ?? 0) > 0
         if (decideStop(session, continuing) === 'ask') {
-          const text = reminder(cliCommand().command, flags.channel ?? 'work')
-          printJson(agent === 'cursor' ? { followup_message: text } : { decision: 'block', reason: text })
+          const cli = cliCommand().command
+          // The first reminder on this board also offers, once, to link the person's accounts.
+          const text = claimLinkOffer(boardUrl) ? `${reminder(cli)}\n\n${linkOffer(cli)}` : reminder(cli)
+          printJson(stopOutput(agent, text))
         }
       } catch {}
       return 0
     }
 
     case 'edit': {
-      await client().edit(messageId(args[0]), await text(args[1]))
+      const { unknownMentions } = await client().edit(messageId(args[0]), await text(args[1]))
+      warnUnknownMentions(unknownMentions)
       return 0
     }
 
@@ -960,7 +951,7 @@ if (parsed === null) {
 /**
  * Exits once stdout and stderr have flushed. On a pipe, writes can still be
  * queued when a command returns, and `process.exit` would drop them: a long
- * `read --json` would reach a slow reader cut off.
+ * `read <id> --json` would reach a slow reader cut off.
  */
 function exit(code: number) {
   let pending = 2

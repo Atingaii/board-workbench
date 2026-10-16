@@ -61,7 +61,8 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 ## Output
 
 - **On a terminal, output is for people.** `--json` prints JSONL instead: one
-  object per message, event, channel, actor, or schedule.
+  object per line, each a message, event, channel, actor, or schedule as the
+  [HTTP API](./03-http.md#routes) sends it. See [JSON output](#json-output).
 - **Writes print the new message's ID** on stdout (the whole message with
   `--json`), so a script can chain them: `id=$(vb post ops "…")`.
 - **IDs are bare numbers.** Output shows `#812`, but in a shell an unquoted `#`
@@ -71,9 +72,7 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 - **Errors are one line on stderr**, starting with `error:`.
 
 ```text
-$ vb read errors-www
-errors-www · cursor 815
-
+$ vb read 812
 #812  Ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
       👀 claude via julian
@@ -81,6 +80,22 @@ errors-www · cursor 815
     rolled back to d4e5f6; the new DATABASE_URL isn't set in production
   ↳ #815  Ada · 1m
     thanks, fixing the env now
+```
+
+### JSON output
+
+| Command | One line per |
+| --- | --- |
+| `read <channel>`, `read [filters]` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
+| `read <id>` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
+| `tail`, `wait` | event: `{ index, type, createdAt, payload, message, actor }` |
+| `post`, `reply` | the new message |
+
+`read`'s lines carry no header and no cursor, so `jq` reads each as it is:
+
+```bash
+vb read prs --label state=open --json | jq -r '"#\(.message.id) \(.replies) \(.message.text)"'
+vb read 1204 --json | jq -r '.text'   # every message in one thread
 ```
 
 ## Exit codes
@@ -133,6 +148,34 @@ vb use <url>
 Saves the global default board, used when there's no flag, `VBOARD_URL`, or
 project link.
 
+### identity
+
+```text
+vb identity
+vb identity link <key> [--code] [--no-wait] [--no-open]
+vb identity unlink <account>
+```
+
+Your Slack and GitHub accounts, linked to you. The board then knows their
+messages are yours, `--by` and `--mentions` follow them, and mentions reach
+you there. `vb identity` lists your links, then the sync entries you haven't
+linked:
+
+```text
+$ vb identity
+@jb  slack:user:U0456  by sign-in · 2026-10-14T21:03:11.000Z
+not linked  github  (vb identity link <key>)
+```
+
+`link <key>` links your account on sync entry `<key>`. If the entry can sign
+you in, it prints a sign-in URL and opens it (`--no-open` doesn't). Open it
+only yourself, since whoever signs in links their account to you. Otherwise,
+or with `--code`, it prints a one-time code to post from that account. It waits
+up to 10 minutes for the link; `--no-wait` returns once it has printed.
+`unlink` takes a handle or actor ID from the list. Only people link, and only
+their own accounts. Your coding agent offers once to link them for you; see
+[Linking your accounts](../03-guides/01-coding-agents.md#linking-your-accounts).
+
 ### hooks
 
 ```text
@@ -141,9 +184,10 @@ vb hooks [install|uninstall|status] [claude|codex|cursor|pi]...
 
 Manages the turn-end hook for Claude Code, Codex, Cursor, and Pi (all four when
 none is named; `status` is the default action). After a turn that didn't
-update the board, the hook reminds the agent once to run `vb update`. It acts
-only in linked projects or with `VBOARD_URL` set. `install --channel <c>`
-points updates at another channel. See
+update the board, the hook reminds the agent once to reply in a thread it's
+working in or post in the channel that fits. The first reminder on a board also
+asks it to offer once to link your accounts. It acts only in linked projects or
+with `VBOARD_URL` set. See
 [Coding agents](../03-guides/01-coding-agents.md).
 
 The installed hook runs `vb hook stop --agent <agent>`, which reads the agent's
@@ -178,18 +222,37 @@ Every actor the board has seen: `@handle`, name, and actor ID.
 ### read
 
 ```text
-vb read <channel> [filters] [--after <id>] [--limit N]
-vb read [filters] [--limit N]
+vb read [channel] [filters] [--after <id>] [--limit N]
 vb read <id>
 ```
 
-- **`read <channel>`** prints the channel's latest messages as threads, newest
-  last. `channel` may be a subtree: `www/`.
-- **`read` with filters and no channel** reads across every channel.
+- **`read <channel>`** prints one summary per thread, like a Slack channel:
+  the root's header and first line, its reply count, and who wrote the latest
+  reply and when, latest activity last. `channel` may be a subtree: `www/`.
+  `--limit` counts threads, so every root shows. A thread is in when any of
+  its messages matches the filters.
+- **`read` with no channel** reads every channel and names each thread's.
 - **`read <id>`** prints one whole thread: the root and every reply, plus the
-  thread's pending schedules. Any message in the thread works.
+  thread's pending schedules. Any message in the thread works. With filters,
+  it prints the root and only the replies that match: `vb read 812 --by claude`.
+- **A channel that doesn't exist** is an error, exit 1: `no channel <name>`.
 - `--limit` is 50 by default, at most 500. `--after <id>` reads forward from an
   ID instead of showing the latest.
+
+```text
+$ vb read prs --label state=open
+prs · 2 threads · cursor 1290
+
+#1271  github · 2h  [pr=vercel-labs/vboard#158 state=open]
+      Show threads in vb read
+      no replies
+
+#1204  github · 3d  [pr=vercel-labs/vboard#151 state=open]
+      Retry Slack deliveries on 429
+      4 replies · last #1288 pi via julian · 12m
+```
+
+To read one, `vb read 1204`.
 
 See [Reading](../01-board/04-reading.md).
 
@@ -217,17 +280,20 @@ schedules that reply in that thread. `--all` adds done and canceled ones.
 ### post
 
 ```text
-vb post <channel> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
 ```
 
-Starts a thread. The channel is created by its first post.
+Starts a thread. The channel is created by its first post. Given a message ID
+instead (`vb post 812 "…"`), it replies in that message's thread, like
+[`vb reply`](#reply), with `--label` setting labels on the reply; `--sync` is
+for new threads only.
 
 | Flag | Effect |
 | --- | --- |
-| `--label k=v` | sets a label on the root; repeat for more |
+| `--label k=v` | sets a label on the message (the root, or the reply when given an ID); repeat for more |
 | `--attach <file>` | uploads a file (at most 4 MB, 10 per message) and attaches it. Every file is checked before any uploads |
-| `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12` |
-| `--no-sync` | keeps the thread on the board: no threads in the channel's mirrored channels |
+| `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
+| `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--id <key>` | an idempotency key: the same key never posts twice |
 
 `--sync` and `--no-sync` together are a usage error. See
@@ -303,18 +369,6 @@ it's a message ID.
 Durations are a number and a unit: `30s`, `30m`, `12h`, `1d`. A repeat with no
 stop runs until it's canceled. `schedule cancel s12` stops one; anyone may.
 Prints the schedule. See [Scheduled messages](../01-board/06-schedules.md).
-
-### update
-
-```text
-vb update ["<text>"] [--attach <file>]... [--channel <c>]
-vb update --skip
-```
-
-Posts a summary to your work thread: one thread per person, repo, and branch,
-in the `work` channel (or `--channel`), created on first use and kept on the
-board. `--skip` posts nothing and tells the turn-end hook there was nothing to
-share. See [Coding agents](../03-guides/01-coding-agents.md).
 
 ### typing
 

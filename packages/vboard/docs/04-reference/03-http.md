@@ -80,10 +80,12 @@ also need the message's author's principal.
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt }` |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
+| GET | `/identity` | Your linked accounts and the sync entries you haven't linked: `{ principal, links, unlinked, cursor }`. See [vb identity](./01-cli.md#identity) |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
+| GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
-| POST | `/messages` | Post or reply. Answers 201 `{ message }`. See [Posting](#posting) |
-| POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }` |
+| POST | `/messages` | Post or reply. Answers 201 `{ message }`, with `unknownMentions` when handles in it matched no one. See [Posting](#posting) |
+| POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }`, with `unknownMentions` like a post |
 | POST | `/messages/:id/delete` | `{}`. Answers `{ ok: true }` |
 | POST | `/messages/:id/reactions` | `{ emoji, remove? }`. `emoji` is a short name: `eyes`, `thumbs_up` |
 | POST | `/messages/:id/labels` | `{ set?, unset? }`, at least one |
@@ -91,7 +93,7 @@ also need the message's author's principal.
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the thread's synced platform threads. Answers `{ targets }`. Writes nothing to the log |
 | POST | `/attachments` | Upload one file. Answers 201 `{ attachment: { id, name, type, size } }`. See [Attachments](#attachments) |
 | GET | `/attachments/:id` | The file |
-| POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`. See [Schedules](#schedules) |
+| POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
@@ -121,7 +123,7 @@ message, so any later read already includes it.
 | `attachments` | attachment IDs from `POST /attachments`, at most 10 |
 | `sync` | external targets a new thread starts in or joins, at most 10 |
 | `noSync` | `true` keeps the message on the board |
-| `id` | an idempotency key, up to 200 characters |
+| `id` | an idempotency key, up to 200 characters. Not a UUIDv8: those are the board's own |
 
 A post needs `channel` and a reply needs `re`, never both. `sync` is for posts
 only, and contradicts `noSync`.
@@ -138,6 +140,20 @@ only, and contradicts `noSync`.
 
 Messages come oldest first. Filters are evaluated in memory over every
 message: there are no indexes.
+
+### Listing threads
+
+`GET /threads` takes the same [filters](#filters). A thread is in when any of
+its messages matches, and each comes as `{ message, replies, last }`: the root,
+its reply count, and its latest reply, or `null`. Deleted replies don't count.
+
+| Query | Effect |
+| --- | --- |
+| `after` | threads active after this index, the first `limit` of them |
+| `limit` | threads, 1 to 500, 50 by default. Without `after`, the latest `limit` |
+
+Threads come by latest activity (the latest reply, or the root when it has
+none), newest last.
 
 ### Attachments
 
@@ -277,7 +293,8 @@ Every failure is JSON with a matching status:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |
-| 400 | `unknown_mention`, `ambiguous_mention` | an `@handle` matches no actor, or several. The message lists the `@[actor-id]` forms to use |
+| 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use |
+| 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `no_blob_store` | an upload to a board with nowhere to keep files |
 | 400 | `platform_error` | a platform failed a source read |
@@ -286,7 +303,7 @@ Every failure is JSON with a matching status:
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 404 | `not_found` | no such route, or an inbox, source read, or webhook on a board without sync |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `channel_not_found` | no such thing |
-| 409 | `duplicate_id` | an `id` already used for a different write |
+| 409 | `duplicate_id` | an `id` already used for a different write, or by someone else |
 | 413 | `too_large` | an upload over 4 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
 | 500 | `internal` | anything else; the board logs it |

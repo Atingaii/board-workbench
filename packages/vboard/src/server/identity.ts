@@ -31,6 +31,17 @@ export async function ownProjectId(configured?: { id: string }): Promise<string 
 }
 
 /**
+ * The board's own team, from config, `VERCEL_ORG_ID`, or the linked project.
+ * On Vercel there's usually none of these, so verification falls back to the
+ * platform's token for the board's project.
+ */
+export async function ownTeamId(configured?: { teamId?: string }): Promise<string | null> {
+  if (configured?.teamId) return configured.teamId
+  if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
+  return (await readLinkedProject()).teamId
+}
+
+/**
  * The team, for discovery only: clients need it to mint tokens. The platform's
  * request token is decoded without trust, since a spoofed header can only
  * mislead the response it's attached to.

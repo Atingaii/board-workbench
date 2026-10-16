@@ -14,6 +14,7 @@ import {
   SourceReadQuery,
   LabelBody,
   MessagesQuery,
+  ThreadsQuery,
   PostBody,
   ReactBody,
   RedriveBody,
@@ -46,7 +47,7 @@ import { avatarSvg } from './avatars.ts'
 import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
 import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
-import { discoveryIdentity, ownProjectId } from './identity.ts'
+import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
 import { createSchedules } from './schedules.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
@@ -122,6 +123,7 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'message', pattern: /\/messages\/(\d+)$/ },
   { method: 'GET', name: 'messages', pattern: /\/messages$/ },
   { method: 'POST', name: 'post', pattern: /\/messages$/ },
+  { method: 'GET', name: 'threads', pattern: /\/threads$/ },
   { method: 'POST', name: 'cancelSchedule', pattern: /\/schedules\/s?(\d+)\/cancel$/ },
   { method: 'GET', name: 'schedules', pattern: /\/schedules$/ },
   { method: 'POST', name: 'schedule', pattern: /\/schedules$/ },
@@ -168,6 +170,12 @@ function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
 }
 
 const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
+
+/**
+ * `idempotentId`'s shape, a UUIDv8: the IDs the board derives for its own writes (schedule
+ * sends, watchers, sync). They're guessable, so an API caller can't post with one and take it first.
+ */
+const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
 
@@ -269,6 +277,7 @@ export function board(options: BoardOptions = {}) {
   }
   const verify = createVerifier({
     projectId: () => ownProjectId(options.project),
+    teamId: () => ownTeamId(options.project),
     trustedSources: options.trustedSources ?? [],
     ...(options.auth ? { auth: options.auth } : {}),
   })
@@ -278,7 +287,7 @@ export function board(options: BoardOptions = {}) {
     const header = request.headers.get('authorization') ?? ''
     const token = header.match(/^Bearer\s+(.+)$/i)?.[1]
     if (!token) throw unauthorized('missing bearer token')
-    return verify(token, boardUrl)
+    return verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
   }
 
   /** The sessions whose handlers run on lanes, so a dead letter there stops the rest of its lane. */
@@ -435,7 +444,10 @@ export function board(options: BoardOptions = {}) {
             method: state.links[id]!.method,
             at: state.links[id]!.at,
           }))
-          const body: IdentityView = { principal: principal.id, links, cursor: index }
+          const unlinked = Object.entries(options.sync ?? {})
+            .filter(([, entry]) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`)))
+            .map(([key]) => key)
+          const body: IdentityView = { principal: principal.id, links, unlinked, cursor: index }
           return json(body)
         }
         case 'identityLink': {
@@ -478,6 +490,28 @@ export function board(options: BoardOptions = {}) {
               : found.slice(-limit)
           return json({ messages: found.map((m) => view(m, actors)), cursor: index })
         }
+        case 'threads': {
+          const query = ThreadsQuery.parse(queryObject(url))
+          const [{ state, index }, { state: actors }] = await Promise.all([
+            session.state(messagesReducer),
+            session.state(actorsReducer),
+          ])
+          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
+          const roots = new Set<number>()
+          for (const message of Object.values(state.byId)) if (matches(message)) roots.add(message.re ?? message.id)
+          let found = [...roots].map((id) => {
+            const replies = (state.replies[id] ?? []).map((reply) => state.byId[reply]!).filter((reply) => !reply.deleted)
+            const last = replies.at(-1) ?? null
+            return { root: state.byId[id]!, replies: replies.length, last, at: last?.id ?? id }
+          })
+          found.sort((a, b) => a.at - b.at)
+          const limit = query.limit ?? 50
+          found = query.after !== undefined ? found.filter((t) => t.at > query.after!).slice(0, limit) : found.slice(-limit)
+          return json({
+            threads: found.map((t) => ({ message: view(t.root, actors), replies: t.replies, last: t.last && view(t.last, actors) })),
+            cursor: index,
+          })
+        }
         case 'message': {
           const [{ state, index }, { state: actors }] = await Promise.all([
             session.state(messagesReducer),
@@ -493,8 +527,10 @@ export function board(options: BoardOptions = {}) {
           require(principal, 'post')
           const body = PostBody.parse(await readJson(request))
           if (body.sync?.length) require(principal, 'sync')
+          if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
+            throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
-          const message = await writePost(writes, {
+          const { unknownMentions, ...message } = await writePost(writes, {
             attachments,
             identity,
             channel: body.channel,
@@ -506,13 +542,13 @@ export function board(options: BoardOptions = {}) {
             sync: body.sync,
             ...origin,
           })
-          return json({ message }, 201)
+          return json({ message, ...(unknownMentions ? { unknownMentions } : {}) }, 201)
         }
         case 'schedule': {
           require(principal, 'post')
           const body = ScheduleBody.parse(await readJson(request))
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
-          return json({ schedule: await schedules.create(identity, body, attachments) }, 201)
+          return json(await schedules.create(identity, body, attachments), 201)
         }
         case 'schedules': {
           const query = SchedulesQuery.parse(queryObject(url))
@@ -532,8 +568,8 @@ export function board(options: BoardOptions = {}) {
         case 'edit': {
           require(principal, 'post')
           const body = EditBody.parse(await readJson(request))
-          await writeEdit(writes, { identity, id: match.id!, text: body.text, ...origin })
-          return json({ ok: true })
+          const { unknownMentions } = await writeEdit(writes, { identity, id: match.id!, text: body.text, ...origin })
+          return json({ ok: true, ...(unknownMentions ? { unknownMentions } : {}) })
         }
         case 'delete': {
           require(principal, 'post')

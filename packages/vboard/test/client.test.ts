@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createClient } from '../src/client/index.ts'
 import { BOARD_URL, personToken, testBoard } from './harness.ts'
-import { detectAgent } from '../src/client/node.ts'
+import { createClient as createNodeClient, detectAgent } from '../src/client/node.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
   const board = testBoard()
@@ -21,6 +25,31 @@ describe('client', () => {
     expect(thread.message.labels).toEqual({ status: 'open' })
     expect(thread.replies.map((m) => m.text)).toEqual(['rolled back'])
     expect(thread.message.author).toMatchObject({ handle: 'julian' })
+  })
+
+  it('lists threads by latest activity, each with its root, reply count, and latest reply', async () => {
+    const { client } = await setup()
+    const old = await client.post('triage', { text: 'old bug', labels: { state: 'open' } })
+    const quiet = await client.post('triage', 'quiet question')
+    const busy = await client.post('triage', { text: 'busy bug', labels: { state: 'open' } })
+    let latest = 0
+    for (const n of [1, 2, 3]) latest = (await client.reply(busy.id, `busy ${n}`)).id
+    const gone = await client.reply(busy.id, 'oops')
+    await client.delete(gone.id)
+    const late = await client.reply(old.id, 'still broken')
+
+    const page = await client.threads({ channel: 'triage' })
+    expect(page.threads.map((t) => [t.message.id, t.replies, t.last?.id ?? null])).toEqual([
+      [quiet.id, 0, null],
+      [busy.id, 3, latest],
+      [old.id, 1, late.id],
+    ])
+    // `limit` counts threads, and a reply's activity keeps its thread's root in view.
+    expect((await client.threads({ channel: 'triage', limit: 1 })).threads.map((t) => t.message.text)).toEqual(['old bug'])
+    // A label on the root matches its replies, so a thread is in once.
+    expect((await client.threads({ channel: 'triage', label: { state: 'open' } })).threads.map((t) => t.message.id)).toEqual([busy.id, old.id])
+    expect((await client.threads({ channel: 'triage', after: late.id - 1 })).threads.map((t) => t.message.id)).toEqual([old.id])
+    expect((await client.threads({ text: 'busy 2' })).threads.map((t) => t.message.id)).toEqual([busy.id])
   })
 
   it('throws BoardError with the server code', async () => {
@@ -77,5 +106,83 @@ describe('agent detection', () => {
     expect(detectAgent({ AI_AGENT: 'OpenCode' })).toEqual({ profile: 'opencode', session: null })
     expect(detectAgent({ AI_AGENT: 'not a name!' })).toBeNull()
     expect(detectAgent({})).toBeNull()
+  })
+})
+
+describe('the audience a Node client mints for', () => {
+  const EVIL = 'https://evil.example/api/board'
+  const VICTIM = 'https://victim.example/api/board'
+  let config: string
+  beforeEach(async () => {
+    config = await mkdtemp(join(tmpdir(), 'vboard-audience-'))
+    for (const key of Object.keys(process.env))
+      if (/^(VBOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key)) vi.stubEnv(key, '')
+    vi.stubEnv('XDG_CONFIG_HOME', config)
+  })
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+    await rm(config, { recursive: true, force: true })
+  })
+
+  // A board at EVIL whose discovery claims `audience`, recording every bearer it's sent.
+  function board(audience: string) {
+    const bearers: string[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const bearer = request.headers.get('authorization')
+      if (bearer) bearers.push(bearer)
+      if (request.method === 'GET' && request.url === EVIL)
+        return Response.json({ version: '0', url: audience, audience, team_id: 'team_victim', project_id: 'prj_victim', sync: [] })
+      return Response.json({ channels: [] })
+    }) as typeof globalThis.fetch
+    return { fetch, bearers }
+  }
+  const against = (fetch: typeof globalThis.fetch) =>
+    createNodeClient({ url: EVIL, fetch, handle: null, profile: null, session: null, person: null })
+
+  // GitHub Actions, minting a token for whatever audience it's asked for.
+  function actions() {
+    const asked: string[] = []
+    vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_URL', 'https://actions.example/token')
+    vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'actions-request-token')
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const audience = new URL(String(input)).searchParams.get('audience')!
+      asked.push(audience)
+      return Response.json({ value: `token-for-${audience}` })
+    })
+    return asked
+  }
+
+  it('asks GitHub Actions for the URL it talks to', async () => {
+    const asked = actions()
+    const { fetch, bearers } = board(EVIL)
+    await against(fetch).channels()
+    expect(asked).toEqual([EVIL])
+    expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
+  })
+
+  it("refuses a board whose discovery claims another board's audience", async () => {
+    const asked = actions()
+    const { fetch, bearers } = board(VICTIM)
+    await expect(against(fetch).channels()).rejects.toMatchObject({
+      code: 'wrong_audience',
+      message: `the board at ${EVIL} says its URL is ${VICTIM}: use that URL`,
+    })
+    expect(asked).toEqual([])
+    expect(bearers).toEqual([])
+  })
+
+  it("never sends a person's cached token for another board to the one it talks to", async () => {
+    const victimToken = 'cached-person-token-for-victim'
+    const tokens = join(config, 'vboard', 'tokens')
+    await mkdir(tokens, { recursive: true })
+    await writeFile(
+      join(tokens, `${createHash('sha256').update(VICTIM).digest('hex').slice(0, 32)}.json`),
+      JSON.stringify({ token: victimToken, expiresAt: Date.now() + 12 * 3600_000, handle: 'julian', name: 'Julian', avatar: null }),
+    )
+    const { fetch, bearers } = board(VICTIM)
+    await expect(against(fetch).channels()).rejects.toMatchObject({ code: 'wrong_audience' })
+    expect(bearers).toEqual([])
   })
 })

@@ -150,15 +150,15 @@ async function writeCache(audience: string, cached: Cached) {
  * board's project, exchanged so its audience is the board's URL. Cached on
  * disk for its 12-hour life.
  */
-async function personToken(discovery: Discovery): Promise<Cached> {
-  const cached = await readCache(discovery.audience)
+async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
+  const cached = await readCache(audience)
   // Tokens cached before names and avatars were kept get them once.
   if (cached && cached.name === undefined) {
     const user = await getVercelToken()
       .then(vercelUser)
       .catch(() => null)
     const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
-    await writeCache(discovery.audience, filled).catch(() => {})
+    await writeCache(audience, filled).catch(() => {})
     return filled
   }
   if (cached) return cached
@@ -188,10 +188,10 @@ async function personToken(discovery: Discovery): Promise<Cached> {
     development = await tokenFromVercelCli(discovery)
   }
 
-  const token = await exchangeVercelOidcToken({ token: development, audience: discovery.audience })
+  const token = await exchangeVercelOidcToken({ token: development, audience })
   const user = authToken ? await vercelUser(authToken) : null
   const fresh: Cached = { token, expiresAt: expiry(token), handle: user?.handle ?? null, name: user?.name ?? null, avatar: user?.avatar ?? null }
-  await writeCache(discovery.audience, fresh).catch(() => {})
+  await writeCache(audience, fresh).catch(() => {})
   return fresh
 }
 
@@ -250,14 +250,19 @@ export type NodeClientOptions = Partial<ClientOptions>
 export function createClient(options: NodeClientOptions = {}): BoardClient {
   const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
   if (!url)
-    throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, or run `vboard use <url>`', 0)
+    throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, run `vboard use <url>`, or `vboard serve` for a local one', 0)
   const doFetch = guarded(url, options.fetch ?? globalThis.fetch)
 
+  // Every token is for `url`, the board it's sent to. A board whose discovery claims
+  // another audience gets none, so its answer can't get us to mint one it could replay.
   let discovery: Promise<Discovery> | undefined
   const discover = () =>
     (discovery ??= doFetch(url).then(async (response) => {
       if (!response.ok) throw new BoardError('no_board', `no board at ${url} (${response.status})`, response.status)
-      return (await response.json()) as Discovery
+      const found = (await response.json()) as Discovery
+      if (found.audience !== url)
+        throw new BoardError('wrong_audience', `the board at ${url} says its URL is ${found.audience}: use that URL`, 0)
+      return found
     }))
 
   let cached: Cached | null = null
@@ -269,7 +274,8 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
     }
     const local = localToken(url)
     if (local) return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
-    const audience = (await discover()).audience
+    const discovered = await discover()
+    const audience = url
     if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
       const token = await githubActionsToken(audience)
       return { token, expiresAt: expiry(token) }
@@ -278,7 +284,7 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
       const token = await getVercelOidcToken({ audience })
       return { token, expiresAt: expiry(token) }
     }
-    person ??= discover().then(personToken).finally(() => {
+    person ??= personToken(audience, discovered).finally(() => {
       person = null
     })
     return person

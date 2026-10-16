@@ -10,6 +10,7 @@ import { fakePlatform } from './sync-fixtures.ts'
 import { slack } from '../src/sync/slack.ts'
 import { github } from '../src/sync/github.ts'
 import { withUserTokens, type UserTokens } from '../src/sync/users.ts'
+import type { ProviderOptions } from '../src/sync/provider.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 
 type Read = { id: number; text: string; by: { actor: string }; author: { handle: string; person?: { id: string; handle: string } } | null }
@@ -72,7 +73,7 @@ function slackAs(owners: Record<string, string>, onPost?: (post: { threadId: str
   }
 }
 
-function setup(options: { users?: UserTokens; owners?: Record<string, string>; githubUsers?: UserTokens; onPost?: Parameters<typeof slackAs>[1]; url?: string | undefined } = {}) {
+function setup(options: { users?: UserTokens; owners?: Record<string, string>; githubUsers?: UserTokens; onPost?: Parameters<typeof slackAs>[1]; url?: string | undefined; slackRender?: ProviderOptions['render'] } = {}) {
   const as = slackAs(options.owners ?? {}, options.onPost)
   const s = fakePlatform('slack', as.extend)
   const g = fakePlatform('github')
@@ -82,6 +83,7 @@ function setup(options: { users?: UserTokens; owners?: Record<string, string>; g
         adapter: options.users ? withUserTokens(s.adapter, options.users) : s.adapter,
         client: async () => (s.adapter as unknown as { webClient: never }).webClient,
         channels: { C1: 'firehose' },
+        render: options.slackRender,
       }),
       github: github({ adapter: options.githubUsers ? withUserTokens(g.adapter, options.githubUsers) : g.adapter, repos: { 'basehub-ai/vboard': 'prs' } }),
     },
@@ -109,6 +111,7 @@ describe('linking accounts with a one-time code', () => {
     await vi.waitFor(async () => expect(await read(julian, 'channel=firehose')).toHaveLength(3))
     // Before linking, the Slack account is someone else; your agents are already you.
     expect((await read(julian, 'by=julian')).map((m) => m.text)).toEqual(['from the board', 'from my agent'])
+    expect((await julian('GET', '/identity')).body.unlinked).toEqual(['slack', 'github'])
 
     const challenge = (await julian('POST', '/identity/link', { sync: 'slack' })).body
     expect(challenge).toMatchObject({ method: 'code', sync: 'slack', platform: 'slack', code: expect.stringMatching(/^vb-[A-Z2-9]{4}-[A-Z2-9]{4}$/) })
@@ -118,6 +121,7 @@ describe('linking accounts with a one-time code', () => {
     expect((await julian('GET', '/identity')).body).toMatchObject({
       principal: 'vercel:user:u_julian',
       links: [{ actor: 'slack:user:U_JULIAN', handle: 'jb', method: 'code' }],
+      unlinked: ['github'],
     })
     // The code never reaches the board, and Slack gets a check mark on it.
     expect((await read(julian, 'channel=firehose')).map((m) => m.text)).not.toContain(challenge.code)
@@ -154,6 +158,62 @@ describe('linking accounts with a one-time code', () => {
     expect((await read(julian, 'mentions=me')).map((m) => m.text)).toEqual(['@julian can you look?', '@jb ping'])
   })
 
+  it('carries a person across platforms: their GitHub account reads as their Slack one', async () => {
+    const seen: (string | null)[] = []
+    let owner: string | null = null
+    const { board, s, webhook } = setup({
+      slackRender: ({ message, label, mentionOf }) => {
+        seen.push(mentionOf(message.by.actor))
+        owner = mentionOf('vercel:user:u_julian')
+        return `**${label}**: ${message.text}`
+      },
+    })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const ada = caller(board.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    await julian('POST', '/messages', { channel: 'firehose', text: 'hi', noSync: true })
+    const forSlack = (await julian('POST', '/identity/link', { sync: 'slack' })).body.code
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: forSlack, user: 'U_JULIAN', name: 'jb' })
+    // Julian, as GitHub knows them, opens a PR, and links that account from it.
+    await webhook(
+      'github',
+      {
+        action: 'opened',
+        repository: { full_name: 'basehub-ai/vboard' },
+        sender: { login: 'julianbenegas', id: 42 },
+        pull_request: { number: 8, title: 'Links', html_url: 'https://github.com/basehub-ai/vboard/pull/8', draft: false, merged: false },
+      },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 'd1' },
+    )
+    await vi.waitFor(async () => expect(await read(ada, 'channel=prs')).toHaveLength(1))
+    const forGitHub = (await julian('POST', '/identity/link', { sync: 'github' })).body.code
+    await webhook('github', { type: 'message', threadId: 'github:basehub-ai/vboard:8', id: 'c0', text: forGitHub, user: '42', name: 'julianbenegas' })
+    await vi.waitFor(async () => expect((await julian('GET', '/identity')).body.links).toHaveLength(2))
+
+    // The PR's thread goes to Slack, where only the links map GitHub to Slack.
+    const [root] = await read(ada, 'channel=prs')
+    await ada('POST', `/messages/${root!.id}/sync`, { target: 'slack:C9' })
+    await vi.waitFor(() => expect(s.channelPosts.map((p) => p.channelId)).toEqual(['slack:C9']))
+    // The default label stays the name; a renderer that wants the person gets their Slack mention.
+    expect(JSON.parse(s.channelPosts[0]!.text).markdown).toMatch(/^\*\*julianbenegas \(github\)\*\*: PR #8: Links/)
+    expect(seen.at(-1)).toBe('<@U_JULIAN>')
+    expect(owner).toBe('<@U_JULIAN>')
+
+    // A mention of the GitHub account reads as the Slack one.
+    await ada('POST', '/messages', { re: root!.id, text: '@[github:user:42] can you look?' })
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toContainEqual(expect.stringContaining('<@U_JULIAN> can you look?')))
+    // Someone with no Slack account has no mention there.
+    expect(seen.at(-1)).toBeNull()
+
+    // Unlinked, the GitHub account is just itself again.
+    await julian('POST', '/identity/unlink', { actor: 'github:user:42' })
+    seen.length = 0
+    await ada('POST', `/messages/${root!.id}/labels`, { set: { review: 'yes' } })
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
+    expect(seen.every((mention) => mention === null)).toBe(true)
+    await ada('POST', '/messages', { re: root!.id, text: '@[github:user:42] again' })
+    await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toContainEqual(expect.stringContaining('julianbenegas again')))
+  })
+
   it('imports an expired, foreign, or already used code as a message, and the first account keeps it', async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
@@ -178,6 +238,28 @@ describe('linking accounts with a one-time code', () => {
     await vi.waitFor(async () => expect((await read(julian, 'channel=firehose')).map((m) => m.text)).toEqual(expect.arrayContaining([forGitHub, stale])))
     vi.useRealTimers()
     expect((await julian('GET', '/identity')).body.links).toHaveLength(1)
+  })
+
+  it('imports a used code reposted by the account that used it as a message, with no check mark', async () => {
+    const { board, s, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'a thread', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'channel=firehose')).toHaveLength(1))
+    const { code } = (await julian('POST', '/identity/link', { sync: 'slack' })).body
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '101', text: code, user: 'U_JULIAN' })
+    await vi.waitFor(async () => expect((await julian('GET', '/identity')).body.links).toHaveLength(1))
+    await julian('POST', '/identity/unlink', { actor: 'slack:user:U_JULIAN' })
+
+    // Long after its ten minutes, the same account posts the used code again: it's just a message.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 20 * 60_000)
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '105', text: code, user: 'U_JULIAN' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '106', text: 'after', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await read(julian, 'channel=firehose')).map((m) => m.text)).toContain('after'))
+    vi.useRealTimers()
+    expect((await read(julian, 'channel=firehose')).map((m) => m.text)).toEqual(['a thread', code, 'after'])
+    expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '101', emoji: 'check', added: true }])
+    expect((await julian('GET', '/identity')).body.links).toEqual([])
   })
 
   it('unlinks an account, by handle; only people link, and only their own accounts', async () => {
@@ -434,7 +516,9 @@ describe('vb identity', () => {
     try {
       const url = `${server.origin}/api/board`
       const token = await personToken('u_julian', url)
-      expect(await run(url, token, ['identity'])).toMatchObject({ code: 0, stdout: expect.stringContaining('no linked accounts') })
+      // It names the sync entries left to link, so an agent knows what to offer.
+      expect(await run(url, token, ['identity'])).toMatchObject({ code: 0, stdout: 'no linked accounts\nnot linked  slack, github  (vb identity link <key>)\n' })
+      expect(JSON.parse((await run(url, token, ['identity', '--json'])).stdout).unlinked).toEqual(['slack', 'github'])
 
       let posted: Promise<Response> | undefined
       const linking = await run(url, token, ['identity', 'link', 'slack'], (line) => {
@@ -444,7 +528,7 @@ describe('vb identity', () => {
       expect(linking).toMatchObject({ code: 0, stderr: '' })
       expect(linking.stdout).toMatch(/^From your slack account, post this as a message anywhere the board syncs, within 10 minutes:\n\n  vb-[A-Z2-9]{4}-[A-Z2-9]{4}\n\nlinked @jb \(slack:user:U_JULIAN\)\n$/)
 
-      expect((await run(url, token, ['identity'])).stdout).toMatch(/^@jb  slack:user:U_JULIAN  by code · \d{4}-/)
+      expect((await run(url, token, ['identity'])).stdout).toMatch(/^@jb  slack:user:U_JULIAN  by code · \d{4}-\S+\nnot linked  github  \(vb identity link <key>\)\n$/)
       expect(await run(url, token, ['identity', 'unlink', '@jb'])).toMatchObject({ code: 0, stdout: 'unlinked slack:user:U_JULIAN\n' })
       expect((await run(url, token, ['identity', 'nope'])).code).toBe(2)
     } finally {

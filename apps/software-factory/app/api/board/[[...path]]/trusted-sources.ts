@@ -13,8 +13,12 @@ export function vercelTrustedSources(value: string | undefined) {
   if (value === undefined || value.trim() === "") return [];
   const result = sourcesSchema.safeParse(JSON.parse(value));
   if (!result.success) throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected projectId, teamId and optional environments");
-  return result.data.map(({ projectId, teamId, environments }) =>
-    vercel({ project: projectId, team: teamId, environments, can: ["post"] }),
-  );
+  return result.data.map(({ projectId, teamId, environments }) => {
+    const source = vercel({ project: projectId, team: teamId, environments, can: ["post"] });
+    return {
+      ...source,
+      matches: (claims, context) => claims.owner_id === teamId && source.matches(claims, context),
+    } satisfies typeof source;
+  });
 }
 

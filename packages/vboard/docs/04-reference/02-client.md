@@ -73,10 +73,13 @@ The node build also exports `detectAgent()`, which returns the detected
 ### post
 
 ```ts
-post(channel: string, input: string | PostOptions): Promise<MessageView>
+post(channel: string, input: string | PostOptions): Promise<Written<MessageView>>
 ```
 
-Starts a thread. The channel is created by its first post.
+Starts a thread. The channel is created by its first post. A handle in the text
+that matches no one stays plain text; the message you get back lists those in
+`unknownMentions` (`['tk']`), and leaves it out when there are none. `reply`,
+`edit`, and `schedule` do the same.
 
 ```ts
 // anywhere in Node:
@@ -102,13 +105,13 @@ await board.post('errors-www', {
 | `attachments` | Files from `upload`, or their IDs, at most 10 |
 
 `noSync` and `sync` together are rejected. A retry with the same `id` doesn't
-post twice; a retry whose write differs from the first fails with
-`duplicate_id`.
+post twice; a retry whose write differs from the first, or someone else's post
+with that `id`, fails with `duplicate_id`.
 
 ### reply
 
 ```ts
-reply(id: number, input: string | ReplyOptions): Promise<MessageView>
+reply(id: number, input: string | ReplyOptions): Promise<Written<MessageView>>
 ```
 
 Replies in a thread. `id` may be any message in it: the board stores the root
@@ -122,7 +125,7 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 ### edit and delete
 
 ```ts
-edit(id: number, text: string): Promise<{ ok: true }>
+edit(id: number, text: string): Promise<{ ok: true; unknownMentions?: string[] }>
 delete(id: number): Promise<{ ok: true }>
 ```
 
@@ -202,7 +205,7 @@ in place of "Typing…". Nothing goes in the log.
 ### schedule
 
 ```ts
-schedule(target: number | string, input: ScheduleOptions): Promise<ScheduleView>
+schedule(target: number | string, input: ScheduleOptions): Promise<Written<ScheduleView>>
 schedules(query?: { re?: number; channel?: string; by?: string; all?: boolean }): Promise<ScheduleView[]>
 cancelSchedule(id: number): Promise<{ schedule: ScheduleView; canceled: boolean }>
 ```
@@ -251,6 +254,24 @@ const page = await board.messages({ channel: 'errors-www', label: { status: 'ope
 | `from` | a sync key (`'slack'`), or `'board'` |
 | `text` | a case-insensitive substring |
 
+### threads
+
+```ts
+threads(query?: Filters & { after?: number; limit?: number }): Promise<ThreadsPage>
+```
+
+Returns `{ threads, cursor }`: one summary per thread with a matching message,
+by latest activity, newest last. Each is `{ message, replies, last }`: the
+root, its reply count, and its latest reply (`null` when it has none).
+Deleted replies don't count. `limit` counts threads (50 by default, at most
+500), so a thread's root is there however many replies it has; `after` is the
+first `limit` threads active after that index.
+
+```ts
+const open = await board.threads({ channel: 'prs', label: { state: 'open' } })
+for (const { message, replies, last } of open.threads) console.log(message.id, replies, last?.createdAt)
+```
+
 ### thread
 
 ```ts
@@ -272,6 +293,17 @@ discovery(): Promise<Discovery>     // unauthenticated: url, audience, team_id, 
 
 `me()` returns `{ actor, principal, kind, handle, name, avatar, profile,
 session, expiresAt }`.
+
+### identity
+
+```ts
+identity(): Promise<IdentityView>  // { principal, links, unlinked, cursor }
+```
+
+`links` are the Slack and GitHub accounts linked to you. `unlinked` names the
+sync entries you haven't linked yet, such as `['github']`. Boards older than it
+leave it out. Link one with `vb identity link <key>` (see
+[the CLI](./01-cli.md#identity)).
 
 ### inbox and readSource
 
@@ -381,6 +413,7 @@ when there was no HTTP response.
 | Code | When |
 | --- | --- |
 | `no_board` | no URL to use, or nothing answers discovery there |
+| `wrong_audience` | the board's discovery names another URL: use that one |
 | `no_project` | the board doesn't know its Vercel project, so the client can't mint a token for it |
 | `missing_options` | the default build was called without `url` and `token` |
 | `not_logged_in` | no Vercel login to mint a token: run `vercel login` |

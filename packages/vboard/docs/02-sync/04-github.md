@@ -48,7 +48,7 @@ to skip it.
 2. **Comments, Slack replies, and board replies** all reach each other.
 3. **Inline review comments** arrive as replies in the same thread, with their
    file and line (`src/auth.ts:42`). A board reply to one goes back into that
-   review thread on GitHub, and into the PR's Slack thread with a quote line.
+   review thread on GitHub, and into the PR's Slack thread as written.
 4. **Reviews and closing** arrive as replies ("approved by ada", "merged by
    julian") and update the root's labels.
 
@@ -67,7 +67,7 @@ issue. Resolving review conversations isn't synced.
 | --- | --- |
 | `pr.opened` | A root labeled `pr=owner/repo#123` and `state=open` or `state=draft` |
 | `pr.ready`, `pr.draft` | Sets `state` to `open` or `draft` |
-| `pr.reopened` | A reply ("reopened by julian") and `state=open` |
+| `pr.reopened` | A reply ("reopened by julian") and `state=open`, or `state=draft` for a draft |
 | `pr.closed` | A reply ("merged by julian" or "closed by julian") and `state=merged` or `state=closed` |
 | `review.submitted` | A reply with the verdict ("approved by ada", "changes requested by ada") and the review's body. Approvals and change requests set `review` |
 | `review.dismissed` | Unsets `review` |

@@ -25,6 +25,11 @@ The CLI and the Node SDK find a token themselves. The first match wins:
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your `vercel login`, minted for the board's project and exchanged for its audience | `vercel:user:<user_id>` |
 
+Every token the CLI and the Node SDK get is for the URL they send it to. When
+discovery there names another URL, they get no token and fail with
+`wrong_audience`: use the URL the error names. So a board can't claim to be
+another one and collect tokens it could replay there.
+
 Other runtimes pass `url` and `token` to `createClient` themselves; see the
 [client reference](../04-reference/02-client.md).
 
@@ -32,7 +37,7 @@ Other runtimes pass `url` and `token` to `createClient` themselves; see the
 
 There's no login command. The CLI reads the board's discovery document, asks
 Vercel for a development token for the board's project with your Vercel CLI
-login, and exchanges it for one whose audience is the board's URL. It caches
+login, and exchanges it for one whose audience is the URL it talks to. It caches
 the result in `~/.config/vboard/tokens` (or under `$XDG_CONFIG_HOME`) for its
 12-hour life.
 
@@ -133,6 +138,11 @@ export const { GET, POST } = board({
 
 - **`vercel({ project, team?, environments?, can? })`** matches another
   project's deployments, by project name or ID, and team slug or ID.
+- **A project name without `team` means the board's own team.** Names are only
+  unique within a team, so another team's `marketing` doesn't match. A project
+  ID matches on any team, since IDs are unique. The board knows its team from
+  `board({ project: { teamId } })`, `VERCEL_ORG_ID`, the linked project, or on
+  Vercel the platform's token. When it can't tell, a name matches nothing.
 - **`githubActions({ repository, event?, workflow?, ref?, can? })`** matches a
   workflow run. `workflow` is the file's path in the repo.
 - **Names are for reading; IDs are stored.** A rule matches a project or repo
@@ -194,15 +204,22 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   even someone the board hasn't seen. The board stores the exact actor, so it
   renders natively. An email no platform knows stays plain text.
 - **Mentions in inline code or code blocks don't count.**
-- **A mention must resolve to exactly one actor,** or the write fails:
+- **A handle no one has stays plain text.** The write goes through, notifying
+  no one for it, and `vb` warns: `warning: @x matches no one on the board, so
+  it stays plain text and notifies no one`. Synced copies carry a word joiner
+  after the `@`, so GitHub can't ping whoever has that login there.
+- **A handle several actors share fails the write,** since a guess could
+  notify the wrong person:
 
 ```text
 $ vb post errors-www "@ada the rollback is live"
 error: ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (ada)
 ```
 
-A handle nobody has is `error: unknown mention @x`. Mentions are stored as actor
+An `@[actor-id]` the board doesn't know fails with `error: unknown actor`. Mentions are stored as actor
 IDs, so a later handle change never reroutes an old one, and edits resolve them
 again. Platform text never fails a write: a mention there that doesn't resolve
 stays plain text. On their own platform, mentions render natively: `<@U0456>` in
-Slack, `@login` on GitHub.
+Slack, `@login` on GitHub. A person who linked accounts (`vb identity link`)
+renders natively wherever they linked one: `@julian` or their GitHub account
+reads as `<@U0456>` in Slack.

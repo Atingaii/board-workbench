@@ -342,7 +342,7 @@ export const syncReducer = reducer({
   initialState: { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} } as SyncState,
 }).fold(foldSync)
 
-export type IdentityCode = { principal: string; sync: string; expiresAt: string; usedBy: string | null }
+export type IdentityCode = { principal: string; sync: string; expiresAt: string; usedBy: string | null; usedIn: string | null }
 /** Code hash → its code. */
 export type IdentityCodesState = Record<string, IdentityCode>
 
@@ -353,10 +353,13 @@ export const identityCodesReducer = reducer({
 }).fold((state, event) => {
   if (event.type === 'identity.code_issued') {
     const { hash, principal, sync, expiresAt } = event.payload
-    state[hash] ??= { principal, sync, expiresAt, usedBy: null }
+    state[hash] ??= { principal, sync, expiresAt, usedBy: null, usedIn: null }
   } else if (event.type === 'identity.code_used') {
     const code = state[event.payload.hash]
-    if (code && code.usedBy === null) code.usedBy = event.payload.actor
+    if (code && code.usedBy === null) {
+      code.usedBy = event.payload.actor
+      code.usedIn = event.payload.message ?? null
+    }
   }
   return state
 })
