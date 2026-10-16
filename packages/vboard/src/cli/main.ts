@@ -685,13 +685,15 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const { command: cli, note } = cliCommand()
       // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
+        const had = installedHook(agent) !== null
         const changed = installHook(agent, cli)
-        out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
-        out(`  ${changed ? 'added the turn-end hook' : 'already installed'}`)
         // The reminder asks for `vb reply`, `vb post`, `vb read`, and `vb channels`: no permission prompt for each.
         const rules = allowRules(agent, cli)
         const added = rules ? allow(rules.file, rules.rules) : []
-        if (rules) disallow(rules.file, legacyRules(agent, cli))
+        const dropped = rules ? disallow(rules.file, legacyRules(agent, cli)) : false
+        // "already installed" only when nothing was written: a new hook command, rule, or dropped rule is an update.
+        out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
+        out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
         if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
         if (agent === 'cursor' && !rules) out('  npm i -g vboard lets Cursor run vb without asking')
         if (agent === 'codex') {
