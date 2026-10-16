@@ -396,7 +396,8 @@ only their own accounts.
   1. Extract the tokens from the prose.
   2. Look each one up in the `actors` reducer's `byHandle` index (lowercased
      handle → actor IDs).
-  3. Exactly one match resolves. Zero is `error: unknown mention @x`. More than
+  3. Exactly one match resolves. Zero leaves it plain text, and the write's
+     answer lists it in `unknownMentions` so the writer is warned. More than
      one is `error: ambiguous mention @x`, listing the actor IDs to use with
      `@[…]`.
   4. Store the actor IDs on the event. Edits resolve again.

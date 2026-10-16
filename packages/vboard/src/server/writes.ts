@@ -18,6 +18,7 @@ import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
 import { badRequest, duplicateId, forbidden, notFound } from './errors.ts'
 import { view } from './feed.ts'
+import type { MessageView } from '../api/routes.ts'
 import type { ResolvedTarget } from '../sync/provider.ts'
 import type { BoardClient } from '../client/client.ts'
 import { runMiddleware, type Middleware, type WriteSource } from './middleware.ts'
@@ -110,7 +111,13 @@ export type PostInput = WriteOrigin & {
   schedule?: { id: number; n: number }
 }
 
-export async function writePost(ctx: WriteContext, input: PostInput) {
+/**
+ * A post as it landed. `unknownMentions` lists the handles in it that matched
+ * nobody and stayed plain text; it's for the writer, never stored.
+ */
+export type Posted = MessageView & { unknownMentions?: string[] }
+
+export async function writePost(ctx: WriteContext, input: PostInput): Promise<Posted> {
   const { state: messages } = await ctx.session.state(messagesReducer)
   const { identity } = input
   let channel = input.channel
@@ -186,7 +193,7 @@ async function commitPost(
   const seen = actorSeen(identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const mentions = resolveMentions(text, knownWith(actors, found), seen ? identity.actor : undefined, input.lenientMentions ?? false)
+  const { mentions, unknown } = resolveMentions(text, knownWith(actors, found), seen ? identity.actor : undefined, input.lenientMentions ?? false)
   const synced = await Promise.all(
     targets.map(async ({ target, kind, cause }) => ({
       type: 'thread.synced' as const,
@@ -222,7 +229,8 @@ async function commitPost(
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
   const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
-  return view(message, known)
+  const landed: Posted = view(message, known)
+  return unknown.length ? { ...landed, unknownMentions: unknown } : landed
 }
 
 /** `slack:C0123ABC:1727.1` → `slack:C0123ABC`; `github:o/r:12` → `github:o/r`. */
@@ -242,7 +250,7 @@ async function liveMessage(ctx: WriteContext, id: number): Promise<Message> {
 
 export type EditInput = WriteOrigin & { identity: Identity; id: number; text: string; from?: string | null; asAuthor?: boolean }
 
-export async function writeEdit(ctx: WriteContext, input: EditInput) {
+export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ unknownMentions?: string[] }> {
   const message = await liveMessage(ctx, input.id)
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
@@ -262,12 +270,12 @@ export async function writeEdit(ctx: WriteContext, input: EditInput) {
   )
 }
 
-async function commitEdit(ctx: WriteContext, input: EditInput, message: Message) {
+async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<{ unknownMentions?: string[] }> {
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
-  const mentions = resolveMentions(text, knownWith(actors, found), seen ? input.identity.actor : undefined, input.from != null)
+  const { mentions, unknown } = resolveMentions(text, knownWith(actors, found), seen ? input.identity.actor : undefined, input.from != null)
   await ctx.session.append(...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
@@ -279,6 +287,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
       from: input.from ?? null,
     },
   })
+  return unknown.length ? { unknownMentions: unknown } : {}
 }
 
 /** A message's links, replaced: a platform edit or unfurl changed what it links to. */

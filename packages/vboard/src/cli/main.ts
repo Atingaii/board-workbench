@@ -322,6 +322,14 @@ function hookAgents(names: string[]): HookAgent[] {
   return names.length ? (names as HookAgent[]) : known
 }
 
+/** A write went through, but some handles in it matched no one: they stayed plain text. */
+function warnUnknownMentions(handles: string[] | undefined) {
+  if (!handles?.length) return
+  const names = handles.map((handle) => `@${handle}`)
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  process.stderr.write(`warning: ${list} ${names.length === 1 ? 'matches' : 'match'} no one on the board, so it stays plain text and notifies no one\n`)
+}
+
 function printMessage(message: MessageView) {
   if (flags.json) printJson(message)
   else out(String(message.id))
@@ -557,6 +565,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
         : await board.reply(re, options)
       wrote()
+      warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
     }
@@ -573,6 +582,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags['no-sync'] ? { noSync: true } : {}),
       })
       wrote()
+      warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
     }
@@ -607,6 +617,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(times !== undefined ? { times } : {}),
       })
       wrote()
+      warnUnknownMentions(schedule.unknownMentions)
       if (flags.json) printJson(schedule)
       else out(formatSchedule(schedule))
       return 0
@@ -718,7 +729,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'edit': {
-      await client().edit(messageId(args[0]), await text(args[1]))
+      const { unknownMentions } = await client().edit(messageId(args[0]), await text(args[1]))
+      warnUnknownMentions(unknownMentions)
       return 0
     }
 

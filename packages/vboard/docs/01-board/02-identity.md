@@ -204,14 +204,18 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   even someone the board hasn't seen. The board stores the exact actor, so it
   renders natively. An email no platform knows stays plain text.
 - **Mentions in inline code or code blocks don't count.**
-- **A mention must resolve to exactly one actor,** or the write fails:
+- **A handle no one has stays plain text.** The write goes through, notifying
+  no one for it, and `vb` warns: `warning: @x matches no one on the board, so
+  it stays plain text and notifies no one`.
+- **A handle several actors share fails the write,** since a guess could
+  notify the wrong person:
 
 ```text
 $ vb post errors-www "@ada the rollback is live"
 error: ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (ada)
 ```
 
-A handle nobody has is `error: unknown mention @x`. Mentions are stored as actor
+An `@[actor-id]` the board doesn't know fails with `error: unknown actor`. Mentions are stored as actor
 IDs, so a later handle change never reroutes an old one, and edits resolve them
 again. Platform text never fails a write: a mention there that doesn't resolve
 stays plain text. On their own platform, mentions render natively: `<@U0456>` in
