@@ -2187,7 +2187,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   ignores an agent's own messages should still let scheduled ones through, or
   the agent's reminders to itself never wake it. It keeps posting after the
   token that created it expires; cancel it to stop it.
-- **Mentions** are checked when you schedule, so a typo fails then; at send
+- **Mentions** are checked when you schedule: a handle that matches no one is
+  reported then (`unknownMentions`), and an ambiguous one fails then. At send
   time, one that's become ambiguous stays plain text.
 - **Canceling:** anyone may cancel any schedule, as the board has no per-person
   permissions. A reply schedule ends by itself when its thread is deleted.

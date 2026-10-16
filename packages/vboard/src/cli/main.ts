@@ -327,7 +327,8 @@ function warnUnknownMentions(handles: string[] | undefined) {
   if (!handles?.length) return
   const names = handles.map((handle) => `@${handle}`)
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
-  process.stderr.write(`warning: ${list} ${names.length === 1 ? 'matches' : 'match'} no one on the board, so it stays plain text and notifies no one\n`)
+  const one = names.length === 1
+  process.stderr.write(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one\n`)
 }
 
 function printMessage(message: MessageView) {

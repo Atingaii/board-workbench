@@ -250,7 +250,7 @@ describe('cli', () => {
     expect(posted).toMatchObject({ code: 0, stderr: 'warning: @tk matches no one on the board, so it stays plain text and notifies no one\n' })
     const id = posted.stdout.trim()
     const reply = await vb(['reply', id, '@tk and @tk2, see `@code`'])
-    expect(reply).toMatchObject({ code: 0, stderr: 'warning: @tk and @tk2 match no one on the board, so it stays plain text and notifies no one\n' })
+    expect(reply).toMatchObject({ code: 0, stderr: 'warning: @tk and @tk2 match no one on the board, so they stay plain text and notify no one\n' })
     expect(await vb(['edit', id, 'ping @tk3'])).toMatchObject({ code: 0, stderr: expect.stringContaining('@tk3 matches no one') })
     const lines = (await vb(['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
     expect(lines.map((m: { text: string; mentions: string[] }) => [m.text, m.mentions])).toEqual([
