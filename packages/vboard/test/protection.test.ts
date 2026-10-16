@@ -87,7 +87,6 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
 
   it('uses Trusted Sources for hosted discovery and authenticated calls without bypass credentials', async () => {
     vi.stubEnv('VERCEL', '1')
-    vi.stubEnv('VERCEL_AUTOMATION_BYPASS_SECRET', 'must-not-send')
     const token = await personToken()
     runtimeToken.mockResolvedValueOnce(token)
     const board = testBoard()
@@ -114,6 +113,17 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     const { fetch, api } = protectedBoard()
     await expect(createClient({ url: BOARD_URL, token: await personToken(), fetch }).discovery())
       .rejects.toMatchObject({ code: 'protected', message: expect.stringContaining('Trusted Sources') })
+    expect(api).toEqual([])
+  })
+
+  it('still sends VERCEL_AUTOMATION_BYPASS_SECRET when hosted callers set it', async () => {
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_AUTOMATION_BYPASS_SECRET', SECRET)
+    const { fetch, api, sent } = protectedBoard()
+    const client = createClient({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+    expect((await client.discovery()).url).toBe(BOARD_URL)
+    await client.post('dev', 'hosted with a bypass')
+    expect(sent.every((header) => header === SECRET)).toBe(true)
     expect(api).toEqual([])
   })
 

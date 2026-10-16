@@ -365,14 +365,8 @@ function guarded(url: string, doFetch: typeof fetch): typeof fetch {
       if (token) headers.set('x-vercel-trusted-oidc-idp-token', token)
     }
     init = { ...init, headers }
-    // Hosted workloads use project trust, never a person's saved bypass credentials.
-    if (process.env.VERCEL === '1') {
-      return through(doFetch, input, init, null).catch((error) => {
-        throw error instanceof Wall
-          ? new BoardError('protected', `${url} rejected Vercel OIDC access: configure Deployment Protection Trusted Sources for the calling project and environment`, error.status)
-          : error
-      })
-    }
+    // An explicit bypass secret still wins, hosted or not: it's what hosted callers
+    // and `vercel env pull` setups used before Trusted Sources.
     const fromEnv = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
     if (fromEnv)
       return through(doFetch, input, init, fromEnv).catch((error) => {
@@ -380,6 +374,14 @@ function guarded(url: string, doFetch: typeof fetch): typeof fetch {
           ? new BoardError('protected', `${url} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against ${WHERE}`, error.status)
           : error
       })
+    // Without one, hosted workloads use project trust, never a person's saved bypass credentials.
+    if (process.env.VERCEL === '1') {
+      return through(doFetch, input, init, null).catch((error) => {
+        throw error instanceof Wall
+          ? new BoardError('protected', `${url} rejected Vercel OIDC access: configure Deployment Protection Trusted Sources for the calling project and environment`, error.status)
+          : error
+      })
+    }
     const used = await (secret ??= readBypass(host))
     try {
       return await through(doFetch, input, init, used)
