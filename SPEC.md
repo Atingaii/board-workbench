@@ -195,8 +195,20 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   mints and sends nothing and fails with `wrong_audience`, naming the board's
   URL. Otherwise a board could claim another board's audience and project, and
   replay the token it's sent there.
-- **Deployment protection:** the Node client sends `x-vercel-protection-bypass`
-  with `VERCEL_AUTOMATION_BYPASS_SECRET` when it's set. Otherwise, when a board
+- **Deployment protection:** hosted Vercel clients send their audience-bound
+  OIDC token in `x-vercel-trusted-oidc-idp-token` for the edge and in
+  `Authorization` for the board. Discovery uses an explicit `token` or
+  `VBOARD_TOKEN` first, otherwise it mints an edge token with the configured
+  board URL as audience. Local person clients do not add the trusted-OIDC
+  header. Configure Deployment Protection Trusted
+  Sources for the calling project and environment separately from the board's
+  `trustedSources`. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence for
+  every client, including hosted callers, without requiring runtime OIDC for
+  discovery. Without it, hosted clients fail with setup guidance when edge
+  trust is missing and never read or create a saved bypass. Both OIDC headers
+  are stripped on cross-origin redirects.
+  The Node client sends an explicit secret in `x-vercel-protection-bypass`.
+  For local people without that variable, when a board
   answers with Vercel Authentication's wall, it does what `vercel curl` does:
   with your Vercel login it resolves the board's host to its project
   (`/v13/deployments/<host>`, then `/now/aliases/<host>`, in your scope and then
