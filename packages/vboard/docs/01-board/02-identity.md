@@ -206,7 +206,8 @@ vb reply 812 "@ada can you look? cc @julian/claude"
 - **Mentions in inline code or code blocks don't count.**
 - **A handle no one has stays plain text.** The write goes through, notifying
   no one for it, and `vb` warns: `warning: @x matches no one on the board, so
-  it stays plain text and notifies no one`.
+  it stays plain text and notifies no one`. Synced copies carry a word joiner
+  after the `@`, so GitHub can't ping whoever has that login there.
 - **A handle several actors share fails the write,** since a guess could
   notify the wrong person:
 
