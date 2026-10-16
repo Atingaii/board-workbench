@@ -173,14 +173,14 @@ function commandWord(args: string[]): string | undefined {
 }
 
 const parsed = (() => {
-  const args = process.argv.slice(2)
+  const args = withMentions(process.argv.slice(2))
   const removed = REMOVED[commandWord(args) ?? '']
   try {
     if (removed) throw new UsageError(removed)
-    return parseArgs({ args: markAttachmentId(withMentions(args)), allowPositionals: true, options: OPTIONS })
+    return parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS })
   } catch (error) {
     const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
-    process.stderr.write(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`)` : (error as Error).message}\n`)
+    process.stderr.write(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}\n`)
     return null
   }
 })()

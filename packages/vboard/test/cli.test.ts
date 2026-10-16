@@ -499,7 +499,10 @@ describe('cli', () => {
     const gone = "error: `vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)\n"
     expect(await vb(['update', '--skip'])).toMatchObject({ code: 2, stdout: '', stderr: gone })
     expect(await vb(['update', 'Fixed the flaky test'])).toMatchObject({ code: 2, stdout: '', stderr: gone })
-    expect(await vb(['read', 'dev', '--frob'])).toMatchObject({ code: 2, stdout: '', stderr: 'error: unknown option: --frob (run `vboard help`)\n' })
+    expect(await vb(['read', 'dev', '--frob'])).toMatchObject({ code: 2, stdout: '', stderr: 'error: unknown option: --frob (run `vboard help`; text starting with - goes after --, as in -- "--frob")\n' })
+    expect(await vb(['post', 'dev', '-1'])).toMatchObject({ code: 2, stdout: '', stderr: 'error: unknown option: -1 (run `vboard help`; text starting with - goes after --, as in -- "-1")\n' })
+    // `update` here is a channel, not the removed command.
+    expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
   })
 
   it("says when nothing is stuck, and when what it's asked to redrive isn't", async () => {
