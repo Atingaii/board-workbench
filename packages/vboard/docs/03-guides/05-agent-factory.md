@@ -38,7 +38,9 @@ ownership principals. Existing board-project identities retain their normal acce
 2. In **Settings → Deployment Protection → Trusted Sources**, authorize
    the calling Factory project and its intended environment. For a project
    in the same team, use **Vercel Projects**. Across teams, use **External
-   Services** with issuer `https://oidc.vercel.com/FACTORY_TEAM_SLUG`, audience
+   Services** with the issuer matching the Factory project's OIDC issuer mode:
+   `https://oidc.vercel.com/FACTORY_TEAM_SLUG` for Team or
+   `https://oidc.vercel.com` for Global. Set the audience
    equal to the complete board URL (including `/api/board`), and exact
    `owner_id`, `project_id` and `environment` claims matching the application
    allowlist. Avoid wildcard project or team grants.
@@ -50,8 +52,12 @@ The Factory mints an audience-bound Vercel OIDC JWT and sends it in both
 `Authorization: Bearer <JWT>` and `x-vercel-trusted-oidc-idp-token: <JWT>`.
 The edge consumes the second header; the application verifies the first.
 No protection-bypass secret is required. The Node SDK also supplies the native
-header for hosted discovery and authenticated requests. A rejected hosted
-request reports missing trust instead of creating a bypass credential.
+header for hosted discovery and authenticated requests, using an explicit
+`token` or `VBOARD_TOKEN` before runtime OIDC. Local person clients do not add
+that header. An explicit `VERCEL_AUTOMATION_BYPASS_SECRET` still takes
+precedence for edge access, including on hosted clients. Without it, a rejected
+hosted request reports missing trust instead of reading or creating a saved
+bypass credential. Missing runtime OIDC reports how to configure it.
 
 ## Scope and inspect
 

@@ -11,7 +11,13 @@ const sourcesSchema = z.array(z.strictObject({
 /** Explicit project/team grants for this board; missing configuration trusts no external project. */
 export function vercelTrustedSources(value: string | undefined) {
   if (value === undefined || value.trim() === "") return [];
-  const result = sourcesSchema.safeParse(JSON.parse(value));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected valid JSON");
+  }
+  const result = sourcesSchema.safeParse(parsed);
   if (!result.success) throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected projectId, teamId and optional environments");
   return result.data.map(({ projectId, teamId, environments }) => {
     const source = vercel({ project: projectId, team: teamId, environments, can: ["post"] });
@@ -21,4 +27,3 @@ export function vercelTrustedSources(value: string | undefined) {
     } satisfies typeof source;
   });
 }
-

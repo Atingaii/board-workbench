@@ -48,7 +48,8 @@ session labels do not create separate ownership principals.
 Separately, configure the board project's **Settings → Deployment Protection →
 Trusted Sources**. Same-team callers use **Vercel Projects**, with the intended
 source and target environments. Cross-team callers use **External Services**:
-issuer `https://oidc.vercel.com/FACTORY_TEAM_SLUG`, audience equal to the full
+issuer matching the Factory project's OIDC mode (`https://oidc.vercel.com/FACTORY_TEAM_SLUG`
+for Team or `https://oidc.vercel.com` for Global), audience equal to the full
 board URL including `/api/board`, and exact `owner_id`, `project_id` and
 `environment` claims. See the current
 [Vercel Trusted Sources documentation](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/trusted-sources)

@@ -17,7 +17,9 @@ test("requires explicit immutable project/team grants and defaults to production
     { projectId: "prj_factory", teamId: TEAM_ID, environments: [] },
     { projectId: "prj_factory", teamId: TEAM_ID, can: ["sync"] },
   ]) assert.throws(() => vercelTrustedSources(JSON.stringify([grant])));
-  assert.throws(() => vercelTrustedSources("not JSON"));
+  assert.throws(() => vercelTrustedSources("not JSON"), {
+    message: "Invalid VBOARD_TRUSTED_SOURCES: expected valid JSON",
+  });
 });
 
 test("trusted Factory sessions discover, post, review and respond with verified provenance", async () => {
