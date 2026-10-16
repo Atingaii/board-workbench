@@ -1871,7 +1871,10 @@ app can, not what the person who posted the link can, and every board reader
 sees the snapshot, so private channels and DMs are left to Slack's unfurl, which
 checks the poster. The app doesn't join a channel to read a link. A link the
 board can't read keeps why (`private_channel`, `not_in_channel`) until an
-unfurl fills it in; an unfurl of one link keeps the others as they were. `vb read` and `vb inspect` quote each one under the message. Snapshots
+unfurl fills it in; an unfurl of one link keeps the others as they were. A
+forwarded message is a link too: Slack sends it only as an `is_share`
+attachment, whose snapshot is the shared message. A forward with no text of its
+own imports as that message quoted (`> **Ada**: …`) with its permalink below. `vb read` and `vb inspect` quote each one under the message. Snapshots
 are what the message said when the link arrived; its files are linked, not
 copied.
 
