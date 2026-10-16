@@ -156,11 +156,31 @@ function markAttachmentId(args: string[]): string[] {
   }
   return args
 }
+/** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
+const REMOVED: Record<string, string> = {
+  update: "`vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)",
+}
+
+/** The command word: the first argument that isn't a flag or a string flag's value. */
+function commandWord(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--') return args[i + 1]
+    if (!arg.startsWith('-') || arg === '-') return arg
+    if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+  }
+  return undefined
+}
+
 const parsed = (() => {
+  const args = process.argv.slice(2)
+  const removed = REMOVED[commandWord(args) ?? '']
   try {
-    return parseArgs({ args: markAttachmentId(withMentions(process.argv.slice(2))), allowPositionals: true, options: OPTIONS })
+    if (removed) throw new UsageError(removed)
+    return parseArgs({ args: markAttachmentId(withMentions(args)), allowPositionals: true, options: OPTIONS })
   } catch (error) {
-    process.stderr.write(`error: ${(error as Error).message}\n`)
+    const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
+    process.stderr.write(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`)` : (error as Error).message}\n`)
     return null
   }
 })()
@@ -655,9 +675,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       out(list.map((schedule) => formatSchedule(schedule)).join('\n'))
       return 0
     }
-
-    case 'update':
-      throw new UsageError('`vb update` is gone: reply in the thread you\'re working in (vb reply <id>), or post where it fits (vb post <channel>)')
 
     case 'hooks': {
       const [action = 'status', ...names] = args
