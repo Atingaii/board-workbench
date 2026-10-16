@@ -1,5 +1,11 @@
 # vboard
 
+## 0.12.1
+
+### Patch Changes
+
+- d154b53: `vb download` takes an attachment whose ID starts with `-`, about one in 64 of them, instead of failing with `error: Unknown option`. Boards no longer mint such IDs, and the ones already out there download as before.
+
 ## 0.12.0
 
 ### Minor Changes
