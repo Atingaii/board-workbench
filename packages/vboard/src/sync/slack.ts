@@ -194,17 +194,21 @@ const snapshotOf = (att: SlackAttachment, ts: string, markdown: (mrkdwn: string)
  */
 export function slackLinks(key: string, text: string, attachments: SlackAttachment[] = [], markdown: (mrkdwn: string) => string = (t) => t): ExternalLink[] {
   const links: ExternalLink[] = []
+  // A message linked twice (its text and a forward's share) is one link, with whichever snapshot came.
   const add = (found: NonNullable<ReturnType<typeof permalinkOf>>, att: SlackAttachment | undefined) => {
-    if (links.some((link) => link.url === found.url || (link.thread === `${key}:${found.channel}:${found.thread}` && link.message === found.ts)) || found.url.length > 4000) return
+    const known = links.find((link) => link.url === found.url || (link.thread === `${key}:${found.channel}:${found.thread}` && link.message === found.ts))
+    if (known) {
+      if (!known.snapshot && att) known.snapshot = snapshotOf(att, found.ts, markdown)
+      return
+    }
+    if (found.url.length > 4000 || links.length === LINKS_PER_MESSAGE_MAX) return
     links.push({ url: found.url, thread: `${key}:${found.channel}:${found.thread}`, message: found.ts, snapshot: att ? snapshotOf(att, found.ts, markdown) : null })
   }
   for (const match of text.matchAll(PERMALINK)) {
-    if (links.length === LINKS_PER_MESSAGE_MAX) return links
     const found = permalinkOf(match[0])!
     add(found, attachments.find((att) => att.is_msg_unfurl && ((att.channel_id === found.channel && att.ts === found.ts) || att.from_url?.replaceAll('&amp;', '&') === found.url)))
   }
   for (const att of attachments) {
-    if (links.length === LINKS_PER_MESSAGE_MAX) break
     const found = att.is_share ? permalinkOf(att.from_url ?? att.original_url ?? '') : null
     if (found) add(found, att)
   }
@@ -219,7 +223,9 @@ export function forwardText(links: ExternalLink[]): string {
   return links.filter((link) => link.snapshot).map((link) => {
     const { author, text } = link.snapshot!
     const lines = text.trim() ? text.trim().split('\n') : ['']
-    return [`> **${author}**: ${lines[0]}`.trimEnd(), ...lines.slice(1).map((line) => `> ${line}`.trimEnd()), '', link.url].join('\n')
+    // A first line that opens a block (a fence, a list, a heading, a quote) only works at a line's start.
+    const head = /^(```|~~~|[-*+] |\d+[.)] |#{1,6} |>)/.test(lines[0]!) ? [`> **${author}**:`, `> ${lines[0]}`] : [`> **${author}**: ${lines[0]}`]
+    return [...head, ...lines.slice(1).map((line) => `> ${line}`)].map((line) => line.trimEnd()).concat('', link.url).join('\n')
   }).join('\n\n')
 }
 

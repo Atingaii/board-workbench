@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
-import { slack, slackLinks, type SlackClient } from '../src/sync/slack.ts'
+import { forwardText, slack, slackLinks, type SlackClient } from '../src/sync/slack.ts'
 import { formatMessage } from '../src/cli/format.ts'
 import type { MessageView } from '../src/api/routes.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
@@ -59,6 +59,17 @@ describe('slack message links', () => {
     ])
     // A forward with a comment that also links the shared message links it once.
     expect(slackLinks('slack', `look <${permalink('C9')}>`, [share])).toHaveLength(1)
+    // ...and keeps the share's snapshot when Slack didn't also mark it an unfurl.
+    expect(slackLinks('slack', `look <${permalink('C9')}>`, [{ ...share, is_msg_unfurl: false }])).toEqual([
+      expect.objectContaining({ url: permalink('C9'), snapshot: expect.objectContaining({ author: 'Ada', text: 'deploys are *down*' }) }),
+    ])
+  })
+
+  it('quotes a forward that opens with a block with its author on a line of their own', () => {
+    const link = (text: string) => slackLinks('slack', '', [{ is_share: true, from_url: permalink('C9'), channel_id: 'C9', ts: TS, author_name: 'Ada', text }])
+    expect(forwardText(link('```\nError: deploy failed\n```'))).toBe(`> **Ada**:\n> \`\`\`\n> Error: deploy failed\n> \`\`\`\n\n${permalink('C9')}`)
+    expect(forwardText(link('- one\n- two'))).toBe(`> **Ada**:\n> - one\n> - two\n\n${permalink('C9')}`)
+    expect(forwardText(link('plain'))).toBe(`> **Ada**: plain\n\n${permalink('C9')}`)
   })
 
   it('imports a forward with no text of its own as the message it shares', async () => {
