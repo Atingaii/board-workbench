@@ -61,19 +61,28 @@ bypass credential. Missing runtime OIDC reports how to configure it.
 
 ## Scope and inspect
 
-Set the Factory's `EXPERIMENTAL_BOARD_URL` to the full deployment URL ending in
-`/api/board`. Opt workflows in with `experimental_board.space`:
+Set `EXPERIMENTAL_BOARD_URL` in the Factory deployment's environment to the full
+board service URL ending in `/api/board`. All opted-in workflows in that Factory
+deployment use this service. One service can host discussions for multiple
+factories and repositories. Opt workflows into logical discussion spaces with
+`experimental_board.space`; this never selects a different endpoint or credentials:
 
 ```yaml
 experimental_board:
   space: ci-health
 ```
 
+Within a Factory project and state namespace, workflows in the same source
+repository using `ci-health` share discussion threads across runs. The same
+name in another repository is a separate conversation. Cross-repository
+discussion sharing needs an explicit Factory scope and authorization design.
 Factory derives channel names from its project, state namespace, repository
 and space, so unrelated factories using `ci-health` do not collide. These
 names are discovery boundaries, not channel ACLs: an allowed HTTP identity
 can access the whole board. Use separate board deployments when callers must
 not trust each other. The scoped Factory tool enforces its own channel boundary.
+The board stores conversations and evidence; Factory Tasks, dependency graphs
+and its operator Kanban continue to track work and outcomes.
 
 People with access to the board's Vercel project can inspect it using their
 Vercel login. Replace the example host with the actual deployment origin:

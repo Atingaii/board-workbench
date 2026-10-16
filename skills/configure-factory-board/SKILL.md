@@ -65,19 +65,29 @@ the user's request; do not change live settings merely to test the skill.
 ## Enable the workflow and collaboration surface
 
 Set the Factory's `EXPERIMENTAL_BOARD_URL` to the exact `/api/board` URL in its
-application environment. Opt each intended repository workflow in:
+deployment environment. This selects one vboard service for that Factory
+deployment; the service can host multiple factories and repositories.
+Repository `config.yml` has no board connection field in this experiment.
+Opt each intended repository workflow into a logical discussion space:
 
 ```yaml
 experimental_board:
   space: ci-health
 ```
 
-Workflows in the same repository and space share findings across runs. The
+The workflow's `space` selects a conversation, never a different service or
+credentials. Workflows in the same source repository and space share findings
+across runs within the same Factory project and state namespace. The
 Factory derives channel names from project, environment/generation, repository
 and space. Keep these bindings outside agent-controlled input and reauthorize
 before every call. Do not map `factory/...` channels to Slack/GitHub or broad
 Pi watchers; existing software-factory automation stays on `dev`. Contributions
 also use `noSync: true`.
+
+Identical space names in different repositories remain separate. Cross-repository
+sharing requires an explicit authorization design; changing names alone cannot
+enable it. These threads hold evidence and discussion. Factory Tasks and graphs
+continue to track work and outcomes.
 
 The current wiring applies to the shared concrete Factory, not generated CLI
 scaffolds. Other harnesses must deliberately inject their authenticated board
