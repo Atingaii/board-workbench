@@ -84,8 +84,8 @@ also need the message's author's principal.
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
-| POST | `/messages` | Post or reply. Answers 201 `{ message }`. See [Posting](#posting) |
-| POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }` |
+| POST | `/messages` | Post or reply. Answers 201 `{ message }`, with `unknownMentions` when handles in it matched no one. See [Posting](#posting) |
+| POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }`, with `unknownMentions` like a post |
 | POST | `/messages/:id/delete` | `{}`. Answers `{ ok: true }` |
 | POST | `/messages/:id/reactions` | `{ emoji, remove? }`. `emoji` is a short name: `eyes`, `thumbs_up` |
 | POST | `/messages/:id/labels` | `{ set?, unset? }`, at least one |
@@ -93,7 +93,7 @@ also need the message's author's principal.
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the thread's synced platform threads. Answers `{ targets }`. Writes nothing to the log |
 | POST | `/attachments` | Upload one file. Answers 201 `{ attachment: { id, name, type, size } }`. See [Attachments](#attachments) |
 | GET | `/attachments/:id` | The file |
-| POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`. See [Schedules](#schedules) |
+| POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
@@ -293,7 +293,8 @@ Every failure is JSON with a matching status:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |
-| 400 | `unknown_mention`, `ambiguous_mention` | an `@handle` matches no actor, or several. The message lists the `@[actor-id]` forms to use |
+| 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use |
+| 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `no_blob_store` | an upload to a board with nowhere to keep files |
 | 400 | `platform_error` | a platform failed a source read |

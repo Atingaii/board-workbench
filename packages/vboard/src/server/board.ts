@@ -530,7 +530,7 @@ export function board(options: BoardOptions = {}) {
           if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
             throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
-          const message = await writePost(writes, {
+          const { unknownMentions, ...message } = await writePost(writes, {
             attachments,
             identity,
             channel: body.channel,
@@ -542,13 +542,13 @@ export function board(options: BoardOptions = {}) {
             sync: body.sync,
             ...origin,
           })
-          return json({ message }, 201)
+          return json({ message, ...(unknownMentions ? { unknownMentions } : {}) }, 201)
         }
         case 'schedule': {
           require(principal, 'post')
           const body = ScheduleBody.parse(await readJson(request))
           const attachments = await Promise.all([...new Set(body.attachments ?? [])].map((id) => readAttachment(blob, id)))
-          return json({ schedule: await schedules.create(identity, body, attachments) }, 201)
+          return json(await schedules.create(identity, body, attachments), 201)
         }
         case 'schedules': {
           const query = SchedulesQuery.parse(queryObject(url))
@@ -568,8 +568,8 @@ export function board(options: BoardOptions = {}) {
         case 'edit': {
           require(principal, 'post')
           const body = EditBody.parse(await readJson(request))
-          await writeEdit(writes, { identity, id: match.id!, text: body.text, ...origin })
-          return json({ ok: true })
+          const { unknownMentions } = await writeEdit(writes, { identity, id: match.id!, text: body.text, ...origin })
+          return json({ ok: true, ...(unknownMentions ? { unknownMentions } : {}) })
         }
         case 'delete': {
           require(principal, 'post')
