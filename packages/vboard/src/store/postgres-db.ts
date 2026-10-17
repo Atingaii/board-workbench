@@ -28,8 +28,11 @@ function explain(error: unknown): unknown {
   return error
 }
 
-/** The tables on Postgres, through a pool that `pool()` makes the first time it's needed. */
-export function postgresDb(pool: () => Promise<PgPool>): Db {
+/**
+ * The tables on Postgres, through a pool that `pool()` makes the first time it's
+ * needed. `owned`: closing the tables ends the pool.
+ */
+export function postgresDb(pool: () => Promise<PgPool>, options: { owned: boolean } = { owned: true }): Db {
   const run = async (queryable: PgQueryable, query: Sql) => {
     try {
       return await queryable.query(query.text, query.values)
@@ -71,7 +74,7 @@ export function postgresDb(pool: () => Promise<PgPool>): Db {
         return true
       }),
     async close() {
-      await (await pool()).end()
+      if (options.owned) await (await pool()).end()
     },
   }
 }

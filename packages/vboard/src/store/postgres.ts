@@ -7,23 +7,39 @@ import type { BoardStore } from './types.ts'
 const PG: string = 'pg'
 
 export type PostgresOptions = {
-  /** The database: A2's log and vboard's tables, which `schema.sql` creates. */
-  connectionString: string
   /** A direct connection to the same database, for live updates by notification. */
   listenConnectionString?: string
-  /** Connections vboard's own pool may open; A2 keeps a pool of its own. Default 5. */
-  max?: number
-}
+} & (
+  | {
+      /** The database: A2's log and vboard's tables, which `schema.sql` creates. */
+      connectionString: string
+      /** Connections vboard's own pool may open; A2 keeps a pool of its own. Default 5. */
+      max?: number
+    }
+  | {
+      /**
+       * A `pg` Pool you made, shared by A2's log and vboard's tables: for a password
+       * that comes from a callback, say. Closing the store ends it.
+       */
+      client: PgPool
+    }
+)
 
 /**
  * A board on Postgres (`npm i pg`). Apply `node_modules/vboard/sql/postgres/schema.sql`
  * before the first deploy: neither A2 nor vboard creates tables in Postgres.
  */
 export function postgres(options: PostgresOptions): BoardStore {
-  const log = a2Postgres({
-    connectionString: options.connectionString,
-    ...(options.listenConnectionString ? { listenConnectionString: options.listenConnectionString } : {}),
-  })
+  const listen = options.listenConnectionString ? { listenConnectionString: options.listenConnectionString } : {}
+  if ('client' in options) {
+    // vboard's transactions each need a connection of their own: a pool, not one connection.
+    if (typeof options.client.connect !== 'function') throw new TypeError('postgres({ client }) takes a pg Pool, which has connect()')
+    const log = a2Postgres({ client: options.client, ...listen })
+    // A2 ends the pool when its store closes, so the tables leave it open.
+    const tables = sqlTables(postgresDb(async () => options.client, { owned: false }))
+    return { log, tables, close: () => log.close() }
+  }
+  const log = a2Postgres({ connectionString: options.connectionString, ...listen })
   let pool: Promise<PgPool> | null = null
   const open = () =>
     (pool ??= import(PG).then(({ default: pg }) => {

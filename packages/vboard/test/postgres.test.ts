@@ -61,6 +61,19 @@ describe.skipIf(!url)('vboard on Postgres', () => {
     expect(threads.body.cursor).toBeGreaterThanOrEqual(id)
   })
 
+  it('shares a pool it was given between A2 and the tables', async () => {
+    const pool = new pg.Pool({ connectionString: database, max: 3 })
+    const shared = postgres({ client: pool })
+    const mounted = board({ store: shared, url: BOARD_URL, project: { id: PROJECT_ID, teamId: TEAM_ID }, auth: testAuth })
+    const julian = caller(mounted.fetch, await personToken())
+    const root = await julian('POST', '/messages', { channel: 'pool', text: 'one pool' })
+    await julian('POST', '/messages', { re: root.body.message.id, text: 'for both' })
+    const thread = await julian('GET', `/messages/${root.body.message.id}`)
+    expect(thread.body.replies.map((reply: { text: string }) => reply.text)).toEqual(['for both'])
+    await shared.close()
+    expect(pool.ending).toBe(true)
+  })
+
   it('says which file to apply when the tables are missing', async () => {
     const at = new URL(url!)
     at.pathname = '/postgres'

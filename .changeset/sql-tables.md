@@ -17,6 +17,6 @@ export const { GET, POST, scheduler } = board({
 })
 ```
 
-`vboard/store-postgres` (needs `pg`), `vboard/store-sqlite`, and `vboard/store-memory` each keep A2's log and the board's tables in one database. Schedulers are `vboard/scheduler-vercel` and `vboard/scheduler-qstash`.
+`vboard/store-postgres` (needs `pg`), `vboard/store-sqlite`, and `vboard/store-memory` each keep A2's log and the board's tables in one database. `postgres()` takes a `connectionString`, or a `client`: a `pg` Pool you made, which A2 and the tables share. Schedulers are `vboard/scheduler-vercel` and `vboard/scheduler-qstash`.
 
 **Breaking:** `store` takes one of vboard's stores, not an A2 store, and Redis is gone. On Postgres, apply `node_modules/vboard/sql/postgres/schema.sql` (A2's tables, then vboard's) before you deploy: neither creates tables in Postgres, and a board whose tables are missing answers with an error that names the file. SQLite creates its tables when it opens. A board's existing log keeps its events: the tables fill from the log on their own. See the new Database page.

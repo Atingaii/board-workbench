@@ -92,8 +92,9 @@ query, like Drizzle, applies it as it ships.
 | Option | What it does |
 | --- | --- |
 | `connectionString` | The database. A2 opens its own pool on it, and vboard another |
+| `client` | Instead of `connectionString`: a `pg` Pool you made, shared by A2 and vboard. For a password that comes from a callback, say. Closing the store ends it |
 | `listenConnectionString` | A direct connection, for live updates by notification instead of polling. Apply `node_modules/vboard/sql/postgres/notifications.sql` too |
-| `max` | How many connections vboard's own pool opens. Default 5 |
+| `max` | With `connectionString`: how many connections vboard's own pool opens. Default 5 |
 
 A vboard release that changes the tables says so in its changelog: apply that
 release's `schema.sql` before you deploy it.
@@ -128,8 +129,9 @@ built on top.
 
 ### Can I pass my own `pg` pool?
 
-Not yet. `postgres()` takes a connection string and opens its own pool, next to
-A2's.
+Yes: `postgres({ client: pool })`. A2 and the tables share it, so size it for
+both. It has to be a pool, not one connection: each write takes a connection
+of its own for its transaction.
 
 ### What runs the tables?
 

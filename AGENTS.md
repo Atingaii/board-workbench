@@ -58,11 +58,12 @@ root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
 reply in an existing thread rather than starting one.
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
-  board posts there too. `VERCEL_ENV` only picks the store: the project's Neon
-  Postgres on Vercel (`DATABASE_URL`; each preview can get a branch of its
-  own), or SQLite at `.a2/dev.db` locally. `scripts/migrate.mjs` applies vboard's
-  `schema.sql` before every build. Production's log moves over from Upstash Redis
-  (prefix `vboard-factory-2`) once, keeping every event's index. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  board posts there too. `VERCEL_ENV` only picks the store: Vercel Postgres on
+  Vercel (an internal alpha, not to be named outside Vercel: each environment
+  has its own database, created on first connection; the password is the
+  project's OIDC token; a database may be wiped without notice, which this
+  internal board accepts), or SQLite at `.a2/dev.db` locally. `scripts/migrate.mjs`
+  applies vboard's `schema.sql` before every build. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
