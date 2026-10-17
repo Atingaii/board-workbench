@@ -38,6 +38,11 @@ export interface MessageTables {
   position(): Promise<number>
   /** Applies one board event, exactly once: an event at or below the position changes nothing. */
   apply(event: BoardEvent): Promise<void>
+  /**
+   * Applies `event` only if it's the very next one, and says whether it did: a
+   * writer catching the tables up on its own write, without waiting on the consumer.
+   */
+  applyNext(event: BoardEvent): Promise<boolean>
   message(id: number): Promise<Message | null>
   /** The message a post with this event ID created. A root's thread key is one. */
   byEventId(eventId: string): Promise<Message | null>

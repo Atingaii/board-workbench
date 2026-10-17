@@ -194,6 +194,27 @@ describe.each(DIALECTS)('tables on %s', (_, open) => {
     await tables.close()
   })
 
+  it('let a writer apply only the very next event, never ahead of a gap', async () => {
+    const events = history(7, 200)
+    const tables = sqlTables(await open())
+    // A fresh board has no position yet: the consumer starts it, from the first event.
+    expect(await tables.applyNext(events[0]!)).toBe(false)
+    for (const event of events.slice(0, 50)) await tables.apply(event)
+    expect(await tables.applyNext(events[52]!)).toBe(false) // #51 isn't applied yet
+    expect(await tables.position()).toBe(50)
+    expect(await tables.applyNext(events[50]!)).toBe(true)
+    expect(await tables.applyNext(events[50]!)).toBe(false) // already applied
+    // Writers and the consumer take turns, in any mix; the tables end up the same.
+    for (const event of events.slice(51)) {
+      if (event.index % 3 === 0) expect(await tables.applyNext(event)).toBe(true)
+      else await tables.apply(event)
+      await tables.apply(event) // the consumer, after the writer: a no-op
+    }
+    const { messages } = fold(events)
+    for (const message of Object.values(messages.byId)) expect(await tables.message(message.id)).toEqual(message)
+    await tables.close()
+  })
+
   it('apply each event once, however many times it is handed over', async () => {
     const events = history(6, 120)
     const tables = sqlTables(await open())

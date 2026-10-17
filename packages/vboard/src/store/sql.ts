@@ -147,6 +147,12 @@ export function sqlTables(db: Db): MessageTables {
     values: [TABLES_CONSUMER, index],
   })
 
+  /** Only the event right after the position: never ahead of events the tables haven't applied. */
+  const claimNext = (index: number): Sql => ({
+    text: 'update vboard_positions set log_index = $2 where consumer = $1 and log_index = $3 returning 1 as claimed',
+    values: [TABLES_CONSUMER, index, index - 1],
+  })
+
   async function row(id: number) {
     const [found] = await db.all({ text: 'select data, replies, at from vboard_messages where id = $1', values: [id] })
     return found
@@ -237,9 +243,17 @@ order by r.at ${order} limit ${p.add(page.limit)}`,
     },
 
     async apply(event) {
+      // Applied already, most often by the writer that wrote it: skip the reads.
+      if (position(await db.all(positionSql)) >= event.index) return
       const id = concernedMessageId(event)
       const change = id === null ? {} : project(await before(event, id), event)
       await db.commit(claim(event.index), writes(event, change))
+    },
+
+    async applyNext(event) {
+      const id = concernedMessageId(event)
+      const change = id === null ? {} : project(await before(event, id), event)
+      return db.commit(claimNext(event.index), writes(event, change))
     },
 
     async message(id) {

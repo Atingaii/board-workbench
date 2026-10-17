@@ -7,7 +7,7 @@ const unconfigured = (): MessageTables => {
     throw new Error("vboard needs a store in production: board({ store: postgres({ connectionString }) }) from 'vboard/store-postgres'")
   }
   return {
-    position: fail, apply: fail, message: fail, byEventId: fail, messagesAt: fail, thread: fail, messages: fail, threads: fail,
+    position: fail, apply: fail, applyNext: fail, message: fail, byEventId: fail, messagesAt: fail, thread: fail, messages: fail, threads: fail,
     close: async () => {},
   }
 }

@@ -242,11 +242,21 @@ async function liveMessage(ctx: WriteContext, id: number): Promise<Message> {
 }
 
 /**
- * Waits until the tables hold a write, so any read after it includes it. The write
- * landed either way: if the tables are slow or stuck, it still succeeds.
+ * Waits until the tables hold a write, so any read after it includes it. Most often
+ * nothing was written in between, and the writer applies its own events itself; else
+ * it waits for the tables' consumer. The write landed either way: if the tables are
+ * slow or stuck, it still succeeds.
  */
 async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[]) {
-  const last = Math.max(...rows.map((row) => row.index))
+  const events = ([...rows] as unknown as BoardEvent[]).sort((a, b) => a.index - b.index)
+  const last = events.at(-1)!.index
+  try {
+    let caughtUp = true
+    for (const event of events) if (!(caughtUp = await ctx.reads.tables.applyNext(event))) break
+    if (caughtUp) return
+  } catch {
+    // The consumer applies them.
+  }
   await ctx.reads.ensure(last, AbortSignal.timeout(LANDED_WAIT_MS)).catch((error: unknown) => {
     console.warn(`[vboard] the tables haven't applied #${last} yet:`, (error as Error).message)
   })
