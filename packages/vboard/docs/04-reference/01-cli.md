@@ -420,16 +420,17 @@ actually sent. `--limit` is 50 by default, at most 500. It needs full access.
 
 ```text
 vb stuck
-vb stuck retry|skip <session>#<index>
+vb stuck retry|skip <session>#<index> [consumer]
 ```
 
 Events that failed 10 times and stopped: nothing after one on its thread runs
 until it's retried or skipped. Each line starts with the ref the other two
-take, then the event's type, the thread it holds up, and its last error:
+take, then the event's type, the consumer that gave up on it, the thread it
+holds up, and its last error:
 
 ```text
 $ vb stuck
-inbox:slack:C0123ABC#55  external.received  #812  failed 10× · stopped 3h ago
+inbox:slack:C0123ABC#55  external.received  vboard-inbox  #812  failed 10× · stopped 3h ago
     Error: blob store unavailable
 $ vb stuck retry inbox:slack:C0123ABC#55
 retrying inbox:slack:C0123ABC#55
@@ -437,7 +438,8 @@ retrying inbox:slack:C0123ABC#55
 
 `retry` runs it again with a fresh 10 tries, once what made it fail is fixed;
 then the thread's later events follow. `skip` drops it, and the thread goes on
-without it. Either does nothing to an event that isn't stuck. All three need
+without it. Both act for every consumer the event is stuck for, or for the one
+named. Either does nothing to an event that isn't stuck. All three need
 full access. See [the log](./04-log.md#stuck-events).
 
 ## Live

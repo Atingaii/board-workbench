@@ -52,7 +52,7 @@ A new root or reply.
 
 ### The rest
 
-Every event below carries `thread`, the thread key, so handlers can keep a
+Every event below carries `thread`, the thread key, so consumers can keep a
 thread's events in order on its lane.
 
 | Event | Payload | Written when |
@@ -97,7 +97,7 @@ thread's events in order on its lane.
 
 | Contract | Sessions | Events | Holds |
 | --- | --- | --- | --- |
-| `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC` | `external.received { sync, event, raw }` | every platform event, stored before the board answers the webhook; the inbound handler runs here |
+| `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC` | `external.received { sync, event, raw }` | every platform event, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here |
 | `vboard-watch` | `watch:<id>`, e.g. `watch:triage` | `watch.matched { thread, event }` | each [watcher's](../01-board/05-watchers.md) matches; its `run` happens here |
 | `vboard-schedules` | `schedules` | `schedule.created`, `schedule.canceled`, `schedule.due`, `schedule.fired` | [scheduled messages](../01-board/06-schedules.md) |
 
@@ -122,17 +122,31 @@ A schedule's ID is the index of its `schedule.created` event (`s12`).
 
 ### Stuck events
 
-Handlers run on lanes, one per thread, so a thread's events run in order. When
-one keeps failing, A2 gives up on it after 10 tries: it's dead-lettered, and
-nothing after it on its lane runs. vboard keeps that rare. A delivery that keeps
+The board's work runs as A2 consumers. Each runs events in order on lanes, and
+most lanes are threads, so a thread's events run in order:
+
+| Consumer | Runs on | Lane | What it does |
+| --- | --- | --- | --- |
+| `vboard-sync` | `board` | thread | delivers the board's writes to synced platforms |
+| `vboard-watchers` | `board` | thread | matches each event against every watcher |
+| `vboard-inbox` | each inbox | external thread | imports platform events onto the board |
+| `vboard-watch` | each watcher's session | thread | runs the watcher |
+| `vboard-schedules` | `schedules` | one | arms each new schedule's first send |
+| `vboard-schedule-sends` | `schedules` | schedule | posts a send when it's due |
+
+Each consumer keeps its own place, so one that fails holds up only itself. When
+an event keeps failing, A2 gives up on it after 10 tries: it's dead-lettered for
+that consumer, and nothing after it on that consumer's lane runs. vboard keeps that rare. A delivery that keeps
 failing is recorded as `message.sync_failed`, and a watcher gives up on its
 event, so neither stops its thread. What's left is mostly the cause outside
 vboard's control: a blob store that's down while files come in, or a bug.
 
 `vb stuck` lists them across the `board` session, every inbox (the mapped
 channels', and those of threads synced anywhere else), every watcher, and
-`schedules`. `vb stuck retry` runs one again with a fresh 10 tries, and its
-thread's later events follow; `vb stuck skip` marks it done without running it.
+`schedules`. Each names the consumer it's stuck for. `vb stuck retry` runs one again with a
+fresh 10 tries, and its thread's later events follow; `vb stuck skip` marks it
+done without running it. Given a consumer, either acts for that consumer alone;
+otherwise for every consumer the event is stuck for.
 Both are one atomic A2 operation (`session.redrive()`), and the board logs who
 did which.
 
@@ -146,7 +160,7 @@ the first three.
 | `messagesReducer` | `vboard.messages.v4` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | `read`, `/messages`, the event feed |
 | `channelsReducer` | `vboard.channels.v1` | path → `{ path, lastIndex, messages, threads }` | `channels` |
 | `actorsReducer` | `vboard.actors.v1` | `byId`: actor ID → `{ id, kind, handle, name, avatar }`; `byHandle`: lowercased handle → actor IDs | mention resolution, `actors`, rendering |
-| sync (internal) | `vboard.sync.v1` | thread → its targets and external threads; external thread → thread; message → its copies on each platform | both sync handlers |
+| sync (internal) | `vboard.sync.v1` | thread → its targets and external threads; external thread → thread; message → its copies on each platform | `vboard-inbox` and `vboard-sync` |
 
 A message, as `messagesReducer` folds it:
 

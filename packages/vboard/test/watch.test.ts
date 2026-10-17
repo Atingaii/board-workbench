@@ -220,6 +220,7 @@ describe('watchers', () => {
     // Without a scheduler nothing retries on its own; each drain is the next try.
     const watches = board.servers.at(-1)!
     await vi.waitFor(async () => {
+      await board.skipHold(watches, 'watch:flaky')
       await watches.drain('watch:flaky')
       expect(seen).toEqual(['are you alive?'])
     })
@@ -236,14 +237,15 @@ describe('watchers', () => {
     const match = { id: 'm1', payload: { thread: 't1', event: { index: 7, type: 'message.posted' } } }
     const input = { watcher: { id: 'pi', run }, match, board: () => ({}) as never, record: async (failure: unknown) => void recorded.push(failure) }
 
-    // Up to twice the tries, a run gets another go: earlier attempts may have been kills.
+    // Short of twice the tries, a run gets another go: earlier attempts may have been kills.
+    await runMatch({ ...input, attempt: 9 })
+    expect(run).toHaveBeenCalledTimes(1)
+    // The 10th is the last A2 hands out (it counts each kill as a failure at the next takeover,
+    // and dead-letters at 10): give up, don't run again.
     await runMatch({ ...input, attempt: 10 })
     expect(run).toHaveBeenCalledTimes(1)
-    // Past that, the runs keep dying (A2 counts kills as attempts, not failures): give up, don't run again.
-    await runMatch({ ...input, attempt: 11 })
-    expect(run).toHaveBeenCalledTimes(1)
-    expect(recorded).toEqual([{ matched: 'm1', thread: 't1', error: 'its run was cut short 10 times (a timeout, or out of memory)' }])
-    expect(error).toHaveBeenCalledWith('[vboard] watcher pi gave up on event #7 after 11 tries:', 'its run was cut short 10 times (a timeout, or out of memory)')
+    expect(recorded).toEqual([{ matched: 'm1', thread: 't1', error: 'its run was cut short 9 times (a timeout, or out of memory)' }])
+    expect(error).toHaveBeenCalledWith('[vboard] watcher pi gave up on event #7 after 10 tries:', 'its run was cut short 9 times (a timeout, or out of memory)')
     error.mockRestore()
   })
 

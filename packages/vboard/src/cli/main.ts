@@ -71,8 +71,8 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
   stuck                                    events that failed 10 times and stopped their thread (full access only)
-  stuck retry|skip <event>                 retry one with a fresh 10 tries, or skip it so its thread goes on,
-                                           e.g. stuck retry inbox:slack:C0123#55
+  stuck retry|skip <event> [consumer]      retry one with a fresh 10 tries, or skip it so its thread goes on,
+                                           for one consumer or all it's stuck for, e.g. stuck retry board#55
   sources                                  the board's sources (its sync entries: slack, github, …)
   sources <key> read <channel|thread|link> [--limit N]
                                            read a source's channel, thread, or message link without syncing it,
@@ -839,13 +839,15 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(list.map((event) => formatStuck(event)).join('\n'))
         return 0
       }
+      const consumer = args[2]
       const at = ref?.lastIndexOf('#') ?? -1
       const index = ref === undefined ? NaN : Number(ref.slice(at + 1))
-      if ((action !== 'retry' && action !== 'skip') || at <= 0 || !Number.isInteger(index) || index < 1 || args.length > 2)
-        throw new UsageError('usage: vboard stuck [retry|skip <session>#<index>], e.g. stuck retry board#812')
-      const { redriven } = await client().redrive(ref!.slice(0, at), index, action)
+      if ((action !== 'retry' && action !== 'skip') || at <= 0 || !Number.isInteger(index) || index < 1 || args.length > 3)
+        throw new UsageError('usage: vboard stuck [retry|skip <session>#<index> [consumer]], e.g. stuck retry board#812')
+      const { redriven } = await client().redrive(ref!.slice(0, at), index, action, consumer)
+      const what = consumer === undefined ? ref : `${ref} for ${consumer}`
       if (flags.json) printJson({ redriven })
-      else out(redriven ? `${action === 'retry' ? 'retrying' : 'skipped'} ${ref}` : `${ref} isn't stuck`)
+      else out(redriven ? `${action === 'retry' ? 'retrying' : 'skipped'} ${what}` : `${what} isn't stuck`)
       return 0
     }
 

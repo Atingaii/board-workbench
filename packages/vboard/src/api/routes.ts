@@ -148,6 +148,8 @@ export const InboxQuery = z.object({
 export const RedriveBody = z.object({
   session: z.string().min(1).max(300),
   index: z.number().int().min(1),
+  /** The consumer it's stuck for; without one, every consumer stuck on it. */
+  consumer: z.string().min(1).max(200).optional(),
   action: z.enum(['retry', 'skip']),
 })
 
@@ -348,6 +350,12 @@ export type StuckEvent = {
   /** The A2 session it's in: `board`, `inbox:<channel>`, `watch:<watcher>`, or `schedules`. */
   session: string
   index: number
+  /**
+   * What gave up on it: `vboard-sync` (delivery to platforms), `vboard-watchers`
+   * (matching watchers), `vboard-watch` (running one), `vboard-inbox` (platform
+   * events), `vboard-schedules`, or `vboard-schedule-sends`.
+   */
+  consumer: string
   type: string
   lane: string | null
   /** The board thread it holds up, when there is one, and its root. */

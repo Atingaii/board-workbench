@@ -32,6 +32,7 @@ function setup() {
   /** Drains an inbox until A2 gives up on its event: 10 failures. */
   const deadLetter = async (call: ReturnType<typeof caller>, channel: string) =>
     vi.waitFor(async () => {
+      await board.skipHold(inbox, `inbox:${channel}`)
       await inbox.drain(`inbox:${channel}`)
       expect((await call('GET', '/stuck')).body.stuck).toHaveLength(1)
     }, { timeout: 10_000, interval: 5 })
@@ -54,6 +55,7 @@ describe('stuck events', () => {
     const [stuck] = (await julian('GET', '/stuck')).body.stuck
     expect(stuck).toMatchObject({
       session: 'inbox:slack:C1',
+      consumer: 'vboard-inbox',
       type: 'external.received',
       lane: 'thread:slack:C1:500.1',
       thread: null, // it never reached the board
@@ -64,7 +66,7 @@ describe('stuck events', () => {
     })
     expect(await texts(julian)).toEqual([])
     expect(formatStuck(stuck, Date.parse(stuck.failedAt) + 120_000)).toBe(
-      `inbox:slack:C1#${stuck.index}  external.received  slack:C1:500.1  failed 10× · stopped 2m ago\n    ${stuck.error.split('\n')[0]}`,
+      `inbox:slack:C1#${stuck.index}  external.received  vboard-inbox  slack:C1:500.1  failed 10× · stopped 2m ago\n    ${stuck.error.split('\n')[0]}`,
     )
 
     up()

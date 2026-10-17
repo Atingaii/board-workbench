@@ -1,5 +1,5 @@
 import { idempotentId, reducer } from 'experimental-a2'
-import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
+import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { ScheduleBodyOutput, ScheduleView, SchedulesQueryOutput } from '../api/routes.ts'
 import { duration } from '../client/client.ts'
 import {
@@ -150,12 +150,12 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   let writes: WriteContext | null = null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
-  async function arm(ctx: HandlerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
+  async function arm(ctx: ConsumerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
     const hop = Math.min(at, Date.now() + MAX_HOP_MS)
     await ctx.session.schedule(name, { at: new Date(Math.max(hop, Date.now())) }, { type: 'schedule.due', payload: { id, n, at } })
   }
 
-  async function due(ctx: HandlerContext<ScheduleEvents, 'schedule.due'>) {
+  async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
     if (!writes) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
     const { state } = await ctx.session.state(schedulesReducer)
@@ -205,23 +205,30 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     if (next !== null) await arm(ctx, 'next', id, n + 1, next)
   }
 
+  /** Arms each new schedule's first send. */
+  const arming = consumer({
+    contract: schedulesContract,
+    name: 'vboard-schedules',
+    types: ['schedule.created'],
+    lane: 'schedules',
+  }).run(async (ctx) => {
+    if (!options.scheduler) return
+    await arm(ctx, 'first', ctx.event.index, 0, ctx.event.payload.first)
+  })
+
+  /** Makes each due send, one schedule at a time. */
+  const sending = consumer({
+    contract: schedulesContract,
+    name: 'vboard-schedule-sends',
+    types: ['schedule.due'],
+    lane: ({ event }) => `schedule:${event.payload.id}`,
+  }).run(due)
+
   const server = createServer({
     contract: schedulesContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    handlers: {
-      'schedule.created': {
-        lane: 'schedules',
-        handler: async (ctx) => {
-          if (!options.scheduler) return
-          await arm(ctx, 'first', ctx.event.index, 0, ctx.event.payload.first)
-        },
-      },
-      'schedule.due': {
-        lane: ({ event }) => `schedule:${event.payload.id}`,
-        handler: due,
-      },
-    },
+    consumers: [arming, sending],
   })
   const session = server.session(SCHEDULES_SESSION)
 

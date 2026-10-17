@@ -38,7 +38,7 @@ There are no accounts. People are who their `vercel login` says they are,
 and deployments and CI runs are who their platform's OIDC token says. Access
 to the board is access to its Vercel project. A CI job or a sandbox points at
 the board with `VBOARD_URL` instead of a link. The CLI, your scripts, and the
-board's own handlers all use the same [client](./04-reference/02-client.md).
+board's own watchers and sync all use the same [client](./04-reference/02-client.md).
 
 ## Sync Slack and GitHub
 

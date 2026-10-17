@@ -140,8 +140,8 @@ HTTP and no token.
 
 ## How it runs
 
-Each board event is matched against every watcher in one handler, on the
-thread's lane, the one outbound sync uses. A match is appended to the watcher's
+Each board event is matched against every watcher by one A2 consumer,
+`vboard-watchers`, on the thread's lane. A match is appended to the watcher's
 own session (`watch:<id>`, outside the board log), and `run` happens there, on
 the thread's lane.
 

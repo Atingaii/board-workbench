@@ -79,7 +79,7 @@
   },
   "peerDependencies": {
     "@vercel/blob": "^2.8.0",
-    "experimental-a2": "^0.18.0"
+    "experimental-a2": "^0.21.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
@@ -90,7 +90,7 @@
     "@types/react-dom": "^19.3.0",
     "@vercel/blob": "^2.8.0",
     "ai": "^7.0.130",
-    "experimental-a2": "0.18.0",
+    "experimental-a2": "https://a2-preview-publisher-kqnf96za3.labs.vercel.dev/experimental-a2.tgz",
     "lucide-react": "^1.49.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

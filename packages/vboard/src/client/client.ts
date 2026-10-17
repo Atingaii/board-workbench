@@ -342,11 +342,14 @@ export function createBoardClient(options: ClientOptions) {
     /** Events that failed 10 times and stopped their thread, oldest first. Full access only. */
     stuck: async () => (await call<{ stuck: StuckEvent[] }>('GET', '/stuck')).stuck,
     /**
-     * Retries a stuck event with a fresh 10 tries, or skips it so its thread goes on. `redriven` is
-     * false when it wasn't stuck (anymore). Full access only.
+     * Retries a stuck event with a fresh 10 tries, or skips it so its thread goes on, for `consumer`,
+     * or for every consumer it's stuck for. `redriven` is false when it wasn't stuck (anymore). Full
+     * access only.
      */
-    redrive: (session: string, index: number, action: 'retry' | 'skip') =>
-      call<{ redriven: boolean }>('POST', '/stuck/redrive', { body: { session, index, action } }),
+    redrive: (session: string, index: number, action: 'retry' | 'skip', consumer?: string) =>
+      call<{ redriven: boolean }>('POST', '/stuck/redrive', {
+        body: { session, index, action, ...(consumer !== undefined ? { consumer } : {}) },
+      }),
     /**
      * Reads a platform channel (`#name`, an ID), thread (`C0123:1727000000.123456`),
      * or message permalink on demand, without syncing or storing it. Full access only.

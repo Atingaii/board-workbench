@@ -142,31 +142,21 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'attachment', pattern: /\/attachments\/([A-Za-z0-9_-]+)$/ },
 ]
 
-type BoardHandlers = NonNullable<ServerOptions<BoardEvents>['handlers']>
 /** What `vb stuck` needs of an A2 session, whatever its contract. */
 type Redrivable = {
-  deadLetters(): Promise<{ index: number; type: string; lane: string | null; attemptCount: number; failureCount: number; lastError: string | null; failedAt: Date }[]>
-  redrive(index: number, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
-}
-type BoardHandler = { lane?: unknown; handler: (ctx: never) => Promise<unknown> }
-
-/** A2 takes one handler per event type, so watchers and sync share it, on the same lanes: watchers first. */
-function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
-  const combined: Record<string, BoardHandler> = {}
-  for (const set of sets)
-    for (const [type, entry] of Object.entries(set) as [string, BoardHandler][]) {
-      const first = combined[type]
-      combined[type] = first
-        ? {
-            lane: first.lane,
-            handler: async (ctx: never) => {
-              await first.handler(ctx)
-              await entry.handler(ctx)
-            },
-          }
-        : entry
-    }
-  return combined as BoardHandlers
+  deadLetters(): Promise<
+    {
+      consumer: string
+      index: number
+      type: string
+      lane: string | null
+      attemptCount: number
+      failureCount: number
+      lastError: string | null
+      failedAt: Date
+    }[]
+  >
+  redrive(target: { consumer: string; index: number }, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
 }
 
 const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
@@ -255,12 +245,13 @@ export function board(options: BoardOptions = {}) {
       ? createWatchers({ watch: options.watch, store: options.store, scheduler: options.scheduler })
       : null
   const schedules = createSchedules({ store: options.store, scheduler: options.scheduler })
-  const handlers = [watchers?.boardHandlers, engine?.outboundHandlers].filter((set) => set !== undefined)
+  // Watchers and sync each keep their own place in the board's log.
+  const consumers = [watchers?.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
   const server = createServer({
     contract: boardContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    ...(handlers.length > 0 ? { handlers: combineHandlers(...handlers) } : {}),
+    consumers,
   })
   const session = server.session(BOARD_SESSION)
   const writes: WriteContext = {
@@ -290,7 +281,7 @@ export function board(options: BoardOptions = {}) {
     return verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
   }
 
-  /** The sessions whose handlers run on lanes, so a dead letter there stops the rest of its lane. */
+  /** The sessions whose consumers run on lanes, so a dead letter there stops the rest of its lane. */
   async function lanedSessions(): Promise<{ id: string; session: Redrivable }[]> {
     const ids: [string, { session(id: string): Redrivable }][] = [
       [BOARD_SESSION, server],
@@ -315,6 +306,7 @@ export function board(options: BoardOptions = {}) {
       return {
         session: id,
         index: dead.index,
+        consumer: dead.consumer,
         type: dead.type,
         lane: dead.lane,
         thread,
@@ -331,9 +323,19 @@ export function board(options: BoardOptions = {}) {
   async function redrive(body: z.infer<typeof RedriveBody>, by: string) {
     const target = (await lanedSessions()).find(({ id }) => id === body.session)
     if (!target) throw notFound(`no session ${body.session} on this board`)
-    const { redriven } = await target.session.redrive(body.index, { action: body.action })
-    if (redriven) console.info(`[vboard] ${by} ${body.action === 'retry' ? 'retried' : 'skipped'} stuck event ${body.session}#${body.index}`)
-    return { redriven }
+    // Without a consumer, every consumer the event is stuck for.
+    const consumers =
+      body.consumer !== undefined
+        ? [body.consumer]
+        : (await target.session.deadLetters()).filter((dead) => dead.index === body.index).map((dead) => dead.consumer)
+    const done: string[] = []
+    for (const consumer of consumers) {
+      const { redriven } = await target.session.redrive({ consumer, index: body.index }, { action: body.action })
+      if (redriven) done.push(consumer)
+    }
+    if (done.length > 0)
+      console.info(`[vboard] ${by} ${body.action === 'retry' ? 'retried' : 'skipped'} stuck event ${body.session}#${body.index} for ${done.join(', ')}`)
+    return { redriven: done.length > 0 }
   }
 
   const require = (principal: Principal, capability: Capability) => {

@@ -6,7 +6,7 @@ import { ChatSyncProvider } from '../src/sync/chat-provider.ts'
 import type { SyncContext, EventMapping } from '../src/sync/provider.ts'
 import { envelope, eventSchema } from '../src/sync/events.ts'
 import { z } from 'zod'
-import { createServer } from 'experimental-a2/server'
+import { consumer, createServer } from 'experimental-a2/server'
 import { memory } from 'experimental-a2/store-memory'
 import { boardContract } from '../src/contract/contract.ts'
 import { github } from '../src/sync/github.ts'
@@ -282,6 +282,7 @@ describe('sync', () => {
     await vi.waitFor(() => expect(s.fetches).toHaveLength(flaky))
     s.served.set('https://files.slack.test/flaky.log', log)
     await vi.waitFor(async () => {
+      await board.skipHold(inbox, 'inbox:slack:C1')
       await inbox.drain('inbox:slack:C1')
       expect(await read(julian, 'firehose')).toHaveLength(1)
     })
@@ -294,6 +295,7 @@ describe('sync', () => {
       files: [{ name: 'gone.log', mimeType: 'text/plain', url: 'https://files.slack.test/gone.log', size: 11 }],
     })
     await vi.waitFor(async () => {
+      await board.skipHold(inbox, 'inbox:slack:C1')
       await inbox.drain('inbox:slack:C1')
       const { body } = await julian('GET', `/messages/${root!.id}`)
       expect(body.replies[0]).toMatchObject({ text: "older one\n\n📎 gone.log (11 B) didn't come over: slack wouldn't hand it over", attachments: [] })
@@ -334,6 +336,7 @@ describe('sync', () => {
 
     // A rate limit retries the upload alone (each drain is the next attempt); the refusal that follows notes the file in the text.
     await vi.waitFor(async () => {
+      await board.skipHold(board.servers[0]!, 'board')
       await board.servers[0]!.drain('board')
       expect(s.edits).toHaveLength(1)
     })
@@ -1114,6 +1117,7 @@ describe('sync', () => {
     const { body: failed } = await julian('POST', '/messages', { re: body.message.id, text: 'rolled back' })
     // Without a scheduler nothing retries on its own; each drain is the next attempt.
     await vi.waitFor(async () => {
+      await board.skipHold(board.servers[0]!, 'board')
       await board.servers[0]!.drain('board')
       const { body: thread } = await julian('GET', `/messages/${body.message.id}`)
       expect(thread.replies[0].undelivered).toEqual({ 'slack:C1': 'not_in_channel' })
@@ -1192,7 +1196,7 @@ describe('provider callbacks', () => {
     } finally { error.mockRestore() }
   })
 
-  it('preserves A2 receipt identities from the pre-refactor handler step', async () => {
+  it('derives a receipt identity from its trigger, the sync consumer, and the receipt', async () => {
     const { board, s, webhook } = setup()
     const call = caller(board.fetch, await personToken())
     await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'root', user: 'U1' })
@@ -1207,11 +1211,11 @@ describe('provider callbacks', () => {
     if (!trigger || trigger.type !== 'message.posted' || !receipt || receipt.type !== 'message.synced') throw new Error('missing delivery history')
     const reference = createServer({
       contract: boardContract, store: memory(),
-      handlers: {
-        'message.posted': { handler: async (ctx) => {
+      consumers: [
+        consumer({ contract: boardContract, name: 'vboard-sync', types: ['message.posted'] }).run(async (ctx) => {
           await ctx.session.append(`receipt:${posted.body.message.id}:${receipt.payload.target}`, { type: 'message.synced', payload: receipt.payload })
-        } },
-      },
+        }),
+      ],
     })
     const old = reference.session('board')
     await old.append({ id: trigger.id, type: 'message.posted', payload: trigger.payload })

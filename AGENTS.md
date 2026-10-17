@@ -54,9 +54,10 @@ reply in an existing thread rather than starting one.
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  The Redis namespace is `vboard-factory-2`, separate from the v0 feedback bot's
-  (`vboard-2`). Both are new with A2 0.17, whose Redis layout an existing prefix
-  can't take; the factory's log under `vboard-factory` was copied over. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  The Redis namespace is `vboard-factory-3`, separate from the v0 feedback bot's
+  (`vboard-3`). Both are new with A2's consumers, whose Redis layout an existing
+  prefix can't take, as A2 0.17's was before; production's logs are copied over
+  from `-2` when it moves. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
@@ -116,8 +117,8 @@ reply in an existing thread rather than starting one.
   what's new itself: a burst of replies costs one turn, not one each.
   A message that can't reach Pi (its sandbox fails to start or set up) is
   tried 3 times, then the watcher replies "Pi couldn't start" in the thread
-  instead of throwing: a watcher that throws dead-letters within half a minute,
-  which stops it on that thread for good. The next reply tries again. No
+  instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
+  then vboard drops that event without a word. The next reply tries again. No
   watcher's own reply wakes Pi or triage (`byWatcher`).
 - `crosspost` (`crosspost.ts`) links a factory PR's Slack thread and the Slack
   thread it was built for, both ways, once the PR's root lands in Slack (its tail

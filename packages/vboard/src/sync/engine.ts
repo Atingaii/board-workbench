@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { canonicalEmoji } from '../contract/emoji.ts'
 import { idempotentId } from 'experimental-a2'
-import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
+import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { BoardClient } from '../client/client.ts'
 import {
   IDENTITY_SESSION,
+  boardContract,
   identityContract,
   inboxContract,
   inboxSession,
@@ -638,18 +639,21 @@ export function createSyncEngine(options: {
     ...(options.store ? { store: options.store } : {}),
   })
 
+  /** Inbound: each platform event, one platform thread at a time. */
+  const inbox = consumer({
+    contract: inboxContract,
+    name: 'vboard-inbox',
+    types: ['external.received'],
+    lane: ({ event }) => `thread:${event.payload.event.thread}`,
+  }).run(async (ctx) => {
+    await inbound(ctx.event as InboxEvent, ctx.attempt)
+  })
+
   const inboxServer = createServer({
     contract: inboxContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    handlers: {
-      'external.received': {
-        lane: ({ event }) => `thread:${event.payload.event.thread}`,
-        handler: async (ctx) => {
-          await inbound(ctx.event as InboxEvent, ctx.attempt)
-        },
-      },
-    },
+    consumers: [inbox],
   })
 
   // --- outbound: board → platforms --------------------------------------------------
@@ -782,7 +786,7 @@ export function createSyncEngine(options: {
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
 
-  type Ctx<K extends keyof BoardEvents> = HandlerContext<BoardEvents, K>
+  type Ctx<K extends keyof BoardEvents> = ConsumerContext<BoardEvents, K>
 
   async function latest(ctx: Ctx<keyof BoardEvents>) {
     const [sync, messages, actors] = await Promise.all([
@@ -880,7 +884,7 @@ export function createSyncEngine(options: {
   }
 
   /**
-   * A2 dead-letters a handler after 10 failures, and a dead letter stops its lane,
+   * A2 dead-letters an event after 10 failures, and a dead letter stops its lane,
    * which is the thread's: nothing after it would sync. So a delivery retries a
    * few times, then records `message.sync_failed` and lets the thread move on.
    */
@@ -988,7 +992,7 @@ export function createSyncEngine(options: {
     const failures: Failure[] = []
     for (const target of synced.targets) {
       const externalThread = synced.external[target]
-      if (!externalThread) continue // the root isn't there yet; its thread.synced handler backfills
+      if (!externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
       if (cameFrom(message, target)) continue
       try {
         const copy = state.sync.copies[message.id]?.[target] ?? (await postReply(ctx, state, message, target, externalThread))
@@ -1093,18 +1097,31 @@ export function createSyncEngine(options: {
     return done.filter((external) => external !== null)
   }
 
-  const lane = ({ event }: { event: { payload: unknown } }) => `thread:${(event.payload as { thread: string }).thread}`
+  /** What each board event a platform shows is delivered by. */
+  const deliveries = {
+    'thread.synced': deliverThread,
+    'message.posted': deliverPost,
+    'message.edited': deliverChange,
+    'message.deleted': deliverChange,
+    'reaction.added': deliverChange,
+    'reaction.removed': deliverChange,
+    'labels.changed': deliverLabels,
+  } satisfies { [K in keyof BoardEvents]?: (ctx: Ctx<K>) => Promise<unknown> }
+  type Delivered = keyof typeof deliveries
 
-  /** Board-contract handlers for outbound delivery, one lane per thread. */
-  const outboundHandlers = {
-    'thread.synced': { lane, handler: async (ctx: Ctx<'thread.synced'>) => void (await deliverThread(ctx)) },
-    'message.posted': { lane, handler: async (ctx: Ctx<'message.posted'>) => void (await deliverPost(ctx)) },
-    'message.edited': { lane, handler: async (ctx: Ctx<'message.edited'>) => void (await deliverChange(ctx)) },
-    'message.deleted': { lane, handler: async (ctx: Ctx<'message.deleted'>) => void (await deliverChange(ctx)) },
-    'reaction.added': { lane, handler: async (ctx: Ctx<'reaction.added'>) => void (await deliverChange(ctx)) },
-    'reaction.removed': { lane, handler: async (ctx: Ctx<'reaction.removed'>) => void (await deliverChange(ctx)) },
-    'labels.changed': { lane, handler: async (ctx: Ctx<'labels.changed'>) => void (await deliverLabels(ctx)) },
-  }
+  /**
+   * Outbound delivery, one thread at a time, on the same per-thread lanes as the
+   * watchers' but with its own place in the log: no watcher holds it up.
+   */
+  const outbound = consumer({
+    contract: boardContract,
+    name: 'vboard-sync',
+    types: Object.keys(deliveries) as Delivered[],
+    lane: ({ event }) => `thread:${(event.payload as { thread: string }).thread}`,
+  }).run(async (ctx) => {
+    const deliver = deliveries[ctx.event.type] as (ctx: Ctx<Delivered>) => Promise<unknown>
+    await deliver(ctx)
+  })
 
   async function readInbox(key: string, channel: string | undefined, limit: number) {
     platformOf(key)
@@ -1165,7 +1182,7 @@ export function createSyncEngine(options: {
     inboxServer,
     identityServer,
     readSource,
-    outboundHandlers,
+    outbound,
     startLink,
     checkLink,
     bind: (b: BoardBinding) => {

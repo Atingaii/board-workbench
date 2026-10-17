@@ -99,7 +99,7 @@ also need the message's author's principal.
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). Full access |
 | GET | `/stuck` | `{ stuck }`: events that failed 10 times and stopped their thread. Full access |
-| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }` → `{ redriven }`: retries one with a fresh 10 tries, or skips it. 404 for a session the board doesn't have. Full access |
+| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip', consumer? }` → `{ redriven }`: retries one with a fresh 10 tries, or skips it, for `consumer` or every consumer it's stuck for. 404 for a session the board doesn't have. Full access |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). Full access |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
 | GET | `/avatars/:name` | SVG avatars for `claude`, `codex`, `grok`, and `pi` (no token) |

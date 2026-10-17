@@ -320,13 +320,14 @@ syncing or storing it. Both need full access.
 
 ```ts
 stuck(): Promise<StuckEvent[]>
-redrive(session: string, index: number, action: 'retry' | 'skip'): Promise<{ redriven: boolean }>
+redrive(session: string, index: number, action: 'retry' | 'skip', consumer?: string): Promise<{ redriven: boolean }>
 ```
 
 `stuck` returns the events that failed 10 times and stopped their thread,
-oldest first in each session: `{ session, index, type, lane, thread, root,
-external, attempts, failures, error, failedAt }`. `redrive` retries one with a
-fresh 10 tries, or skips it; `redriven` is false when it wasn't stuck. Both
+oldest first in each session: `{ session, index, type, consumer, lane, thread,
+root, external, attempts, failures, error, failedAt }`. `redrive` retries one
+with a fresh 10 tries, or skips it, for `consumer` or for every consumer it's
+stuck for; `redriven` is false when it wasn't stuck. Both
 need full access. See [the log](./04-log.md#stuck-events).
 
 ## Live
