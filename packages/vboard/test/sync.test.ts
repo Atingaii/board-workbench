@@ -780,6 +780,7 @@ describe('sync', () => {
       expect(await read(julian, 'prs')).toHaveLength(0)
       expect(s.channelPosts).toHaveLength(0)
       await vi.waitFor(async () => {
+        await board.skipHold(board.servers[1]!, 'inbox:github:basehub-ai/vboard:pulls')
         await board.servers[1]!.drain('inbox:github:basehub-ai/vboard:pulls')
         expect(await read(julian, 'prs')).toHaveLength(2)
       })
@@ -1184,6 +1185,7 @@ describe('provider callbacks', () => {
       await send(action, 'selected')
       await vi.waitFor(() => expect(error).toHaveBeenCalled())
       await vi.waitFor(async () => {
+        await board.skipHold(board.servers[1]!, `inbox:github:basehub-ai/vboard:${issue ? 'issues' : 'pulls'}`)
         await board.servers[1]!.drain(`inbox:github:basehub-ai/vboard:${issue ? 'issues' : 'pulls'}`)
         expect(results).toHaveLength(2)
       })
@@ -1309,6 +1311,7 @@ describe('provider callbacks', () => {
       await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U1' }) }))
       await vi.waitFor(() => expect(attempts).toBe(1))
       await vi.waitFor(async () => {
+        await board.skipHold(board.servers[1]!, 'inbox:slack:C1')
         await board.servers[1]!.drain('inbox:slack:C1')
         expect(attempts).toBe(2)
       })
