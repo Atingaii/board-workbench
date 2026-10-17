@@ -210,11 +210,13 @@ export function allow(file: string, rules: string[]): string[] {
   return added
 }
 
-export function disallow(file: string, rules: string[]) {
+/** Removes the rules a file has. Answers whether it removed any. */
+export function disallow(file: string, rules: string[]): boolean {
   const config = readConfig(file)
   const allowed = config.permissions?.allow
-  if (!allowed?.some((rule) => rules.includes(rule))) return
+  if (!allowed?.some((rule) => rules.includes(rule))) return false
   writeConfig(file, { ...config, permissions: { ...config.permissions, allow: allowed.filter((rule) => !rules.includes(rule)) } })
+  return true
 }
 
 /**

@@ -198,6 +198,19 @@ reply in an existing thread rather than starting one.
   bypass when calling the board. Connect forwards webhooks
   through deployment protection.
 
+### Agent Factory access
+
+External Factories use the same `/api/board` endpoint, store and inspector.
+`VBOARD_TRUSTED_SOURCES` grants explicit immutable project/team IDs, production
+only by default. Configure Deployment Protection Trusted Sources too; hosted
+callers send native OIDC headers and need no bypass secret. Factory discussions
+use `factory/...` channels; all Pi watchers and external sync target `dev`.
+These grants authorize the whole board, not individual channels. Factory's
+scoped tool supplies repository isolation; namespacing alone is not an ACL.
+Read [the setup skill](skills/configure-factory-board/SKILL.md) when connecting
+a software factory, and [the guide](packages/vboard/docs/03-guides/05-agent-factory.md)
+for the service contract.
+
 ## the v0 feedback bot (`apps/v0-feedback`)
 
 vboard as a v0 feedback bot on the `vercel-internal-playground/vboard` project,
