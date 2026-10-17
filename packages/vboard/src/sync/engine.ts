@@ -1044,10 +1044,14 @@ export function createSyncEngine(options: {
   async function deliverLabels(ctx: Ctx<'labels.changed'>) {
     const { id } = ctx.event.payload
     const state = await latest(ctx)
-    const message = await state.tables.message(id)
+    // The message just after this change, against just before it: a later change has its own delivery.
+    const [after, before] = await Promise.all([
+      state.tables.messagesAt([id], ctx.event.index).then((found) => found.get(id)),
+      state.tables.messagesAt([id], ctx.event.index - 1).then((found) => found.get(id)),
+    ])
+    const message = after
     const copies = state.sync.copies[id] ?? {}
     if (!message || message.deleted || Object.keys(copies).length === 0) return
-    const before = (await state.tables.messagesAt([id], ctx.event.index - 1)).get(id)
     const previous = { ...message, labels: before?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
       try {
