@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BoardEvent } from '../src/contract/contract.ts'
-import { foldActors, foldMessages, type ActorsState, type Message, type MessagesState } from '../src/contract/reducers.ts'
+import { foldActors, foldMessages, foldSync, type ActorsState, type Message, type MessagesState, type SyncState } from '../src/contract/reducers.ts'
 import { compileFilter, toMessageFilter, type ParsedFilters } from '../src/server/feed.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
 import { sqlTables, type Db } from '../src/store/sql.ts'
@@ -58,22 +58,31 @@ function history(seed: number, length: number): BoardEvent[] {
     if (!target || roll < 0.25) {
       const id = `e${events.length + 1}`
       const channel = r.pick(CHANNELS)
+      // Some come in from a platform thread, which the root then lives in.
+      const imported = r.chance(0.3)
+      const n = events.length + 1
       push('message.posted', {
         channel, text: text(), re: null, replyTo: null, thread: id, labels: labels(), noSync: r.chance(0.1),
-        mentions: mentions(), by: author, origin: null, from: r.chance(0.3) ? 'slack' : null,
+        mentions: mentions(), by: author,
+        origin: imported ? { channel: 'slack:C9', thread: `slack:C9:${n}`, subthread: null, message: `${n}.0`, context: null } : null,
+        from: imported ? 'slack' : null,
       }, id)
       posted.push({ id: events.length, re: null, channel, thread: id })
     } else if (roll < 0.5) {
       const root = target.re ?? target.id
       const rootPost = posted.find((p) => p.id === root)!
+      const imported = r.chance(0.2)
+      const n = events.length + 1
       push('message.posted', {
         channel: rootPost.channel, text: text(), re: root, replyTo: target.re === null ? null : target.id, thread: rootPost.thread,
-        labels: r.chance(0.2) ? labels() : {}, noSync: false, mentions: mentions(), by: author, origin: null, from: null,
+        labels: r.chance(0.2) ? labels() : {}, noSync: false, mentions: mentions(), by: author,
+        origin: imported ? { channel: 'slack:C9', thread: `slack:C9:${root}`, subthread: r.chance(0.3) ? `slack:C9:${root}:s` : null, message: `${n}.0`, context: null } : null,
+        from: imported ? 'slack' : null,
       })
       posted.push({ id: events.length, re: root, channel: rootPost.channel, thread: rootPost.thread })
     } else {
       const base = { id: target.id, thread: target.thread, by: author, from: null }
-      const kind = r.pick(['edit', 'delete', 'react', 'unreact', 'labels', 'linked', 'synced', 'failed', 'other'] as const)
+      const kind = r.pick(['edit', 'delete', 'react', 'unreact', 'labels', 'linked', 'synced', 'synced', 'files', 'failed', 'attach', 'attach'] as const)
       if (kind === 'edit') push('message.edited', { ...base, text: text(), mentions: mentions() })
       else if (kind === 'delete') push('message.deleted', base)
       else if (kind === 'react') push('reaction.added', { ...base, emoji: r.pick(['eyes', '+1', 'thumbs_up']) })
@@ -81,8 +90,16 @@ function history(seed: number, length: number): BoardEvent[] {
       else if (kind === 'labels') push('labels.changed', { id: target.id, thread: target.thread, by: author, set: labels(), unset: r.chance(0.5) ? [r.pick(['kind', 'pr', 'tag.x'])] : [] })
       else if (kind === 'linked') push('message.linked', { ...base, links: [{ url: 'https://example.com', message: null, snapshot: null, unavailable: null }] })
       else if (kind === 'failed') push('message.sync_failed', { id: target.id, thread: target.thread, target: 'slack:C1', error: 'not_in_channel' })
-      else if (kind === 'synced') push('message.synced', { id: target.id, thread: target.thread, target: 'slack:C1', external: { thread: 'slack:C1:1', message: '1.2' } })
-      else push('thread.synced', { thread: target.thread, target: 'slack:C1', cause: 'request', by: author })
+      else if (kind === 'synced') {
+        // A root's receipt in a channel target says which platform thread it started.
+        const to = r.pick(['slack:C1', 'github:o/r:7'])
+        const external = target.re === null && to === 'slack:C1' ? `slack:C1:${target.id}` : to === 'slack:C1' ? `slack:C1:${target.re}` : to
+        push('message.synced', { id: target.id, thread: target.thread, target: to, external: { thread: external, message: `${target.id}.9`, ...(r.chance(0.2) ? { asUser: true } : {}) } })
+      } else if (kind === 'files') push('message.files_synced', { id: target.id, thread: target.thread, target: r.pick(['slack:C1', 'slack:C9']), files: r.chance(0.2) ? null : ['F1'] })
+      else {
+        const to = r.pick(['slack:C1', 'github:o/r:7', 'slack:C1'])
+        push('thread.synced', { thread: target.thread, target: to, cause: 'request', by: author, ...(r.chance(0.5) ? { kind: to.split(':').length > 2 ? 'thread' : 'channel' } : {}) })
+      }
     }
   }
   return events
@@ -92,12 +109,14 @@ function history(seed: number, length: number): BoardEvent[] {
 function fold(events: readonly BoardEvent[], index = Infinity) {
   const messages: MessagesState = { byId: {}, replies: {} }
   const actors: ActorsState = { byId: {}, byHandle: {}, links: {} }
+  const sync: SyncState = { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} }
   for (const event of events) {
     if (event.index > index) break
     foldMessages(messages, event)
     foldActors(actors, event)
+    foldSync(sync, event)
   }
-  return { messages, actors }
+  return { messages, actors, sync }
 }
 
 /** `/messages` and `/threads` as they were computed over the full state. */
@@ -212,6 +231,25 @@ describe.each(DIALECTS)('tables on %s', (_, open) => {
     }
     const { messages } = fold(events)
     for (const message of Object.values(messages.byId)) expect(await tables.message(message.id)).toEqual(message)
+    await tables.close()
+  })
+
+  it.each([8, 9])('keep the sync state the full-state fold keeps (history %i)', async (seed) => {
+    const events = history(seed, 400)
+    const tables = await applied(events)
+    const { sync } = fold(events)
+    expect(Object.keys(sync.threads).length).toBeGreaterThan(10)
+    for (const [key, thread] of Object.entries(sync.threads)) expect(await tables.syncOf(key)).toEqual(thread)
+    expect(await tables.syncOf('no-such-thread')).toBeNull()
+    for (const [external, thread] of Object.entries(sync.byExternalThread)) expect(await tables.threadOf(external)).toBe(thread)
+    expect((await tables.externalThreads()).sort()).toEqual(Object.keys(sync.byExternalThread).sort())
+    const ids = events.filter((e) => e.type === 'message.posted').map((e) => e.index)
+    const copies = await tables.copiesOf(ids)
+    expect(Object.fromEntries([...copies].map(([id, byTarget]) => [String(id), byTarget]))).toEqual(sync.copies)
+    for (const [key, message] of Object.entries(sync.byExternalMessage)) {
+      const at = key.lastIndexOf('|')
+      expect(await tables.messageOf(key.slice(0, at), key.slice(at + 1))).toBe(message)
+    }
     await tables.close()
   })
 

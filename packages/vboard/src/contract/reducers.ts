@@ -336,12 +336,6 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
   }
 }
 
-export const syncReducer = reducer({
-  contract: boardContract,
-  name: 'vboard.sync.v1',
-  initialState: { threads: {}, byExternalThread: {}, copies: {}, byExternalMessage: {} } as SyncState,
-}).fold(foldSync)
-
 export type IdentityCode = { principal: string; sync: string; expiresAt: string; usedBy: string | null; usedIn: string | null }
 /** Code hash → its code. */
 export type IdentityCodesState = Record<string, IdentityCode>

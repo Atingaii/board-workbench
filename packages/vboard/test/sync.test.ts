@@ -1408,7 +1408,8 @@ describe('provider callbacks', () => {
     const send = (id: string, text: string) => board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id, text, user: 'U1' }) }))
     await send('100', 'first')
     await vi.waitFor(async () => expect(await read(call, 'support')).toHaveLength(1))
-    await expect(saved()).rejects.toThrow('callback has finished')
+    // The message is readable as soon as it's written, which can be before the callback returns.
+    await vi.waitFor(() => expect(saved()).rejects.toThrow('callback has finished'))
     await send('101', 'skip')
     await send('102', 'last')
     await vi.waitFor(async () => expect((await read(call, 'support')).map((m) => m.text)).toEqual(['first', 'last']))

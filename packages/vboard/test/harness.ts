@@ -50,9 +50,14 @@ export function testBoard(options: Partial<BoardOptions> = {}) {
    * over, and run the event twice at once.
    */
   const skipHold = async (server: { contract: { name: string } }, session: string) => {
+    // Skipping the clock lapses every claim in the store, so nothing may be running on the board either:
+    // a delivery in flight there would be taken over, and post twice.
+    const sessions = [`${server.contract.name}\u001f${session}`, 'vboard\u001fboard']
     await vi.waitFor(async () => {
-      const cursors = await store.log!.cursors(`${server.contract.name}\u001f${session}`)
-      expect(cursors.filter((cursor) => cursor.claimHolder !== null)).toEqual([])
+      for (const at of sessions) {
+        const cursors = await store.log!.cursors(at)
+        expect(cursors.filter((cursor) => cursor.claimHolder !== null)).toEqual([])
+      }
     })
     clock.skip()
   }

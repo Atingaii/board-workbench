@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { idempotentId } from 'experimental-a2'
 import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
-import { actorsReducer, foldMessages, syncReducer, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
+import { actorsReducer, foldMessages, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
@@ -379,8 +379,7 @@ export async function writeAttach(
 ) {
   const message = await liveMessage(ctx, input.id)
   const { target, kind } = await ctx.normalizeTarget(input.target)
-  const { state: sync } = await ctx.session.state(syncReducer)
-  if (sync.threads[message.thread]?.targets.includes(target)) return { target, attached: false }
+  if ((await ctx.reads.tables.syncOf(message.thread))?.targets.includes(target)) return { target, attached: false }
   await ctx.session.append({
     type: 'thread.synced',
     id: await idempotentId('vboard', message.thread, 'sync', target),

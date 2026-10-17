@@ -754,15 +754,19 @@ The log is the truth; messages are read from tables kept from it. Smaller
 state is folded from the log by A2 reducers.
 
 - **The tables.** The `vboard-tables` consumer applies every board event, in
-  order, to four tables in the board's own database: `vboard_messages` (each
+  order, to tables in the board's own database: `vboard_messages` (each
   message as it is now, plus columns to filter on, and a root's thread
   summary), `vboard_versions` (each message after every event that changed it),
-  `vboard_terms` (labels and mentions, as an index), and `vboard_positions` (the
-  last log index applied). Each event is one transaction that claims its index
-  first, so a retried or superseded attempt changes nothing.
-- **The same fold.** A message is built by `foldMessages`, the fold the board
-  always used, on a state of just that message: the tables hold exactly what
-  folding the whole log would.
+  `vboard_terms` (labels and mentions, as an index), the sync state's four maps
+  (`vboard_sync_threads`, `vboard_external_threads`, `vboard_copies`,
+  `vboard_external_messages`), and `vboard_positions` (the last log index
+  applied). Each event is one transaction that claims its index first, so a
+  retried or superseded attempt changes nothing; on Postgres it's one call to
+  `vboard_apply`. A writer applies its own events itself when each is the very
+  next one, and otherwise waits for the consumer.
+- **The same fold.** A message is built by `foldMessages`, and the sync state by
+  `foldSync`, the folds the board always used, on a state of just what the event
+  touches: the tables hold exactly what folding the whole log would.
 - **One interface.** The board reads through `MessageTables` (`message`,
   `thread`, `messagesAt`, `messages(filter, page)`, `threads(filter, page)`,
   `apply`, `position`), stated in board terms. SQL on Postgres and SQLite is its
@@ -772,7 +776,6 @@ state is folded from the log by A2 reducers.
 | --- | --- | --- |
 | `channels` | path → last index, message count | `channels`, the feed's start |
 | `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs, and links | mention resolution, `actors`, rendering, `--by` and `--mentions` |
-| `sync` | thread root → external threads; external thread group → root; message → external copies | both sync consumers |
 
 - **Consistency:** a write answers once the tables hold it, so any later read
   includes it. A read that names a message ID waits until the tables reach it;
@@ -2269,8 +2272,6 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
     events from the raw webhook, the same way `github()` does.
 - **Full-text search,** on the tables (Postgres `pg_trgm` or `tsvector`, SQLite
   FTS5), for `text` filters that don't read through the board.
-- **Sync state in the tables,** like messages: `syncReducer` grows with roots
-  and delivered copies.
 
 ## Decisions log
 

@@ -356,9 +356,9 @@ shared by the server and the client.
   answering, it writes the quote. (That's why replies sync without an
   automatic quote line.)
 
-- **One log.** Every board fact is an event in A2 session `board`. Messages are
-  read from tables the `vboard-tables` consumer keeps from it (`src/store/`),
-  built with `foldMessages`; smaller views are reducers in
+- **One log.** Every board fact is an event in A2 session `board`. Messages and
+  the sync state are read from tables the `vboard-tables` consumer keeps from it
+  (`src/store/`), built with `foldMessages` and `foldSync`; smaller views are reducers in
   `src/contract/reducers.ts`. Nothing writes the tables but that consumer.
   Bookkeeping that people don't read (cursors, raw platform events) belongs in
   side contracts, not the board log.

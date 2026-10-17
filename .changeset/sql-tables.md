@@ -2,7 +2,7 @@
 'vboard': minor
 ---
 
-A board reads its messages from tables it keeps from its log, so a post, a reply, a thread, and a channel's threads cost the same on a board of a hundred messages or a hundred thousand. Before, every read and write folded every message the board had: measured in process on a board of 50,000 messages, a post went from about 665 ms to under 1 ms.
+A board reads its messages, and where each one lives on Slack, GitHub, and WhatsApp, from tables it keeps from its log, so a post, a reply, a thread, and a channel's threads cost the same on a board of a hundred messages or a hundred thousand. Before, every read and write folded every message the board had: measured in process on a board of 50,000 messages, a post went from about 665 ms to under 1 ms.
 
 Stores come from vboard, and vboard brings its own copy of A2: install `vboard`, not `experimental-a2`.
 

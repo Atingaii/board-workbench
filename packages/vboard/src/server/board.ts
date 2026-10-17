@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Scheduler } from 'experimental-a2/server'
 import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, watchSession, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, linkedTo, syncReducer } from '../contract/reducers.ts'
+import { actorsReducer, channelsReducer, linkedTo } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import {
   EditBody,
@@ -310,7 +310,6 @@ export function board(options: BoardOptions = {}) {
     if (found.length === 0) return []
     // The tables first: reads and writes wait on them, so they're what to retry first.
     found.sort((a, b) => Number(b.dead.consumer === TABLES_CONSUMER) - Number(a.dead.consumer === TABLES_CONSUMER))
-    const { state: sync } = await session.state(syncReducer)
     // A thread's key is its root's post's event ID.
     const roots = new Map<string, number | null>()
     const rootOf = async (thread: string) => {
@@ -321,7 +320,7 @@ export function board(options: BoardOptions = {}) {
       const laneThread = dead.lane?.startsWith('thread:') ? dead.lane.slice('thread:'.length) : null
       // An inbox's lanes are platform threads; everywhere else they're the board's.
       const inbox = id.startsWith('inbox:')
-      const thread = inbox ? (laneThread && (sync.byExternalThread[laneThread] ?? null)) : laneThread
+      const thread = inbox ? (laneThread && (await store.tables.threadOf(laneThread))) : laneThread
       return {
         session: id,
         index: dead.index,

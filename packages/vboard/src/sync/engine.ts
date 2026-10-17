@@ -23,7 +23,6 @@ import {
   identityCodesReducer,
   isThreadTarget,
   linkedTo,
-  syncReducer,
   type Actor,
   type ActorsState,
   type ExternalCopy,
@@ -209,8 +208,7 @@ export function createSyncEngine(options: {
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
     const map = await mappings(key)
-    const { state: sync } = await bound().session.state(syncReducer)
-    if (!map.has(event.channel) && !sync.byExternalThread[event.thread]) return
+    if (!map.has(event.channel) && !(await bound().writes.reads.tables.threadOf(event.thread))) return
     const id = await idempotentId('vboard-inbox', key, dedupe)
     await inboxServer.session(inboxSession(event.channel)).append({
       type: 'external.received', id, payload: { sync: key, event, raw: jsonSafe(raw) },
@@ -248,12 +246,12 @@ export function createSyncEngine(options: {
   async function resolveLinks(platform: SyncProvider, links: ExternalLink[], previous: Link[] = []): Promise<Link[]> {
     if (links.length === 0) return []
     const { session, writes } = bound()
-    const [{ state: sync }, { state: actors }] = await Promise.all([session.state(syncReducer), session.state(actorsReducer)])
+    const { state: actors } = await session.state(actorsReducer)
     const resolved: Link[] = []
     for (const link of links) {
       if (resolved.some((done) => done.url === link.url)) continue
-      const id = sync.byExternalMessage[externalMessageKey(link.thread, link.message)]
-      const copy = id === undefined ? undefined : await writes.reads.message(id)
+      const id = await writes.reads.tables.messageOf(link.thread, link.message)
+      const copy = id === null ? undefined : await writes.reads.message(id)
       if (copy && !copy.deleted) {
         resolved.push({ url: link.url, message: copy.id, unavailable: null, snapshot: {
           author: actors.byId[copy.by.actor]?.name ?? copy.by.actor,
@@ -334,10 +332,10 @@ export function createSyncEngine(options: {
     const { sync: key, event, raw } = trigger.payload
     const platform = platformOf(key)
     const mapping = (await mappings(key)).get(event.channel)
-    const { state: sync } = await session.state(syncReducer)
-    const linked = sync.byExternalThread[event.thread]
+    const tables = writes.reads.tables
+    const linked = (await tables.threadOf(event.thread)) ?? undefined
     if (event.kind === 'message') {
-      const copied = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
+      const copied = (await tables.messageOf(event.subthread ?? event.thread, event.message)) ?? undefined
       if (copied !== undefined) {
         const origin = (await writes.reads.message(copied))?.origin
         if (!origin || origin.message !== event.message || (origin.subthread ?? origin.thread) !== (event.subthread ?? event.thread)) return
@@ -358,9 +356,8 @@ export function createSyncEngine(options: {
         applied = applyIncoming(trigger, attempt, ChannelPath.parse(channel), SyncOverrides.parse(overrides)).catch(async (error: unknown) => {
           if (!(error instanceof DroppedError)) throw error
           // Dropped: nothing of it is on the board, though a root fetched for it may be.
-          const { state } = await session.state(syncReducer)
-          const thread = state.byExternalThread[event.thread]
-          const root = thread === undefined ? undefined : state.threads[thread]?.root
+          const thread = await tables.threadOf(event.thread)
+          const root = thread === null ? undefined : (await tables.syncOf(thread))?.root
           return { root: root ?? null, message: null }
         })
         return applied
@@ -382,7 +379,7 @@ export function createSyncEngine(options: {
         await mapping.run(context)
         return
       }
-      const channel = mapping?.channel ?? (linked ? sync.threads[linked]?.channel : undefined)
+      const channel = mapping?.channel ?? (linked ? (await tables.syncOf(linked))?.channel : undefined)
       if (channel) await platform.sync(context, channel)
     } finally {
       active = false
@@ -415,26 +412,30 @@ export function createSyncEngine(options: {
    */
   async function deliveringAsPerson(thread: string | undefined, event: Extract<ExternalEvent, { kind: 'message' }>) {
     const { session, writes } = bound()
-    const [{ state: actors }, { state: sync }] = await Promise.all([session.state(actorsReducer), session.state(syncReducer)])
+    const { state: actors } = await session.state(actorsReducer)
+    const tables = writes.reads.tables
     const link = actors.links[event.author.id]
     if (!link || link.method !== 'consent') return false
     const now = Date.now()
-    const pending = (message: Message, target: string) =>
+    const pending = (message: Message, target: string, copies: Record<string, unknown>) =>
       message.by.principal === link.to && message.by.profile === null && message.from === null &&
       !message.deleted && !message.noSync && now - Date.parse(message.createdAt) < ECHO_WINDOW_MS &&
-      !sync.copies[message.id]?.[target] && !message.undelivered[target]
+      !copies[target] && !message.undelivered[target]
     if (thread !== undefined) {
-      const synced = sync.threads[thread]
+      const synced = await tables.syncOf(thread)
       if (!synced) return false
       const targets = synced.targets.filter((target) => synced.external[target] === event.thread)
-      const messages = await writes.reads.tables.thread(synced.root)
-      return messages.some((message) => targets.some((target) => pending(message, target)))
+      const messages = await tables.thread(synced.root)
+      const copies = await tables.copiesOf(messages.map((message) => message.id))
+      return messages.some((message) => targets.some((target) => pending(message, target, copies.get(message.id) ?? {})))
     }
-    // A new thread of theirs: a root still on its way to this channel, which has no platform thread there yet.
-    for (const synced of Object.values(sync.threads)) {
-      if (!synced.targets.includes(event.channel) || synced.external[event.channel]) continue
-      const root = await writes.reads.tables.message(synced.root)
-      if (root && pending(root, event.channel)) return true
+    // A new thread of theirs: one of their roots from the echo window, still on its way to this channel.
+    const roots = await tables.recentRoots(link.to, now - ECHO_WINDOW_MS)
+    const copies = await tables.copiesOf(roots.map((root) => root.id))
+    for (const root of roots) {
+      const synced = await tables.syncOf(root.thread)
+      if (synced?.targets.includes(event.channel) && !synced.external[event.channel] && pending(root, event.channel, copies.get(root.id) ?? {}))
+        return true
     }
     return false
   }
@@ -512,9 +513,9 @@ export function createSyncEngine(options: {
     const source = originOf(trigger)
     const { sync: key, event } = trigger.payload
     const platform = platformOf(key)
-    const { state: sync } = await session.state(syncReducer)
-    const threadKey = sync.byExternalThread[event.thread]
-    const rootId = threadKey ? sync.threads[threadKey]?.root : undefined
+    const tables = writes.reads.tables
+    const threadKey = (await tables.threadOf(event.thread)) ?? undefined
+    const rootId = threadKey ? (await tables.syncOf(threadKey))?.root : undefined
     const writeId = (n: number) => idempotentId('vboard-inbound', trigger.id, String(n))
     const result = (message: { id: number; re: number | null }): SyncResult => ({ root: message.re ?? message.id, message: message.id })
     const labels = (defaults: Record<string, string> = {}) => {
@@ -539,7 +540,7 @@ export function createSyncEngine(options: {
 
     switch (event.kind) {
       case 'message': {
-        const existing = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
+        const existing = (await tables.messageOf(event.subthread ?? event.thread, event.message)) ?? undefined
         if (existing !== undefined) return { root: rootId ?? existing, message: existing }
         const identity = externalIdentity(event.author)
         const { attachments, notes } = event.files?.length ? await importFiles(platform, event.files, attempt) : { attachments: [], notes: [] }
@@ -579,7 +580,7 @@ export function createSyncEngine(options: {
       case 'edited':
       case 'deleted':
       case 'reaction': {
-        const id = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
+        const id = (await tables.messageOf(event.subthread ?? event.thread, event.message)) ?? undefined
         if (id === undefined) return { root: rootId ?? null, message: null }
         const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
         const identity = externalIdentity(author)
@@ -784,15 +785,15 @@ export function createSyncEngine(options: {
 
   type Ctx<K extends keyof BoardEvents> = ConsumerContext<BoardEvents, K>
 
-  /** The board as it is now, at least through the event being delivered. */
+  /**
+   * The board as it is now, the whole log applied: a delivery's retry guard reads
+   * the receipts an earlier attempt wrote, which come after the event it delivers.
+   */
   async function latest(ctx: Ctx<keyof BoardEvents>) {
     const { reads } = bound().writes
-    await reads.ensure(ctx.event.index, ctx.signal)
-    const [sync, actors] = await Promise.all([
-      ctx.session.state(syncReducer, { through: 'latest' }),
-      ctx.session.state(actorsReducer, { through: 'latest' }),
-    ])
-    return { sync: sync.state, actors: actors.state, tables: reads.tables }
+    await reads.ensure(undefined, ctx.signal)
+    const { state: actors } = await ctx.session.state(actorsReducer, { through: 'latest' })
+    return { actors, tables: reads.tables }
   }
 
   async function postReply(
@@ -802,7 +803,7 @@ export function createSyncEngine(options: {
     target: string,
     externalThread: string,
   ) {
-    const replyCopy = message.replyTo === null ? undefined : state.sync.copies[message.replyTo]?.[target]
+    const replyCopy = message.replyTo === null ? undefined : (await state.tables.copiesOf([message.replyTo])).get(message.replyTo)?.[target]
     // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere into the main thread, as written.
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
@@ -913,9 +914,10 @@ export function createSyncEngine(options: {
     const { thread, target } = ctx.event.payload
     if ((ctx.event.payload.kind ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'thread') return // joining: only messages written after the join are delivered
     const state = await latest(ctx)
-    const synced = state.sync.threads[thread]
+    const synced = await state.tables.syncOf(thread)
     const [root, ...replies] = synced ? await state.tables.thread(synced.root) : []
     if (!synced || !root || root.id !== synced.root || root.deleted) return
+    const copies = await state.tables.copiesOf([root.id, ...replies.map((reply) => reply.id)])
     let externalThread = synced.external[target]
     if (!externalThread) {
       try {
@@ -954,7 +956,7 @@ export function createSyncEngine(options: {
         return settle(ctx, thread, [{ id: root.id, target, error }])
       }
     } else {
-      const copy = state.sync.copies[root.id]?.[target]
+      const copy = copies.get(root.id)?.[target]
       if (copy)
         try {
           await deliverFiles(ctx, root, target, copy, state.actors)
@@ -966,7 +968,7 @@ export function createSyncEngine(options: {
     for (const reply of replies) {
       if (reply.deleted || reply.noSync || cameFrom(reply, target)) continue
       try {
-        const copy = state.sync.copies[reply.id]?.[target] ?? (await postReply(ctx, state, reply, target, externalThread))
+        const copy = copies.get(reply.id)?.[target] ?? (await postReply(ctx, state, reply, target, externalThread))
         await deliverFiles(ctx, reply, target, copy, state.actors)
       } catch (error) {
         failures.push({ id: reply.id, target, error })
@@ -983,7 +985,7 @@ export function createSyncEngine(options: {
     const { payload } = ctx.event
     if (payload.re === null || payload.noSync) return
     const state = await latest(ctx)
-    const synced = state.sync.threads[payload.thread]
+    const synced = await state.tables.syncOf(payload.thread)
     const message = await state.tables.message(ctx.event.index)
     if (!synced || !message || synced.targets.length === 0) return
     const failures: Failure[] = []
@@ -992,7 +994,7 @@ export function createSyncEngine(options: {
       if (!externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
       if (cameFrom(message, target)) continue
       try {
-        const copy = state.sync.copies[message.id]?.[target] ?? (await postReply(ctx, state, message, target, externalThread))
+        const copy = (await state.tables.copiesOf([message.id])).get(message.id)?.[target] ?? (await postReply(ctx, state, message, target, externalThread))
         await deliverFiles(ctx, message, target, copy, state.actors)
       } catch (error) {
         failures.push({ id: message.id, target, error })
@@ -1007,7 +1009,7 @@ export function createSyncEngine(options: {
   ) {
     const event = ctx.event
     const state = await latest(ctx)
-    const copies = state.sync.copies[event.payload.id] ?? {}
+    const copies = (await state.tables.copiesOf([event.payload.id])).get(event.payload.id) ?? {}
     const message = await state.tables.message(event.payload.id)
     for (const [target, copy] of Object.entries(copies)) {
       if (event.payload.from !== null && keyOf(target) === event.payload.from) continue
@@ -1050,7 +1052,7 @@ export function createSyncEngine(options: {
       state.tables.messagesAt([id], ctx.event.index - 1).then((found) => found.get(id)),
     ])
     const message = after
-    const copies = state.sync.copies[id] ?? {}
+    const copies = (await state.tables.copiesOf([id])).get(id) ?? {}
     if (!message || message.deleted || Object.keys(copies).length === 0) return
     const previous = { ...message, labels: before?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
@@ -1073,8 +1075,7 @@ export function createSyncEngine(options: {
   async function typing(thread: string, status?: string): Promise<string[]> {
     const { session, writes } = bound()
     await writes.reads.ensure()
-    const { state: sync } = await session.state(syncReducer)
-    const synced = sync.threads[thread]
+    const synced = await writes.reads.tables.syncOf(thread)
     if (!synced) return []
     const messages = await writes.reads.tables.thread(synced.root)
     const externals = [...new Set(Object.values(synced.external))]
@@ -1151,8 +1152,7 @@ export function createSyncEngine(options: {
   async function inboxChannels(): Promise<string[]> {
     const channels = new Set<string>()
     for (const key of Object.keys(entries)) for (const channel of (await mappings(key)).keys()) channels.add(channel)
-    const { state: sync } = await bound().session.state(syncReducer)
-    for (const thread of Object.keys(sync.byExternalThread)) {
+    for (const thread of await bound().writes.reads.tables.externalThreads()) {
       const key = thread.slice(0, thread.indexOf(':'))
       const channel = entries[key]?.inboxChannel(key, thread)
       if (channel) channels.add(channel)

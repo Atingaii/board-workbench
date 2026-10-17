@@ -41,6 +41,8 @@ One database holds two things:
 | `vboard_messages` | each message as it is now, with the columns filters use; a root's row also holds its reply count and its latest reply |
 | `vboard_versions` | each message after every event that changed it, so `vb tail` and watchers can show a change before and after |
 | `vboard_terms` | labels and mentions, so `--label` and `--mentions` are an index lookup |
+| `vboard_sync_threads`, `vboard_copies` | where each thread and message lives on each platform: a thread's targets and the platform thread on each, a message's copy on each |
+| `vboard_external_threads`, `vboard_external_messages` | the other way: which board thread and message a platform's thread and message are |
 | `vboard_positions` | the last log index the tables applied |
 
 A post, a reply, a thread, and a channel's list of threads cost the same on a
