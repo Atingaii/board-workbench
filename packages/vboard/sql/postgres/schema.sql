@@ -266,3 +266,53 @@ create table if not exists vboard_terms (
 );
 --> statement-breakpoint
 create index if not exists vboard_terms_term on vboard_terms (term, value, message_id);
+--> statement-breakpoint
+create or replace function vboard_apply(
+  apply_consumer text,
+  apply_index bigint,
+  apply_next boolean,
+  apply_message jsonb,
+  apply_terms jsonb,
+  apply_summary jsonb
+) returns boolean language plpgsql as $$
+begin
+  if apply_next then
+    update vboard_positions set log_index = apply_index
+      where consumer = apply_consumer and log_index = apply_index - 1;
+  else
+    insert into vboard_positions (consumer, log_index) values (apply_consumer, apply_index)
+      on conflict (consumer) do update set log_index = excluded.log_index
+      where vboard_positions.log_index < excluded.log_index;
+  end if;
+  if not found then
+    return false;
+  end if;
+  if apply_message is not null then
+    if (apply_message->>'created')::boolean then
+      insert into vboard_messages
+        (id, event_id, channel, re, by_actor, by_principal, by_profile, from_key, no_sync, text_lower, deleted, created_at, data)
+        values (
+          (apply_message->>'id')::bigint, apply_message->>'event_id', apply_message->>'channel', (apply_message->>'re')::bigint,
+          apply_message->>'by_actor', apply_message->>'by_principal', apply_message->>'by_profile', apply_message->>'from_key',
+          (apply_message->>'no_sync')::boolean, apply_message->>'text_lower', (apply_message->>'deleted')::boolean,
+          (apply_message->>'created_at')::bigint, apply_message->>'data');
+    else
+      update vboard_messages
+        set text_lower = apply_message->>'text_lower', deleted = (apply_message->>'deleted')::boolean, data = apply_message->>'data'
+        where id = (apply_message->>'id')::bigint;
+    end if;
+    insert into vboard_versions (log_index, message_id, data)
+      values (apply_index, (apply_message->>'id')::bigint, apply_message->>'data');
+    if apply_terms is not null then
+      delete from vboard_terms where message_id = (apply_message->>'id')::bigint;
+      insert into vboard_terms (message_id, term, value)
+        select (apply_message->>'id')::bigint, term->>0, term->>1 from jsonb_array_elements(apply_terms) as term;
+    end if;
+  end if;
+  if apply_summary is not null then
+    update vboard_messages set replies = (apply_summary->>'replies')::int, at = (apply_summary->>'at')::bigint
+      where id = (apply_summary->>'root')::bigint;
+  end if;
+  return true;
+end
+$$;

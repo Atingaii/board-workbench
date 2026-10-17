@@ -68,8 +68,65 @@ export function ddl(dialect: Db['dialect']): string[] {
   primary key (message_id, term, value)
 )`,
     'create index if not exists vboard_terms_term on vboard_terms (term, value, message_id)',
+    ...(dialect === 'postgres' ? [APPLY_FUNCTION] : []),
   ]
 }
+
+/**
+ * Postgres applies an event's change in one call, one round trip: claim the
+ * position, then write the message, its version, its terms, and its root's
+ * summary. `apply_next` claims only the very next index. SQLite runs the same
+ * writes as statements, in process.
+ */
+const APPLY_FUNCTION = `create or replace function vboard_apply(
+  apply_consumer text,
+  apply_index bigint,
+  apply_next boolean,
+  apply_message jsonb,
+  apply_terms jsonb,
+  apply_summary jsonb
+) returns boolean language plpgsql as $$
+begin
+  if apply_next then
+    update vboard_positions set log_index = apply_index
+      where consumer = apply_consumer and log_index = apply_index - 1;
+  else
+    insert into vboard_positions (consumer, log_index) values (apply_consumer, apply_index)
+      on conflict (consumer) do update set log_index = excluded.log_index
+      where vboard_positions.log_index < excluded.log_index;
+  end if;
+  if not found then
+    return false;
+  end if;
+  if apply_message is not null then
+    if (apply_message->>'created')::boolean then
+      insert into vboard_messages
+        (id, event_id, channel, re, by_actor, by_principal, by_profile, from_key, no_sync, text_lower, deleted, created_at, data)
+        values (
+          (apply_message->>'id')::bigint, apply_message->>'event_id', apply_message->>'channel', (apply_message->>'re')::bigint,
+          apply_message->>'by_actor', apply_message->>'by_principal', apply_message->>'by_profile', apply_message->>'from_key',
+          (apply_message->>'no_sync')::boolean, apply_message->>'text_lower', (apply_message->>'deleted')::boolean,
+          (apply_message->>'created_at')::bigint, apply_message->>'data');
+    else
+      update vboard_messages
+        set text_lower = apply_message->>'text_lower', deleted = (apply_message->>'deleted')::boolean, data = apply_message->>'data'
+        where id = (apply_message->>'id')::bigint;
+    end if;
+    insert into vboard_versions (log_index, message_id, data)
+      values (apply_index, (apply_message->>'id')::bigint, apply_message->>'data');
+    if apply_terms is not null then
+      delete from vboard_terms where message_id = (apply_message->>'id')::bigint;
+      insert into vboard_terms (message_id, term, value)
+        select (apply_message->>'id')::bigint, term->>0, term->>1 from jsonb_array_elements(apply_terms) as term;
+    end if;
+  end if;
+  if apply_summary is not null then
+    update vboard_messages set replies = (apply_summary->>'replies')::int, at = (apply_summary->>'at')::bigint
+      where id = (apply_summary->>'root')::bigint;
+  end if;
+  return true;
+end
+$$`
 
 /** Postgres refuses NUL in text; nothing a reader filters on needs one. */
 const clean = (value: string) => value.replaceAll('\u0000', '')
@@ -175,46 +232,79 @@ export function sqlTables(db: Db): MessageTables {
     return { message, root }
   }
 
-  function writes(event: BoardEvent, change: Change): Sql[] {
+  /** What an event writes, as column values: the one place they're derived. */
+  function payload(event: BoardEvent, change: Change) {
+    const m = change.message?.after
+    return {
+      message: m && {
+        id: m.id,
+        created: change.message!.created,
+        event_id: clean(event.id),
+        channel: m.channel,
+        re: m.re,
+        by_actor: clean(m.by.actor),
+        by_principal: clean(m.by.principal),
+        by_profile: m.by.profile === null ? null : clean(m.by.profile),
+        from_key: m.from,
+        no_sync: m.noSync,
+        text_lower: clean(m.text.toLowerCase()),
+        deleted: m.deleted,
+        created_at: Date.parse(m.createdAt),
+        data: JSON.stringify(m),
+      },
+      terms:
+        m && change.message!.terms
+          ? [
+              ...Object.entries(m.labels).map(([key, value]) => [key, clean(value)] as const),
+              ...[...new Set(m.mentions)].map((actor) => [MENTION, clean(actor)] as const),
+            ]
+          : null,
+      summary: change.summary ?? null,
+    }
+  }
+
+  /** The writes as statements, for SQLite. Postgres's `vboard_apply` does the same. */
+  function statements(index: number, { message: m, terms, summary }: ReturnType<typeof payload>): Sql[] {
     const out: Sql[] = []
-    if (change.message) {
-      const { after: m, created, terms } = change.message
-      const data = JSON.stringify(m)
-      if (created)
+    if (m) {
+      if (m.created)
         out.push({
           text: `insert into vboard_messages
   (id, event_id, channel, re, by_actor, by_principal, by_profile, from_key, no_sync, text_lower, deleted, created_at, data)
   values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-          values: [
-            m.id, event.id, m.channel, m.re, clean(m.by.actor), clean(m.by.principal), m.by.profile === null ? null : clean(m.by.profile),
-            m.from, m.noSync, clean(m.text.toLowerCase()), m.deleted, Date.parse(m.createdAt), data,
-          ],
+          values: [m.id, m.event_id, m.channel, m.re, m.by_actor, m.by_principal, m.by_profile, m.from_key, m.no_sync, m.text_lower, m.deleted, m.created_at, m.data],
         })
       else
-        out.push({
-          text: 'update vboard_messages set text_lower = $1, deleted = $2, data = $3 where id = $4',
-          values: [clean(m.text.toLowerCase()), m.deleted, data, m.id],
-        })
-      out.push({ text: 'insert into vboard_versions (log_index, message_id, data) values ($1, $2, $3)', values: [event.index, m.id, data] })
+        out.push({ text: 'update vboard_messages set text_lower = $1, deleted = $2, data = $3 where id = $4', values: [m.text_lower, m.deleted, m.data, m.id] })
+      out.push({ text: 'insert into vboard_versions (log_index, message_id, data) values ($1, $2, $3)', values: [index, m.id, m.data] })
       if (terms) {
-        if (!created) out.push({ text: 'delete from vboard_terms where message_id = $1', values: [m.id] })
-        const rows = [
-          ...Object.entries(m.labels).map(([key, value]) => [key, clean(value)] as const),
-          ...[...new Set(m.mentions)].map((actor) => [MENTION, clean(actor)] as const),
-        ]
-        if (rows.length > 0) {
+        if (!m.created) out.push({ text: 'delete from vboard_terms where message_id = $1', values: [m.id] })
+        if (terms.length > 0) {
           const p = new Params()
-          const tuples = rows.map(([term, value]) => `(${p.add(m.id)}, ${p.add(term)}, ${p.add(value)})`)
+          const tuples = terms.map(([term, value]) => `(${p.add(m.id)}, ${p.add(term)}, ${p.add(value)})`)
           out.push({ text: `insert into vboard_terms (message_id, term, value) values ${tuples.join(', ')}`, values: p.values })
         }
       }
     }
-    if (change.summary)
-      out.push({
-        text: 'update vboard_messages set replies = $1, at = $2 where id = $3',
-        values: [change.summary.replies, change.summary.at, change.summary.root],
-      })
+    if (summary)
+      out.push({ text: 'update vboard_messages set replies = $1, at = $2 where id = $3', values: [summary.replies, summary.at, summary.root] })
     return out
+  }
+
+  /** Claims `event` (only if it's the next one, with `next`) and writes what it changes, atomically. */
+  async function commit(event: BoardEvent, next: boolean): Promise<boolean> {
+    const id = concernedMessageId(event)
+    const change = id === null ? {} : project(await before(event, id), event)
+    const written = payload(event, change)
+    if (db.dialect === 'postgres') {
+      const json = (value: unknown) => (value === null || value === undefined ? null : JSON.stringify(value))
+      const [row] = await db.all({
+        text: 'select vboard_apply($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb) as applied',
+        values: [TABLES_CONSUMER, event.index, next, json(written.message), json(written.terms), json(written.summary)],
+      })
+      return row?.applied === true
+    }
+    return db.commit(next ? claimNext(event.index) : claim(event.index), statements(event.index, written))
   }
 
   function threadsQuery(filter: MessageFilter, page: Page): Sql {
@@ -245,16 +335,10 @@ order by r.at ${order} limit ${p.add(page.limit)}`,
     async apply(event) {
       // Applied already, most often by the writer that wrote it: skip the reads.
       if (position(await db.all(positionSql)) >= event.index) return
-      const id = concernedMessageId(event)
-      const change = id === null ? {} : project(await before(event, id), event)
-      await db.commit(claim(event.index), writes(event, change))
+      await commit(event, false)
     },
 
-    async applyNext(event) {
-      const id = concernedMessageId(event)
-      const change = id === null ? {} : project(await before(event, id), event)
-      return db.commit(claimNext(event.index), writes(event, change))
-    },
+    applyNext: (event) => commit(event, true),
 
     async message(id) {
       return parse(await row(id))
