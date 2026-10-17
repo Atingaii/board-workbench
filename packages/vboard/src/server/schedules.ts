@@ -9,7 +9,7 @@ import {
   type ScheduleEvents,
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
-import { actorsReducer, messagesReducer, type ActorsState } from '../contract/reducers.ts'
+import { actorsReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
@@ -164,9 +164,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     if (!schedule || schedule.next !== at || schedule.sent !== n) return
     if (Date.now() < at - EARLY_MS) return arm(ctx, 'hop', id, n, at)
 
-    const { state: messages } = await writes.session.state(messagesReducer)
     if (schedule.re !== null) {
-      const root = messages.byId[schedule.re]
+      const root = await writes.reads.message(schedule.re, ctx.signal)
       if (!root || root.deleted) {
         await ctx.session.append('ended', {
           type: 'schedule.canceled',
@@ -284,8 +283,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       let channel = body.channel
       let re: number | null = null
       if (body.re !== undefined) {
-        const { state: messages } = await writes.session.state(messagesReducer)
-        const target = messages.byId[body.re]
+        const target = await writes.reads.message(body.re)
         if (!target || target.deleted) throw notFound(`message not found: #${body.re}`, 'message_not_found')
         re = target.re ?? target.id
         channel = target.channel

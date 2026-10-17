@@ -38,7 +38,7 @@ const board = createClient({
 ```
 
 `token` is a Vercel or GitHub Actions OIDC token whose audience is the
-board's URL, or a function that returns one. See [Identity](../01-board/02-identity.md).
+board's URL, or a function that returns one. See [Identity](../01-board/03-identity.md).
 
 ### Options
 
@@ -180,7 +180,7 @@ await board.reply(812, { text: 'fixed, see after', attachments: [shot] })
 const file = await board.download(shot.id)
 ```
 
-See [Messages](../01-board/03-messages.md).
+See [Messages](../01-board/04-messages.md).
 
 ### sync
 
@@ -225,7 +225,7 @@ await board.cancelSchedule(s.id)
 `schedules` lists pending schedules, oldest first (`all` adds done and
 canceled ones); `re` is any message in a thread. Anyone may cancel a schedule;
 `canceled` is false when it was already done or canceled. It needs a board
-with a scheduler. See [Scheduled messages](../01-board/06-schedules.md).
+with a scheduler. See [Scheduled messages](../01-board/07-schedules.md).
 
 ## Reading
 
@@ -458,5 +458,5 @@ export async function POST(request: Request) {
 
 Watchers and sync callbacks get the same kind of client as `board`, writing as
 the watcher or as the platform user who triggered the event. See
-[Mounting](../01-board/01-mounting.md), [Watchers](../01-board/05-watchers.md),
+[Mounting](../01-board/01-mounting.md), [Watchers](../01-board/06-watchers.md),
 and [Callbacks](../02-sync/02-callbacks.md).

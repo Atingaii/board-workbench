@@ -2,17 +2,22 @@ import type { z } from 'zod'
 import type { ActorView, Filters, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
 import type { BoardEvent } from '../contract/contract.ts'
 import {
+  channelsReducer,
   foldActors,
   foldMessages,
   iso,
   linkedTo,
-  messagesReducer,
   personOf,
   type ActorsState,
   type Message,
   type MessagesState,
 } from '../contract/reducers.ts'
+import { concernedMessageId } from '../store/project.ts'
+import type { MessageFilter } from '../store/types.ts'
 import type { BoardSession } from './board.ts'
+import type { BoardReads } from './reads.ts'
+
+export { concernedMessageId }
 
 export type ParsedFilters = z.output<typeof Filters>
 
@@ -133,11 +138,65 @@ export function compileFilter(
   }
 }
 
-/** The message an event concerns, if any. */
-export function concernedMessageId(event: BoardEvent): number | null {
-  if (event.type === 'message.posted') return event.index
-  if ('id' in event.payload) return event.payload.id
-  return null
+/** The filters as the tables take them: handles resolved to who they cover, `me` to the caller. */
+export function toMessageFilter(filters: ParsedFilters, context: { me: string | null; actors: ActorsState }): MessageFilter {
+  const out: MessageFilter = {}
+  const channel = filters.channel
+  if (channel !== undefined)
+    out.channel = channel.endsWith('/') ? { path: channel.slice(0, -1), subtree: true } : { path: channel, subtree: false }
+  if (filters.re !== undefined) out.re = filters.re
+  if (filters.by !== undefined) {
+    const who = whoIs(filters.by, context.actors)
+    out.by = { actors: [...who.actors], principals: [...who.principals] }
+  }
+  if (filters.mentions !== undefined)
+    out.mentions =
+      filters.mentions === 'me'
+        ? context.me === null ? [] : [context.me, ...linkedTo(context.actors, context.me)]
+        : [...whoIs(filters.mentions, context.actors).actors]
+  if (filters.from !== undefined) out.from = filters.from
+  if (filters.text !== undefined) out.text = filters.text.toLowerCase()
+  if (filters.label?.length) out.labels = filters.label.map(([key, values]) => ({ key, values }))
+  return out
+}
+
+/**
+ * Loads into `messages`, as they were just before `event`, the message it
+ * concerns and that message's root: what folding it and matching filters need.
+ * `loaded` remembers what was asked for already, found or not.
+ */
+async function loadInto(
+  reads: BoardReads,
+  messages: MessagesState,
+  loaded: Set<number>,
+  event: BoardEvent,
+  signal?: AbortSignal,
+): Promise<void> {
+  const id = concernedMessageId(event)
+  if (id === null) return
+  const through = event.index - 1
+  const load = async (ids: number[]) => {
+    const wanted = ids.filter((want) => !loaded.has(want))
+    if (wanted.length === 0) return
+    const found = await reads.messagesAt(wanted, through, signal)
+    for (const want of wanted) {
+      loaded.add(want)
+      const message = found.get(want)
+      if (message) messages.byId[want] = message
+    }
+  }
+  // A post is new: the fold makes it. The rest concern a message that was already there.
+  if (event.type === 'message.posted') loaded.add(id)
+  else await load([id])
+  const re = event.type === 'message.posted' ? event.payload.re : (messages.byId[id]?.re ?? null)
+  if (re !== null) await load([re])
+}
+
+/** The message `event` concerns and its root, as they were just before it. */
+export async function loadBefore(reads: BoardReads, event: BoardEvent, signal?: AbortSignal): Promise<MessagesState> {
+  const messages: MessagesState = { byId: {}, replies: {} }
+  await loadInto(reads, messages, new Set(), event, signal)
+  return messages
 }
 
 /** Folds one event into `messages` and `actors`, and returns the message it concerns before and after. */
@@ -169,32 +228,54 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
 export type FeedItem = { index: number; view: BoardEventView | null }
 
 /**
- * Folds events one at a time from a known state and decides what a subscriber
- * sees. A label or reaction change is delivered when its message matched the
- * filter before *or* after it, so subscribers see messages leave a view too.
+ * Folds events one at a time and decides what a subscriber sees. It holds only
+ * the messages events have touched, each loaded from the tables as it was just
+ * before the first event that touched it. A label or reaction change is
+ * delivered when its message matched the filter before *or* after it, so
+ * subscribers see messages leave a view too.
  */
 export class FeedProjection {
-  private readonly messages: MessagesState
+  private readonly messages: MessagesState = { byId: {}, replies: {} }
+  private readonly loaded = new Set<number>()
+  private readonly reads: BoardReads
   readonly actors: ActorsState
   private readonly match: (message: Message | undefined) => boolean
   private readonly criteria: boolean
   private readonly all: boolean
 
-  constructor(
-    messages: MessagesState,
-    actors: ActorsState,
-    match: (message: Message | undefined) => boolean,
-    criteria: boolean,
-    all: boolean,
-  ) {
-    this.messages = messages
-    this.actors = actors
-    this.match = match
-    this.criteria = criteria
-    this.all = all
+  constructor(options: FeedOptions) {
+    this.reads = options.reads
+    this.actors = options.actors
+    this.match = compileFilter(options.filters, { me: options.me, actors: options.actors, messages: this.messages })
+    this.criteria = hasCriteria(options.filters)
+    this.all = options.all
   }
 
-  step(event: BoardEvent): FeedItem {
+  /** Loads what `events` touch, all as of `index`, in two queries rather than two per event. */
+  async preload(events: readonly BoardEvent[], index: number): Promise<void> {
+    const ids = new Set<number>()
+    for (const event of events) {
+      const id = concernedMessageId(event)
+      if (id === null) continue
+      if (event.type !== 'message.posted') ids.add(id)
+      else if (event.payload.re !== null) ids.add(event.payload.re)
+    }
+    const load = async (wanted: number[]) => {
+      if (wanted.length === 0) return
+      const found = await this.reads.messagesAt(wanted, index)
+      for (const id of wanted) {
+        this.loaded.add(id)
+        const message = found.get(id)
+        if (message) this.messages.byId[id] = message
+      }
+    }
+    await load([...ids].filter((id) => !this.loaded.has(id) && id <= index))
+    const roots = Object.values(this.messages.byId).flatMap((message) => (message.re === null ? [] : [message.re]))
+    await load([...new Set(roots)].filter((id) => !this.loaded.has(id)))
+  }
+
+  async step(event: BoardEvent, signal?: AbortSignal): Promise<FeedItem> {
+    await loadInto(this.reads, this.messages, this.loaded, event, signal)
     const { id, before, after } = foldEvent(this.messages, this.actors, event)
     const hidden = HIDDEN.has(event.type) && !this.all
     const visible = !hidden && (this.criteria ? this.match(before) || this.match(after) : id !== null || this.all)
@@ -227,6 +308,7 @@ function nextOrAbort<T>(
 
 export type FeedOptions = {
   session: BoardSession
+  reads: BoardReads
   after: number | undefined
   filters: ParsedFilters
   all: boolean
@@ -234,21 +316,10 @@ export type FeedOptions = {
   actors: ActorsState
 }
 
-/** The starting state and index: `after`, or the current head when omitted. */
-async function start(options: FeedOptions) {
-  const head = await options.session.state(messagesReducer)
-  if (options.after === undefined || options.after >= head.index) return head
-  return options.session.state(messagesReducer, { through: options.after })
-}
-
-function projection(options: FeedOptions, messages: MessagesState) {
-  return new FeedProjection(
-    messages,
-    options.actors,
-    compileFilter(options.filters, { me: options.me, actors: options.actors, messages }),
-    hasCriteria(options.filters),
-    options.all,
-  )
+/** Where a feed starts: `after`, or the head when it's omitted or past it. */
+async function start(options: FeedOptions): Promise<number> {
+  const { index: head } = await options.session.state(channelsReducer)
+  return options.after === undefined || options.after >= head ? head : options.after
 }
 
 /** Every event after the start, live, until the signal aborts. */
@@ -256,8 +327,8 @@ export async function* liveFeed(
   options: FeedOptions,
   signal: AbortSignal,
 ): AsyncGenerator<FeedItem> {
-  const { state, index } = await start(options)
-  const feed = projection(options, state)
+  const index = await start(options)
+  const feed = new FeedProjection(options)
   const iterator = options.session.stream({ startAfter: index })[Symbol.asyncIterator]()
   try {
     // The starting cursor, so a client that sees nothing yet can still resume exactly.
@@ -265,7 +336,7 @@ export async function* liveFeed(
     while (true) {
       const next = await nextOrAbort(iterator, signal)
       if (next === null || next.done) return
-      yield feed.step(next.value as BoardEvent)
+      yield await feed.step(next.value as BoardEvent, signal)
     }
   } finally {
     void iterator.return?.()
@@ -284,13 +355,14 @@ export async function pollFeed(
   waitMs: number,
   signal: AbortSignal,
 ): Promise<{ events: BoardEventView[]; cursor: number }> {
-  const { state, index } = await start(options)
-  const feed = projection(options, state)
+  const index = await start(options)
+  const feed = new FeedProjection(options)
   const events: BoardEventView[] = []
   let cursor = index
-  const backlog = await options.session.history({ gte: index + 1, lte: index + PAGE })
+  const backlog = (await options.session.history({ gte: index + 1, lte: index + PAGE })) as BoardEvent[]
+  await feed.preload(backlog, index)
   for (const event of backlog) {
-    const item = feed.step(event as BoardEvent)
+    const item = await feed.step(event, signal)
     cursor = item.index
     if (item.view) events.push(item.view)
   }
@@ -303,7 +375,7 @@ export async function pollFeed(
     while (true) {
       const next = await nextOrAbort(iterator, until)
       if (next === null || next.done) return { events, cursor }
-      const item = feed.step(next.value as BoardEvent)
+      const item = await feed.step(next.value as BoardEvent, until)
       cursor = item.index
       if (item.view) {
         events.push(item.view)

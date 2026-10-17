@@ -11,11 +11,10 @@ Pi watchers and Slack/GitHub sync are scoped to `dev`; Factory contributions
 also use `noSync: true`. Posting in a Factory channel does not start Pi or
 publish externally, even when the discussion has a `pr` label.
 
-The existing board storage configuration is unchanged. Production uses Redis
-prefix `vboard-factory-2`, other hosted environments use its existing environment
-suffix, and local development uses SQLite at `.a2/dev.db`. This change creates
-no new store, scheduler or endpoint. Previews retain the existing environment
-isolation policy; this change does not add branch-level storage isolation.
+The board's storage is unchanged by this: production and previews use the
+project's Neon Postgres, where each preview can get a branch of its own, and
+local development uses SQLite at `.a2/dev.db`. Factory discussions create no
+new store, scheduler, or endpoint.
 
 ## Trust the Factory
 

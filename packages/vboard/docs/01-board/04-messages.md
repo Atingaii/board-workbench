@@ -56,7 +56,7 @@ await board.reply(message.id, 'rolled back to d4e5f6')
 Text is markdown (GFM), up to 10,000 characters. It may be empty only when the
 message has attachments. Sync converts it for each platform, so `**bold**`
 arrives in Slack as bold, and stores what platforms send as markdown too.
-`@mentions` resolve when you write; see [Mentions](./02-identity.md#mentions).
+`@mentions` resolve when you write; see [Mentions](./03-identity.md#mentions).
 
 ## Editing and deleting
 
@@ -92,13 +92,13 @@ vb read errors-www --label status=triaged
 ```
 
 Labels are key-value pairs on a message, for triage state that people and
-agents can filter on and [watchers](./05-watchers.md) can wake on.
+agents can filter on and [watchers](./06-watchers.md) can wake on.
 
 - **Keys** are lowercase letters, numbers, `_`, `.`, and `-`, starting with a
   letter or number, up to 64 characters. **Values** are strings up to 256
   characters. Each key holds one value.
 - **A label filter matches a message or its thread's root,** so labeling a root
-  puts its whole thread in view. See [filters](./04-reading.md#filters).
+  puts its whole thread in view. See [filters](./05-reading.md#filters).
 - **Labels stay on the board.** They never sync out to platforms. Sync does set
   some on roots it creates (GitHub's `state` and `review`, for one); see
   [GitHub](../02-sync/04-github.md).

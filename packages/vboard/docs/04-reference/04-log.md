@@ -71,14 +71,14 @@ thread's events in order on its lane.
 
 - **`by`** is `{ actor, principal, profile, session }`: the actor ID
   (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
-  the runtime session. See [Identity](../01-board/02-identity.md).
+  the runtime session. See [Identity](../01-board/03-identity.md).
 - **`from`** is the sync key a change came from (`slack`), or null on the
   board.
 - **`actor.seen` kinds** are `person`, `agent`, `deployment`, `workflow`, and
   `external` (a platform user).
 - **The event feed hides bookkeeping** by default: `actor.seen`,
   `thread.synced`, `message.synced`, and `message.files_synced` appear with
-  `all` (`vb tail --all`). See [Reading](../01-board/04-reading.md).
+  `all` (`vb tail --all`). See [Reading](../01-board/05-reading.md).
 
 ### Rules for values
 
@@ -98,8 +98,8 @@ thread's events in order on its lane.
 | Contract | Sessions | Events | Holds |
 | --- | --- | --- | --- |
 | `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC` | `external.received { sync, event, raw }` | every platform event, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here |
-| `vboard-watch` | `watch:<id>`, e.g. `watch:triage` | `watch.matched { thread, event }` | each [watcher's](../01-board/05-watchers.md) matches; its `run` happens here |
-| `vboard-schedules` | `schedules` | `schedule.created`, `schedule.canceled`, `schedule.due`, `schedule.fired` | [scheduled messages](../01-board/06-schedules.md) |
+| `vboard-watch` | `watch:<id>`, e.g. `watch:triage` | `watch.matched { thread, event }` | each [watcher's](../01-board/06-watchers.md) matches; its `run` happens here |
+| `vboard-schedules` | `schedules` | `schedule.created`, `schedule.canceled`, `schedule.due`, `schedule.fired` | [scheduled messages](../01-board/07-schedules.md) |
 
 - **`external.received`** holds the normalized platform event (a message, an
   edit, a delete, a reaction, or a lifecycle event like a PR opening) and the
@@ -127,6 +127,7 @@ most lanes are threads, so a thread's events run in order:
 
 | Consumer | Runs on | Lane | What it does |
 | --- | --- | --- | --- |
+| `vboard-tables` | `board` | one | keeps the [tables](../01-board/02-database.md) the board reads from, every event in order |
 | `vboard-sync` | `board` | thread | delivers the board's writes to synced platforms |
 | `vboard-watchers` | `board` | thread | matches each event against every watcher |
 | `vboard-inbox` | each inbox | external thread | imports platform events onto the board |
@@ -134,7 +135,9 @@ most lanes are threads, so a thread's events run in order:
 | `vboard-schedules` | `schedules` | one | arms each new schedule's first send |
 | `vboard-schedule-sends` | `schedules` | schedule | posts a send when it's due |
 
-Each consumer keeps its own place, so one that fails holds up only itself. When
+Each consumer keeps its own place, so one that fails holds up only itself,
+except `vboard-tables`: reads by message ID and writes wait on it, and
+`vb stuck` lists it first. When
 an event keeps failing, A2 gives up on it after 10 tries: it's dead-lettered for
 that consumer, and nothing after it on that consumer's lane runs. vboard keeps that rare. A delivery that keeps
 failing is recorded as `message.sync_failed`, and a watcher gives up on its
@@ -150,19 +153,22 @@ otherwise for every consumer the event is stuck for.
 Both are one atomic A2 operation (`session.redrive()`), and the board logs who
 did which.
 
-## Reducers
+## Reducers and tables
 
-Every read folds the `board` session through these. `vboard/contract` exports
-the first three.
+Messages are read from tables the board keeps from the log, with the
+`vboard-tables` consumer (see [Database](../01-board/02-database.md)). Smaller
+state is folded from the `board` session by these reducers. `vboard/contract`
+exports the first three, and `messagesReducer`, which folds a message exactly
+as the tables keep it, for anyone reading the log themselves.
 
 | Reducer | A2 name | State | Used by |
 | --- | --- | --- | --- |
-| `messagesReducer` | `vboard.messages.v4` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | `read`, `/messages`, the event feed |
 | `channelsReducer` | `vboard.channels.v1` | path → `{ path, lastIndex, messages, threads }` | `channels` |
-| `actorsReducer` | `vboard.actors.v1` | `byId`: actor ID → `{ id, kind, handle, name, avatar }`; `byHandle`: lowercased handle → actor IDs | mention resolution, `actors`, rendering |
+| `actorsReducer` | `vboard.actors.v2` | `byId`: actor ID → `{ id, kind, handle, name, avatar }`; `byHandle`: lowercased handle → actor IDs; `links`: platform actor → the person it's linked to | mention resolution, `actors`, rendering |
+| `messagesReducer` | `vboard.messages.v4` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | not the board: its tables hold the same messages |
 | sync (internal) | `vboard.sync.v1` | thread → its targets and external threads; external thread → thread; message → its copies on each platform | `vboard-inbox` and `vboard-sync` |
 
-A message, as `messagesReducer` folds it:
+A message, as the tables keep it and `messagesReducer` folds it:
 
 | Field | Meaning |
 | --- | --- |
@@ -193,20 +199,18 @@ A2 event IDs are unique across the whole store.
 
 ## Stores
 
-The board persists everything through one A2 store, and runs every background
-job through one A2 scheduler.
+The board keeps its log and its tables in one store, and runs every background
+job through one scheduler.
 
 | Store | Import | Typical use |
 | --- | --- | --- |
-| `postgres()` | `experimental-a2/store-postgres` | production |
-| `redis()` | `experimental-a2/store-redis` | production |
-| `redisHttp()` | `experimental-a2/store-redis-http` | production, on Upstash |
-| `sqlite()` | `experimental-a2/store-sqlite` | development: A2's default, `.a2/dev.db` |
-| `memory()` | `experimental-a2/store-memory` | tests |
+| `postgres()` | `vboard/store-postgres` | production |
+| `sqlite()` | `vboard/store-sqlite` | development and `vb serve` |
+| `memory()` | `vboard/store-memory` | tests |
 
-Without `store`, `board()` uses A2's defaults: SQLite in development, memory
-in tests, and a startup error in production. See
-[Mounting](../01-board/01-mounting.md).
+Without `store`, the board uses SQLite at `.a2/dev.db` in development and
+memory in tests; in production it doesn't start. See
+[Database](../01-board/02-database.md).
 
 ## Limits
 

@@ -1,21 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { idempotentId } from 'experimental-a2'
 import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
-import {
-  actorsReducer,
-  foldMessages,
-  messagesReducer,
-  postedReducer,
-  syncReducer,
-  type Actor,
-  type ActorsState,
-  type Message,
-} from '../contract/reducers.ts'
+import { actorsReducer, foldMessages, syncReducer, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
+import type { BoardReads } from './reads.ts'
 import { badRequest, duplicateId, forbidden, notFound } from './errors.ts'
 import { view } from './feed.ts'
 import type { MessageView } from '../api/routes.ts'
@@ -37,6 +29,8 @@ export function deploymentIdentity(actor: string, handle: string): Identity {
 
 export type WriteContext = {
   session: BoardSession
+  /** The board's tables, where writes check what they write to. */
+  reads: BoardReads
   /** External channels a new root in this board channel starts threads in. */
   configTargets: (channel: string) => Promise<ResolvedTarget[]>
   /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
@@ -118,7 +112,6 @@ export type PostInput = WriteOrigin & {
 export type Posted = MessageView & { unknownMentions?: string[] }
 
 export async function writePost(ctx: WriteContext, input: PostInput): Promise<Posted> {
-  const { state: messages } = await ctx.session.state(messagesReducer)
   const { identity } = input
   let channel = input.channel
   let re: number | null = null
@@ -126,12 +119,13 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   let thread: string
   const id = input.id ?? (input.re === undefined ? randomUUID() : undefined)
   if (input.re !== undefined) {
-    const target = messages.byId[input.re]
+    const target = await ctx.reads.message(input.re)
     if (!target) throw notFound(`message not found: #${input.re}`, 'message_not_found')
     re = target.re ?? target.id
     replyTo = target.id === re ? null : target.id
     channel = target.channel
-    thread = messages.byId[re]!.thread
+    // A reply carries its root's thread key.
+    thread = target.thread
     if (input.sync?.length)
       throw badRequest('sync attaches whole threads: use `vboard sync <id> <target>`')
   } else {
@@ -142,8 +136,7 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   const chain = middlewareFor(ctx, input)
   if (chain && id !== undefined) {
     // A retry of a write that landed: what's on the board stands, whatever the middleware would say now.
-    const { state: posted } = await ctx.session.state(postedReducer)
-    const landed = posted[id] === undefined ? undefined : messages.byId[posted[id]]
+    const landed = await ctx.reads.byEventId(id)
     if (landed) {
       // Only the same author's post in the same place is a retry. Text and labels can't tell:
       // the middleware may have changed them, and edits may have since.
@@ -227,6 +220,7 @@ async function commitPost(
     ...synced,
   )
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
+  await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
   const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
   const landed: Posted = view(message, known)
@@ -242,11 +236,24 @@ export const channelOf = (externalThread: string) => {
 }
 
 async function liveMessage(ctx: WriteContext, id: number): Promise<Message> {
-  const { state } = await ctx.session.state(messagesReducer)
-  const message = state.byId[id]
+  const message = await ctx.reads.message(id)
   if (!message) throw notFound(`message not found: #${id}`, 'message_not_found')
   return message
 }
+
+/**
+ * Waits until the tables hold a write, so any read after it includes it. The write
+ * landed either way: if the tables are slow or stuck, it still succeeds.
+ */
+async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[]) {
+  const last = Math.max(...rows.map((row) => row.index))
+  await ctx.reads.ensure(last, AbortSignal.timeout(LANDED_WAIT_MS)).catch((error: unknown) => {
+    console.warn(`[vboard] the tables haven't applied #${last} yet:`, (error as Error).message)
+  })
+}
+
+/** How long a write waits for the tables before it answers anyway. */
+const LANDED_WAIT_MS = 10_000
 
 export type EditInput = WriteOrigin & { identity: Identity; id: number; text: string; from?: string | null; asAuthor?: boolean }
 
@@ -276,7 +283,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
   const { text, found } = await withEmailMentions(ctx, input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
   const { mentions, unknown } = resolveMentions(text, knownWith(actors, found), seen ? input.identity.actor : undefined, input.from != null)
-  await ctx.session.append(...(seen ? [seen] : []), ...named, {
+  const rows = await ctx.session.append(...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
       id: message.id,
@@ -287,6 +294,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
       from: input.from ?? null,
     },
   })
+  await untilApplied(ctx, rows)
   return unknown.length ? { unknownMentions: unknown } : {}
 }
 
@@ -294,10 +302,10 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
 export async function writeLinks(ctx: WriteContext, input: { identity: Identity; id: number; links: Link[]; from: string | null }) {
   const message = await liveMessage(ctx, input.id)
   if (message.deleted) return
-  await ctx.session.append({
+  await untilApplied(ctx, await ctx.session.append({
     type: 'message.linked',
     payload: { id: message.id, thread: message.thread, links: input.links, by: input.identity.author, from: input.from },
-  })
+  }))
 }
 
 export async function writeDelete(
@@ -308,10 +316,10 @@ export async function writeDelete(
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can delete a message')
   if (message.deleted) return
-  await ctx.session.append({
+  await untilApplied(ctx, await ctx.session.append({
     type: 'message.deleted',
     payload: { id: message.id, thread: message.thread, by: input.identity.author, from: input.from ?? null },
-  })
+  }))
 }
 
 export async function writeReaction(
@@ -322,7 +330,7 @@ export async function writeReaction(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  await ctx.session.append(...(seen ? [seen] : []), {
+  await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
     type: input.remove ? 'reaction.removed' : 'reaction.added',
     payload: {
       id: message.id,
@@ -331,7 +339,7 @@ export async function writeReaction(
       by: input.identity.author,
       from: input.from ?? null,
     },
-  })
+  }))
 }
 
 export async function writeLabels(
@@ -342,7 +350,7 @@ export async function writeLabels(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  await ctx.session.append(...(seen ? [seen] : []), {
+  await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
     type: 'labels.changed',
     payload: {
       id: message.id,
@@ -351,7 +359,7 @@ export async function writeLabels(
       unset: input.unset ?? [],
       by: input.identity.author,
     },
-  })
+  }))
 }
 
 /** Attaches a thread to an external target. Attaching twice is a no-op. */

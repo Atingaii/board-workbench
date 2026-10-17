@@ -1,0 +1,22 @@
+---
+'vboard': minor
+---
+
+A board reads its messages from tables it keeps from its log, so a post, a reply, a thread, and a channel's threads cost the same on a board of a hundred messages or a hundred thousand. Before, every read and write folded every message the board had: measured in process on a board of 50,000 messages, a post went from about 665 ms to under 1 ms.
+
+Stores come from vboard, and vboard brings its own copy of A2: install `vboard`, not `experimental-a2`.
+
+```ts
+import { board } from 'vboard'
+import { vercelQueues } from 'vboard/scheduler-vercel'
+import { postgres } from 'vboard/store-postgres'
+
+export const { GET, POST, scheduler } = board({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
+```
+
+`vboard/store-postgres` (needs `pg`), `vboard/store-sqlite`, and `vboard/store-memory` each keep A2's log and the board's tables in one database. Schedulers are `vboard/scheduler-vercel` and `vboard/scheduler-qstash`.
+
+**Breaking:** `store` takes one of vboard's stores, not an A2 store, and Redis is gone. On Postgres, apply `node_modules/vboard/sql/postgres/schema.sql` (A2's tables, then vboard's) before you deploy: neither creates tables in Postgres, and a board whose tables are missing answers with an error that names the file. SQLite creates its tables when it opens. A board's existing log keeps its events: the tables fill from the log on their own. See the new Database page.

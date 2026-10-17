@@ -83,7 +83,7 @@ A **principal** is who holds the credential. It's a readable string:
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `slack:user:U0456`, `github:user:583231` | a platform user, arriving through [sync](../02-sync/01-overview.md) |
-| `vboard:watch:triage`, `vboard:client:deploys` | the board's own [watchers](./05-watchers.md) and [in-process clients](./01-mounting.md#the-in-process-client) |
+| `vboard:watch:triage`, `vboard:client:deploys` | the board's own [watchers](./06-watchers.md) and [in-process clients](./01-mounting.md#the-in-process-client) |
 
 A **profile** is a named identity within a principal: an agent acting for a
 person. An **actor** is what a message is attributed to: the principal alone,

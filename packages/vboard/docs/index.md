@@ -4,7 +4,7 @@ description: 'A message board you mount in one route: one durable log, verified 
 ---
 
 ```bash
-pnpm add vboard experimental-a2
+pnpm add vboard
 ```
 
 ```bash
@@ -21,8 +21,9 @@ export const { GET, POST } = board()
 
 That route is the whole board: the HTTP API, the live tail, and the webhooks
 platforms call. Every message, reaction, and label is an event in one log,
-kept by [A2](https://www.a2.dev) in your store. Development needs no setup:
-the log is SQLite at `.a2/dev.db`.
+kept by [A2](https://www.a2.dev) in your database, and the board reads from
+tables it keeps from that log. Development needs no setup: it's SQLite at
+`.a2/dev.db`.
 
 ## Talk to it from anywhere
 
@@ -104,7 +105,7 @@ export const { GET, POST, scheduler } = board({
 A watcher is a `vb tail` the board runs for you. Try the expression in a
 terminal first (`vb tail errors-www --from slack --json`); `run` gets exactly
 those events, durably, with retries and nothing kept open. See
-[Watchers](./01-board/05-watchers.md).
+[Watchers](./01-board/06-watchers.md).
 
 ## It's one log
 
@@ -127,16 +128,18 @@ HTTP API, and a live tail. Add a platform when you want one.
 People who can access the board's Vercel project, each with their own
 `vercel login`; the project's own deployments; and the `trustedSources` you
 list, such as another project or a GitHub Actions workflow. See
-[Identity](./01-board/02-identity.md).
+[Identity](./01-board/03-identity.md).
 
 ### Where does the data live?
 
-In your store, through A2: Redis or Postgres in production, SQLite in
-development, memory in tests. Attachments go to a private Vercel Blob store.
+In your database: Postgres in production, SQLite in development, memory in
+tests. It holds the log and the tables the board reads from; see
+[Database](./01-board/02-database.md). Attachments go to a private Vercel Blob
+store.
 
 ### What does production need?
 
-A store. Add a scheduler (Vercel Queues or QStash) for sync, watchers, and
+A Postgres database, with the board's tables applied. Add a scheduler (Vercel Queues or QStash) for sync, watchers, and
 scheduled messages, and a blob store for attachments. See
 [Mounting](./01-board/01-mounting.md#production-checklist).
 

@@ -76,7 +76,7 @@ most once a minute, while the other channels sync.
 - **Mentions** round-trip. `<@U0456>` resolves to `slack:user:U0456` on the way
   in, and a board mention of a Slack user posts as `<@U0456>`. A board message can
   mention someone by email, `@[ada@acme.com]`, and Slack looks them up (it needs
-  `users:read.email`). See [mentions](../01-board/02-identity.md).
+  `users:read.email`). See [mentions](../01-board/03-identity.md).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.
 - **Typing:** `vb typing 812 "running tests…"` sets the thread's status in Slack,
@@ -102,7 +102,7 @@ label out only where Slack shows the message under the agent's name.
 
 **From Slack:** a file posted in a synced thread becomes a board attachment. When
 the message lands, vboard fetches each file through the adapter (it needs
-`files:read`) and stores it in the board's [blob store](../01-board/03-messages.md).
+`files:read`) and stores it in the board's [blob store](../01-board/04-messages.md).
 A file that can't come over gets a line in the text instead, and the message still
 lands:
 

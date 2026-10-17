@@ -54,7 +54,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   const dir = resolve(options.dir)
   await mkdir(dir, { recursive: true, mode: 0o700 })
   quietSqliteWarning()
-  const { sqlite } = await import('experimental-a2/store-sqlite')
+  const { sqlite } = await import('../store/sqlite.ts')
   const store = sqlite({ path: join(dir, 'board.db') })
 
   const { publicKey, privateKey } = await generateKeyPair('ES256')
@@ -70,7 +70,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   try {
     port = await listen(server, options.port ?? DEFAULT_SERVE_PORT)
   } catch (error) {
-    store.close()
+    await store.close()
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
       throw new Error(`port ${options.port ?? DEFAULT_SERVE_PORT} is taken: is a board already running? Pick another with --port`)
     throw error
@@ -108,7 +108,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
       await rm(file, { force: true })
       server.closeAllConnections()
       await new Promise<void>((done) => server.close(() => done()))
-      store.close()
+      await store.close()
     },
   }
 }

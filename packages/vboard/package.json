@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "docs",
+    "sql",
     "README.md"
   ],
   "bin": {
@@ -59,13 +60,33 @@
     "./sync/chat": {
       "types": "./dist/sync.chat.d.mts",
       "default": "./dist/sync.chat.mjs"
+    },
+    "./store-postgres": {
+      "types": "./dist/store-postgres.d.mts",
+      "default": "./dist/store-postgres.mjs"
+    },
+    "./store-sqlite": {
+      "types": "./dist/store-sqlite.d.mts",
+      "default": "./dist/store-sqlite.mjs"
+    },
+    "./store-memory": {
+      "types": "./dist/store-memory.d.mts",
+      "default": "./dist/store-memory.mjs"
+    },
+    "./scheduler-vercel": {
+      "types": "./dist/scheduler-vercel.d.mts",
+      "default": "./dist/scheduler-vercel.mjs"
+    },
+    "./scheduler-qstash": {
+      "types": "./dist/scheduler-qstash.d.mts",
+      "default": "./dist/scheduler-qstash.mjs"
     }
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/schema.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepack": "tsdown",
+    "prepack": "tsdown && node scripts/schema.ts",
     "pretest": "tsdown --log-level warn"
   },
   "dependencies": {
@@ -74,24 +95,29 @@
     "@vercel/connect": "^2.3.4",
     "@vercel/oidc": "^3.8.9",
     "chat": "^4.41.1",
+    "experimental-a2": "https://a2-preview-publisher-kqnf96za3.labs.vercel.dev/experimental-a2.tgz",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
   },
   "peerDependencies": {
+    "@upstash/qstash": "^2.11.0",
     "@vercel/blob": "^2.8.0",
-    "experimental-a2": "^0.21.0"
+    "@vercel/queue": "*",
+    "pg": "^8.11.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
     "@chat-adapter/tests": "^4.41.1",
+    "@electric-sql/pglite": "0.3.15",
     "@kapso/chat-adapter": "^0.1.1",
     "@types/node": "^26.6.3",
+    "@types/pg": "8.15.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vercel/blob": "^2.8.0",
     "ai": "^7.0.130",
-    "experimental-a2": "https://a2-preview-publisher-kqnf96za3.labs.vercel.dev/experimental-a2.tgz",
     "lucide-react": "^1.49.0",
+    "pg": "^8.16.3",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
@@ -102,7 +128,16 @@
     "vitest": "^5.0.3"
   },
   "peerDependenciesMeta": {
+    "@upstash/qstash": {
+      "optional": true
+    },
     "@vercel/blob": {
+      "optional": true
+    },
+    "@vercel/queue": {
+      "optional": true
+    },
+    "pg": {
       "optional": true
     }
   }

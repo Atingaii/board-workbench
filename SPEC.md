@@ -114,7 +114,7 @@ conversations.
 ### Install
 
 ```bash
-pnpm i vboard experimental-a2                         # a board: log, API, SDK, CLI
+pnpm i vboard pg                                      # a board: log, tables, API, SDK, CLI
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
 pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api                       # + sync with WhatsApp, through Kapso
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
@@ -125,9 +125,12 @@ with `npx vboard`.
 
 **Dependencies:**
 
-- **Peer, required: `experimental-a2`.** You import your store and scheduler
-  from it (e.g. `experimental-a2/store-redis-http`), and they must be the same
-  copy that vboard uses.
+- **Regular dependency: `experimental-a2`.** vboard owns it: you import your
+  store and scheduler from vboard (`vboard/store-postgres`,
+  `vboard/scheduler-vercel`), so they're always the copy vboard uses.
+- **Peers, optional: `pg`, `@vercel/queue`, `@upstash/qstash`.** Loaded only by
+  `vboard/store-postgres`, `vboard/scheduler-vercel`, and
+  `vboard/scheduler-qstash`.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`,
   `@kapso/chat-adapter`.** They are loaded only by `vboard/adapter-slack`,
   `vboard/adapter-github`, and `vboard/adapter-kapso`. Your adapters
@@ -747,44 +750,49 @@ come in, a bug. Those need a person.
 
 ## Reading state
 
-Every read is a fold of the single session through A2 reducers. There are no
-tables. The reducers are defined in `vboard/contract` and cached by A2's
-snapshots.
+The log is the truth; messages are read from tables kept from it. Smaller
+state is folded from the log by A2 reducers.
+
+- **The tables.** The `vboard-tables` consumer applies every board event, in
+  order, to four tables in the board's own database: `vboard_messages` (each
+  message as it is now, plus columns to filter on, and a root's thread
+  summary), `vboard_versions` (each message after every event that changed it),
+  `vboard_terms` (labels and mentions, as an index), and `vboard_positions` (the
+  last log index applied). Each event is one transaction that claims its index
+  first, so a retried or superseded attempt changes nothing.
+- **The same fold.** A message is built by `foldMessages`, the fold the board
+  always used, on a state of just that message: the tables hold exactly what
+  folding the whole log would.
+- **One interface.** The board reads through `MessageTables` (`message`,
+  `thread`, `messagesAt`, `messages(filter, page)`, `threads(filter, page)`,
+  `apply`, `position`), stated in board terms. SQL on Postgres and SQLite is its
+  one implementation today; the queries are the same on both.
 
 | Reducer | State | Used by |
 | --- | --- | --- |
-| `channels` | path → last index, message count | `channels`, channel validation |
-| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | mention resolution, `actors`, rendering |
+| `channels` | path → last index, message count | `channels`, the feed's start |
+| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs, and links | mention resolution, `actors`, rendering, `--by` and `--mentions` |
 | `sync` | thread root → external threads; external thread group → root; message → external copies | both sync consumers |
-| `messages` | message → current text, thread, reply target, labels, reactions, tombstone | `read`, `/messages` filters, event-feed filters |
 
-- **Consistency:** every response reports the log index it reflects, as A2's
-  `state()` does. Writes return their message ID, so any later read already
-  includes the write.
-- **Filters** (`channel`, `re`, `by`, `mentions`, `label`) are evaluated in
-  memory over the `messages` state.
-- **The event feed** starts from `state(messages, { through: after })` and folds
-  each new event as it streams. That fold is what gives it the before-or-after
-  view of each change. When no checkpoint exists at or before `after`, A2
-  refolds from the start of the log.
-- **Small reducers stay separate from `messages`,** so resolving a mention or
-  syncing a reply never has to fold the largest state.
+- **Consistency:** a write answers once the tables hold it, so any later read
+  includes it. A read that names a message ID waits until the tables reach it;
+  an ID is a log index. List reads answer at once and report, as `cursor`, the
+  index the tables reflect.
+- **Filters** (`channel`, `re`, `by`, `mentions`, `from`, `text`, `label`) are
+  SQL over the tables for `/messages` and `/threads`. `by` and `mentions` are
+  resolved to actor and principal sets first, from the `actors` state.
+- **The event feed and watchers** see each change before and after: they load
+  the message an event concerns, and its root, from `vboard_versions` as of the
+  event before, and fold the event in memory. The same filters are a JS
+  predicate there; a test keeps it equal to the SQL.
+- **Cost:** a post, a reply, a thread, and a channel's threads are index
+  lookups, flat in the board's size. Other lists stop at a page, so a rare
+  match or `/threads` with filters beyond a channel reads further.
 
-**The ceiling.** The `messages` snapshot is one JSON value that is rewritten
-after catch-up reads. That's fine for thousands of messages and too heavy for
-hundreds of thousands. The plan when a board outgrows it is row-shaped
-projections: reducers that fold into rows keyed by ID, caught up to a stored
-high-water index. Ideally that becomes an A2 primitive, not board-specific code.
-It's not in the MVP.
-
-**Store support:** any A2 store.
-
-| Store | Typical use |
-| --- | --- |
-| `postgres()` | production |
-| `redis()` / `redisHttp()` | production (Upstash via `redisHttp`) |
-| SQLite | development (A2's default `.a2/dev.db`) |
-| memory | tests |
+**Store support:** `vboard/store-postgres` in production, `vboard/store-sqlite`
+in development and `vb serve`, `vboard/store-memory` in tests. Each holds A2's
+log and the tables in one database. Postgres gets its tables from
+`sql/postgres/schema.sql`, A2's then vboard's, applied before deploying.
 
 ## Cursors
 
@@ -2233,8 +2241,6 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 ## Non-goals for v1
 
 - Full-text search
-- SQL read models or row-shaped projections; they're the plan for scale, not
-  for the MVP
 - Accounts, login, sessions, roles, and per-channel access control
 - A web UI; the CLI and `tail` are the UI
 - Custom views or reducers supplied by whoever mounts the board
@@ -2260,8 +2266,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
     label in a group (`Type › Bug`, one per group) becomes `tag.type=Bug`.
   - Chat SDK's Linear adapter handles only comments, so the module reads issue
     events from the raw webhook, the same way `github()` does.
-- **Row-shaped projections,** when a benchmark limit bites.
-- **Full-text search,** on top of row-shaped projections.
+- **Full-text search,** on the tables (Postgres `pg_trgm` or `tsvector`, SQLite
+  FTS5), for `text` filters that don't read through the board.
+- **Sync state in the tables,** like messages: `syncReducer` grows with roots
+  and delivered copies.
 
 ## Decisions log
 
@@ -2285,14 +2293,17 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 
 ## Benchmarks before release
 
-The MVP keeps everything in one A2 session. Before release, measure where that
-stops being enough, on Postgres and on Upstash Redis over HTTP:
+The MVP folded every message into one `messages` reducer, which A2 copies on
+every read and snapshots whole. Measured on synthetic boards of real factory
+messages (about 1 KB each), on an in-process store:
 
-1. **Append throughput through one session:** posts per second until p95 latency
-   doubles.
-2. **Subscriber cost:** p95 delivery latency with 1, 10, and 50 concurrent
-   `tail` subscribers, all scanning every event.
-3. **The `messages` snapshot:** size and rewrite time at 1k, 10k, and 100k
-   messages.
+| Messages | Post, as one reducer | Thread read, as one reducer | Post, tables | Thread read, tables | Channel's threads, tables |
+| --- | --- | --- | --- | --- | --- |
+| 10,000 | 125 ms | 54 ms | 0.4 ms | 0.3 ms | 0.5 ms |
+| 50,000 | 665 ms | 294 ms | 0.2 ms | 0.3 ms | 0.5 ms |
 
-The first of these to bite sets the trigger for row-shaped projections.
+Almost all of the reducer's cost was copying its state. Its snapshot would
+also have outgrown Upstash's 10 MB request limit at about 10,000 messages. That
+set the trigger: the tables replaced it. Still to measure, on Postgres over
+the network: append throughput through one session, and subscriber cost with
+1, 10, and 50 concurrent `tail` subscribers.

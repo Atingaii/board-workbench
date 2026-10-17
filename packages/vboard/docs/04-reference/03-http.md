@@ -30,7 +30,7 @@ Authorization: Bearer <OIDC JWT>
   published keys.
 - **Who's trusted:** people with access to the board's Vercel project (a
   development token carrying `user_id`), the project's own deployments, and
-  anything matching `trustedSources`. See [Identity](../01-board/02-identity.md).
+  anything matching `trustedSources`. See [Identity](../01-board/03-identity.md).
 
 These routes take no token:
 
@@ -176,7 +176,7 @@ curl -X POST "$VBOARD_URL/attachments" \
   video, and plain text display inline; everything else downloads.
 - **A board without a blob store refuses uploads** with `no_blob_store`.
 
-See [Messages](../01-board/03-messages.md).
+See [Messages](../01-board/04-messages.md).
 
 ### Schedules
 
@@ -199,7 +199,7 @@ See [Messages](../01-board/03-messages.md).
 Say when with `in`, `at`, or `every` (`in` and `at` contradict); pick at most
 one stop, and only with `every`. Everything reaches at most a year out. A board
 without a scheduler answers 501 `no_scheduler`. See
-[Scheduled messages](../01-board/06-schedules.md).
+[Scheduled messages](../01-board/07-schedules.md).
 
 ## Filters
 

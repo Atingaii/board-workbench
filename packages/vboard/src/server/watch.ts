@@ -4,8 +4,9 @@ import type { BoardEventView } from '../api/routes.ts'
 import { parseWatchTail } from '../api/tail.ts'
 import type { BoardClient } from '../client/client.ts'
 import { boardContract, watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
-import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
+import { actorsReducer, type Message, type MessagesState } from '../contract/reducers.ts'
+import { compileFilter, eventView, foldEvent, hasCriteria, loadBefore, type ParsedFilters } from './feed.ts'
+import type { BoardReads } from './reads.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 
 /** What a watcher's `run` gets. */
@@ -126,6 +127,7 @@ export function createWatchers(options: {
   const byId = new Map(watchers.map((watcher) => [watcher.id, watcher]))
 
   let clientAs: ((identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient) | null = null
+  let reads: BoardReads | null = null
 
   /** Runs a watcher on a board event it matched, one thread at a time. */
   const runner = consumer({
@@ -159,8 +161,8 @@ export function createWatchers(options: {
   async function dispatch(ctx: ConsumerContext<BoardEvents>) {
     const event = ctx.event as BoardEvent
     const through = event.index - 1
-    const [{ state: messages }, { state: actors }] = await Promise.all([
-      ctx.session.state(messagesReducer, { through }),
+    const [messages, { state: actors }] = await Promise.all([
+      messagesBefore(event, ctx.signal),
       ctx.session.state(actorsReducer, { through }),
     ])
     const { id, before, after } = foldEvent(messages, actors, event)
@@ -179,6 +181,12 @@ export function createWatchers(options: {
         payload: { thread: (event.payload as { thread: string }).thread, event: view },
       })
     }
+  }
+
+  /** The message `event` concerns, and its thread's root, as they were just before it. */
+  async function messagesBefore(event: BoardEvent, signal: AbortSignal): Promise<MessagesState> {
+    if (!reads) throw new Error('watchers used before the board bound them')
+    return loadBefore(reads, event, signal)
   }
 
   /** Didn't match before and does now; a new reply only counts if its thread wasn't already in view. */
@@ -209,8 +217,9 @@ export function createWatchers(options: {
     server,
     boardConsumer,
     ids: watchers.map((watcher) => watcher.id),
-    bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient }) => {
+    bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient; reads: BoardReads }) => {
       clientAs = binding.clientAs
+      reads = binding.reads
     },
   }
 }

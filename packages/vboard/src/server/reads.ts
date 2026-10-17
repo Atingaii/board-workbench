@@ -1,0 +1,57 @@
+import { consumer } from 'experimental-a2/server'
+import { boardContract, type BoardEvent } from '../contract/contract.ts'
+import type { Message } from '../contract/reducers.ts'
+import { TABLES_CONSUMER } from '../store/sql.ts'
+import type { MessageTables } from '../store/types.ts'
+import type { BoardSession } from './board.ts'
+
+/** Keeps the tables from the board's log, one event at a time, from the first. */
+export function tablesConsumer(tables: MessageTables) {
+  return consumer({ contract: boardContract, name: TABLES_CONSUMER, lane: 'tables', backfill: true }).run(async (ctx) => {
+    await tables.apply(ctx.event as BoardEvent)
+  })
+}
+
+export type TablesConsumer = ReturnType<typeof tablesConsumer>
+
+/**
+ * The board's reads from its tables. A read that names a log index (a message
+ * ID is one) waits until the tables have applied it; list reads don't wait, and
+ * say which index they reflect.
+ */
+export function createReads(tables: MessageTables, session: BoardSession, projection: TablesConsumer) {
+  /** Waits until the tables have applied `index`, or the whole log when it's omitted. */
+  async function ensure(index?: number, signal?: AbortSignal): Promise<void> {
+    if (index !== undefined && (await tables.position()) >= index) return
+    await session.consume(projection, { ...(index !== undefined ? { through: index } : {}), ...(signal ? { signal } : {}) })
+  }
+
+  return {
+    tables,
+    ensure,
+    position: () => tables.position(),
+    async message(id: number, signal?: AbortSignal): Promise<Message | null> {
+      await ensure(id, signal)
+      return tables.message(id)
+    },
+    /** A thread's root and replies; `cursor` is the index the tables had applied before reading it. */
+    async thread(root: number, signal?: AbortSignal): Promise<{ messages: Message[]; cursor: number }> {
+      await ensure(root, signal)
+      const cursor = await tables.position()
+      return { messages: await tables.thread(root), cursor }
+    },
+    async messagesAt(ids: readonly number[], index: number, signal?: AbortSignal): Promise<Map<number, Message>> {
+      await ensure(index, signal)
+      return tables.messagesAt(ids, index)
+    },
+    /** By event ID, as of the whole log: an ID doesn't say how far to wait. */
+    async byEventId(eventId: string, signal?: AbortSignal): Promise<Message | null> {
+      await ensure(undefined, signal)
+      return tables.byEventId(eventId)
+    },
+    messages: tables.messages.bind(tables),
+    threads: tables.threads.bind(tables),
+  }
+}
+
+export type BoardReads = ReturnType<typeof createReads>

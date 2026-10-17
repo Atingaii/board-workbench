@@ -23,7 +23,6 @@ import {
   identityCodesReducer,
   isThreadTarget,
   linkedTo,
-  messagesReducer,
   syncReducer,
   type Actor,
   type ActorsState,
@@ -248,15 +247,13 @@ export function createSyncEngine(options: {
    */
   async function resolveLinks(platform: SyncProvider, links: ExternalLink[], previous: Link[] = []): Promise<Link[]> {
     if (links.length === 0) return []
-    const { session } = bound()
-    const [{ state: sync }, { state: messages }, { state: actors }] = await Promise.all([
-      session.state(syncReducer), session.state(messagesReducer), session.state(actorsReducer),
-    ])
+    const { session, writes } = bound()
+    const [{ state: sync }, { state: actors }] = await Promise.all([session.state(syncReducer), session.state(actorsReducer)])
     const resolved: Link[] = []
     for (const link of links) {
       if (resolved.some((done) => done.url === link.url)) continue
       const id = sync.byExternalMessage[externalMessageKey(link.thread, link.message)]
-      const copy = id === undefined ? undefined : messages.byId[id]
+      const copy = id === undefined ? undefined : await writes.reads.message(id)
       if (copy && !copy.deleted) {
         resolved.push({ url: link.url, message: copy.id, unavailable: null, snapshot: {
           author: actors.byId[copy.by.actor]?.name ?? copy.by.actor,
@@ -330,8 +327,10 @@ export function createSyncEngine(options: {
     return { attachments, notes }
   }
 
-  async function inbound(trigger: InboxEvent, attempt = 1) {
-    const { session, clientAs } = bound()
+  async function inbound(trigger: InboxEvent, attempt = 1, signal?: AbortSignal) {
+    const { session, clientAs, writes } = bound()
+    // What a platform event changes depends on the board as it is now: let the tables catch up.
+    await writes.reads.ensure(undefined, signal)
     const { sync: key, event, raw } = trigger.payload
     const platform = platformOf(key)
     const mapping = (await mappings(key)).get(event.channel)
@@ -340,8 +339,7 @@ export function createSyncEngine(options: {
     if (event.kind === 'message') {
       const copied = sync.byExternalMessage[externalMessageKey(event.subthread ?? event.thread, event.message)]
       if (copied !== undefined) {
-        const { state: messages } = await session.state(messagesReducer)
-        const origin = messages.byId[copied]?.origin
+        const origin = (await writes.reads.message(copied))?.origin
         if (!origin || origin.message !== event.message || (origin.subthread ?? origin.thread) !== (event.subthread ?? event.thread)) return
       } else if (platform.users && attempt < ECHO_ATTEMPTS && (await deliveringAsPerson(linked, event)))
         throw new Error(`holding ${event.message} until ${event.author.id}'s board message there has its receipt`)
@@ -416,27 +414,29 @@ export function createSyncEngine(options: {
    * only from the receipt.
    */
   async function deliveringAsPerson(thread: string | undefined, event: Extract<ExternalEvent, { kind: 'message' }>) {
-    const { session } = bound()
-    const [{ state: actors }, { state: sync }, { state: messages }] = await Promise.all([
-      session.state(actorsReducer), session.state(syncReducer), session.state(messagesReducer),
-    ])
+    const { session, writes } = bound()
+    const [{ state: actors }, { state: sync }] = await Promise.all([session.state(actorsReducer), session.state(syncReducer)])
     const link = actors.links[event.author.id]
     if (!link || link.method !== 'consent') return false
     const now = Date.now()
-    const pending = (id: number, target: string) => {
-      const message = messages.byId[id]
-      return !!message && message.by.principal === link.to && message.by.profile === null && message.from === null &&
-        !message.deleted && !message.noSync && now - Date.parse(message.createdAt) < ECHO_WINDOW_MS &&
-        !sync.copies[id]?.[target] && !message.undelivered[target]
-    }
+    const pending = (message: Message, target: string) =>
+      message.by.principal === link.to && message.by.profile === null && message.from === null &&
+      !message.deleted && !message.noSync && now - Date.parse(message.createdAt) < ECHO_WINDOW_MS &&
+      !sync.copies[message.id]?.[target] && !message.undelivered[target]
     if (thread !== undefined) {
       const synced = sync.threads[thread]
       if (!synced) return false
       const targets = synced.targets.filter((target) => synced.external[target] === event.thread)
-      return [synced.root, ...(messages.replies[synced.root] ?? [])].some((id) => targets.some((target) => pending(id, target)))
+      const messages = await writes.reads.tables.thread(synced.root)
+      return messages.some((message) => targets.some((target) => pending(message, target)))
     }
-    return Object.values(sync.threads).some((synced) =>
-      synced.targets.includes(event.channel) && !synced.external[event.channel] && pending(synced.root, event.channel))
+    // A new thread of theirs: a root still on its way to this channel, which has no platform thread there yet.
+    for (const synced of Object.values(sync.threads)) {
+      if (!synced.targets.includes(event.channel) || synced.external[event.channel]) continue
+      const root = await writes.reads.tables.message(synced.root)
+      if (root && pending(root, event.channel)) return true
+    }
+    return false
   }
 
   const codes = () => identityServer.session(IDENTITY_SESSION)
@@ -531,8 +531,7 @@ export function createSyncEngine(options: {
     }
     const setExtraLabels = async (identity: Identity, id: number) => {
       if (!overrides.labels && !overrides.unset) return
-      const { state: messages } = await session.state(messagesReducer)
-      const root = messages.byId[id]
+      const root = await writes.reads.message(id)
       const set = Object.fromEntries(Object.entries(overrides.labels ?? {}).filter(([key, value]) => root?.labels[key] !== value))
       const unset = (overrides.unset ?? []).filter((key) => root?.labels[key] !== undefined)
       if (Object.keys(set).length || unset.length) await writeLabels(writes, { identity, id, set, unset })
@@ -587,17 +586,15 @@ export function createSyncEngine(options: {
         if (rootId !== undefined) await setExtraLabels(identity, rootId)
         if (event.kind === 'deleted') await writeDelete(writes, { identity, id, from: key, asAuthor: false })
         else if (event.kind === 'edited') {
-          const { state: messages } = await session.state(messagesReducer)
-          const stored = messages.byId[id]
+          const stored = (await writes.reads.message(id)) ?? undefined
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
           if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { ...source, identity, id, text, from: key, asAuthor: false })
           const links = stored ? await resolveLinks(platform, event.links ?? [], stored.links) : []
           if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, id, links, from: key })
         } else {
           if (platform.singleReaction) {
-            const { state: messages } = await session.state(messagesReducer)
             const emoji = canonicalEmoji(event.emoji)
-            for (const [held, actors] of Object.entries(messages.byId[id]?.reactions ?? {}))
+            for (const [held, actors] of Object.entries((await writes.reads.message(id))?.reactions ?? {}))
               if (actors.includes(identity.actor.id) && !(event.added && held === emoji))
                 await writeReaction(writes, { identity, id, emoji: held, remove: true, from: key })
           }
@@ -608,8 +605,7 @@ export function createSyncEngine(options: {
       case 'lifecycle': {
         const identity = externalIdentity(event.author)
         if (rootId !== undefined) {
-          const { state: messages } = await session.state(messagesReducer)
-          const root = messages.byId[rootId]
+          const root = (await writes.reads.message(rootId)) ?? undefined
           const createdHere = root?.origin?.message === `lifecycle:${trigger.id}`
           const draft = createdHere ? rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw }) : null
           const desired = labels(draft?.labels ?? event.labels)
@@ -646,7 +642,7 @@ export function createSyncEngine(options: {
     types: ['external.received'],
     lane: ({ event }) => `thread:${event.payload.event.thread}`,
   }).run(async (ctx) => {
-    await inbound(ctx.event as InboxEvent, ctx.attempt)
+    await inbound(ctx.event as InboxEvent, ctx.attempt, ctx.signal)
   })
 
   const inboxServer = createServer({
@@ -788,13 +784,15 @@ export function createSyncEngine(options: {
 
   type Ctx<K extends keyof BoardEvents> = ConsumerContext<BoardEvents, K>
 
+  /** The board as it is now, at least through the event being delivered. */
   async function latest(ctx: Ctx<keyof BoardEvents>) {
-    const [sync, messages, actors] = await Promise.all([
+    const { reads } = bound().writes
+    await reads.ensure(ctx.event.index, ctx.signal)
+    const [sync, actors] = await Promise.all([
       ctx.session.state(syncReducer, { through: 'latest' }),
-      ctx.session.state(messagesReducer, { through: 'latest' }),
       ctx.session.state(actorsReducer, { through: 'latest' }),
     ])
-    return { sync: sync.state, messages: messages.state, actors: actors.state }
+    return { sync: sync.state, actors: actors.state, tables: reads.tables }
   }
 
   async function postReply(
@@ -916,8 +914,8 @@ export function createSyncEngine(options: {
     if ((ctx.event.payload.kind ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'thread') return // joining: only messages written after the join are delivered
     const state = await latest(ctx)
     const synced = state.sync.threads[thread]
-    const root = synced ? state.messages.byId[synced.root] : undefined
-    if (!synced || !root || root.deleted) return
+    const [root, ...replies] = synced ? await state.tables.thread(synced.root) : []
+    if (!synced || !root || root.id !== synced.root || root.deleted) return
     let externalThread = synced.external[target]
     if (!externalThread) {
       try {
@@ -965,14 +963,13 @@ export function createSyncEngine(options: {
         }
     }
     const failures: Failure[] = []
-    for (const replyId of state.messages.replies[root.id] ?? []) {
-      const reply = state.messages.byId[replyId]
-      if (!reply || reply.deleted || reply.noSync || cameFrom(reply, target)) continue
+    for (const reply of replies) {
+      if (reply.deleted || reply.noSync || cameFrom(reply, target)) continue
       try {
-        const copy = state.sync.copies[replyId]?.[target] ?? (await postReply(ctx, state, reply, target, externalThread))
+        const copy = state.sync.copies[reply.id]?.[target] ?? (await postReply(ctx, state, reply, target, externalThread))
         await deliverFiles(ctx, reply, target, copy, state.actors)
       } catch (error) {
-        failures.push({ id: replyId, target, error })
+        failures.push({ id: reply.id, target, error })
       }
     }
     await settle(ctx, thread, failures)
@@ -987,7 +984,7 @@ export function createSyncEngine(options: {
     if (payload.re === null || payload.noSync) return
     const state = await latest(ctx)
     const synced = state.sync.threads[payload.thread]
-    const message = state.messages.byId[ctx.event.index]
+    const message = await state.tables.message(ctx.event.index)
     if (!synced || !message || synced.targets.length === 0) return
     const failures: Failure[] = []
     for (const target of synced.targets) {
@@ -1011,7 +1008,7 @@ export function createSyncEngine(options: {
     const event = ctx.event
     const state = await latest(ctx)
     const copies = state.sync.copies[event.payload.id] ?? {}
-    const message = state.messages.byId[event.payload.id]
+    const message = await state.tables.message(event.payload.id)
     for (const [target, copy] of Object.entries(copies)) {
       if (event.payload.from !== null && keyOf(target) === event.payload.from) continue
       try {
@@ -1047,11 +1044,11 @@ export function createSyncEngine(options: {
   async function deliverLabels(ctx: Ctx<'labels.changed'>) {
     const { id } = ctx.event.payload
     const state = await latest(ctx)
-    const message = state.messages.byId[id]
+    const message = await state.tables.message(id)
     const copies = state.sync.copies[id] ?? {}
     if (!message || message.deleted || Object.keys(copies).length === 0) return
-    const { state: before } = await ctx.session.state(messagesReducer, { through: ctx.event.index - 1 })
-    const previous = { ...message, labels: before.byId[id]?.labels ?? {} }
+    const before = (await state.tables.messagesAt([id], ctx.event.index - 1)).get(id)
+    const previous = { ...message, labels: before?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
       try {
         const body = renderFor(target, message, state.actors, copy.files === null)
@@ -1070,11 +1067,12 @@ export function createSyncEngine(options: {
    * replaces "Typing…" where the platform shows text (Slack).
    */
   async function typing(thread: string, status?: string): Promise<string[]> {
-    const { session } = bound()
-    const [{ state: sync }, { state: messages }] = await Promise.all([session.state(syncReducer), session.state(messagesReducer)])
+    const { session, writes } = bound()
+    await writes.reads.ensure()
+    const { state: sync } = await session.state(syncReducer)
     const synced = sync.threads[thread]
     if (!synced) return []
-    const ids = [synced.root, ...(messages.replies[synced.root] ?? [])]
+    const messages = await writes.reads.tables.thread(synced.root)
     const externals = [...new Set(Object.values(synced.external))]
     const done = await Promise.all(
       externals.map(async (external) => {
@@ -1082,9 +1080,9 @@ export function createSyncEngine(options: {
         try {
           const platform = platformOf(key)
           let latest: string | null = null
-          for (let i = ids.length - 1; i >= 0 && latest === null; i--) {
-            const origin = messages.byId[ids[i]!]
-            if (origin && !origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
+          for (let i = messages.length - 1; i >= 0 && latest === null; i--) {
+            const origin = messages[i]!
+            if (!origin.deleted && origin.origin?.thread === external) latest = origin.origin.message
           }
           await platform.startTyping(native(external), latest, status)
           return external

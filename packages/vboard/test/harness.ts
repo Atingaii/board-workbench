@@ -1,6 +1,6 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
-import { memory } from 'experimental-a2/store-memory'
+import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
@@ -51,7 +51,7 @@ export function testBoard(options: Partial<BoardOptions> = {}) {
    */
   const skipHold = async (server: { contract: { name: string } }, session: string) => {
     await vi.waitFor(async () => {
-      const cursors = await store.cursors(`${server.contract.name}\u001f${session}`)
+      const cursors = await store.log!.cursors(`${server.contract.name}\u001f${session}`)
       expect(cursors.filter((cursor) => cursor.claimHolder !== null)).toEqual([])
     })
     clock.skip()

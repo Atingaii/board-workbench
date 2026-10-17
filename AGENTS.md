@@ -52,12 +52,11 @@ root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
 reply in an existing thread rather than starting one.
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
-  board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
-  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  The Redis namespace is `vboard-factory-3`, separate from the v0 feedback bot's
-  (`vboard-3`). Both are new with A2's consumers, whose Redis layout an existing
-  prefix can't take, as A2 0.17's was before; production's logs are copied over
-  from `-2` when it moves. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  board posts there too. `VERCEL_ENV` only picks the store: the project's Neon
+  Postgres on Vercel (`DATABASE_URL`; each preview can get a branch of its
+  own), or SQLite at `.a2/dev.db` locally. `scripts/migrate.mjs` applies vboard's
+  `schema.sql` before every build. Production's log moves over from Upstash Redis
+  (prefix `vboard-factory-2`) once, keeping every event's index. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
@@ -228,9 +227,10 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
 - Every environment syncs with the real Slack, so a local or preview board posts
-  there too. `VERCEL_ENV` only picks the log: production's Redis keys, a
-  preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
-  channels are private, so they're mapped by ID.
+  there too. `VERCEL_ENV` only picks the store: the project's Neon Postgres on
+  Vercel (`DATABASE_URL`), or SQLite at `.a2/dev.db` locally; `scripts/migrate.mjs`
+  applies the tables before every build. The channels are private, so they're
+  mapped by ID.
 - `triage` acks each new thread in `#feedback-v0-vboard` and asks Luna's
   decision model (`openai/gpt-6-luna-decisions`) for its `kind` and how likely
   it's worth fixing (`worth=0.00`–`1.00`). A bug or feature at 0.7 or more gets
@@ -349,9 +349,16 @@ shared by the server and the client.
   answering, it writes the quote. (That's why replies sync without an
   automatic quote line.)
 
-- **One log.** Every board fact is an event in A2 session `board`. Views are
-  reducers in `src/contract/reducers.ts`. Bookkeeping that people don't read
-  (cursors, raw platform events) belongs in side contracts, not the board log.
+- **One log.** Every board fact is an event in A2 session `board`. Messages are
+  read from tables the `vboard-tables` consumer keeps from it (`src/store/`),
+  built with `foldMessages`; smaller views are reducers in
+  `src/contract/reducers.ts`. Nothing writes the tables but that consumer.
+  Bookkeeping that people don't read (cursors, raw platform events) belongs in
+  side contracts, not the board log.
+- **The tables are one interface.** The board reads through `MessageTables`
+  (`src/store/types.ts`), in board terms; SQL is behind it, the same queries on
+  Postgres and SQLite. A query change keeps `test/tables.test.ts` (random
+  histories against the full-state fold, on both dialects) passing.
 - **Folds mutate in place.** A2 clones state at every read and snapshot
   boundary, so an event costs O(1). Never share a fold's state object outside
   the fold.

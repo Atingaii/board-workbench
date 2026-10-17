@@ -28,11 +28,11 @@ Each entry under `sync` is one platform account, keyed by a name you choose:
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { vercelQueues } from 'vboard/scheduler-vercel'
+import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST, scheduler } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
@@ -211,6 +211,6 @@ vb sources slack read '#general'        # read a channel the board doesn't sync
 ```
 
 `vb inbox` and `vb sources … read` need full access: a
-[trusted source](../01-board/02-identity.md) restricted with `can` can't use them.
+[trusted source](../01-board/03-identity.md) restricted with `can` can't use them.
 Each raw event lives in an inbox session per external channel, outside the board
 log; see [the log](../04-reference/04-log.md).

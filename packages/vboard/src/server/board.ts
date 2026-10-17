@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
-import { createServer, type A2Store, type A2Scheduler, type ServerOptions } from 'experimental-a2/server'
+import { createServer, type A2Scheduler } from 'experimental-a2/server'
 import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, watchSession, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, linkedTo, messagesReducer, syncReducer } from '../contract/reducers.ts'
+import { actorsReducer, channelsReducer, linkedTo, syncReducer } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import {
   EditBody,
@@ -46,9 +46,13 @@ import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
 import { attachmentResponse, defaultBlob, readAttachment, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
-import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
+import { liveFeed, personView, pollFeed, toMessageFilter, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
+import { createReads, tablesConsumer } from './reads.ts'
 import { createSchedules } from './schedules.ts'
+import { defaultStore } from '../store/default.ts'
+import { TABLES_CONSUMER } from '../store/sql.ts'
+import type { BoardStore } from '../store/types.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
   writeAttach,
@@ -65,8 +69,11 @@ import {
 import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
 
 export type BoardOptions = {
-  /** Any A2 store. Omitted: SQLite in development, memory in tests, an error in production. */
-  store?: A2Store
+  /**
+   * Where the board keeps its log and tables: `postgres()`, `sqlite()`, or `memory()` from
+   * `vboard/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
+   */
+  store?: BoardStore
   /** Required for sync in production, and for scheduled messages. Mount the board's `scheduler` as `POST` in its own route. */
   scheduler?: A2Scheduler
   /** Machines outside this project that may call the board. */
@@ -100,7 +107,7 @@ export type BoardOptions = {
 const boardServer = (options: BoardOptions) =>
   createServer({
     contract: boardContract,
-    ...(options.store ? { store: options.store } : {}),
+    ...(options.store?.log ? { store: options.store.log } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   })
 
@@ -236,26 +243,32 @@ async function readCapped(request: Request, max: number): Promise<Uint8Array> {
 /** Mounts a board: one log in one route. Create it once, at module scope. */
 export function board(options: BoardOptions = {}) {
   const blob = options.blob ?? defaultBlob()
+  const store = options.store ?? defaultStore()
+  // The same A2 store object for every server: A2 recognizes its own stores by identity.
+  const log = store.log
   const engine =
     options.sync && Object.keys(options.sync).length > 0
-      ? createSyncEngine({ entries: options.sync, store: options.store, scheduler: options.scheduler, blob })
+      ? createSyncEngine({ entries: options.sync, store: log, scheduler: options.scheduler, blob })
       : null
   const watchers =
     options.watch && Object.keys(options.watch).length > 0
-      ? createWatchers({ watch: options.watch, store: options.store, scheduler: options.scheduler })
+      ? createWatchers({ watch: options.watch, store: log, scheduler: options.scheduler })
       : null
-  const schedules = createSchedules({ store: options.store, scheduler: options.scheduler })
-  // Watchers and sync each keep their own place in the board's log.
-  const consumers = [watchers?.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
+  const schedules = createSchedules({ store: log, scheduler: options.scheduler })
+  const projection = tablesConsumer(store.tables)
+  // The tables, watchers, and sync each keep their own place in the board's log.
+  const consumers = [projection, watchers?.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
   const server = createServer({
     contract: boardContract,
-    ...(options.store ? { store: options.store } : {}),
+    ...(log ? { store: log } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers,
   })
   const session = server.session(BOARD_SESSION)
+  const reads = createReads(store.tables, session, projection)
   const writes: WriteContext = {
     session,
+    reads,
     configTargets: engine ? engine.configTargets : async () => [],
     ...(engine ? { findByEmail: engine.findByEmail } : {}),
     normalizeTarget: engine
@@ -295,10 +308,16 @@ export function board(options: BoardOptions = {}) {
   async function stuck(): Promise<StuckEvent[]> {
     const found = (await Promise.all((await lanedSessions()).map(async ({ id, session }) => (await session.deadLetters()).map((dead) => ({ id, dead }))))).flat()
     if (found.length === 0) return []
-    const [{ state: messages }, { state: sync }] = await Promise.all([session.state(messagesReducer), session.state(syncReducer)])
-    const roots = new Map<string, number>()
-    for (const message of Object.values(messages.byId)) if (message.re === null) roots.set(message.thread, message.id)
-    return found.map(({ id, dead }) => {
+    // The tables first: reads and writes wait on them, so they're what to retry first.
+    found.sort((a, b) => Number(b.dead.consumer === TABLES_CONSUMER) - Number(a.dead.consumer === TABLES_CONSUMER))
+    const { state: sync } = await session.state(syncReducer)
+    // A thread's key is its root's post's event ID.
+    const roots = new Map<string, number | null>()
+    const rootOf = async (thread: string) => {
+      if (!roots.has(thread)) roots.set(thread, (await store.tables.byEventId(thread))?.id ?? null)
+      return roots.get(thread)!
+    }
+    return Promise.all(found.map(async ({ id, dead }) => {
       const laneThread = dead.lane?.startsWith('thread:') ? dead.lane.slice('thread:'.length) : null
       // An inbox's lanes are platform threads; everywhere else they're the board's.
       const inbox = id.startsWith('inbox:')
@@ -310,14 +329,14 @@ export function board(options: BoardOptions = {}) {
         type: dead.type,
         lane: dead.lane,
         thread,
-        root: thread === null ? null : (roots.get(thread) ?? null),
+        root: thread === null ? null : await rootOf(thread),
         external: inbox ? laneThread : null,
         attempts: dead.attemptCount,
         failures: dead.failureCount,
         error: dead.lastError,
         failedAt: dead.failedAt.toISOString(),
       }
-    })
+    }))
   }
 
   async function redrive(body: z.infer<typeof RedriveBody>, by: string) {
@@ -366,7 +385,7 @@ export function board(options: BoardOptions = {}) {
 
   engine?.bind({ session, writes, clientAs })
   schedules.bind({ writes })
-  watchers?.bind({ clientAs })
+  watchers?.bind({ clientAs, reads })
 
   async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
     try {
@@ -476,54 +495,40 @@ export function board(options: BoardOptions = {}) {
         }
         case 'messages': {
           const query = MessagesQuery.parse(queryObject(url))
-          const [{ state, index }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
-            session.state(actorsReducer),
-          ])
-          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
-          let found = Object.values(state.byId)
-            .filter(matches)
-            .sort((a, b) => a.id - b.id)
-          if (query.before !== undefined) found = found.filter((m) => m.id < query.before!)
-          const limit = query.limit ?? 50
-          found =
-            query.after !== undefined
-              ? found.filter((m) => m.id > query.after!).slice(0, limit)
-              : found.slice(-limit)
-          return json({ messages: found.map((m) => view(m, actors)), cursor: index })
+          const { state: actors } = await session.state(actorsReducer)
+          const { messages, position } = await reads.messages(toMessageFilter(query, { me: actor.id, actors }), {
+            ...(query.before !== undefined ? { before: query.before } : {}),
+            ...(query.after !== undefined ? { after: query.after } : {}),
+            limit: query.limit ?? 50,
+          })
+          return json({ messages: messages.map((m) => view(m, actors)), cursor: position })
         }
         case 'threads': {
           const query = ThreadsQuery.parse(queryObject(url))
-          const [{ state, index }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
-            session.state(actorsReducer),
-          ])
-          const matches = compileFilter(query, { me: actor.id, actors, messages: state })
-          const roots = new Set<number>()
-          for (const message of Object.values(state.byId)) if (matches(message)) roots.add(message.re ?? message.id)
-          let found = [...roots].map((id) => {
-            const replies = (state.replies[id] ?? []).map((reply) => state.byId[reply]!).filter((reply) => !reply.deleted)
-            const last = replies.at(-1) ?? null
-            return { root: state.byId[id]!, replies: replies.length, last, at: last?.id ?? id }
+          const { state: actors } = await session.state(actorsReducer)
+          const { threads, position } = await reads.threads(toMessageFilter(query, { me: actor.id, actors }), {
+            ...(query.after !== undefined ? { after: query.after } : {}),
+            limit: query.limit ?? 50,
           })
-          found.sort((a, b) => a.at - b.at)
-          const limit = query.limit ?? 50
-          found = query.after !== undefined ? found.filter((t) => t.at > query.after!).slice(0, limit) : found.slice(-limit)
           return json({
-            threads: found.map((t) => ({ message: view(t.root, actors), replies: t.replies, last: t.last && view(t.last, actors) })),
-            cursor: index,
+            threads: threads.map((t) => ({ message: view(t.root, actors), replies: t.replies, last: t.last && view(t.last, actors) })),
+            cursor: position,
           })
         }
         case 'message': {
-          const [{ state, index }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
+          const message = await reads.message(match.id!, request.signal)
+          if (!message) throw notFound(`message not found: #${match.id}`, 'message_not_found')
+          const [{ messages, cursor }, { state: actors }] = await Promise.all([
+            reads.thread(message.re ?? message.id, request.signal),
             session.state(actorsReducer),
           ])
-          const message = state.byId[match.id!]
-          if (!message) throw notFound(`message not found: #${match.id}`, 'message_not_found')
-          const root = message.re === null ? message : state.byId[message.re]!
-          const replies = (state.replies[root.id] ?? []).map((id) => view(state.byId[id]!, actors))
-          return json({ message: view(root, actors), replies, cursor: index, schedules: await schedules.forThread(root.id) })
+          const [root, ...replies] = messages
+          return json({
+            message: view(root!, actors),
+            replies: replies.map((reply) => view(reply, actors)),
+            cursor,
+            schedules: await schedules.forThread(root!.id),
+          })
         }
         case 'post': {
           require(principal, 'post')
@@ -556,8 +561,7 @@ export function board(options: BoardOptions = {}) {
           const query = SchedulesQuery.parse(queryObject(url))
           let root: number | undefined
           if (query.re !== undefined) {
-            const { state } = await session.state(messagesReducer)
-            const message = state.byId[query.re]
+            const message = await reads.message(query.re, request.signal)
             if (!message) throw notFound(`message not found: #${query.re}`, 'message_not_found')
             root = message.re ?? message.id
           }
@@ -615,8 +619,7 @@ export function board(options: BoardOptions = {}) {
         }
         case 'typing': {
           require(principal, 'post')
-          const { state } = await session.state(messagesReducer)
-          const message = state.byId[match.id!]
+          const message = await reads.message(match.id!, request.signal)
           if (!message || message.deleted) throw notFound(`message not found: #${match.id}`, 'message_not_found')
           const { status } = TypingBody.parse(await readJson(request)) ?? {}
           const body: TypingResult = { targets: engine ? await engine.typing(message.thread, status) : [] }
@@ -651,7 +654,7 @@ export function board(options: BoardOptions = {}) {
           const after =
             query.after ?? (Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : undefined)
           const { state: actors } = await session.state(actorsReducer)
-          const feedOptions = { session, after, filters: query, all: query.all ?? false, me: actor.id, actors }
+          const feedOptions = { session, reads, after, filters: query, all: query.all ?? false, me: actor.id, actors }
           if ((request.headers.get('accept') ?? '').includes('text/event-stream'))
             return sse(feedOptions, request.signal, streamMaxMs)
           return json(await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal))
@@ -693,6 +696,7 @@ export function board(options: BoardOptions = {}) {
     /** For tests and tools. */
     engine,
     session,
+    store,
   }
 }
 
