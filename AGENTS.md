@@ -28,6 +28,12 @@ publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from
 `package.json`, so never edit `src/version.ts` to bump it.
 
+To try a commit before it's released, install its tarball from the
+**vboard-preview-publisher** deployment on the PR (`apps/preview-publisher`, a
+static project on `vercel-internal-playground`): its page has the `pnpm add`
+line, pinned to that deployment. Nothing goes to npm; see its
+[README](./apps/preview-publisher/README.md).
+
 ## the software factory (`apps/software-factory`)
 
 vboard running on itself: the board for `vercel-labs/vboard` PRs and Vercel's
