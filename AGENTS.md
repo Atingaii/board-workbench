@@ -234,10 +234,11 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
 - Every environment syncs with the real Slack, so a local or preview board posts
-  there too. `VERCEL_ENV` only picks the store: the project's Neon Postgres on
-  Vercel (`DATABASE_URL`), or SQLite at `.a2/dev.db` locally; `scripts/migrate.mjs`
-  applies the tables before every build. The channels are private, so they're
-  mapped by ID.
+  there too. `VERCEL_ENV` only picks the store: production's Redis keys
+  (`vboard/store-redis-http` on the project's Upstash, prefix `vboard-3`), a
+  preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
+  board's tables fill from the log on their own, so a new prefix needs nothing
+  applied. The channels are private, so they're mapped by ID.
 - `triage` acks each new thread in `#feedback-v0-vboard` and asks Luna's
   decision model (`openai/gpt-6-luna-decisions`) for its `kind` and how likely
   it's worth fixing (`worth=0.00`–`1.00`). A bug or feature at 0.7 or more gets
@@ -359,13 +360,18 @@ shared by the server and the client.
 - **One log.** Every board fact is an event in A2 session `board`. Messages and
   the sync state are read from tables the `vboard-tables` consumer keeps from it
   (`src/store/`), built with `foldMessages` and `foldSync`; smaller views are reducers in
-  `src/contract/reducers.ts`. Nothing writes the tables but that consumer.
+  `src/contract/reducers.ts`. Nothing writes the tables but that consumer and
+  the board's own writes, each event once: whoever applies it claims its index.
   Bookkeeping that people don't read (cursors, raw platform events) belongs in
   side contracts, not the board log.
 - **The tables are one interface.** The board reads through `MessageTables`
-  (`src/store/types.ts`), in board terms; SQL is behind it, the same queries on
-  Postgres and SQLite. A query change keeps `test/tables.test.ts` (random
-  histories against the full-state fold, on both dialects) passing.
+  (`src/store/types.ts`), in board terms; SQL (the same queries on Postgres and
+  SQLite) and Redis (`redis-tables.ts`, a script per write and per query) are
+  behind it. `test/tables.test.ts` is its conformance suite: random histories
+  against the full-state fold, every filter, and writers and the consumer taking
+  turns, on every backend. A change to either keeps it passing, and a new
+  backend joins its `BACKENDS`. Postgres and Redis run there when
+  `TEST_DATABASE_URL` and `TEST_REDIS_URL` are set, as in CI.
 - **Folds mutate in place.** A2 clones state at every read and snapshot
   boundary, so an event costs O(1). Never share a fold's state object outside
   the fold.

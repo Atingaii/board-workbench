@@ -9,16 +9,16 @@ the CLI.
 ```ts
 // app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { redisHttp } from 'experimental-a2/store-redis-http' // or store-postgres, store-redis, store-sqlite
+import { postgres } from 'vboard/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
 export const { GET, POST } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
 })
 ```
 
-`store` accepts any A2 store. If you omit it, you get A2's defaults: SQLite at
-`.a2/dev.db` in development, memory in tests, and a startup error in
-production.
+`store` is one of vboard's stores (see [Reading state](#reading-state)). If you
+omit it, you get SQLite at `.a2/dev.db` in development, memory in tests, and a
+startup error in production.
 
 `blob` is where [attachments](#attachments) live: `vercelBlob()` from
 `vboard/adapter-vercel-blob`, on a private Vercel Blob store connected to the
@@ -114,7 +114,7 @@ conversations.
 ### Install
 
 ```bash
-pnpm i vboard pg                                      # a board: log, tables, API, SDK, CLI
+pnpm i vboard pg                                      # a board: log, tables, API, SDK, CLI (or ioredis)
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
 pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api                       # + sync with WhatsApp, through Kapso
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
@@ -128,9 +128,10 @@ with `npx vboard`.
 - **Regular dependency: `experimental-a2`.** vboard owns it: you import your
   store and scheduler from vboard (`vboard/store-postgres`,
   `vboard/scheduler-vercel`), so they're always the copy vboard uses.
-- **Peers, optional: `pg`, `@vercel/queue`, `@upstash/qstash`.** Loaded only by
-  `vboard/store-postgres`, `vboard/scheduler-vercel`, and
-  `vboard/scheduler-qstash`.
+- **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`.**
+  Loaded only by `vboard/store-postgres`, `vboard/store-redis`,
+  `vboard/scheduler-vercel`, and `vboard/scheduler-qstash`.
+  `vboard/store-redis-http` needs none: it speaks Upstash's REST API.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`,
   `@kapso/chat-adapter`.** They are loaded only by `vboard/adapter-slack`,
   `vboard/adapter-github`, and `vboard/adapter-kapso`. Your adapters
@@ -754,7 +755,7 @@ The log is the truth; messages are read from tables kept from it. Smaller
 state is folded from the log by A2 reducers.
 
 - **The tables.** The `vboard-tables` consumer applies every board event, in
-  order, to tables in the board's own database: `vboard_messages` (each
+  order, to tables in the board's own database. On SQL they are `vboard_messages` (each
   message as it is now, plus columns to filter on, and a root's thread
   summary), `vboard_versions` (each message after every event that changed it),
   `vboard_terms` (labels and mentions, as an index), the sync state's four maps
@@ -762,15 +763,22 @@ state is folded from the log by A2 reducers.
   `vboard_external_messages`), and `vboard_positions` (the last log index
   applied). Each event is one transaction that claims its index first, so a
   retried or superseded attempt changes nothing; on Postgres it's one call to
-  `vboard_apply`. A writer applies its own events itself when each is the very
-  next one, and otherwise waits for the consumer.
+  `vboard_apply`. On Redis the same rows are hashes and sorted sets under
+  `<keyPrefix>:vboard`, with a sorted set per filter value (a channel, a thread,
+  an author, a mention, a label key and each of its values; a reply is in its
+  root's label sets too), and each event is one script that checks the
+  position and writes. A writer applies its own events itself when each is the
+  very next one, and otherwise waits for the consumer.
 - **The same fold.** A message is built by `foldMessages`, and the sync state by
   `foldSync`, the folds the board always used, on a state of just what the event
   touches: the tables hold exactly what folding the whole log would.
 - **One interface.** The board reads through `MessageTables` (`message`,
   `thread`, `messagesAt`, `messages(filter, page)`, `threads(filter, page)`,
-  `apply`, `position`), stated in board terms. SQL on Postgres and SQLite is its
-  one implementation today; the queries are the same on both.
+  `apply`, `position`), stated in board terms. It has two implementations: SQL,
+  the same queries on Postgres and SQLite, and Redis, a script per write and per
+  query. One conformance suite holds every backend to the full-state fold, on
+  random histories, every filter, and every way writers and the consumer take
+  turns.
 
 | Reducer | State | Used by |
 | --- | --- | --- |
@@ -782,7 +790,9 @@ state is folded from the log by A2 reducers.
   an ID is a log index. List reads answer at once and report, as `cursor`, the
   index the tables reflect.
 - **Filters** (`channel`, `re`, `by`, `mentions`, `from`, `text`, `label`) are
-  SQL over the tables for `/messages` and `/threads`. `by` and `mentions` are
+  queries over the tables for `/messages` and `/threads`: SQL, or on Redis a
+  script that walks the smallest set a filter has and tests the rest, at most
+  4,000 IDs a script, since Redis runs nothing else while one runs. `by` and `mentions` are
   resolved to actor and principal sets first, from the `actors` state.
 - **The event feed and watchers** see each change before and after: they load
   the message an event concerns, and its root, from `vboard_versions` as of the
@@ -792,10 +802,12 @@ state is folded from the log by A2 reducers.
   lookups, flat in the board's size. Other lists stop at a page, so a rare
   match or `/threads` with filters beyond a channel reads further.
 
-**Store support:** `vboard/store-postgres` in production, `vboard/store-sqlite`
-in development and `vb serve`, `vboard/store-memory` in tests. Each holds A2's
-log and the tables in one database. Postgres gets its tables from
-`sql/postgres/schema.sql`, A2's then vboard's, applied before deploying.
+**Store support:** `vboard/store-postgres`, `vboard/store-redis` (TCP), or
+`vboard/store-redis-http` (Upstash REST) in production, `vboard/store-sqlite` in
+development and `vb serve`, `vboard/store-memory` in tests. Each holds A2's log
+and the tables in one database. Postgres gets its tables from
+`sql/postgres/schema.sql`, A2's then vboard's, applied before deploying; Redis
+and SQLite need nothing applied.
 
 ## Cursors
 
@@ -1279,8 +1291,8 @@ by the platform's own things: Slack channels, GitHub repos.
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { redisHttp } from 'vboard/store-redis-http'
+import { vercelQueues } from 'vboard/scheduler-vercel'
 
 export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
@@ -2303,6 +2315,11 @@ messages (about 1 KB each), on an in-process store:
 | --- | --- | --- | --- | --- | --- |
 | 10,000 | 125 ms | 54 ms | 0.4 ms | 0.3 ms | 0.5 ms |
 | 50,000 | 665 ms | 294 ms | 0.2 ms | 0.3 ms | 0.5 ms |
+
+On a local Redis, the tables at 50,000 messages: a post 0.2 ms, a thread 0.2
+ms, a channel's threads 0.6 ms, about 4 KB of memory a message (three versions
+each). A text search that matches nothing reads every message, 127 ms in
+scripts of 4,000 IDs.
 
 Almost all of the reducer's cost was copying its state. Its snapshot would
 also have outgrown Upstash's 10 MB request limit at about 10,000 messages. That

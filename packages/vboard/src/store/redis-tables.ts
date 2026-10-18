@@ -1,0 +1,523 @@
+import type { BoardEvent } from '../contract/contract.ts'
+import { externalMessageKey, type ExternalCopy, type Message, type SyncedThread } from '../contract/reducers.ts'
+import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
+import type { MessageFilter, MessageTables, Page, ThreadSummary } from './types.ts'
+
+/** One Redis command, as A2's Redis stores send them: `call('HGET', key, field)`. */
+export type RedisCall = (command: string, ...args: Array<string | number>) => Promise<unknown>
+
+/** What a query reads of a message without parsing all of it. */
+type Meta = { re: number | null; c: string; t: string; ca: number; d: boolean }
+
+/** A root's thread summary: replies that aren't deleted, and the latest one's ID (its own when none). */
+type Summary = { n: number; at: number }
+
+/**
+ * Applies an event's writes if it's the one to apply: with `next`, only the very
+ * next index; otherwise any index past the position. The check and the writes are
+ * one script, so a retried or superseded attempt changes nothing. Every key it
+ * touches comes in KEYS: the position first, then the writes' own.
+ */
+const APPLY = `
+local pos = tonumber(redis.call('GET', KEYS[1]) or '-1')
+local index = tonumber(ARGV[1])
+if ARGV[2] == 'next' then
+  if pos ~= index - 1 then return 0 end
+elseif pos >= index then
+  return 0
+end
+for _, op in ipairs(cjson.decode(ARGV[3])) do
+  redis.call(op[1], KEYS[op[2]], unpack(op, 3))
+end
+redis.call('SET', KEYS[1], ARGV[1])
+return 1
+`
+
+/** The script's shared part: does the message match every group (one set each) and the text? */
+const MATCHES = `
+local function matches(spec, id)
+  for _, group in ipairs(spec.groups) do
+    local found = false
+    for _, key in ipairs(group) do
+      if redis.call('ZSCORE', KEYS[key], id) then found = true break end
+    end
+    if not found then return false end
+  end
+  if spec.text ~= cjson.null then
+    local meta = cjson.decode(redis.call('HGET', KEYS[3], id))
+    if not string.find(meta.t, spec.text, 1, true) then return false end
+  end
+  return true
+end
+local function driver(spec)
+  local best, size = KEYS[spec.fallback], nil
+  for _, key in ipairs(spec.drivers) do
+    local n = redis.call('ZCARD', KEYS[key])
+    if size == nil or n < size then best, size = KEYS[key], n end
+  end
+  return best
+end
+`
+
+/**
+ * Messages that match, walking the smallest index set newest first (oldest first
+ * with \`asc\`) and testing the others, until \`limit\` or until it has read
+ * \`budget\` IDs: Redis runs nothing else while a script runs, so a long read
+ * goes in several. Returns the position, the matches, and where to go on from
+ * (false when the set ran out). KEYS: position, messages, metas, then the sets.
+ */
+const MESSAGES = `${MATCHES}
+local spec = cjson.decode(ARGV[1])
+local from = driver(spec)
+local found, n, read = {}, 0, 0
+local low, high = spec.min, spec.max
+local more = true
+while n < spec.limit do
+  if read >= spec.budget then break end
+  local count = math.min(200, spec.budget - read)
+  local ids
+  if spec.asc then ids = redis.call('ZRANGEBYSCORE', from, low, high, 'LIMIT', 0, count)
+  else ids = redis.call('ZREVRANGEBYSCORE', from, high, low, 'LIMIT', 0, count) end
+  if #ids == 0 then more = false break end
+  for _, id in ipairs(ids) do
+    read = read + 1
+    if spec.asc then low = '(' .. id else high = '(' .. id end
+    if matches(spec, id) then
+      n = n + 1
+      found[n] = id
+      if n >= spec.limit then break end
+    end
+  end
+end
+local rows = {}
+if n > 0 then rows = redis.call('HMGET', KEYS[2], unpack(found)) end
+local next = false
+if more and n < spec.limit then if spec.asc then next = low else next = high end end
+return { redis.call('GET', KEYS[1]) or '0', rows, next }
+`
+
+/**
+ * The latest threads in a channel, or across several, from their thread order
+ * sets: each set's first \`limit\`, merged. KEYS: position, then the sets.
+ */
+const LATEST = `
+local spec = cjson.decode(ARGV[1])
+local roots = {}
+for i = 2, #KEYS do
+  local ids
+  if spec.asc then ids = redis.call('ZRANGEBYSCORE', KEYS[i], spec.min, '+inf', 'WITHSCORES', 'LIMIT', 0, spec.limit)
+  else ids = redis.call('ZREVRANGEBYSCORE', KEYS[i], '+inf', spec.min, 'WITHSCORES', 'LIMIT', 0, spec.limit) end
+  for j = 1, #ids, 2 do roots[#roots + 1] = ids[j] roots[#roots + 1] = ids[j + 1] end
+end
+return { redis.call('GET', KEYS[1]) or '0', roots }
+`
+
+/**
+ * The threads with a message that matches: every match's root and its latest
+ * reply, reading at most \`budget\` IDs. Returns the position, the roots and
+ * their latest replies, and where to go on from. KEYS: position, messages,
+ * metas, summaries, then the sets.
+ */
+const ROOTS = `${MATCHES}
+local spec = cjson.decode(ARGV[1])
+local from = driver(spec)
+local roots, read, high = {}, 0, spec.max
+while read < spec.budget do
+  local ids = redis.call('ZREVRANGEBYSCORE', from, high, '-inf', 'LIMIT', 0, math.min(200, spec.budget - read))
+  if #ids == 0 then return { redis.call('GET', KEYS[1]) or '0', roots, false } end
+  for _, id in ipairs(ids) do
+    read = read + 1
+    if matches(spec, id) then
+      local meta = cjson.decode(redis.call('HGET', KEYS[3], id))
+      local root = id
+      if meta.re ~= cjson.null then root = tostring(meta.re) end
+      roots[#roots + 1] = root
+      roots[#roots + 1] = cjson.decode(redis.call('HGET', KEYS[4], root)).at
+    end
+  end
+  high = '(' .. ids[#ids]
+end
+return { redis.call('GET', KEYS[1]) or '0', roots, high }
+`
+
+/** Each root, its reply count, and its latest reply (false when it has none). KEYS: messages, summaries. ARGV: the roots. */
+const THREAD_ROWS = `
+local out = {}
+for i, root in ipairs(ARGV) do
+  local summary = cjson.decode(redis.call('HGET', KEYS[2], root))
+  local last = false
+  if tostring(summary.at) ~= root then last = redis.call('HGET', KEYS[1], tostring(summary.at)) end
+  out[i] = { redis.call('HGET', KEYS[1], root), summary.n, last }
+end
+return out
+`
+
+/** Each message's latest version at or before ARGV[1]. KEYS: the version data, then each message's versions. */
+const AT = `
+local out = {}
+for i = 2, #KEYS do
+  local found = redis.call('ZREVRANGEBYSCORE', KEYS[i], ARGV[1], '-inf', 'LIMIT', 0, 1)
+  if #found == 0 then out[i - 1] = false else out[i - 1] = redis.call('HGET', KEYS[1], found[1]) end
+end
+return out
+`
+
+/** Each key's hash, whole. */
+const HASHES = `
+local out = {}
+for i = 1, #KEYS do out[i] = redis.call('HGETALL', KEYS[i]) end
+return out
+`
+
+/** A person's roots posted at or after ARGV[1]. KEYS: messages, their roots by creation time. */
+const RECENT = `
+local ids = redis.call('ZRANGEBYSCORE', KEYS[2], ARGV[1], '+inf')
+if #ids == 0 then return {} end
+return redis.call('HMGET', KEYS[1], unpack(ids))
+`
+
+const SEP = '\u001f'
+
+/** How many IDs one query script reads before it hands back where it got to. */
+const SCAN_BUDGET = 4000
+
+/** The label sets a message is in: each key, and each key with its value. */
+const labelTokens = (labels: Record<string, string>): string[] =>
+  Object.entries(labels).flatMap(([key, value]) => [`l${SEP}${key}`, `lv${SEP}${key}${SEP}${value}`])
+
+/** A message is in its own label sets and, for a reply, its root's: "on the message or its root" is one lookup. */
+const inLabelSets = (own: Record<string, string>, root: Record<string, string> | null) =>
+  new Set([...labelTokens(own), ...(root ? labelTokens(root) : [])])
+
+type Op = [command: string, key: string, ...args: string[]]
+
+/**
+ * The tables on Redis: messages, versions, and sync rows in hashes and sorted
+ * sets under `${prefix}:vboard`, and a sorted set per filter value, scored by
+ * message ID. Each write is one script (the position check and the writes);
+ * each query is one script, which walks the smallest set that applies.
+ */
+export function redisTables(call: RedisCall, prefix: string, options: { scanBudget?: number } = {}): MessageTables {
+  const budget = options.scanBudget ?? SCAN_BUDGET
+  const p = `${prefix}:vboard`
+  const k = {
+    pos: `${p}:pos`,
+    messages: `${p}:m`,
+    metas: `${p}:x`,
+    summaries: `${p}:s`,
+    events: `${p}:e`,
+    versionData: `${p}:vd`,
+    all: `${p}:i:all`,
+    channels: `${p}:channels`,
+    threads: `${p}:t`,
+    syncThreads: `${p}:st`,
+    externalThreads: `${p}:et`,
+    externalMessages: `${p}:em`,
+    versions: (id: number | string) => `${p}:v:${id}`,
+    channel: (channel: string) => `${p}:i:c:${channel}`,
+    channelThreads: (channel: string) => `${p}:t:c:${channel}`,
+    /** A root's thread, it and its replies; a reply's holds just it. */
+    thread: (id: number | string) => `${p}:i:r:${id}`,
+    byActor: (actor: string) => `${p}:i:ba:${actor}`,
+    byPrincipal: (principal: string) => `${p}:i:bp:${principal}`,
+    mention: (actor: string) => `${p}:i:mn:${actor}`,
+    from: (from: string) => `${p}:i:f:${from}`,
+    /** A person's roots, by when they were posted: for the echo check. */
+    rootsBy: (principal: string) => `${p}:rr:${principal}`,
+    label: (token: string) => `${p}:i:${token}`,
+    copies: (id: number | string) => `${p}:cp:${id}`,
+  }
+
+  const parse = <T>(value: unknown): T | null =>
+    value === null || value === undefined || value === false ? null : (JSON.parse(String(value)) as T)
+  const evaluate = (script: string, keys: string[], args: Array<string | number>) => call('EVAL', script, keys.length, ...keys, ...args)
+
+  async function messagesOf(ids: readonly number[]): Promise<Map<number, Message>> {
+    const out = new Map<number, Message>()
+    if (ids.length === 0) return out
+    const rows = (await call('HMGET', k.messages, ...ids)) as unknown[]
+    ids.forEach((id, i) => {
+      const message = parse<Message>(rows[i])
+      if (message) out.set(id, message)
+    })
+    return out
+  }
+
+  type Read = Before & { rootLabels: Record<string, string> | null }
+
+  /** The newest reply in `root`'s thread that isn't deleted, other than `except`: newest first, a page at a time. */
+  async function newestReply(root: number, except: number): Promise<number | null> {
+    for (let high = '+inf'; ; ) {
+      const ids = (await call('ZREVRANGEBYSCORE', k.thread(root), high, '-inf', 'LIMIT', 0, 20)) as string[]
+      if (ids.length === 0) return null
+      const metas = (await call('HMGET', k.metas, ...ids)) as unknown[]
+      for (const [i, id] of ids.entries()) {
+        const reply = Number(id)
+        if (reply !== root && reply !== except && !parse<Meta>(metas[i])!.d) return reply
+      }
+      high = `(${ids.at(-1)}`
+    }
+  }
+
+  /** What the event reads before it applies: its message, and its root's summary and labels. */
+  async function before(event: BoardEvent, id: number): Promise<Read> {
+    const message = event.type === 'message.posted' ? undefined : ((await messagesOf([id])).get(id) ?? undefined)
+    const rootId = event.type === 'message.posted' ? event.payload.re : (message?.re ?? null)
+    if (rootId === null) return { message, root: undefined, rootLabels: null }
+    const [rootData, rootSummary] = (await Promise.all([call('HGET', k.messages, rootId), call('HGET', k.summaries, rootId)])) as [unknown, unknown]
+    const summary = parse<Summary>(rootSummary)
+    const root = summary ? { replies: summary.n, at: summary.at } : undefined
+    const read: Read = { message, root, rootLabels: parse<Message>(rootData)?.labels ?? null }
+    if (event.type === 'message.deleted' && message && !message.deleted && root?.at === id) read.previousLast = await newestReply(rootId, id)
+    return read
+  }
+
+  /** A root's replies, when its labels changed: they're in its label sets too. */
+  async function repliesOf(read: Read, change: Change): Promise<Message[]> {
+    const after = change.message?.after
+    if (!after || after.re !== null || change.message!.created || !change.message!.terms) return []
+    if (JSON.stringify(after.labels) === JSON.stringify(read.message!.labels)) return []
+    const ids = ((await call('ZRANGE', k.thread(after.id), 0, -1)) as string[]).map(Number).filter((other) => other !== after.id)
+    return [...(await messagesOf(ids)).values()]
+  }
+
+  async function syncBefore(event: BoardEvent) {
+    const reads = syncReads(event)
+    const [thread, copy] = (await Promise.all([
+      reads.thread === null ? null : call('HGET', k.syncThreads, reads.thread),
+      reads.copy === null ? null : call('HGET', k.copies(reads.copy[0]), reads.copy[1]),
+    ])) as [unknown, unknown]
+    return { thread: parse<SyncedThread>(thread) ?? undefined, copy: parse<ExternalCopy>(copy) ?? undefined }
+  }
+
+  /** The event's writes, as commands. */
+  function writes(event: BoardEvent, read: Read | null, replies: Message[], change: Change, sync: SyncChange): Op[] {
+    const out: Op[] = []
+    const m = change.message?.after
+    if (m && read) {
+      const id = String(m.id)
+      const created = change.message!.created
+      const meta: Meta = { re: m.re, c: m.channel, t: m.text.toLowerCase(), ca: Date.parse(m.createdAt), d: m.deleted }
+      out.push(['HSET', k.messages, id, JSON.stringify(m)], ['HSET', k.metas, id, JSON.stringify(meta)])
+      out.push(['ZADD', k.versions(id), String(event.index), String(event.index)], ['HSET', k.versionData, String(event.index), JSON.stringify(m)])
+      if (created) {
+        out.push(['HSET', k.events, event.id, id], ['SADD', k.channels, m.channel])
+        for (const key of [k.all, k.channel(m.channel), k.thread(id), k.byActor(m.by.actor), k.byPrincipal(m.by.principal), k.from(m.from ?? 'board')])
+          out.push(['ZADD', key, id, id])
+        if (m.re !== null) out.push(['ZADD', k.thread(m.re), id, id])
+        else out.push(['ZADD', k.rootsBy(m.by.principal), String(meta.ca), id])
+      }
+      if (change.message!.terms) {
+        const old = read.message
+        const rootLabels = m.re === null ? null : read.rootLabels
+        const was = created ? new Set<string>() : inLabelSets(old!.labels, rootLabels)
+        const is = inLabelSets(m.labels, rootLabels)
+        for (const token of was) if (!is.has(token)) out.push(['ZREM', k.label(token), id])
+        for (const token of is) if (!was.has(token)) out.push(['ZADD', k.label(token), id, id])
+        const mentionedBefore = new Set(created ? [] : old!.mentions)
+        const mentioned = new Set(m.mentions)
+        for (const actor of mentionedBefore) if (!mentioned.has(actor)) out.push(['ZREM', k.mention(actor), id])
+        for (const actor of mentioned) if (!mentionedBefore.has(actor)) out.push(['ZADD', k.mention(actor), id, id])
+        // A root's labels count for its replies too.
+        for (const reply of replies) {
+          const replyWas = inLabelSets(reply.labels, old!.labels)
+          const replyIs = inLabelSets(reply.labels, m.labels)
+          for (const token of replyWas) if (!replyIs.has(token)) out.push(['ZREM', k.label(token), String(reply.id)])
+          for (const token of replyIs) if (!replyWas.has(token)) out.push(['ZADD', k.label(token), String(reply.id), String(reply.id)])
+        }
+      }
+    }
+    if (change.summary) {
+      const { root, replies, at } = change.summary
+      // A thread's messages are all in its root's channel.
+      const channel = m?.channel ?? read?.message?.channel
+      out.push(['HSET', k.summaries, String(root), JSON.stringify({ n: replies, at } satisfies Summary)], ['ZADD', k.threads, String(at), String(root)])
+      if (channel !== undefined) out.push(['ZADD', k.channelThreads(channel), String(at), String(root)])
+    }
+    if (sync.thread) out.push(['HSET', k.syncThreads, sync.thread.key, JSON.stringify(sync.thread.data)])
+    for (const [external, thread] of sync.externalThreads) out.push(['HSET', k.externalThreads, external, thread])
+    for (const [message, target, copy] of sync.copies) out.push(['HSET', k.copies(message), target, JSON.stringify(copy)])
+    for (const [key, message] of sync.externalMessages) out.push(['HSET', k.externalMessages, key, String(message)])
+    return out
+  }
+
+  async function commit(event: BoardEvent, mode: 'next' | 'any'): Promise<boolean> {
+    const id = concernedMessageId(event)
+    const [read, syncRead] = await Promise.all([id === null ? null : before(event, id), syncBefore(event)])
+    const change = read ? project(read, event) : {}
+    const replies = read ? await repliesOf(read, change) : []
+    const ops = writes(event, read, replies, change, projectSync(syncRead, event))
+    const keys = [k.pos]
+    const slots = new Map<string, number>()
+    const encoded = ops.map(([command, key, ...args]) => {
+      if (!slots.has(key)) slots.set(key, keys.push(key))
+      return [command, slots.get(key)!, ...args]
+    })
+    return Number(await evaluate(APPLY, keys, [event.index, mode, JSON.stringify(encoded)])) === 1
+  }
+
+  /** A filter as groups of sets, each group needing one: the query scripts' input. */
+  async function compile(filter: MessageFilter, keys: string[]) {
+    const slot = (key: string) => keys.push(key)
+    const groups: number[][] = []
+    const group = (sets: string[]) => groups.push(sets.map(slot))
+    if (filter.channel) {
+      const { path, subtree } = filter.channel
+      const under = subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${path}/`)) : []
+      group([path, ...under].map(k.channel))
+    }
+    if (filter.re !== undefined) group([k.thread(filter.re)])
+    if (filter.by) group([...filter.by.actors.map(k.byActor), ...filter.by.principals.map(k.byPrincipal)])
+    if (filter.mentions) group(filter.mentions.map(k.mention))
+    if (filter.from !== undefined) group([k.from(filter.from)])
+    for (const label of filter.labels ?? [])
+      group(label.values === null ? [k.label(`l${SEP}${label.key}`)] : label.values.map((value) => k.label(`lv${SEP}${label.key}${SEP}${value}`)))
+    const drivers = groups.filter((sets) => sets.length === 1).map((sets) => sets[0]!)
+    return { groups, drivers, fallback: slot(k.all), text: filter.text ?? null }
+  }
+
+  return {
+    async position() {
+      return Number((await call('GET', k.pos)) ?? 0)
+    },
+
+    async apply(event) {
+      // Applied already, most often by the writer that wrote it: skip the reads.
+      if (Number((await call('GET', k.pos)) ?? 0) >= event.index) return
+      await commit(event, 'any')
+    },
+
+    applyNext: (event) => commit(event, 'next'),
+
+    async message(id) {
+      return (await messagesOf([id])).get(id) ?? null
+    },
+
+    async byEventId(eventId) {
+      const id = await call('HGET', k.events, eventId)
+      return id === null || id === undefined ? null : ((await messagesOf([Number(id)])).get(Number(id)) ?? null)
+    },
+
+    async messagesAt(ids, index) {
+      const out = new Map<number, Message>()
+      const wanted = [...new Set(ids)]
+      if (wanted.length === 0) return out
+      const rows = (await evaluate(AT, [k.versionData, ...wanted.map(k.versions)], [index])) as unknown[]
+      wanted.forEach((id, i) => {
+        const message = parse<Message>(rows[i])
+        if (message) out.set(id, message)
+      })
+      return out
+    },
+
+    async thread(root) {
+      const ids = ((await call('ZRANGE', k.thread(root), 0, -1)) as string[]).map(Number)
+      const found = await messagesOf(ids)
+      return ids.flatMap((id) => (found.has(id) ? [found.get(id)!] : []))
+    },
+
+    async messages(filter, page) {
+      const keys = [k.pos, k.messages, k.metas]
+      const asc = page.after !== undefined
+      const spec = {
+        ...(await compile(filter, keys)),
+        limit: page.limit,
+        budget,
+        asc,
+        min: asc ? `(${page.after}` : '-inf',
+        max: page.before !== undefined ? `(${page.before}` : '+inf',
+      }
+      // The first script's position: rows a later one reads may be newer, never older, and the feed from it repeats what's newer.
+      let position: number | null = null
+      const messages: Message[] = []
+      for (;;) {
+        const [at, rows, next] = (await evaluate(MESSAGES, keys, [JSON.stringify(spec)])) as [unknown, unknown[], string | null]
+        position ??= Number(at)
+        for (const row of rows) messages.push(parse<Message>(row)!)
+        spec.limit = page.limit - messages.length
+        if (next === null || spec.limit === 0) break
+        if (asc) spec.min = next
+        else spec.max = next
+      }
+      return { messages: asc ? messages : messages.reverse(), position }
+    },
+
+    async threads(filter: MessageFilter, page: Page) {
+      const asc = page.after !== undefined
+      const { channel, ...rest } = filter
+      let position: number | null = null
+      // Each root and when its thread last changed: its latest reply, or itself.
+      const roots = new Map<string, number>()
+      if (Object.keys(rest).length === 0) {
+        const under = channel?.subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${channel.path}/`)) : []
+        const sets = channel ? [channel.path, ...under].map(k.channelThreads) : [k.threads]
+        const spec = { limit: page.limit, asc, min: asc ? `(${page.after}` : '-inf' }
+        const [at, pairs] = (await evaluate(LATEST, [k.pos, ...sets], [JSON.stringify(spec)])) as [unknown, string[]]
+        position = Number(at)
+        for (let i = 0; i < pairs.length; i += 2) roots.set(pairs[i]!, Number(pairs[i + 1]))
+      } else {
+        const keys = [k.pos, k.messages, k.metas, k.summaries]
+        const spec = { ...(await compile(filter, keys)), budget, max: '+inf' }
+        for (;;) {
+          const [at, pairs, next] = (await evaluate(ROOTS, keys, [JSON.stringify(spec)])) as [unknown, Array<string | number>, string | null]
+          position ??= Number(at)
+          for (let i = 0; i < pairs.length; i += 2) roots.set(String(pairs[i]), Number(pairs[i + 1]))
+          if (next === null) break
+          spec.max = next
+        }
+      }
+      const order = [...roots]
+        .filter(([, at]) => page.after === undefined || at > page.after)
+        .sort(([, a], [, b]) => (asc ? a - b : b - a))
+        .slice(0, page.limit)
+        .map(([root]) => root)
+      const rows = order.length === 0 ? [] : ((await evaluate(THREAD_ROWS, [k.messages, k.summaries], order)) as [unknown, unknown, unknown][])
+      const threads: ThreadSummary[] = rows.map(([root, replies, last]) => ({
+        root: parse<Message>(root)!,
+        replies: Number(replies),
+        last: parse<Message>(last),
+      }))
+      return { threads: asc ? threads : threads.reverse(), position: position! }
+    },
+
+    async syncOf(thread) {
+      return parse<SyncedThread>(await call('HGET', k.syncThreads, thread))
+    },
+
+    async threadOf(externalThread) {
+      const thread = await call('HGET', k.externalThreads, externalThread)
+      return thread === null || thread === undefined ? null : String(thread)
+    },
+
+    async copiesOf(ids) {
+      const out = new Map<number, Record<string, ExternalCopy>>()
+      const wanted = [...new Set(ids)]
+      if (wanted.length === 0) return out
+      const rows = (await evaluate(HASHES, wanted.map(k.copies), [])) as string[][]
+      wanted.forEach((id, i) => {
+        const flat = rows[i] ?? []
+        if (flat.length === 0) return
+        const copies: Record<string, ExternalCopy> = {}
+        for (let at = 0; at < flat.length; at += 2) copies[flat[at]!] = JSON.parse(flat[at + 1]!) as ExternalCopy
+        out.set(id, copies)
+      })
+      return out
+    },
+
+    async messageOf(externalThread, platformMessage) {
+      const id = await call('HGET', k.externalMessages, externalMessageKey(externalThread, platformMessage))
+      return id === null || id === undefined ? null : Number(id)
+    },
+
+    async externalThreads() {
+      return (await call('HKEYS', k.externalThreads)) as string[]
+    },
+
+    async recentRoots(principal, since) {
+      const rows = (await evaluate(RECENT, [k.messages, k.rootsBy(principal)], [since])) as unknown[]
+      return rows.map((row) => parse<Message>(row)!).sort((a, b) => a.id - b.id)
+    },
+
+    async close() {},
+  }
+}

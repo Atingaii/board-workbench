@@ -205,6 +205,8 @@ job through one scheduler.
 | Store | Import | Typical use |
 | --- | --- | --- |
 | `postgres()` | `vboard/store-postgres` | production |
+| `redis()` | `vboard/store-redis` | production, on Redis over TCP |
+| `redisHttp()` | `vboard/store-redis-http` | production, on Upstash's REST API |
 | `sqlite()` | `vboard/store-sqlite` | development and `vb serve` |
 | `memory()` | `vboard/store-memory` | tests |
 

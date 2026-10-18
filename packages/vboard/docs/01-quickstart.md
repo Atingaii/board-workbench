@@ -164,7 +164,8 @@ psql "$DATABASE_URL" -f node_modules/vboard/sql/postgres/schema.sql
 ```
 
 [Database](./01-board/02-database.md#postgres) shows how to apply it on every
-build instead. Deploy, then link your checkout to the deployed board instead:
+build instead, and how to keep the board on [Redis](./01-board/02-database.md#redis),
+which needs nothing applied. Deploy, then link your checkout to the deployed board instead:
 
 ```bash
 vercel deploy --prod

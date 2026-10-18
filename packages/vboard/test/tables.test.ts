@@ -1,10 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import { Redis } from 'ioredis'
+import pg from 'pg'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { BoardEvent } from '../src/contract/contract.ts'
 import { foldActors, foldMessages, foldSync, type ActorsState, type Message, type MessagesState, type SyncState } from '../src/contract/reducers.ts'
 import { compileFilter, toMessageFilter, type ParsedFilters } from '../src/server/feed.ts'
+import { postgresDb, type PgPool } from '../src/store/postgres-db.ts'
+import { redisHttp } from '../src/store/redis-http.ts'
+import { redisTables } from '../src/store/redis-tables.ts'
+import { redis } from '../src/store/redis.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
-import { sqlTables, type Db } from '../src/store/sql.ts'
-import type { MessageTables } from '../src/store/types.ts'
+import { ddl, sqlTables } from '../src/store/sql.ts'
+import type { BoardStore, MessageTables } from '../src/store/types.ts'
 import { pgliteDb } from './pglite-db.ts'
 
 /** A small seeded generator, so a failing history can be replayed. */
@@ -161,14 +168,14 @@ const FILTERS: ParsedFilters[] = [
   { by: 'ada', label: [['pr', ['1']]], text: 'fix' },
 ]
 
-const DIALECTS: [string, () => Promise<Db>][] = [
-  ['sqlite', async () => sqliteDb(':memory:')],
-  ['postgres (PGlite)', pgliteDb],
-]
-
-describe.each(DIALECTS)('tables on %s', (_, open) => {
+/**
+ * The conformance suite: every backend of the tables answers exactly as the
+ * full-state fold does, for random histories, every filter, and every way a
+ * writer and the consumer can take turns. A new backend joins `BACKENDS`.
+ */
+function conformance(open: () => Promise<MessageTables>) {
   async function applied(events: readonly BoardEvent[]): Promise<MessageTables> {
-    const tables = sqlTables(await open())
+    const tables = await open()
     for (const event of events) await tables.apply(event)
     return tables
   }
@@ -215,7 +222,7 @@ describe.each(DIALECTS)('tables on %s', (_, open) => {
 
   it('let a writer apply only the very next event, never ahead of a gap', async () => {
     const events = history(7, 200)
-    const tables = sqlTables(await open())
+    const tables = await open()
     // A fresh board has no position yet: the consumer starts it, from the first event.
     expect(await tables.applyNext(events[0]!)).toBe(false)
     for (const event of events.slice(0, 50)) await tables.apply(event)
@@ -253,9 +260,22 @@ describe.each(DIALECTS)('tables on %s', (_, open) => {
     await tables.close()
   })
 
+  it("find a person's roots since a time, for the echo check", async () => {
+    const events = history(10, 300)
+    const tables = await applied(events)
+    const roots = Object.values(fold(events).messages.byId).filter((m) => m.re === null)
+    const times = roots.map((m) => Date.parse(m.createdAt))
+    for (const principal of new Set(AUTHORS.map((a) => a.principal)))
+      for (const since of [0, times[10]!, times.at(-3)!, times.at(-1)! + 1]) {
+        const expected = roots.filter((m) => m.by.principal === principal && Date.parse(m.createdAt) >= since)
+        expect(await tables.recentRoots(principal, since)).toEqual(expected)
+      }
+    await tables.close()
+  })
+
   it('apply each event once, however many times it is handed over', async () => {
     const events = history(6, 120)
-    const tables = sqlTables(await open())
+    const tables = await open()
     for (const event of events) {
       await tables.apply(event)
       await tables.apply(event)
@@ -266,4 +286,111 @@ describe.each(DIALECTS)('tables on %s', (_, open) => {
     for (const message of Object.values(messages.byId)) expect(await tables.message(message.id)).toEqual(message)
     await tables.close()
   })
+}
+
+// Postgres and Redis run when a server is configured (CI has both): each backend gets its own
+// schema or key prefix, so tests never share state.
+const postgresUrl = process.env.TEST_DATABASE_URL
+const redisUrl = process.env.TEST_REDIS_URL
+let opened = 0
+
+const database = `vboard_tables_${process.pid}_${Date.now()}`
+let databaseUrl = ''
+const pools: pg.Pool[] = []
+
+/** The tables in a schema of their own, in a database of the suite's own. */
+async function postgresTables(): Promise<MessageTables> {
+  const schema = `t${++opened}`
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 3, options: `-c search_path=${schema}` })
+  pools.push(pool)
+  await pool.query(`create schema ${schema}`)
+  for (const statement of ddl('postgres')) await pool.query(statement)
+  return sqlTables(postgresDb(async () => pool as unknown as PgPool, { owned: false }))
+}
+
+const stores: BoardStore[] = []
+const clients: Redis[] = []
+const tablesOf = (store: BoardStore): MessageTables => {
+  stores.push(store)
+  return store.tables
+}
+
+/** Upstash's REST API, in front of the test server: the transport `redisHttp` speaks. */
+let rest: Server | undefined
+let restUrl = ''
+async function startRest() {
+  const client = new Redis(redisUrl!)
+  rest = createServer((request, response) => {
+    let body = ''
+    request.on('data', (chunk) => (body += chunk))
+    request.on('end', async () => {
+      const [command, ...args] = JSON.parse(body) as string[]
+      const reply = await client.call(command!, ...args).then(
+        (result) => ({ result }),
+        (error: Error) => ({ error: error.message }),
+      )
+      response.writeHead('error' in reply ? 400 : 200, { 'content-type': 'application/json' }).end(JSON.stringify(reply))
+    })
+  })
+  rest.on('close', () => client.disconnect())
+  await new Promise<void>((done) => rest!.listen(0, '127.0.0.1', done))
+  const address = rest.address()
+  restUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
+}
+
+const BACKENDS: { name: string; open: () => Promise<MessageTables>; enabled: boolean }[] = [
+  { name: 'SQLite', open: async () => sqlTables(sqliteDb(':memory:')), enabled: true },
+  { name: 'Postgres (PGlite)', open: async () => sqlTables(await pgliteDb()), enabled: true },
+  { name: 'Postgres', open: postgresTables, enabled: Boolean(postgresUrl) },
+  { name: 'Redis', open: async () => tablesOf(redis({ url: redisUrl!, keyPrefix: `vbt${process.pid}x${++opened}` })), enabled: Boolean(redisUrl) },
+  {
+    // Redis runs nothing else while a script runs, so a long read goes in several: here, every one does.
+    name: 'Redis, 7 IDs a script',
+    open: async () => {
+      const client = new Redis(redisUrl!)
+      clients.push(client)
+      return redisTables((command, ...args) => client.call(command, ...args), `vbt${process.pid}x${++opened}`, { scanBudget: 7 })
+    },
+    enabled: Boolean(redisUrl),
+  },
+  {
+    name: 'Redis over REST',
+    open: async () => tablesOf(redisHttp({ url: restUrl, token: 'test', keyPrefix: `vbt${process.pid}x${++opened}` })),
+    enabled: Boolean(redisUrl),
+  },
+]
+
+beforeAll(async () => {
+  if (postgresUrl) {
+    const admin = new pg.Client({ connectionString: postgresUrl })
+    await admin.connect()
+    await admin.query(`create database ${database}`)
+    await admin.end()
+    const at = new URL(postgresUrl)
+    at.pathname = `/${database}`
+    databaseUrl = at.toString()
+  }
+  if (redisUrl) await startRest()
 })
+
+afterAll(async () => {
+  for (const store of stores) await store.close()
+  for (const client of clients) client.disconnect()
+  if (redisUrl) {
+    // Every key the suite wrote is under a prefix of its own.
+    const client = new Redis(redisUrl)
+    const keys = await client.keys(`vbt${process.pid}x*`)
+    if (keys.length > 0) await client.del(...keys)
+    client.disconnect()
+  }
+  await new Promise((done) => (rest ? rest.close(done) : done(undefined)))
+  for (const pool of pools) await pool.end()
+  if (postgresUrl) {
+    const admin = new pg.Client({ connectionString: postgresUrl })
+    await admin.connect()
+    await admin.query(`drop database if exists ${database} with (force)`)
+    await admin.end()
+  }
+})
+
+for (const backend of BACKENDS) describe.skipIf(!backend.enabled)(`the tables on ${backend.name}`, () => conformance(backend.open))
