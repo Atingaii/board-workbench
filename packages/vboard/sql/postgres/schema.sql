@@ -190,6 +190,50 @@ end $$;
 drop table if exists a2_schema;
 --> statement-breakpoint
 
+-- Runs an operation's statements in one round trip: A2 sends each write that
+-- takes a session's lock as one call, the lock and then the statements that
+-- need it, so it holds the lock only while the server runs them. Each
+-- statement takes its snapshot when it starts, so those after the lock see
+-- what its last holder committed; a single statement can't, since its
+-- snapshot predates the lock. Each statement is a select of jsonb rows: a row
+-- with an `abort` key fails the call and rolls it back, and one with a `stop`
+-- key ends it. It needs read committed, the default: under a stricter level
+-- every statement would share the first one's snapshot, so it refuses to run.
+-- Created only if missing, as the indexes are: a later release that changes it
+-- adds a function with a new name.
+do $$ begin
+  if to_regprocedure('a2_batch(text[], jsonb)') is null then
+    create function a2_batch(statements text[], params jsonb)
+    returns setof jsonb
+    language plpgsql
+    volatile
+    as $batch$
+    declare
+      statement text;
+      result jsonb;
+    begin
+      if current_setting('transaction_isolation') <> 'read committed' then
+        raise exception using errcode = 'A2002',
+          message = 'a2_batch needs the read committed isolation level';
+      end if;
+      foreach statement in array statements loop
+        for result in execute statement using params loop
+          if result ? 'abort' then
+            raise exception using errcode = 'A2001',
+              message = 'a2_batch aborted', detail = result::text;
+          end if;
+          return next result;
+          if result ? 'stop' then
+            return;
+          end if;
+        end loop;
+      end loop;
+    end
+    $batch$;
+  end if;
+end $$;
+--> statement-breakpoint
+
 do $$ begin
   if to_regclass('a2_events_event_id') is null then
     create unique index if not exists a2_events_event_id on a2_events (event_id);
