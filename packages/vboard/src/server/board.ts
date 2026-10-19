@@ -663,7 +663,10 @@ export function board(options: BoardOptions = {}) {
     }
   }
 
-  const handle = (request: Request) => dispatch(request, null)
+  const handle = (request: Request) => {
+    schedules.catchUp()
+    return dispatch(request, null)
+  }
   const servers = [
     server,
     ...(engine ? [engine.inboxServer] : []),
