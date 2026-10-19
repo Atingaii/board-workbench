@@ -12,6 +12,7 @@ import {
 } from '../contract/schemas.ts'
 import type { BoardEvent } from '../contract/contract.ts'
 import type { Actor, Channel, Message } from '../contract/reducers.ts'
+import type { AccessSummary } from '../server/access.ts'
 
 const id = z.coerce.number().int().positive()
 const repeated = z
@@ -212,7 +213,7 @@ export type ScheduleView = {
   /** The last message it posted. */
   last: number | null
   state: 'pending' | 'done' | 'canceled'
-  canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' } | null
+  canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
   by: { actor: string; principal: string; profile: string | null; session: string | null }
   author: ActorView
   createdAt: string
@@ -264,6 +265,8 @@ export type Me = {
   profile: string | null
   session: string | null
   expiresAt: string | null
+  /** What you may do in each channel pattern, implications included: `{ '*': [...every permission] }` is full access. */
+  can: AccessSummary
 }
 
 /** A platform account linked to you, as `GET /identity` lists it. */
@@ -382,7 +385,7 @@ export const routes = {
   /** Posts a message later, as the caller: needs a scheduler. */
   schedule: { method: 'POST', path: '/schedules', body: ScheduleBody },
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
-  /** Anyone may cancel a schedule. Canceling one that's done is a no-op. */
+  /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
   /** Events that stopped their thread: full access only. */

@@ -36,9 +36,11 @@ vercel link
 ```
 
 A board trusts its own Vercel project: people who can access the project,
-each with their own `vercel login`, and the project's deployments. In
+each with their own `vercel login`, and the project's deployments in the
+environment the board runs in. In
 development the board learns which project it is from `.vercel/project.json`,
-which `vercel link` writes. See [Identity](./01-board/02-identity.md).
+which `vercel link` writes. See [Identity](./01-board/02-identity.md) and
+[Access](./01-board/08-access.md).
 
 ## 4. Start the app
 

@@ -44,7 +44,8 @@ vboard post errors-www "deploy failed on a1b2c3"
    second board, mount a second route.
 2. **Every request carries an OIDC token.** People get theirs from their
    `vercel login`, and machines get theirs from their platform. The board
-   trusts its own project, plus `trustedSources`.
+   trusts its own project's people and its deployments in the environment the
+   board runs in, plus whatever `access` lists, and `access` says what each may do in each channel.
 3. **Every event records who wrote it**: a verified principal, plus an
    optional profile, such as an agent acting for a person.
 4. **A thread syncs with a set of external threads.** A message written in the
@@ -58,18 +59,24 @@ vboard post errors-www "deploy failed on a1b2c3"
 
 ## Principles
 
-- **One board is one trust boundary.** A board has no per-channel ACLs, no
-  roles, and no member list. If some content needs a private space, mount a
-  second board.
+- **Access is per channel, and code says it.** `board({ access })` says what
+  each kind of principal may do in each channel: `read`, `post`, `react`,
+  `label`, `sync`, or `manage`. Reads are gated, so a write-only caller is
+  `['post']`, and what a caller can't read answers 404. Nothing is minted or
+  stored: a credential lives as long as its OIDC token. The board has no roles
+  or member list, and nothing restricts the project's own people, so content
+  that needs privacy from them still needs a second board.
 - **No accounts.** The board has no login page, sessions, or user table.
   Principals are strings derived from verified OIDC claims or from verified
   platform webhooks.
 - **Provenance is server-authored.** The `by`, `mentions`, `origin`, and
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
-- **Wiring is code; the log holds facts.** Sync mappings, watchers, and
-  handlers live in `board()` config, where they're reviewed and deployed.
-  They're never stored as data in the log.
+- **Wiring is code; the log holds facts.** Sync mappings, watchers, handlers,
+  and access live in `board()` config, where they're reviewed and deployed.
+  They're never stored as data in the log. Who sees a fact is decided when it's
+  read: folds stay global, and filters are per reader. Log indexes still show
+  how busy the board is.
 - **Everything is legible in plain text.** Actor IDs are readable strings, not
   hashes. Message IDs and cursors are the same numbers. The CLI is a product
   constraint, not a lesser frontend.
@@ -96,7 +103,7 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()` and the trust helpers (`vercel()`, `githubActions()`) | server |
+| `vboard` | `board()` and the access helpers (`vercelProject()`, `githubActions()`, `oidc()`) | server |
 | `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
 | `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
 | `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
@@ -202,7 +209,7 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   board URL as audience. Local person clients do not add the trusted-OIDC
   header. Configure Deployment Protection Trusted
   Sources for the calling project and environment separately from the board's
-  `trustedSources`. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence for
+  `access` rules. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence for
   every client, including hosted callers, without requiring runtime OIDC for
   discovery. Without it, hosted clients fail with setup guidance when edge
   trust is missing and never read or create a saved bypass. Both OIDC headers
@@ -233,14 +240,26 @@ talking to.
   - Verify with `jose` against the team issuer's JWKS
     (`https://oidc.vercel.com/<team>`).
   - `aud` must be the board's URL.
-  - Tokens from the board's own project are trusted. `project_id` is compared to
+  - The board knows its own project: `project_id` is compared to
     `VERCEL_PROJECT_ID`, or to `board({ project })` in local development.
-  - A `development` token is a person and must carry `user_id`. Any other
-    environment is the deployment itself.
+  - A `development` token from it is a person and must carry `user_id`. Any
+    other environment is the deployment itself. The one the board runs in
+    (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
+    matches it, and any other gets nothing unless one does: a production board
+    refuses its previews, which run any branch's code, and a preview board
+    accepts its own previews. Outside Vercel no environment is the board's, so
+    only people get in without a rule.
 - **GitHub tokens:** verify against `https://token.actions.githubusercontent.com`.
-  A GitHub token is accepted only if it matches a `trustedSources` entry.
-- **Tokens from other Vercel projects** are accepted only if they match a
-  `trustedSources` entry.
+  A GitHub token is accepted only if it matches an `access` rule.
+- **Tokens from other Vercel projects** are accepted only if they match an
+  `access` rule.
+- **Any other issuer** is trusted only when an `oidc()` rule names it, pinned
+  in code as an https URL. The board fetches keys only for issuers a rule
+  names, and a rule matches exact claims, at least one. Its principal is
+  `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
+  percent-encoded (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at
+  the first `:`. Two rules whose issuers would name the same principals
+  (`https://ci.test/a` and `https://ci.test/a/`) are an error at boot.
 - **Tests** pass `board({ issuers })` in code, which points verification at a
   local test issuer. Verification still runs `jose` against a real JWKS, and
   there's no bypass reachable through env. Local development needs no bypass
@@ -249,9 +268,11 @@ talking to.
 ```ts
 board({
   store: postgres(),
-  trustedSources: [
-    vercel({ project: 'marketing', environments: ['production'] }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] }),
+  access: [
+    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
+    oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
+    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
   ],
 })
 ```
@@ -261,7 +282,7 @@ board({
   ID (`project_id`, `repository_id`).
 - **A Vercel project name is scoped to a team.** Anyone can make a project
   named `marketing` on their own team and mint a token for the board's
-  audience, so `vercel({ project })` without `team` matches only the board's own
+  audience, so `vercelProject({ project })` without `team` matches only the board's own
   team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
   knows its team from `board({ project: { teamId } })`, `VERCEL_ORG_ID`, or
   `.vercel/project.json`, and on Vercel from the platform's
@@ -318,19 +339,66 @@ board({
 
 **Authorization in v1:**
 
-- People and the board's own deployments can do everything.
-- `trustedSources` entries can do what their `can` lists, which defaults to
-  everything. The `can` values are:
+- The first `access` rule matching a token decides. `can` is `'all'`, a list
+  (`['post']` means `{ '*': ['post'] }`), or a map from channel pattern to
+  permissions. A pattern is `*`, a channel (`feedback`), or a channel and its
+  subtree (`feedback/`); any other `*` is a config error that says what to
+  write. The most specific pattern decides: an exact channel, then the longest
+  subtree, then `*`.
+- The permissions, with implications kept as one table in code
+  (`server/access.ts`, like Vercel's git broker's `ACTION_IMPLICATIONS`):
 
-  | Value | Allows |
-  | --- | --- |
-  | `post` | posts and replies |
-  | `react` | reactions |
-  | `label` | labels |
-  | `sync` | attaching a thread to an external thread |
+  | Permission | Allows | Implies |
+  | --- | --- | --- |
+  | `read` | messages, threads, `/events`, schedules, the channel in `/channels`, attachments on readable messages | |
+  | `post` | start a thread; edit and delete your own messages; upload; schedule a root | |
+  | `react` | add and remove reactions | `read` |
+  | `label` | set and unset labels, including labels on a post | `read` |
+  | `sync` | attach a thread to an external thread, including `sync` on a post | `read` |
+  | `manage` | cancel anyone's schedule in the channel; in every channel, the inbox, stuck events, redrive, and source reads | everything |
 
+- A reply needs `post` and `read` in its root's channel: addressing a thread
+  you can't read would confirm it exists.
+- People, the board's own deployments in its environment, and the board's own code (watchers, sync,
+  middleware, `board.client()`, schedules' system writes) can do everything.
+- `x-board-scope: dev/=read,post;ci/=read`, set by a proxy that holds the
+  credential, is intersected with the principal's access, so it only narrows.
+  An entry's permissions can be `all` (`dev/=all`). A schedule keeps its
+  creator's scope, so a header longer than 4000 characters is `invalid_scope`
+  on every request.
+- **Every check is against the channel the board looked up.** `authorize()`
+  returns a proof carrying the permission and the channel. The board looks a
+  write's target up before the check (`authorizeMessage` returns the message
+  and its proof from one read of the state), and the write function fails
+  unless the target's channel is the proof's (vercel/api#95953). A reply's
+  channel always comes from its root, never from the body.
+- **404, never 403, for what you can't read.** Message IDs are sequential, so
+  a 403 would confirm a message exists. A refused write you can read answers
+  403 and names the missing permission: `this token can't label in dev`.
+- **Reads are filtered at one choke point each:** `FeedProjection.step` for
+  `/events`, `compileFilter` for `/messages` and `/threads`; `/channels`,
+  `/schedules`, and `/actors` drop what you can't read. An event about no
+  message (`actor.*`, `thread.synced`) reaches only a caller that reads every
+  channel. Links to an unreadable board message lose their snapshot when read.
+- **A write doesn't answer what a read wouldn't.** A post in a channel its
+  caller can't read comes back with the text it sent and no mentions: the
+  board resolves handles and emails to actor IDs, which `/actors` hides from
+  that caller. The board stores the resolved text and mentions, so they still
+  notify. Nor does it list the handles that matched no one
+  (`unknownMentions`), which would say which ones exist: a known and an
+  unknown handle answer alike. Still, an ambiguous handle fails (without
+  candidates) and an `@[actor-id]` the board doesn't know is `unknown_mention`
+  for anyone, so a write-only caller can tell that a handle is shared, or that
+  an actor ID exists, but not whose it is.
 - Only the principal that wrote a message may edit or delete it. A person can
-  edit their own profiles' messages.
+  edit their own profiles' messages. A principal ID is coarser than access (a
+  repo's workflows share one), so where a caller can't read, its own is only
+  what was posted without reading (`blind` on `message.posted`, and on
+  `schedule.created` for listing and canceling): a `pull_request` run that
+  only posts in `ci/` can't touch what a workflow that reads `ci/` wrote.
+- `sync` attaches only an external thread no other board thread is synced
+  with; one that is answers 409 `already_synced`. Taking it over would route
+  its replies to a thread its readers may not be able to read.
 - Sync handlers are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)).
@@ -409,7 +477,8 @@ only their own accounts.
   2. Look each one up in the `actors` reducer's `byHandle` index (lowercased
      handle → actor IDs).
   3. Exactly one match resolves. Zero leaves it plain text, and the write's
-     answer lists it in `unknownMentions` so the writer is warned. More than
+     answer lists it in `unknownMentions` so the writer is warned, if the
+     writer reads the channel. More than
      one is `error: ambiguous mention @x`, listing the actor IDs to use with
      `@[…]`.
   4. Store the actor IDs on the event. Edits resolve again.
@@ -509,9 +578,12 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   sandboxed, so a file can't run as a page on the board's origin.
 - **Deleting a message hides its attachments, but doesn't revoke them.** The
   board stops listing them, and the bytes stay in the store: an ID's bytes
-  never change, and another message may carry the same file. Anyone who has an
-  ID can still read the file with a token. A file that must not be read again
-  (a screenshot with a secret in it) needs deleting from the store itself.
+  never change, and another message may carry the same file. A file is
+  readable by its uploader (recorded beside its metadata, never in the log),
+  and wherever a message carrying it is readable. A post carries only files
+  its author may read, so a file can't cross into another channel. A file that
+  must not be read again (a screenshot with a secret in it) needs deleting
+  from the store itself.
 - **Files posted on a synced platform come in too,** as attachments on the
   board's copy of the message. See [inbound handling](#inbound-handling).
 - **`vb inspect` shows them:** images and video inline, in a fixed frame so
@@ -539,6 +611,7 @@ export const boardContract = contract({
       origin: Origin.nullable(),            // (server) { thread, message, context? } when it came from a platform
       attachments: z.array(Attachment).max(10).optional(), // (server) { id, name, type, size }, as the board stored them
       links: z.array(Link).max(10).optional(), // (server) platform messages it links to: { url, message, snapshot, unavailable }
+      blind: z.literal(true).optional(),     // (server) its author couldn't read the channel
     }),
     'message.linked':    z.object({ id: MessageId, links: z.array(Link), by: Author }), // (server) a platform edit or unfurl changed them
     'message.edited':    z.object({ id: MessageId, text: MessageText, mentions: z.array(ActorId), by: Author }),
@@ -736,7 +809,7 @@ bug. Those need a person.
   isn't stuck (anymore) is a no-op, `{ redriven: false }`. The redrive is
   logged with who asked, not written to the board log: it's bookkeeping, not a
   board fact.
-- Everything here needs full access, like the inbox: errors can hold raw
+- Everything here needs `manage` in every channel, like the inbox: errors can hold raw
   platform data.
 
 ## Reading state
@@ -819,7 +892,7 @@ status.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, and `sync` (each entry's `key` and `platform`) |
-| GET | `/me` | The resolved actor for this token and profile |
+| GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |
 | GET | `/actors` | Actors with their handles (used for mention completion) |
@@ -836,9 +909,9 @@ status.
 | POST | `/messages/:id/sync` | `{ target }`: attach the message's thread to an external target and backfill it |
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
-| GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs full access: `trustedSources` entries restricted by `can` can't read it |
-| GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Full access |
-| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Full access |
+| GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `manage` in every channel |
+| GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Needs `manage` in every channel |
+| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Needs `manage` in every channel |
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
 | GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
@@ -856,6 +929,8 @@ status.
   [Cursors](#cursors)). It works on `/messages` and `/events`.
 - The profile is sent as `x-board-profile`, `x-board-avatar`, and
   `x-board-session`, and the server records them after verifying the token.
+- `x-board-scope` narrows the token's access for that request (see
+  [Authorization](#principals-profiles-actors)). It never widens it.
 
 **Event feed:**
 - SSE frames carry `id: <index>`, so `Last-Event-ID` resumes exactly where the
@@ -1036,7 +1111,7 @@ would change it, or when the vboard its hook runs is older than the CLI's. Codex
 ### Commands
 
 ```
-vboard whoami                                   who am I, on which board, and when my token expires
+vboard whoami                                   who am I, on which board, with which token, and what I can do
 vboard link <url>                               link this project to a board (.vboard/config.json)
 vboard hooks [install|uninstall|status] [agent]... the turn-end hook for Claude Code, Codex, and Cursor
 vboard use <url>                                save the default board
@@ -1054,7 +1129,7 @@ vboard post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--syn
 vboard reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
 vboard schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 vboard schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
-vboard schedule cancel <schedule>               e.g. s12; anyone may
+vboard schedule cancel <schedule>               e.g. s12; yours, or with manage
 vboard edit <id> "<text>"
 vboard delete <id>
 vboard react <id> <emoji> [--remove]
@@ -1624,7 +1699,7 @@ isn't synced or replayed.
   optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
   replaces the default "Typing…". WhatsApp ignores the text. **GitHub** has no
   typing, so it's a no-op.
-- It needs the `post` capability.
+- It needs `post` and `read` in the thread's channel.
 
 ### Adapters
 
@@ -1895,7 +1970,7 @@ exist, by name or ID, is 404 `channel_not_found`; Slack rate-limiting is 429
 `ratelimited`, and Slack failing is 502. Nothing is stored, and reading a channel doesn't
 make the board listen to it: inbound events still only come from configured
 channels and synced threads. Because the app's token reads more than the caller
-might, it needs full access, like `vb inbox`.
+might, it needs `manage` in every channel, like `vb inbox`.
 
 **Rendering.** Messages use the common author-prefixed body by default.
 Configure `render` to change it; credentials and sender-account authorization
@@ -2203,11 +2278,24 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   ignores an agent's own messages should still let scheduled ones through, or
   the agent's reminders to itself never wake it. It keeps posting after the
   token that created it expires; cancel it to stop it.
+- **Each send re-checks its creator.** The schedule stores the token's
+  verified claims and the scope it was narrowed by, never the token. Each send
+  works out the creator's access from them under the rules as they are then,
+  and needs `post` there (and `read`, for a reply; `label`, with labels). A
+  creator that no longer has it has the schedule canceled with `revoked`. The
+  claims keep the board's own team as the board knew it then (`team`), so a
+  rule naming a project without its team still matches in the scheduler's own
+  function, which never sees a request to learn it from.
 - **Mentions** are checked when you schedule: a handle that matches no one is
-  reported then (`unknownMentions`), and an ambiguous one fails then. At send
+  reported then (`unknownMentions`, to a creator that reads the channel), and
+  an ambiguous one fails then. At send
   time, one that's become ambiguous stays plain text.
-- **Canceling:** anyone may cancel any schedule, as the board has no per-person
-  permissions. A reply schedule ends by itself when its thread is deleted.
+- **Canceling:** a schedule's creator while it can post in the schedule's
+  channel, or anyone with `manage` there. A principal ID is coarser than
+  access (a repo's workflows share one, as do proxies narrowing one token with
+  `x-board-scope`), so the creator check also takes `post`, and `read` unless
+  the schedule was created without it (`blind`).
+  A reply schedule ends by itself when its thread is deleted.
 - **How it runs:** `schedule.created` arms the first send as an A2 timer
   (`session.schedule`) carrying `schedule.due { id, n, at }`. That handler, on
   lane `schedule:<id>`, posts send `n`, appends `schedule.fired` with the next
@@ -2225,7 +2313,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 - Full-text search
 - SQL read models or row-shaped projections; they're the plan for scale, not
   for the MVP
-- Accounts, login, sessions, roles, and per-channel access control
+- Accounts, login, sessions, roles, and moderating others' messages
+- Restricting the board's own people, minted or stored tokens and grants, and
+  per-thread access rules
+- Hiding volume: message IDs and cursors still show how busy the board is
 - A web UI; the CLI and `tail` are the UI
 - Custom views or reducers supplied by whoever mounts the board
 - Outbound webhooks as their own feature: a [watcher](#watchers) whose `run`
