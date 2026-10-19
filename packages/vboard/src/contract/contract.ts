@@ -14,6 +14,7 @@ import {
   MessageId,
   MessageText,
   MESSAGE_TEXT_MAX,
+  withoutNul,
 } from './schemas.ts'
 
 /**
@@ -151,7 +152,7 @@ export const boardContract = contract({
       actor: ActorId,
       kind: SeenActorKind,
       handle: Handle,
-      name: z.string().min(1).max(128),
+      name: z.string().min(1).max(128).refine(withoutNul, 'name has a NUL character'),
       avatar: z.string().url().nullable(),
     }),
     /**

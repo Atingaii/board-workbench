@@ -3,6 +3,7 @@ import { memory as a2Memory } from 'experimental-a2/store-memory'
 import { describe, expect, it, vi } from 'vitest'
 import { BOARD_SESSION, boardContract } from '../src/contract/contract.ts'
 import { board } from '../src/server/index.ts'
+import { tablesConsumer } from '../src/server/reads.ts'
 import { waitUntil } from '../src/server/wait-until.ts'
 import { sqlTables } from '../src/store/sql.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
@@ -57,5 +58,36 @@ describe('list reads', () => {
     }
     expect(kept).toHaveLength(1)
     expect(kept[0]).toBe(task)
+  })
+
+  it("keep the board session's place, whatever another session of its contract holds", async () => {
+    const log = a2Memory()
+    const tables = sqlTables(sqliteDb(':memory:'))
+    const deployed = board({
+      store: { log, tables, close: () => tables.close() },
+      url: BOARD_URL,
+      project: { id: PROJECT_ID, teamId: TEAM_ID },
+      auth: testAuth,
+    })
+    const julian = caller(deployed.fetch, await personToken())
+    await julian('POST', '/messages', { channel: 'dev', text: 'one' })
+    const head = await tables.position()
+
+    // Another session of the board's contract, further along, run through the same projection.
+    const projection = tablesConsumer(tables)
+    const other = createServer({ contract: boardContract, store: log, consumers: [projection] }).session('other')
+    const by = { actor: 'vercel:user:u_other', principal: 'vercel:user:u_other', profile: null, session: null }
+    for (let n = 0; n < head + 5; n += 1) {
+      await other.append({
+        id: `other-${n}`,
+        type: 'message.posted',
+        payload: { channel: 'dev', text: `other ${n}`, re: null, replyTo: null, thread: `other-${n}`, labels: {}, noSync: false, mentions: [], by, origin: null, from: null },
+      })
+    }
+    await other.consume(projection)
+    expect(await tables.position()).toBe(head)
+    expect((await julian('POST', '/messages', { channel: 'dev', text: 'two' })).status).toBe(201)
+    const listed = await julian('GET', '/messages?channel=dev')
+    expect(listed.body.messages.map((m: { text: string }) => m.text)).toEqual(['one', 'two'])
   })
 })

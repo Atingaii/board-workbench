@@ -14,10 +14,17 @@ export const ChannelPath = z
   .max(CHANNEL_PATH_MAX)
   .regex(new RegExp(`^${segment}(?:/${segment})*$`), 'invalid channel path')
 
+/** Postgres can't store NUL, so no board string holds one: requests with one are refused, and sync strips it. */
+export const withoutNul = (value: string) => !value.includes('\u0000')
+
+/** `value` without NUL, for what comes in from a platform. */
+export const stripNul = (value: string) => value.replaceAll('\u0000', '')
+
 export const MessageText = z
   .string()
   .max(MESSAGE_TEXT_MAX)
   .refine((text) => text.trim().length > 0, 'message text is empty')
+  .refine(withoutNul, 'message text has a NUL character')
 
 /** A message is named by the log index of its `message.posted` event. */
 export const MessageId = z.number().int().positive()
@@ -26,7 +33,7 @@ export const LabelKey = z
   .string()
   .max(64)
   .regex(/^[a-z0-9][a-z0-9_.-]*$/, 'invalid label key')
-export const LabelValue = z.string().max(256)
+export const LabelValue = z.string().max(256).refine(withoutNul, 'label value has a NUL character')
 export const Labels = z.record(LabelKey, LabelValue)
 
 /** Normalized short names, as Chat SDK names them: `eyes`, `check`, `thumbs_up`. */
@@ -52,7 +59,7 @@ export const SeenActorKind = z.union([ActorKind, z.literal('profile')])
 
 export const actorKind = (kind: z.infer<typeof SeenActorKind>): ActorKind => (kind === 'profile' ? 'agent' : kind)
 
-export const Handle = z.string().min(1).max(128)
+export const Handle = z.string().min(1).max(128).refine(withoutNul, 'handle has a NUL character')
 
 export const Author = z.object({
   actor: ActorId,

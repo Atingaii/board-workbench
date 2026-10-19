@@ -144,6 +144,20 @@ describe('sync', () => {
     expect(s.channelPosts).toHaveLength(0) // a thread that came from Slack is never re-posted to its channel
   })
 
+  it("strips NUL from what Slack sends, which the board refuses and Postgres can't store", async () => {
+    const { board, webhook } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    expect((await julian('POST', '/messages', { channel: 'firehose', text: 'a\u0000b' })).status).toBe(400)
+
+    // Markdown turns NUL into U+FFFD on the way in, and the board strips any that gets past.
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export\u0000 is broken', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [root] = await read(julian, 'firehose')
+    expect(root).toMatchObject({ from: 'slack' })
+    expect(root!.text).toContain('is broken')
+    expect(root!.text).not.toContain('\u0000')
+  })
+
   it('posts a reply to Slack as written, with no quote of the message it answers', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

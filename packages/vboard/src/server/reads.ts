@@ -1,5 +1,5 @@
 import { consumer } from 'experimental-a2/server'
-import { boardContract, type BoardEvent } from '../contract/contract.ts'
+import { BOARD_SESSION, boardContract, type BoardEvent } from '../contract/contract.ts'
 import type { Message } from '../contract/reducers.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { MessageFilter, MessageTables, Page } from '../store/types.ts'
@@ -9,6 +9,8 @@ import { waitUntil } from './wait-until.ts'
 /** Keeps the tables from the board's log, one event at a time, from the first. */
 export function tablesConsumer(tables: MessageTables) {
   return consumer({ contract: boardContract, name: TABLES_CONSUMER, lane: 'tables', backfill: true }).run(async (ctx) => {
+    // The tables keep one position, the board session's: another session's indexes would move it.
+    if (ctx.session.id !== BOARD_SESSION) return
     await tables.apply(ctx.event as BoardEvent)
   })
 }

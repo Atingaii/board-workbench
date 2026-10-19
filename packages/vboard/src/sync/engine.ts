@@ -30,7 +30,7 @@ import {
   type Message,
 } from '../contract/reducers.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
-import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, type Attachment, type Author } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, stripNul, type Attachment, type Author } from '../contract/schemas.ts'
 import type { IdentityChallenge, LinkedAccount } from '../api/routes.ts'
 import { actorSeen } from '../server/actors.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
@@ -64,7 +64,9 @@ export type BoardBinding = {
 }
 
 /** `files`: a message with files may have no text. */
-const clampText = (text: string, files = false) => {
+const clampText = (raw: string, files = false) => {
+  // A platform message can hold NUL, which the board can't store.
+  const text = stripNul(raw)
   const trimmed = text.trim() === '' ? (files ? '' : '(no text)') : text
   return trimmed.length > MESSAGE_TEXT_MAX ? `${trimmed.slice(0, MESSAGE_TEXT_MAX - 1)}…` : trimmed
 }
