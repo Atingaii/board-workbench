@@ -111,13 +111,16 @@ export function actorSeen(seen: Actor, known: ActorsState) {
  * plain text and comes back in `unknown`, so the writer can be told. A handle
  * several actors share, or an `@[actor-id]` the board doesn't know, fails the
  * write. `lenient` is for platform text: no mention fails it, and one that
- * doesn't resolve stays plain text.
+ * doesn't resolve stays plain text. Without `candidates`, an ambiguous mention
+ * doesn't list who it could be: a caller that can't read every channel can't
+ * list actors either.
  */
 export function resolveMentions(
   text: string,
   known: ActorsState,
   pending?: Actor,
   lenient = false,
+  candidates = true,
 ): { mentions: string[]; unknown: string[] } {
   const resolved: string[] = []
   const unknown: string[] = []
@@ -137,6 +140,7 @@ export function resolveMentions(
     if (pending && pending.handle.toLowerCase() === token.handle) ids.add(pending.id)
     if (ids.size === 1) add([...ids][0]!)
     else if (ids.size === 0) unknown.push(token.handle)
+    else if (!candidates) fail(badRequest(`ambiguous mention @${token.handle}: use @[actor-id]`, 'ambiguous_mention'))
     else {
       const options = [...ids]
         .map((id) => `@[${id}] (${known.byId[id]?.name ?? pending?.name ?? id})`)

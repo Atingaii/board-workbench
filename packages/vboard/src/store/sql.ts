@@ -168,6 +168,8 @@ const clean = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
 
 /** A mention's term. Label keys start with a letter or digit, so it's never a label's. */
 const MENTION = '@'
+/** An attachment's term, the same way. */
+const ATTACHMENT = '^'
 
 class Params {
   readonly values: unknown[] = []
@@ -195,6 +197,7 @@ function channelClause(alias: string, channel: NonNullable<MessageFilter['channe
 function clauses(filter: MessageFilter, p: Params): string[] {
   const out: string[] = []
   if (filter.channel) out.push(channelClause('m', filter.channel, p))
+  if (filter.channels) out.push(filter.channels.length ? `m.channel in (${p.list(filter.channels)})` : '1 = 0')
   if (filter.re !== undefined) {
     const re = p.add(filter.re)
     out.push(`(m.id = ${re} or m.re = ${re})`)
@@ -316,6 +319,7 @@ export function sqlTables(db: Db): MessageTables {
           ? [
               ...Object.entries(m.labels).map(([key, value]) => [key, clean(value)] as const),
               ...[...new Set(m.mentions)].map((actor) => [MENTION, clean(actor)] as const),
+              ...[...new Set(m.attachments.map((file) => file.id))].map((id) => [ATTACHMENT, clean(id)] as const),
             ]
           : null,
       summary: change.summary ?? null,
@@ -396,8 +400,9 @@ export function sqlTables(db: Db): MessageTables {
     const p = new Params()
     const where = ['r.re is null']
     // A thread's messages are all in its root's channel: that filter goes on the root, where an index has it.
-    const { channel, ...rest } = filter
+    const { channel, channels, ...rest } = filter
     if (channel) where.push(channelClause('r', channel, p))
+    if (channels) where.push(channels.length ? `r.channel in (${p.list(channels)})` : '1 = 0')
     const matching = clauses(rest, p)
     if (matching.length > 0)
       where.push(`r.id in (select coalesce(m.re, m.id) from vboard_messages m where ${matching.join(' and ')})`)
@@ -514,6 +519,16 @@ where v.message_id in (${p.list([...new Set(ids)])})
 
     async externalThreads() {
       return (await db.all({ text: 'select external from vboard_external_threads', values: [] })).map((found) => String(found.external))
+    },
+
+    async withAttachment(attachment) {
+      const rows = await db.all({
+        text: `select m.data as data from vboard_messages m
+where exists (select 1 from vboard_terms t where t.message_id = m.id and t.term = '${ATTACHMENT}' and t.value = $1)
+order by m.id`,
+        values: [clean(attachment)],
+      })
+      return rows.map((found) => parse(found)!)
     },
 
     async recentRoots(principal, since) {

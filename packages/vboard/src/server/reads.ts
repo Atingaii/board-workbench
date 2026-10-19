@@ -3,7 +3,9 @@ import { BOARD_SESSION, boardContract, type BoardEvent } from '../contract/contr
 import type { Message } from '../contract/reducers.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { MessageFilter, MessageTables, Page } from '../store/types.ts'
+import type { Access } from './access.ts'
 import type { BoardSession } from './board.ts'
+import { linkedIds, type Reader } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 
 /** Keeps the tables from the board's log, one event at a time, from the first. */
@@ -65,12 +67,27 @@ export function createReads(tables: MessageTables, session: BoardSession, projec
       await ensure(undefined, signal)
       return tables.byEventId(eventId)
     },
-    messages(filter: MessageFilter, page: Page) {
+    /**
+     * The reader of views of `messages`: what a link shows depends on where the
+     * message it points to lives, looked up only for a reader that can't read
+     * every channel. A linked message is older than the one linking it, so the
+     * tables have it.
+     */
+    async reader(access: Access, messages: Iterable<Message>): Promise<Reader> {
+      if (access.readsAll) return { access, channelOf: () => undefined }
+      const ids = [...new Set([...messages].flatMap((message) => linkedIds(message.links)))]
+      const found = ids.length === 0 ? new Map<number, Message>() : await tables.messagesAt(ids, await tables.position())
+      return { access, channelOf: (id) => found.get(id)?.channel }
+    },
+    async messages(filter: MessageFilter, page: Page) {
       catchUp()
+      // A reader of no channel: nothing to look for.
+      if (filter.channels?.length === 0) return { messages: [], position: await tables.position() }
       return tables.messages(filter, page)
     },
-    threads(filter: MessageFilter, page: Page) {
+    async threads(filter: MessageFilter, page: Page) {
       catchUp()
+      if (filter.channels?.length === 0) return { threads: [], position: await tables.position() }
       return tables.threads(filter, page)
     },
   }

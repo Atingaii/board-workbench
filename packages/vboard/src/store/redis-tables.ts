@@ -284,7 +284,7 @@ while true do
 end
 `
 
-/** Every message in a thread, a thousand IDs to an HMGET. KEYS: the thread, messages. */
+/** Every message in a set of IDs (a thread, or those carrying an attachment), a thousand to an HMGET. KEYS: the set, messages. */
 const THREAD = `
 local ids = redis.call('ZRANGE', KEYS[1], 0, -1)
 local rows = {}
@@ -346,6 +346,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     byActor: (actor: string) => `${p}:i:ba:${actor}`,
     byPrincipal: (principal: string) => `${p}:i:bp:${principal}`,
     mention: (actor: string) => `${p}:i:mn:${actor}`,
+    attachment: (id: string) => `${p}:i:at:${id}`,
     from: (from: string) => `${p}:i:f:${from}`,
     /** A person's roots, by when they were posted: for the echo check. */
     rootsBy: (principal: string) => `${p}:rr:${principal}`,
@@ -442,6 +443,10 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
         const mentioned = new Set(m.mentions)
         for (const actor of mentionedBefore) if (!mentioned.has(actor)) out.push(['ZREM', k.mention(actor), id])
         for (const actor of mentioned) if (!mentionedBefore.has(actor)) out.push(['ZADD', k.mention(actor), id, id])
+        const filesBefore = new Set(created ? [] : old!.attachments.map((file) => file.id))
+        const files = new Set(m.attachments.map((file) => file.id))
+        for (const file of filesBefore) if (!files.has(file)) out.push(['ZREM', k.attachment(file), id])
+        for (const file of files) if (!filesBefore.has(file)) out.push(['ZADD', k.attachment(file), id, id])
         // A root's labels count for its replies too.
         for (const reply of replies) {
           const replyWas = inLabelSets(reply.labels, old!.labels)
@@ -492,6 +497,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
       const under = subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${path}/`)) : []
       group([path, ...under].map(k.channel))
     }
+    if (filter.channels) group(filter.channels.map(k.channel))
     if (filter.re !== undefined) group([k.thread(filter.re)])
     if (filter.by) group([...filter.by.actors.map(k.byActor), ...filter.by.principals.map(k.byPrincipal)])
     if (filter.mentions) group(filter.mentions.map(k.mention))
@@ -568,13 +574,13 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
 
     async threads(filter: MessageFilter, page: Page) {
       const asc = page.after !== undefined
-      const { channel, ...rest } = filter
+      const { channel, channels, ...rest } = filter
       let position: number | null = null
       // Each root and when its thread last changed: its latest reply, or itself.
       const roots = new Map<string, number>()
-      if (Object.keys(rest).length === 0) {
+      if (Object.keys(rest).length === 0 && !(channel && channels)) {
         const under = channel?.subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${channel.path}/`)) : []
-        const sets = channel ? [channel.path, ...under].map(k.channelThreads) : [k.threads]
+        const sets = channels ? channels.map(k.channelThreads) : channel ? [channel.path, ...under].map(k.channelThreads) : [k.threads]
         const spec = { limit: page.limit, asc, min: asc ? `(${page.after}` : '-inf' }
         const [at, pairs] = (await evaluate(LATEST, [k.pos, ...sets], [luaJson(spec)])) as [unknown, string[]]
         position = Number(at)
@@ -635,6 +641,14 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
 
     async externalThreads() {
       return (await call('HKEYS', k.externalThreads)) as string[]
+    },
+
+    async withAttachment(attachment) {
+      const rows = (await evaluate(THREAD, [k.attachment(attachment), k.messages], [])) as unknown[]
+      return rows.flatMap((row) => {
+        const message = parse<Message>(row)
+        return message ? [message] : []
+      })
     },
 
     async recentRoots(principal, since) {

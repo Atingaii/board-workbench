@@ -2,9 +2,10 @@ import { createServer, type Server } from 'node:http'
 import { Redis } from 'ioredis'
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { compileAccess, FULL_ACCESS, type Can } from '../src/server/access.ts'
 import type { BoardEvent } from '../src/contract/contract.ts'
 import { foldActors, foldMessages, foldSync, type ActorsState, type Message, type MessagesState, type SyncState } from '../src/contract/reducers.ts'
-import { compileFilter, toMessageFilter, type ParsedFilters } from '../src/server/feed.ts'
+import { compileFilter, readableFilter, toMessageFilter, type ParsedFilters } from '../src/server/feed.ts'
 import { postgresDb, type PgPool } from '../src/store/postgres-db.ts'
 import { redisHttp } from '../src/store/redis-http.ts'
 import { redisTables } from '../src/store/redis-tables.ts'
@@ -42,6 +43,7 @@ const SEEN = [
 ] as const
 const CHANNELS = ['dev', 'dev/sub', 'dev_x', 'ops']
 const WORDS = ['PR', '#1', 'fix', 'Bug', 'deploy', 'ÉCLAIR', 'naïve', '100%', 'a_b', 'shipit']
+const FILES = ['f_one', 'f_two', 'f_three', 'f_four']
 const LABELS = [{ kind: 'bug' }, { kind: 'feature' }, { pr: '1' }, { pr: '2' }, { 'tag.x': 'y' }]
 
 /** A random board history: every event type the messages fold handles, and some it ignores. */
@@ -58,6 +60,7 @@ function history(seed: number, length: number): BoardEvent[] {
   const text = () => Array.from({ length: 1 + Math.floor(r.next() * 4) }, () => r.pick(WORDS)).join(' ')
   const labels = () => (r.chance(0.5) ? { ...r.pick(LABELS), ...(r.chance(0.3) ? r.pick(LABELS) : {}) } : {})
   const mentions = () => (r.chance(0.3) ? [r.pick(AUTHORS).actor] : [])
+  const files = () => [...new Set([r.pick(FILES), r.pick(FILES)])].map((id) => ({ id, name: `${id}.png`, type: 'image/png', size: 1 }))
   while (events.length < length) {
     const author = r.pick(AUTHORS)
     const target = posted.length ? r.pick(posted) : null
@@ -70,6 +73,7 @@ function history(seed: number, length: number): BoardEvent[] {
       const n = events.length + 1
       push('message.posted', {
         channel, text: text(), re: null, replyTo: null, thread: id, labels: labels(), noSync: r.chance(0.1),
+        ...(r.chance(0.3) ? { attachments: files() } : {}),
         mentions: mentions(), by: author,
         origin: imported ? { channel: 'slack:C9', thread: `slack:C9:${n}`, subthread: null, message: `${n}.0`, context: null } : null,
         from: imported ? 'slack' : null,
@@ -206,7 +210,7 @@ function conformance(open: () => Promise<MessageTables>) {
     const { messages, actors } = fold(events)
     const me = 'vercel:user:u_bo'
     for (const filters of FILTERS) {
-      const matches = compileFilter(filters, { me, actors, messages })
+      const matches = compileFilter(filters, { me, actors, messages, access: FULL_ACCESS })
       const filter = toMessageFilter(filters, { me, actors })
       for (const page of [{ limit: 50 }, { limit: 7, after: 120 }, { limit: 7, before: 300 }, { limit: 500 }]) {
         const got = await tables.messages(filter, page)
@@ -270,6 +274,40 @@ function conformance(open: () => Promise<MessageTables>) {
         const expected = roots.filter((m) => m.by.principal === principal && Date.parse(m.createdAt) >= since)
         expect(await tables.recentRoots(principal, since)).toEqual(expected)
       }
+    await tables.close()
+  })
+
+  it.each([7, 8])('answer a reader of some channels only with what it reads, for every filter (history %i)', async (seed) => {
+    const events = history(seed, 400)
+    const tables = await applied(events)
+    const { messages, actors } = fold(events)
+    const known = [...new Set(Object.values(messages.byId).map((m) => m.channel))]
+    const grants: Can[] = [{ dev: ['read'] }, { 'dev/': ['read'] }, { dev_x: ['read'], ops: ['read'] }, { nowhere: ['read'] }]
+    for (const can of grants) {
+      const access = compileAccess(can)
+      for (const filters of FILTERS) {
+        const matches = compileFilter(filters, { me: null, actors, messages, access })
+        const filter = readableFilter(toMessageFilter(filters, { me: null, actors }), known, access)
+        const expected = expectedMessages(messages, matches, { limit: 500 })
+        const got = filter.channels?.length === 0 ? [] : (await tables.messages(filter, { limit: 500 })).messages
+        expect(got, JSON.stringify({ can, filters })).toEqual(expected)
+        const threads = filter.channels?.length === 0 ? [] : (await tables.threads(filter, { limit: 50 })).threads
+        expect(threads, JSON.stringify({ can, filters })).toEqual(expectedThreads(messages, matches, { limit: 50 }))
+      }
+    }
+    await tables.close()
+  })
+
+  it('find the messages that carry a file, and none once deleted', async () => {
+    const events = history(9, 400)
+    const tables = await applied(events)
+    const { messages } = fold(events)
+    for (const id of FILES) {
+      const carrying = Object.values(messages.byId).filter((m) => m.attachments.some((file) => file.id === id)).sort((a, b) => a.id - b.id)
+      expect(carrying.length).toBeGreaterThan(0)
+      expect(await tables.withAttachment(id)).toEqual(carrying)
+    }
+    expect(await tables.withAttachment('f_none')).toEqual([])
     await tables.close()
   })
 

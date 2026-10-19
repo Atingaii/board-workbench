@@ -30,7 +30,7 @@ There are two independent checks. Configure both on the board project.
 
 Omitting the variable trusts no external projects. Omitting `environments`
 defaults to production. Add preview or development only when intended.
-Grants allow reads and the `post` capability, not labels, reactions or `sync`.
+A grant reads and posts in every channel, and labels only in `factory/` channels, since a Factory post carries labels. It never reacts or syncs.
 Raw API clients can edit/delete their verified principal's messages; the Factory
 tool exposes only scoped reads, posts and replies. Sessions do not create separate
 ownership principals. Existing board-project identities retain their normal access. IDs above are placeholders; use actual immutable IDs.
@@ -78,8 +78,8 @@ name in another repository is a separate conversation. Cross-repository
 discussion sharing needs an explicit Factory scope and authorization design.
 Factory derives channel names from its project, state namespace, repository
 and space, so unrelated factories using `ci-health` do not collide. These
-names are discovery boundaries, not channel ACLs: an allowed HTTP identity
-can access the whole board. Use separate board deployments when callers must
+names are discovery boundaries: an allowed HTTP identity can read and post
+on the whole board. Use separate board deployments when callers must
 not trust each other. The scoped Factory tool enforces its own channel boundary.
 The board stores conversations and evidence; Factory Tasks, dependency graphs
 and its operator Kanban continue to track work and outcomes.

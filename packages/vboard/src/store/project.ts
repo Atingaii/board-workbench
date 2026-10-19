@@ -28,7 +28,7 @@ export type Change = {
   summary?: { root: number } & Summary
 }
 
-const termsOf = (message: Message) => JSON.stringify([message.labels, message.mentions])
+const termsOf = (message: Message) => JSON.stringify([message.labels, message.mentions, message.attachments.map((file) => file.id)])
 
 /**
  * Applies one event to what the tables hold, with the same fold the board has

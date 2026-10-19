@@ -9,6 +9,8 @@ import type { ExternalCopy, Message, SyncedThread } from '../contract/reducers.t
 export type MessageFilter = {
   /** One channel, or with `subtree` it and every channel under it. */
   channel?: { path: string; subtree: boolean }
+  /** In one of these channels: those a reader may read. None matches nothing. */
+  channels?: readonly string[]
   /** A thread: its root and its replies. */
   re?: number
   /** Written by one of these actors, or by an agent of one of these people. */
@@ -65,6 +67,8 @@ export interface MessageTables {
   externalThreads(): Promise<string[]>
   /** A person's own roots posted at or after `since` (epoch ms). */
   recentRoots(principal: string, since: number): Promise<Message[]>
+  /** The messages that carry an attachment, by ID. A deleted message carries none. */
+  withAttachment(attachment: string): Promise<Message[]>
   close(): Promise<void>
 }
 
