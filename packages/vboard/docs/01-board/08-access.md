@@ -75,6 +75,46 @@ export const { GET, POST, scheduler } = board({
   differ only by a trailing slash, the host's case, or a default port would
   name the same principals, so the board throws when it starts.
 
+## A host's own verifier
+
+A host that serves many teams' boards from one deployment can't use the
+built-in verifier: its callers can't access the host's project, and every
+team's board would trust the host's own deployments. Pass a function as
+`access` to verify callers with your own credentials instead:
+
+```ts
+board({
+  store: redis({ keyPrefix: `board:${teamId}:` }),
+  scheduler: vercelQueues({ topic: `board-${teamId}` }),
+  blob: vercelBlob({ prefix: teamId }),
+  access: async (request) => {
+    const caller = await verifyPlatformToken(request.headers.get('authorization'))
+    if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
+    return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, can: caller.viewer ? ['read'] : 'all', expiresAt: caller.expiresAt }
+  },
+})
+```
+
+- **It returns the principal:** `id` in the board's scheme (`vercel:user:<id>`,
+  `vercel:project:<id>:<env>`, …), `kind`, `handle`, `can` as a rule's, and
+  optionally `expiresAt`. The handle, name, profile, and `x-board-scope` the
+  caller sends still apply on top of it.
+- **To reject, return or throw a `Response`.** The board sends that response
+  as is. Anything else thrown is a 500, so turn a bad token into a 401 yourself.
+- **Nothing else is trusted.** No people, no own-project deployments, no
+  audience check, no platform token header: only what the function grants.
+- **A schedule sends with the access it was granted** when it was made, since
+  there's no request to ask the function again. It's canceled `revoked` once
+  that grant's `expiresAt` passes, so set `expiresAt` to when the caller's
+  credential ends: without it, a schedule keeps its grant for as long as it
+  repeats. Schedules made before a board switched to or from a function are
+  revoked; the board's own code's (`board.client()`, watchers) keep sending.
+- **One board per team.** Create a `board()` for each team and cache them.
+  Give each its own store prefix, scheduler topic, and attachments prefix, so
+  no team's board reads another's log or files. A board holds no timers or
+  connections between requests, so dropping an evicted one is enough; close
+  the store client if you made one for it.
+
 ## Permissions
 
 | Permission | Allows | Implies |
