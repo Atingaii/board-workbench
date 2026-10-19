@@ -15,6 +15,7 @@ import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
 import { deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
 import { DroppedError } from './middleware.ts'
+import { waitUntil } from './wait-until.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -204,15 +205,23 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     if (next !== null) await arm(ctx, 'next', id, n + 1, next)
   }
 
-  /** Arms each new schedule's first send. */
+  /**
+   * Arms each schedule's next send, from the first schedule on: a queue delivers a timer to the
+   * deployment that armed it, so one an earlier deployment armed may never reach this one. The
+   * deployment that gets there first sends, and `due` makes the other's a no-op.
+   */
   const arming = consumer({
     contract: schedulesContract,
     name: 'vboard-schedules',
     types: ['schedule.created'],
     lane: 'schedules',
+    backfill: true,
   }).run(async (ctx) => {
     if (!options.scheduler) return
-    await arm(ctx, 'first', ctx.event.index, 0, ctx.event.payload.first)
+    const { state } = await ctx.session.state(schedulesReducer)
+    const schedule = state.byId[ctx.event.index]
+    if (!schedule || schedule.next === null) return
+    await arm(ctx, 'first', schedule.id, schedule.sent, schedule.next)
   })
 
   /** Makes each due send, one schedule at a time. */
@@ -230,6 +239,20 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     consumers: [arming, sending],
   })
   const session = server.session(SCHEDULES_SESSION)
+
+  /**
+   * The first request on an instance starts the arming catching up, and doesn't wait: on the
+   * first deploy with it, every schedule from before gets its next send armed here.
+   */
+  let catching: Promise<unknown> | null = null
+  function catchUp(): void {
+    if (catching || !options.scheduler) return
+    catching = session.consume(arming).catch((error: unknown) => {
+      console.warn('[vboard] schedules are not caught up:', (error as Error).message)
+      catching = null
+    })
+    waitUntil(catching)
+  }
 
   async function list(query: SchedulesQueryOutput & { root?: number }) {
     if (!writes) throw new Error('schedules used before the board bound them')
@@ -249,6 +272,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   return {
     server,
     session,
+    catchUp,
     bind: (binding: { writes: WriteContext }) => {
       writes = binding.writes
     },
