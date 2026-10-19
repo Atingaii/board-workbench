@@ -172,6 +172,11 @@ behind. Three rules make that invisible:
   first list on each instance also starts the tables catching up, so a deploy
   that adds them fills them from the log even before anyone writes.
 
+On a board that already has a log, the first deploy with tables fills them from
+it, a few round trips to the database an event. Until they reach the head, a
+read by message ID waits for them, and a write waits up to 10 seconds, then
+answers. Lists answer at once with what's there.
+
 ## FAQ
 
 ### Postgres or Redis?

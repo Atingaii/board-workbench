@@ -232,10 +232,76 @@ if #ids == 0 then return {} end
 return redis.call('HMGET', KEYS[1], unpack(ids))
 `
 
+/**
+ * What an event reads before it applies, in one script so it reads the primary,
+ * where the position check runs: a replica can lag it. Nothing, when the
+ * position says it's not the one to apply (as APPLY checks). KEYS: position,
+ * messages, metas, summaries, sync threads, the copy's hash. ARGV: the index,
+ * the mode, the message, its root ('' to take the message's own), the sync
+ * thread, the copy ('' for none of each). Returns the message, its root's ID,
+ * the root, its summary, the sync thread, and the copy.
+ */
+const BEFORE = `
+local pos = tonumber(redis.call('GET', KEYS[1]) or '-1')
+local index = tonumber(ARGV[1])
+if ARGV[2] == 'next' then
+  if pos ~= index - 1 then return false end
+elseif pos >= index then
+  return false
+end
+local message, root = false, ARGV[4]
+if ARGV[3] ~= '' then
+  message = redis.call('HGET', KEYS[2], ARGV[3])
+  if message and root == '' then
+    local re = cjson.decode(redis.call('HGET', KEYS[3], ARGV[3])).re
+    if re ~= cjson.null then root = tostring(re) end
+  end
+end
+local rootData, summary = false, false
+if root ~= '' then
+  rootData = redis.call('HGET', KEYS[2], root)
+  summary = redis.call('HGET', KEYS[4], root)
+end
+local thread, copy = false, false
+if ARGV[5] ~= '' then thread = redis.call('HGET', KEYS[5], ARGV[5]) end
+if ARGV[6] ~= '' then copy = redis.call('HGET', KEYS[6], ARGV[6]) end
+return { message, root, rootData, summary, thread, copy }
+`
+
+/** The newest reply in a thread that isn't deleted, other than ARGV (false when none). KEYS: the thread, metas. */
+const NEWEST = `
+local skip = {}
+for _, id in ipairs(ARGV) do skip[id] = true end
+local high = '+inf'
+while true do
+  local ids = redis.call('ZREVRANGEBYSCORE', KEYS[1], high, '-inf', 'LIMIT', 0, 100)
+  if #ids == 0 then return false end
+  local metas = redis.call('HMGET', KEYS[2], unpack(ids))
+  for i, id in ipairs(ids) do
+    if not skip[id] and not cjson.decode(metas[i]).d then return id end
+  end
+  high = '(' .. ids[#ids]
+end
+`
+
+/** Every message in a thread, a thousand IDs to an HMGET. KEYS: the thread, messages. */
+const THREAD = `
+local ids = redis.call('ZRANGE', KEYS[1], 0, -1)
+local rows = {}
+for first = 1, #ids, 1000 do
+  local part = redis.call('HMGET', KEYS[2], unpack(ids, first, math.min(first + 999, #ids)))
+  for i = 1, #part do rows[#rows + 1] = part[i] end
+end
+return rows
+`
+
 const SEP = '\u001f'
 
 /** How many IDs one query script reads before it hands back where it got to. */
 const SCAN_BUDGET = 4000
+
+/** JSON a script decodes: Redis's cjson refuses an escaped lone surrogate, so each goes out as U+FFFD. */
+const luaJson = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => (typeof item === 'string' ? item.toWellFormed() : item))
 
 /** The label sets a message is in: each key, and each key with its value. */
 const labelTokens = (labels: Record<string, string>): string[] =>
@@ -250,10 +316,13 @@ type Op = [command: string, key: string, ...args: string[]]
 /**
  * The tables on Redis: messages, versions, and sync rows in hashes and sorted
  * sets under `${prefix}:vboard`, and a sorted set per filter value, scored by
- * message ID. Each write is one script (the position check and the writes);
- * each query is one script, which walks the smallest set that applies.
+ * message ID. Each event is two scripts, one that reads what it changes and
+ * one that checks the position and writes; each query is one script, which
+ * walks the smallest set that applies.
  */
-export function redisTables(call: RedisCall, prefix: string, options: { scanBudget?: number } = {}): MessageTables {
+export function redisTables(send: RedisCall, prefix: string, options: { scanBudget?: number } = {}): MessageTables {
+  // Redis keeps a lone surrogate as U+FFFD: every string goes out well-formed, so a write and the read that finds it agree.
+  const call: RedisCall = (command, ...args) => send(command, ...args.map((arg) => (typeof arg === 'string' ? arg.toWellFormed() : arg)))
   const budget = options.scanBudget ?? SCAN_BUDGET
   const p = `${prefix}:vboard`
   const k = {
@@ -301,31 +370,36 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
 
   type Read = Before & { rootLabels: Record<string, string> | null }
 
-  /** The newest reply in `root`'s thread that isn't deleted, other than `except`: newest first, a page at a time. */
-  async function newestReply(root: number, except: number): Promise<number | null> {
-    for (let high = '+inf'; ; ) {
-      const ids = (await call('ZREVRANGEBYSCORE', k.thread(root), high, '-inf', 'LIMIT', 0, 20)) as string[]
-      if (ids.length === 0) return null
-      const metas = (await call('HMGET', k.metas, ...ids)) as unknown[]
-      for (const [i, id] of ids.entries()) {
-        const reply = Number(id)
-        if (reply !== root && reply !== except && !parse<Meta>(metas[i])!.d) return reply
-      }
-      high = `(${ids.at(-1)}`
-    }
-  }
-
-  /** What the event reads before it applies: its message, and its root's summary and labels. */
-  async function before(event: BoardEvent, id: number): Promise<Read> {
-    const message = event.type === 'message.posted' ? undefined : ((await messagesOf([id])).get(id) ?? undefined)
-    const rootId = event.type === 'message.posted' ? event.payload.re : (message?.re ?? null)
-    if (rootId === null) return { message, root: undefined, rootLabels: null }
-    const [rootData, rootSummary] = (await Promise.all([call('HGET', k.messages, rootId), call('HGET', k.summaries, rootId)])) as [unknown, unknown]
+  /**
+   * What the event reads before it applies: its message, its root's summary and labels, and the
+   * sync rows it changes. Null when the position says it's not the one to apply.
+   */
+  async function before(event: BoardEvent, id: number | null, mode: 'next' | 'any') {
+    const posted = event.type === 'message.posted'
+    const reads = syncReads(event)
+    const keys = [k.pos, k.messages, k.metas, k.summaries, k.syncThreads, reads.copy === null ? k.pos : k.copies(reads.copy[0])]
+    const args = [
+      event.index,
+      mode,
+      id === null || posted ? '' : String(id),
+      posted && event.payload.re !== null ? String(event.payload.re) : '',
+      reads.thread ?? '',
+      reads.copy?.[1] ?? '',
+    ]
+    const found = (await evaluate(BEFORE, keys, args)) as unknown[] | null
+    if (!found) return null
+    const [data, rootId, rootData, rootSummary, thread, copy] = found
+    const sync = { thread: parse<SyncedThread>(thread) ?? undefined, copy: parse<ExternalCopy>(copy) ?? undefined }
+    if (id === null) return { read: null, sync }
+    const message = parse<Message>(data) ?? undefined
     const summary = parse<Summary>(rootSummary)
     const root = summary ? { replies: summary.n, at: summary.at } : undefined
     const read: Read = { message, root, rootLabels: parse<Message>(rootData)?.labels ?? null }
-    if (event.type === 'message.deleted' && message && !message.deleted && root?.at === id) read.previousLast = await newestReply(rootId, id)
-    return read
+    if (event.type === 'message.deleted' && message && !message.deleted && root?.at === id) {
+      const newest = await evaluate(NEWEST, [k.thread(Number(rootId)), k.metas], [String(rootId), String(id)])
+      read.previousLast = newest === null || newest === undefined || newest === false ? null : Number(newest)
+    }
+    return { read, sync }
   }
 
   /** A root's replies, when its labels changed: they're in its label sets too. */
@@ -333,17 +407,11 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
     const after = change.message?.after
     if (!after || after.re !== null || change.message!.created || !change.message!.terms) return []
     if (JSON.stringify(after.labels) === JSON.stringify(read.message!.labels)) return []
-    const ids = ((await call('ZRANGE', k.thread(after.id), 0, -1)) as string[]).map(Number).filter((other) => other !== after.id)
-    return [...(await messagesOf(ids)).values()]
-  }
-
-  async function syncBefore(event: BoardEvent) {
-    const reads = syncReads(event)
-    const [thread, copy] = (await Promise.all([
-      reads.thread === null ? null : call('HGET', k.syncThreads, reads.thread),
-      reads.copy === null ? null : call('HGET', k.copies(reads.copy[0]), reads.copy[1]),
-    ])) as [unknown, unknown]
-    return { thread: parse<SyncedThread>(thread) ?? undefined, copy: parse<ExternalCopy>(copy) ?? undefined }
+    const rows = (await evaluate(THREAD, [k.thread(after.id), k.messages], [])) as unknown[]
+    return rows.flatMap((row) => {
+      const message = parse<Message>(row)
+      return message && message.id !== after.id ? [message] : []
+    })
   }
 
   /** The event's writes, as commands. */
@@ -354,7 +422,7 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
       const id = String(m.id)
       const created = change.message!.created
       const meta: Meta = { re: m.re, c: m.channel, t: m.text.toLowerCase(), ca: Date.parse(m.createdAt), d: m.deleted }
-      out.push(['HSET', k.messages, id, JSON.stringify(m)], ['HSET', k.metas, id, JSON.stringify(meta)])
+      out.push(['HSET', k.messages, id, JSON.stringify(m)], ['HSET', k.metas, id, luaJson(meta)])
       out.push(['ZADD', k.versions(id), String(event.index), String(event.index)], ['HSET', k.versionData, String(event.index), JSON.stringify(m)])
       if (created) {
         out.push(['HSET', k.events, event.id, id], ['SADD', k.channels, m.channel])
@@ -399,7 +467,9 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
 
   async function commit(event: BoardEvent, mode: 'next' | 'any'): Promise<boolean> {
     const id = concernedMessageId(event)
-    const [read, syncRead] = await Promise.all([id === null ? null : before(event, id), syncBefore(event)])
+    const found = await before(event, id, mode)
+    if (!found) return false
+    const { read, sync: syncRead } = found
     const change = read ? project(read, event) : {}
     const replies = read ? await repliesOf(read, change) : []
     const ops = writes(event, read, replies, change, projectSync(syncRead, event))
@@ -409,7 +479,7 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
       if (!slots.has(key)) slots.set(key, keys.push(key))
       return [command, slots.get(key)!, ...args]
     })
-    return Number(await evaluate(APPLY, keys, [event.index, mode, JSON.stringify(encoded)])) === 1
+    return Number(await evaluate(APPLY, keys, [event.index, mode, luaJson(encoded)])) === 1
   }
 
   /** A filter as groups of sets, each group needing one: the query scripts' input. */
@@ -438,8 +508,6 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
     },
 
     async apply(event) {
-      // Applied already, most often by the writer that wrote it: skip the reads.
-      if (Number((await call('GET', k.pos)) ?? 0) >= event.index) return
       await commit(event, 'any')
     },
 
@@ -487,7 +555,7 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
       let position: number | null = null
       const messages: Message[] = []
       for (;;) {
-        const [at, rows, next] = (await evaluate(MESSAGES, keys, [JSON.stringify(spec)])) as [unknown, unknown[], string | null]
+        const [at, rows, next] = (await evaluate(MESSAGES, keys, [luaJson(spec)])) as [unknown, unknown[], string | null]
         position ??= Number(at)
         for (const row of rows) messages.push(parse<Message>(row)!)
         spec.limit = page.limit - messages.length
@@ -508,14 +576,14 @@ export function redisTables(call: RedisCall, prefix: string, options: { scanBudg
         const under = channel?.subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${channel.path}/`)) : []
         const sets = channel ? [channel.path, ...under].map(k.channelThreads) : [k.threads]
         const spec = { limit: page.limit, asc, min: asc ? `(${page.after}` : '-inf' }
-        const [at, pairs] = (await evaluate(LATEST, [k.pos, ...sets], [JSON.stringify(spec)])) as [unknown, string[]]
+        const [at, pairs] = (await evaluate(LATEST, [k.pos, ...sets], [luaJson(spec)])) as [unknown, string[]]
         position = Number(at)
         for (let i = 0; i < pairs.length; i += 2) roots.set(pairs[i]!, Number(pairs[i + 1]))
       } else {
         const keys = [k.pos, k.messages, k.metas, k.summaries]
         const spec = { ...(await compile(filter, keys)), budget, max: '+inf' }
         for (;;) {
-          const [at, pairs, next] = (await evaluate(ROOTS, keys, [JSON.stringify(spec)])) as [unknown, Array<string | number>, string | null]
+          const [at, pairs, next] = (await evaluate(ROOTS, keys, [luaJson(spec)])) as [unknown, Array<string | number>, string | null]
           position ??= Number(at)
           for (let i = 0; i < pairs.length; i += 2) roots.set(String(pairs[i]), Number(pairs[i + 1]))
           if (next === null) break

@@ -30,7 +30,7 @@ import {
   type Message,
 } from '../contract/reducers.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
-import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, stripNul, type Attachment, type Author } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment, type Author } from '../contract/schemas.ts'
 import type { IdentityChallenge, LinkedAccount } from '../api/routes.ts'
 import { actorSeen } from '../server/actors.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
@@ -65,10 +65,11 @@ export type BoardBinding = {
 
 /** `files`: a message with files may have no text. */
 const clampText = (raw: string, files = false) => {
-  // A platform message can hold NUL, which the board can't store.
-  const text = stripNul(raw)
+  // A platform message can hold what the board can't store.
+  const text = toStorable(raw)
   const trimmed = text.trim() === '' ? (files ? '' : '(no text)') : text
-  return trimmed.length > MESSAGE_TEXT_MAX ? `${trimmed.slice(0, MESSAGE_TEXT_MAX - 1)}…` : trimmed
+  // The cut can split a character, so it's cleaned again.
+  return trimmed.length > MESSAGE_TEXT_MAX ? `${trimmed.slice(0, MESSAGE_TEXT_MAX - 1).toWellFormed()}…` : trimmed
 }
 
 /** A platform file the board couldn't bring over gets a line in the text instead. */
@@ -109,12 +110,24 @@ const ECHO_ATTEMPTS = 6
 /** Tries per file before it's noted instead: a retry repeats the whole message, so keep it short. */
 const FILE_ATTEMPTS = 3
 
+/** How long a webhook waits for the tables before it lets an event into the inbox anyway: platforms resend after about 3 seconds. */
+const GATE_WAIT_MS = 2_000
+
 const jsonSafe = (value: unknown): unknown => {
   try {
     return JSON.parse(JSON.stringify(value ?? null))
   } catch {
     return null
   }
+}
+
+/** Plain JSON with every string, keys too, as the board keeps it: platforms send what Postgres can't store. */
+const storableJson = <T>(value: T): T => {
+  if (typeof value === 'string') return toStorable(value) as T
+  if (Array.isArray(value)) return value.map(storableJson) as T
+  if (value !== null && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [toStorable(key), storableJson(item)])) as T
+  return value
 }
 
 /** Durable two-way sync between the board and its providers. */
@@ -206,15 +219,31 @@ export function createSyncEngine(options: {
   // --- inbound: platform → inbox --------------------------------------------------
 
   async function intake(key: string, received: ReceivedEvent) {
-    const { event, raw, dedupe } = ReceivedEvent.parse(received)
+    const { event, raw, dedupe } = ReceivedEvent.parse(storableJson({ ...received, raw: jsonSafe(received.raw) }))
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
     const map = await mappings(key)
-    if (!map.has(event.channel) && !(await bound().writes.reads.tables.threadOf(event.thread))) return
+    if (!map.has(event.channel) && !(await syncsThread(event.thread))) return
     const id = await idempotentId('vboard-inbox', key, dedupe)
     await inboxServer.session(inboxSession(event.channel)).append({
-      type: 'external.received', id, payload: { sync: key, event, raw: jsonSafe(raw) },
+      type: 'external.received', id, payload: { sync: key, event, raw },
     })
+  }
+
+  /**
+   * Whether the board syncs a platform thread outside its mapped channels. A receipt or a
+   * request that just synced it may not be in the tables yet, so a miss waits for them;
+   * if they're still catching up, the inbox decides, since it waits as long as it takes.
+   */
+  async function syncsThread(thread: string): Promise<boolean> {
+    const { reads } = bound().writes
+    if ((await reads.tables.threadOf(thread)) !== null) return true
+    try {
+      await reads.ensure(undefined, AbortSignal.timeout(GATE_WAIT_MS))
+    } catch {
+      return true
+    }
+    return (await reads.tables.threadOf(thread)) !== null
   }
 
   async function handleWebhook(key: string, request: Request): Promise<Response> {
@@ -274,7 +303,8 @@ export function createSyncEngine(options: {
       const fetched = await platform.fetchLink(link).catch((error: unknown) => ({ snapshot: null, unavailable: describe(error) }))
       resolved.push({ url: link.url, message: null, snapshot: fetched.snapshot, unavailable: fetched.snapshot ? null : (fetched.unavailable ?? 'unknown').slice(0, 300) })
     }
-    return resolved
+    // A snapshot is what a platform sent, cut to fit.
+    return storableJson(resolved)
   }
 
   /**
@@ -897,7 +927,7 @@ export function createSyncEngine(options: {
   const describe = (error: unknown): string => {
     const code = (error as { data?: { error?: unknown } } | null)?.data?.error
     const text = typeof code === 'string' ? code : error instanceof Error ? error.message : String(error)
-    return text.slice(0, 500) || 'unknown error'
+    return toStorable(text.slice(0, 500)) || 'unknown error'
   }
 
   async function settle(ctx: Ctx<'thread.synced' | 'message.posted'>, thread: string, failures: Failure[]) {

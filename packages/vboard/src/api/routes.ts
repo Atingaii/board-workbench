@@ -9,6 +9,7 @@ import {
   MESSAGE_TEXT_MAX,
   MessageId,
   MessageText,
+  storable,
 } from '../contract/schemas.ts'
 import type { BoardEvent } from '../contract/contract.ts'
 import type { Actor, Channel, Message } from '../contract/reducers.ts'
@@ -71,7 +72,7 @@ export const PostBody = z
     noSync: z.boolean().optional(),
     /** External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. */
     sync: z.array(z.string().min(3).max(300)).max(10).optional(),
-    id: z.string().min(1).max(200).optional(),
+    id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
   })

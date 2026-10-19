@@ -158,8 +158,13 @@ begin
 end
 $$`
 
-/** Postgres refuses NUL in text; nothing a reader filters on needs one. */
-const clean = (value: string) => value.replaceAll('\u0000', '')
+/**
+ * Postgres refuses NUL in text, and a lone surrogate in JSON: the board refuses
+ * both, and a log from before that may hold them. Nothing a reader filters on
+ * needs either, so keys and columns go without NUL and with U+FFFD for a lone
+ * surrogate, and the lookups that find them do the same.
+ */
+const clean = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
 
 /** A mention's term. Label keys start with a letter or digit, so it's never a label's. */
 const MENTION = '@'
@@ -264,11 +269,11 @@ export function sqlTables(db: Db): MessageTables {
 
   async function syncBefore(event: BoardEvent) {
     const reads = syncReads(event)
-    const [thread] = reads.thread === null ? [] : await db.all({ text: 'select data from vboard_sync_threads where thread = $1', values: [reads.thread] })
+    const [thread] = reads.thread === null ? [] : await db.all({ text: 'select data from vboard_sync_threads where thread = $1', values: [clean(reads.thread)] })
     const [copy] =
       reads.copy === null
         ? []
-        : await db.all({ text: 'select data from vboard_copies where message_id = $1 and target = $2', values: reads.copy })
+        : await db.all({ text: 'select data from vboard_copies where message_id = $1 and target = $2', values: [reads.copy[0], clean(reads.copy[1])] })
     return {
       thread: thread ? (JSON.parse(String(thread.data)) as SyncedThread) : undefined,
       copy: copy ? (JSON.parse(String(copy.data)) as ExternalCopy) : undefined,
@@ -279,7 +284,7 @@ export function sqlTables(db: Db): MessageTables {
   function syncPayload(change: SyncChange) {
     if (!change.thread && !change.externalThreads.length && !change.copies.length && !change.externalMessages.length) return null
     return {
-      thread: change.thread ? { key: change.thread.key, data: JSON.stringify(change.thread.data) } : null,
+      thread: change.thread ? { key: clean(change.thread.key), data: JSON.stringify(change.thread.data) } : null,
       external_threads: change.externalThreads.map(([external, thread]) => [clean(external), clean(thread)]),
       copies: change.copies.map(([message, target, copy]) => [message, clean(target), JSON.stringify(copy)]),
       external_messages: change.externalMessages.map(([key, message]) => [clean(key), message]),
@@ -425,7 +430,7 @@ order by r.at ${order} limit ${p.add(page.limit)}`,
     },
 
     async byEventId(eventId) {
-      const [found] = await db.all({ text: 'select data from vboard_messages where event_id = $1', values: [eventId] })
+      const [found] = await db.all({ text: 'select data from vboard_messages where event_id = $1', values: [clean(eventId)] })
       return parse(found)
     },
 
@@ -474,12 +479,12 @@ where v.message_id in (${p.list([...new Set(ids)])})
     },
 
     async syncOf(thread) {
-      const [found] = await db.all({ text: 'select data from vboard_sync_threads where thread = $1', values: [thread] })
+      const [found] = await db.all({ text: 'select data from vboard_sync_threads where thread = $1', values: [clean(thread)] })
       return found ? (JSON.parse(String(found.data)) as SyncedThread) : null
     },
 
     async threadOf(external) {
-      const [found] = await db.all({ text: 'select thread from vboard_external_threads where external = $1', values: [external] })
+      const [found] = await db.all({ text: 'select thread from vboard_external_threads where external = $1', values: [clean(external)] })
       return found ? String(found.thread) : null
     },
 
@@ -502,7 +507,7 @@ where v.message_id in (${p.list([...new Set(ids)])})
     async messageOf(externalThread, platformMessage) {
       const [found] = await db.all({
         text: 'select message_id from vboard_external_messages where key = $1',
-        values: [externalMessageKey(externalThread, platformMessage)],
+        values: [clean(externalMessageKey(externalThread, platformMessage))],
       })
       return found ? Number(found.message_id) : null
     },

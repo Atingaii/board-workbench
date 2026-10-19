@@ -273,6 +273,29 @@ function conformance(open: () => Promise<MessageTables>) {
     await tables.close()
   })
 
+  it('apply an event that holds NUL or a lone surrogate, and still find it', async () => {
+    // The board refuses both now; a log from before may hold them, and a script or a jsonb that can't take one would stop the tables.
+    const by = AUTHORS[0]
+    const odd = 'a\u0000b \ud800 c\udc00'
+    const events = [
+      { type: 'message.posted', id: `p${odd}`, payload: { channel: 'dev', text: `naïve ${odd}`, re: null, replyTo: null, thread: `p${odd}`, labels: { kind: odd }, noSync: false, mentions: [], by, origin: { channel: 'slack:C9', thread: `slack:C9:${odd}`, subthread: null, message: `${odd}.0`, context: null }, from: 'slack' } },
+      { type: 'message.posted', id: 'r', payload: { channel: 'dev', text: odd, re: 1, replyTo: null, thread: `p${odd}`, labels: {}, noSync: false, mentions: [], by, origin: null, from: null } },
+      { type: 'labels.changed', id: 'l', payload: { id: 1, thread: `p${odd}`, by, set: { tag: odd }, unset: [] } },
+      { type: 'thread.synced', id: 's', payload: { thread: `p${odd}`, target: `slack:C1:${odd}`, cause: 'request', by } },
+      { type: 'message.synced', id: 'd', payload: { id: 2, thread: `p${odd}`, target: `slack:C1:${odd}`, external: { thread: `slack:C1:${odd}`, message: `${odd}.9` } } },
+      { type: 'message.deleted', id: 'x', payload: { id: 2, thread: `p${odd}`, by, from: null } },
+    ].map((event, i) => ({ ...event, index: i + 1, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString() }) as unknown as BoardEvent)
+    const tables = await applied(events)
+    const { messages } = fold(events)
+    expect(await tables.position()).toBe(events.length)
+    for (const message of Object.values(messages.byId)) expect(await tables.message(message.id)).toEqual(message)
+    expect(await tables.byEventId(`p${odd}`)).toEqual(messages.byId[1])
+    expect(await tables.threadOf(`slack:C9:${odd}`)).not.toBeNull()
+    expect((await tables.messages({ text: 'naïve' }, { limit: 10 })).messages.map((m) => m.id)).toEqual([1])
+    expect((await tables.threads({ labels: [{ key: 'kind', values: null }] }, { limit: 10 })).threads.map((t) => t.root.id)).toEqual([1])
+    await tables.close()
+  })
+
   it('apply each event once, however many times it is handed over', async () => {
     const events = history(6, 120)
     const tables = await open()

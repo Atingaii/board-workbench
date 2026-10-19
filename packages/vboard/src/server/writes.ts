@@ -134,9 +134,9 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   }
 
   const chain = middlewareFor(ctx, input)
-  if (chain && id !== undefined) {
-    // A retry of a write that landed: what's on the board stands, whatever the middleware would say now.
-    const landed = await ctx.reads.byEventId(id)
+  if (chain && input.id !== undefined) {
+    // A retry of a write that landed (only a caller's own ID can be one): what's on the board stands, whatever the middleware would say now.
+    const landed = await ctx.reads.byEventId(input.id)
     if (landed) {
       // Only the same author's post in the same place is a retry. Text and labels can't tell:
       // the middleware may have changed them, and edits may have since.
