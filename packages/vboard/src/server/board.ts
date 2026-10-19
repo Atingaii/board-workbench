@@ -74,8 +74,8 @@ export type BoardOptions = {
    *
    * Or a function, `(request) => ({ id, kind, handle, can })`, that replaces the built-in
    * verifier: a host's own credentials, for a host serving many teams' boards. Nothing
-   * else is trusted then, not the board's own project nor any token's audience. Throw,
-   * or return a `Response`, to reject.
+   * else is trusted then, not the board's own project nor any token's audience. To reject,
+   * return or throw a `Response`.
    */
   access?: readonly AccessRule[] | HostAccess
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */

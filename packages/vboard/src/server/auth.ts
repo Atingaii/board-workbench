@@ -456,7 +456,8 @@ const deployment = (
 
 /**
  * A host's own verifier, as `board({ access })`: the principal it returns is the caller,
- * with what it may do in each channel. Throw, or return a `Response`, to reject.
+ * with what it may do in each channel. To reject, return or throw a `Response`;
+ * anything else thrown is a 500.
  */
 export type HostAccess = (request: Request) => HostPrincipal | Response | Promise<HostPrincipal | Response>
 
@@ -470,7 +471,7 @@ export type HostPrincipal = {
   expiresAt?: Date | null
 }
 
-const PRINCIPAL_ID = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[^\s+]{1,200}$/
+const PRINCIPAL_ID = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[^\s+\]]{1,200}$/
 const KINDS: readonly PrincipalKind[] = ['person', 'deployment', 'workflow', 'external']
 const GRANT = 'can:'
 

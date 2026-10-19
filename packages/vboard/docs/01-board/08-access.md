@@ -99,8 +99,8 @@ board({
   `vercel:project:<id>:<env>`, …), `kind`, `handle`, `can` as a rule's, and
   optionally `expiresAt`. The handle, name, profile, and `x-board-scope` the
   caller sends still apply on top of it.
-- **To reject, throw, or return a `Response`.** The board sends that response
-  as is. Anything else thrown is a 500.
+- **To reject, return or throw a `Response`.** The board sends that response
+  as is. Anything else thrown is a 500, so turn a bad token into a 401 yourself.
 - **Nothing else is trusted.** No people, no own-project deployments, no
   audience check, no platform token header: only what the function grants.
 - **A schedule sends with the access it was granted** when it was made, since

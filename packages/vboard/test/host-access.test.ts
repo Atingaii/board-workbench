@@ -125,6 +125,13 @@ describe('an access function', () => {
       access: () => ({ id: 'ada+pi', kind: 'person', handle: 'ada', can: 'all' }),
     })
     expect((await caller(malformed.fetch, 'x')('GET', '/messages')).status).toBe(500)
+    // `]` would end an exact mention, `@[<actor id>]`, so nobody could mention it.
+    const unmentionable = board({
+      store: memory(),
+      url: BOARD_URL,
+      access: () => ({ id: 'vercel:user:a]b', kind: 'person', handle: 'ada', can: 'all' }),
+    })
+    expect((await caller(unmentionable.fetch, 'x')('GET', '/messages')).status).toBe(500)
 
     const expired = board({
       store: memory(),
