@@ -430,11 +430,15 @@ export function board(options: BoardOptions = {}) {
   }
 
   engine?.bind({ session, writes, clientAs })
-  // Under a host's function, only what it granted sends: a schedule made under the
-  // built-in verifier, before the board switched, is revoked rather than trusted.
+  // A schedule sends only under the verifier that made it: one from before the board
+  // switched to or from a host's function is revoked rather than trusted. The board's
+  // own code (`vboard:`, which a host's function can't return) sends under either.
   schedules.bind({
     writes,
-    accessNow: host ? (principal) => (principal.facts?.issuer === 'host' ? accessNow(principal) : Promise.resolve(null)) : accessNow,
+    accessNow: (principal) =>
+      principal.id.startsWith('vboard:') || (principal.facts?.issuer === 'host') === (host !== null)
+        ? accessNow(principal)
+        : Promise.resolve(null),
   })
   watchers?.bind({ clientAs })
 

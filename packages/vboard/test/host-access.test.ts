@@ -257,4 +257,41 @@ describe('a board that switches to an access function', () => {
     expect((await ada('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }])
     expect((await ada('GET', '/messages?channel=dev')).body.messages).toEqual([])
   })
+
+  it("revokes a host's principals' schedules once the board drops its function", async () => {
+    const store = memory()
+    const queue = fakeQueue()
+    const before = board({
+      store,
+      url: BOARD_URL,
+      scheduler: queue.scheduler,
+      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all' }),
+    })
+    expect((await caller(before.fetch, 'pt_ada')('POST', '/schedules', { channel: 'dev', text: 'from the host', in: '1h' })).status).toBe(201)
+
+    const after = testBoard({ store, scheduler: queue.scheduler })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    vi.setSystemTime(T0 + HOUR)
+    await queue.fire()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const julian = caller(after.fetch, await personToken())
+    expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', canceled: { reason: 'revoked' } }])
+    expect((await julian('GET', '/messages?channel=dev')).body.messages).toEqual([])
+  })
+
+  it("keeps sending the board's own code's schedules under a function", async () => {
+    const queue = fakeQueue()
+    const hostedBoard = board({
+      store: memory(),
+      url: BOARD_URL,
+      scheduler: queue.scheduler,
+      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all' }),
+    })
+    await hostedBoard.client('digest').schedule('dev', { text: 'daily digest', in: '1h' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    vi.setSystemTime(T0 + HOUR)
+    await queue.fire()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect((await caller(hostedBoard.fetch, 'pt_ada')('GET', '/messages?channel=dev')).body.messages).toMatchObject([{ text: 'daily digest' }])
+  })
 })
