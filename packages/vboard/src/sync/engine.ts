@@ -38,9 +38,11 @@ import { actorSeen } from '../server/actors.ts'
 import { afterRetry } from '../server/attempts.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
+import { FULL_ACCESS, type Permission } from '../server/access.ts'
 import type { BoardSession } from '../server/board.ts'
 import { badRequest, forbidden, HttpError, notFound } from '../server/errors.ts'
 import {
+  trusted,
   writeDelete,
   writeEdit,
   writeLabels,
@@ -48,6 +50,7 @@ import {
   writePost,
   writeReaction,
   type Identity,
+  type PostInput,
   type WriteContext,
   type WriteOrigin,
 } from '../server/writes.ts'
@@ -233,7 +236,7 @@ export function createSyncEngine(options: {
   // --- inbound: inbox → board -------------------------------------------------------
 
   const externalIdentity = (author: { id: string; handle: string; name: string; avatar: string | null }): Identity => {
-    const principal: Principal = { id: author.id, kind: 'external', handle: author.handle, can: 'all', expiresAt: null }
+    const principal: Principal = { id: author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
     return {
       principal,
       author: { actor: author.id, principal: author.id, profile: null, session: null },
@@ -517,6 +520,9 @@ export function createSyncEngine(options: {
     const threadKey = sync.byExternalThread[event.thread]
     const rootId = threadKey ? sync.threads[threadKey]?.root : undefined
     const writeId = (n: number) => idempotentId('vboard-inbound', trigger.id, String(n))
+    // Sync is the owner's code, so it has full access; each write is still proved against the channel it lands in.
+    const post = async (input: Omit<PostInput, 'proofs'>) => writePost(writes, { ...input, proofs: await trusted.post(writes, input) })
+    const authorized = <P extends Permission>(permission: P, id: number) => trusted.message(writes, permission, id)
     const result = (message: { id: number; re: number | null }): SyncResult => ({ root: message.re ?? message.id, message: message.id })
     const labels = (defaults: Record<string, string> = {}) => {
       const merged = { ...defaults, ...overrides.labels }
@@ -536,7 +542,7 @@ export function createSyncEngine(options: {
       const root = messages.byId[id]
       const set = Object.fromEntries(Object.entries(overrides.labels ?? {}).filter(([key, value]) => root?.labels[key] !== value))
       const unset = (overrides.unset ?? []).filter((key) => root?.labels[key] !== undefined)
-      if (Object.keys(set).length || unset.length) await writeLabels(writes, { identity, id, set, unset })
+      if (Object.keys(set).length || unset.length) await writeLabels(writes, { identity, authorized: await authorized('label', id), set, unset })
     }
 
     switch (event.kind) {
@@ -561,22 +567,22 @@ export function createSyncEngine(options: {
         const reply = { ...base, ...(overrides.noSync ? { noSync: true } : {}) }
         if (rootId !== undefined) {
           await setExtraLabels(identity, rootId)
-          return result(await writePost(writes, { ...reply, re: rootId }))
+          return result(await post({ ...reply, re: rootId }))
         }
         const fetched = await platform.fetchRoot(native(event.thread))
         if (fetched === null) {
           const draft = rootDraft({ text: event.text, labels: {}, author: event.author, raw: trigger.payload.raw })
-          return result(await writePost(writes, { ...base, channel, text: clampText(withNotes(overrides.text ?? draft.text, notes), attachments.length > 0), labels: labels(draft.labels) }))
+          return result(await post({ ...base, channel, text: clampText(withNotes(overrides.text ?? draft.text, notes), attachments.length > 0), labels: labels(draft.labels) }))
         }
         const draft = rootDraft({ ...fetched, raw: fetched.raw ?? null })
-        const root = await writePost(writes, {
+        const root = await post({
           ...source,
           identity: externalIdentity(fetched.author), channel,
           text: clampText(draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `root:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(1),
         })
-        return result(await writePost(writes, { ...reply, re: root.id }))
+        return result(await post({ ...reply, re: root.id }))
       }
       case 'edited':
       case 'deleted':
@@ -586,23 +592,23 @@ export function createSyncEngine(options: {
         const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
         const identity = externalIdentity(author)
         if (rootId !== undefined) await setExtraLabels(identity, rootId)
-        if (event.kind === 'deleted') await writeDelete(writes, { identity, id, from: key, asAuthor: false })
+        if (event.kind === 'deleted') await writeDelete(writes, { identity, authorized: await authorized('post', id), from: key, asAuthor: false })
         else if (event.kind === 'edited') {
           const { state: messages } = await session.state(messagesReducer)
           const stored = messages.byId[id]
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
-          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { ...source, identity, id, text, from: key, asAuthor: false })
+          if (stored && !event.linksOnly && stored.text !== text) await writeEdit(writes, { ...source, identity, authorized: await authorized('post', id), text, from: key, asAuthor: false })
           const links = stored ? await resolveLinks(platform, event.links ?? [], stored.links) : []
-          if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, id, links, from: key })
+          if (stored && !sameLinks(links, stored.links)) await writeLinks(writes, { identity, authorized: await authorized('post', id), links, from: key })
         } else {
           if (platform.singleReaction) {
             const { state: messages } = await session.state(messagesReducer)
             const emoji = canonicalEmoji(event.emoji)
             for (const [held, actors] of Object.entries(messages.byId[id]?.reactions ?? {}))
               if (actors.includes(identity.actor.id) && !(event.added && held === emoji))
-                await writeReaction(writes, { identity, id, emoji: held, remove: true, from: key })
+                await writeReaction(writes, { identity, authorized: await authorized('react', id), emoji: held, remove: true, from: key })
           }
-          if (!platform.singleReaction || event.added) await writeReaction(writes, { identity, id, emoji: event.emoji, remove: !event.added, from: key })
+          if (!platform.singleReaction || event.added) await writeReaction(writes, { identity, authorized: await authorized('react', id), emoji: event.emoji, remove: !event.added, from: key })
         }
         return { root: rootId ?? null, message: id }
       }
@@ -617,19 +623,19 @@ export function createSyncEngine(options: {
           const owned = (key: string) => event.owns?.some((prefix) => key.startsWith(prefix)) ?? false
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
-          if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, id: rootId, set, unset })
-          if (event.reply) return result(await writePost(writes, { ...source, identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
+          if (root && !root.deleted && (Object.keys(set).length || unset.length)) await writeLabels(writes, { identity, authorized: await authorized('label', rootId), set, unset })
+          if (event.reply) return result(await post({ ...source, identity, re: rootId, text: clampText(overrides.text ?? event.reply!), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
           return { root: rootId, message: createdHere ? rootId : null }
         }
         if (!event.createRoot) return { root: null, message: null }
         const draft = rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw: trigger.payload.raw })
-        const root = await writePost(writes, {
+        const root = await post({
           ...source,
           identity, channel, text: clampText(event.reply ? draft.text : overrides.text ?? draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${trigger.id}`, context: null },
           from: key, lenientMentions: true, id: await writeId(0),
         })
-        if (event.reply) return result(await writePost(writes, { ...source, identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
+        if (event.reply) return result(await post({ ...source, identity, re: root.id, text: clampText(overrides.text ?? event.reply), from: key, lenientMentions: true, ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
         return result(root)
       }
     }
