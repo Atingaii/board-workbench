@@ -430,7 +430,12 @@ export function board(options: BoardOptions = {}) {
   }
 
   engine?.bind({ session, writes, clientAs })
-  schedules.bind({ writes, accessNow })
+  // Under a host's function, only what it granted sends: a schedule made under the
+  // built-in verifier, before the board switched, is revoked rather than trusted.
+  schedules.bind({
+    writes,
+    accessNow: host ? (principal) => (principal.facts?.issuer === 'host' ? accessNow(principal) : Promise.resolve(null)) : accessNow,
+  })
   watchers?.bind({ clientAs })
 
   async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {

@@ -105,7 +105,9 @@ board({
   audience check, no platform token header: only what the function grants.
 - **A schedule sends with the access it was granted** when it was made, since
   there's no request to ask the function again. It's canceled `revoked` once
-  that grant's `expiresAt` passes.
+  that grant's `expiresAt` passes, so set `expiresAt` to when the caller's
+  credential ends: without it, a schedule keeps its grant for as long as it
+  repeats. Schedules made before a board switched to a function are revoked.
 - **One board per team.** Create a `board()` for each team and cache them.
   Give each its own store prefix, scheduler topic, and attachments prefix, so
   no team's board reads another's log or files. A board holds no timers or

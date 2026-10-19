@@ -3,7 +3,7 @@ import { memory } from 'experimental-a2/store-memory'
 import { board, type HostPrincipal, type BoardOptions } from '../src/server/index.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
 import { fakeQueue } from './queue.ts'
-import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, testAuth } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, testAuth, testBoard } from './harness.ts'
 
 /** A host's credentials: opaque platform tokens it verifies itself, each naming a team. */
 const PLATFORM: Record<string, { team: string; principal: HostPrincipal }> = {
@@ -223,5 +223,38 @@ describe("schedules from an access function's principal", () => {
     grant.until = Date.now() + HOUR
     expect((await ada('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }])
     expect((await ada('GET', '/messages?channel=dev/standup')).body.messages).toEqual([])
+  })
+})
+
+describe('a board that switches to an access function', () => {
+  const T0 = Date.parse('2026-10-07T12:00:00.000Z')
+  const HOUR = 3_600_000
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it("revokes schedules the built-in verifier's callers made, instead of trusting them", async () => {
+    const store = memory()
+    const queue = fakeQueue()
+    const before = testBoard({ store, scheduler: queue.scheduler })
+    const julian = caller(before.fetch, await personToken())
+    expect((await julian('POST', '/schedules', { channel: 'dev', text: 'from before', in: '1h' })).status).toBe(201)
+
+    // The same log, now behind a host that only knows Ada.
+    const after = board({
+      store,
+      url: BOARD_URL,
+      scheduler: queue.scheduler,
+      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all' }),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    vi.setSystemTime(T0 + HOUR)
+    await queue.fire()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const ada = caller(after.fetch, 'pt_ada')
+    expect((await ada('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }])
+    expect((await ada('GET', '/messages?channel=dev')).body.messages).toEqual([])
   })
 })
