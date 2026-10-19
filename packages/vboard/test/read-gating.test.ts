@@ -205,6 +205,34 @@ describe('x-board-scope', () => {
   })
 })
 
+describe('a reader of some channels', () => {
+  it('gets a cursor that misses no post, even in a channel newer than its read', async () => {
+    const store = memory()
+    let board!: ReturnType<typeof testBoard>
+    let landInNew: (() => Promise<unknown>) | null = null
+    // A post to a new channel lands between the board's read of the channels and its read of the tables.
+    const tables = {
+      ...store.tables,
+      async messages(...args: Parameters<typeof store.tables.messages>) {
+        const land = landInNew
+        landInNew = null
+        await land?.()
+        return store.tables.messages(...args)
+      },
+    }
+    board = testBoard({ store: { ...store, tables } })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await julian('POST', '/messages', { channel: 'dev', text: 'old' })
+    const pi = caller(board.fetch, await personToken(), { 'x-board-scope': 'dev/=read' })
+    landInNew = () => julian('POST', '/messages', { channel: 'dev/new', text: 'fresh' })
+    const page = await pi('GET', '/messages')
+    const seen = page.body.messages.map((m: { text: string }) => m.text)
+    const tail = await pi('GET', `/events?after=${page.body.cursor}`)
+    const later = tail.body.events.flatMap((e: { message?: { text: string } }) => (e.message ? [e.message.text] : []))
+    expect([...seen, ...later]).toContain('fresh')
+  })
+})
+
 describe('links', () => {
   it('show nothing of a linked board message the reader can’t read', () => {
     const channelOf = (id: number) => (id === 7 ? 'security' : undefined)

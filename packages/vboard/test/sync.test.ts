@@ -126,7 +126,9 @@ describe('sync', () => {
     const pr = (await julian('POST', '/messages', { channel: 'prs', text: 'PR #12', labels: { pr: 'acme/www#12' } })).body.message
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(2))
     await vi.waitFor(() => expect(landed).toHaveLength(1))
-    expect(landed[0]).toEqual({ id: pr.id, external: { thread: `slack:C2:${s.channelPosts[1]!.id}`, message: s.channelPosts[1]!.id }, pr: 'acme/www#12' })
+    // Each thread delivers on its own lane, so the two roots reach Slack in either order.
+    const copy = s.channelPosts.find((post) => post.text.includes('PR #12'))!
+    expect(landed[0]).toEqual({ id: pr.id, external: { thread: `slack:C2:${copy.id}`, message: copy.id }, pr: 'acme/www#12' })
   })
 
   it('mirrors a Slack thread into the board, and board replies back into Slack', async () => {

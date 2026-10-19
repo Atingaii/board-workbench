@@ -379,6 +379,9 @@ export function sqlTables(db: Db): MessageTables {
 
   /** Claims `event` (only if it's the next one, with `next`) and writes what it changes, atomically. */
   async function commit(event: BoardEvent, next: boolean): Promise<boolean> {
+    // Only once the event before it has landed: until then, what it reads could be older than the
+    // state it would fold onto. After, only this event moves the position, and its claim checks that.
+    if (next && position(await db.all(positionSql)) !== event.index - 1) return false
     const id = concernedMessageId(event)
     const [change, sync] = await Promise.all([
       id === null ? {} : before(event, id).then((read) => project(read, event)),

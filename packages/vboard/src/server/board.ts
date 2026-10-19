@@ -384,16 +384,22 @@ export function board(options: BoardOptions = {}) {
     return (await reads.tables.withAttachment(id)).some((message) => principal.access.readable(message.channel))
   }
 
-  /** `filter`, narrowed to the channels `access` reads among those the log has. */
-  async function readable(filter: MessageFilter, access: Access): Promise<MessageFilter> {
-    if (access.readsAll) return filter
-    return readableFilter(filter, Object.keys((await session.state(channelsReducer)).state), access)
+  /**
+   * `filter`, narrowed to the channels `access` reads among those the log has,
+   * and the index that list reflects: a read's cursor goes no further, or the
+   * first post in a channel newer than the list would be in neither the page
+   * nor the feed after it.
+   */
+  async function readable(filter: MessageFilter, access: Access): Promise<{ filter: MessageFilter; through: number }> {
+    if (access.readsAll) return { filter, through: Number.POSITIVE_INFINITY }
+    const { state, index } = await session.state(channelsReducer)
+    return { filter: readableFilter(filter, Object.keys(state), access), through: index }
   }
 
   /** Who wrote, was mentioned, or reacted in the channels `access` reads, a page at a time. */
   async function actorsIn(access: Access): Promise<Set<string>> {
     const ids = new Set<string>()
-    const filter = await readable({}, access)
+    const { filter } = await readable({}, access)
     for (let before: number | undefined; ; ) {
       const { messages } = await reads.messages(filter, { limit: 500, ...(before !== undefined ? { before } : {}) })
       for (const message of messages) {
@@ -562,19 +568,19 @@ export function board(options: BoardOptions = {}) {
         case 'messages': {
           const query = MessagesQuery.parse(queryObject(url))
           const { state: actors } = await session.state(actorsReducer)
-          const filter = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+          const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
           const { messages, position } = await reads.messages(filter, {
             ...(query.before !== undefined ? { before: query.before } : {}),
             ...(query.after !== undefined ? { after: query.after } : {}),
             limit: query.limit ?? 50,
           })
           const reader = await reads.reader(principal.access, messages)
-          return json({ messages: messages.map((m) => view(m, actors, reader)), cursor: position })
+          return json({ messages: messages.map((m) => view(m, actors, reader)), cursor: Math.min(position, through) })
         }
         case 'threads': {
           const query = ThreadsQuery.parse(queryObject(url))
           const { state: actors } = await session.state(actorsReducer)
-          const filter = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+          const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
           const { threads, position } = await reads.threads(filter, {
             ...(query.after !== undefined ? { after: query.after } : {}),
             limit: query.limit ?? 50,
@@ -582,7 +588,7 @@ export function board(options: BoardOptions = {}) {
           const reader = await reads.reader(principal.access, threads.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
           return json({
             threads: threads.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
-            cursor: position,
+            cursor: Math.min(position, through),
           })
         }
         case 'message': {

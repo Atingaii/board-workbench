@@ -454,4 +454,34 @@ afterAll(async () => {
   }
 })
 
+describe('the SQL tables', () => {
+  it("never fold a writer's event onto what it read before the event ahead of it landed", async () => {
+    const by = AUTHORS[0]
+    const at = (index: number) => new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString()
+    const events = [
+      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: 'secret', re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, mentions: [], by, origin: null, from: null } },
+      { type: 'message.deleted', id: 'd', payload: { id: 1, thread: 'p', by, from: null } },
+      { type: 'labels.changed', id: 'l', payload: { id: 1, thread: 'p', by, set: { kind: 'bug' }, unset: [] } },
+    ].map((event, i) => ({ ...event, index: i + 1, createdAt: at(i) }) as unknown as BoardEvent)
+    const db = sqliteDb(':memory:')
+    const consumer = sqlTables(db)
+    await consumer.apply(events[0]!)
+    // The consumer lands the delete right after the writer's first read.
+    let ahead: (() => Promise<void>) | null = () => consumer.apply(events[1]!)
+    const writer = sqlTables({
+      ...db,
+      async all(query) {
+        const rows = await db.all(query)
+        const land = ahead
+        ahead = null
+        await land?.()
+        return rows
+      },
+    })
+    if (!(await writer.applyNext(events[2]!))) await consumer.apply(events[2]!)
+    expect(await consumer.message(1)).toEqual(fold(events).messages.byId[1])
+    await consumer.close()
+  })
+})
+
 for (const backend of BACKENDS) describe.skipIf(!backend.enabled)(`the tables on ${backend.name}`, () => conformance(backend.open))
