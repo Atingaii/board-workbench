@@ -33,21 +33,34 @@ redis.call('SET', KEYS[1], ARGV[1])
 return 1
 `
 
-/** The script's shared part: does the message match every group (one set each) and the text? */
+/**
+ * The scripts' shared part: which of a page of IDs match every group (one of
+ * its sets each) and the text. Upstash bills each command a script runs, so a
+ * page costs one ZMSCORE per set and one HMGET for the text, whatever its size.
+ */
 const MATCHES = `
-local function matches(spec, id)
+local function matching(spec, from, ids)
+  local ok = {}
+  for i = 1, #ids do ok[i] = true end
   for _, group in ipairs(spec.groups) do
-    local found = false
-    for _, key in ipairs(group) do
-      if redis.call('ZSCORE', KEYS[key], id) then found = true break end
+    -- The set the page came from holds every ID in it.
+    if not (#group == 1 and KEYS[group[1]] == from) then
+      local any = {}
+      for _, key in ipairs(group) do
+        local scores = redis.call('ZMSCORE', KEYS[key], unpack(ids))
+        for i = 1, #ids do if scores[i] then any[i] = true end end
+      end
+      for i = 1, #ids do if not any[i] then ok[i] = false end end
     end
-    if not found then return false end
   end
+  local metas = nil
   if spec.text ~= cjson.null then
-    local meta = cjson.decode(redis.call('HGET', KEYS[3], id))
-    if not string.find(meta.t, spec.text, 1, true) then return false end
+    metas = redis.call('HMGET', KEYS[3], unpack(ids))
+    for i = 1, #ids do
+      if ok[i] and not string.find(cjson.decode(metas[i]).t, spec.text, 1, true) then ok[i] = false end
+    end
   end
-  return true
+  return ok, metas
 end
 local function driver(spec)
   local best, size = KEYS[spec.fallback], nil
@@ -61,10 +74,11 @@ end
 
 /**
  * Messages that match, walking the smallest index set newest first (oldest first
- * with \`asc\`) and testing the others, until \`limit\` or until it has read
- * \`budget\` IDs: Redis runs nothing else while a script runs, so a long read
- * goes in several. Returns the position, the matches, and where to go on from
- * (false when the set ran out). KEYS: position, messages, metas, then the sets.
+ * with \`asc\`) and testing the others a page at a time, until \`limit\` or until
+ * it has read \`budget\` IDs: Redis runs nothing else while a script runs, so a
+ * long read goes in several. Returns the position, the matches, and where to go
+ * on from (false when the set ran out). KEYS: position, messages, metas, then
+ * the sets.
  */
 const MESSAGES = `${MATCHES}
 local spec = cjson.decode(ARGV[1])
@@ -79,10 +93,11 @@ while n < spec.limit do
   if spec.asc then ids = redis.call('ZRANGEBYSCORE', from, low, high, 'LIMIT', 0, count)
   else ids = redis.call('ZREVRANGEBYSCORE', from, high, low, 'LIMIT', 0, count) end
   if #ids == 0 then more = false break end
-  for _, id in ipairs(ids) do
+  local ok = matching(spec, from, ids)
+  for i, id in ipairs(ids) do
     read = read + 1
     if spec.asc then low = '(' .. id else high = '(' .. id end
-    if matches(spec, id) then
+    if ok[i] then
       n = n + 1
       found[n] = id
       if n >= spec.limit then break end
@@ -113,28 +128,49 @@ return { redis.call('GET', KEYS[1]) or '0', roots }
 `
 
 /**
- * The threads with a message that matches: every match's root and its latest
- * reply, reading at most \`budget\` IDs. Returns the position, the roots and
- * their latest replies, and where to go on from. KEYS: position, messages,
+ * The threads with a message that matches: every match's root, once, and its
+ * latest reply, reading at most \`budget\` IDs. Returns the position, the roots
+ * and their latest replies, and where to go on from. KEYS: position, messages,
  * metas, summaries, then the sets.
  */
 const ROOTS = `${MATCHES}
 local spec = cjson.decode(ARGV[1])
 local from = driver(spec)
-local roots, read, high = {}, 0, spec.max
+local roots, seen, read, high = {}, {}, 0, spec.max
 while read < spec.budget do
   local ids = redis.call('ZREVRANGEBYSCORE', from, high, '-inf', 'LIMIT', 0, math.min(200, spec.budget - read))
   if #ids == 0 then return { redis.call('GET', KEYS[1]) or '0', roots, false } end
-  for _, id in ipairs(ids) do
-    read = read + 1
-    if matches(spec, id) then
-      local meta = cjson.decode(redis.call('HGET', KEYS[3], id))
+  local ok, metas = matching(spec, from, ids)
+  local matched = {}
+  for i, id in ipairs(ids) do if ok[i] then matched[#matched + 1] = id end end
+  if #matched > 0 then
+    if metas then
+      local byId = {}
+      for i, id in ipairs(ids) do byId[id] = metas[i] end
+      metas = {}
+      for j, id in ipairs(matched) do metas[j] = byId[id] end
+    else
+      metas = redis.call('HMGET', KEYS[3], unpack(matched))
+    end
+    local fresh = {}
+    for j, id in ipairs(matched) do
+      local meta = cjson.decode(metas[j])
       local root = id
       if meta.re ~= cjson.null then root = tostring(meta.re) end
-      roots[#roots + 1] = root
-      roots[#roots + 1] = cjson.decode(redis.call('HGET', KEYS[4], root)).at
+      if not seen[root] then
+        seen[root] = true
+        fresh[#fresh + 1] = root
+      end
+    end
+    if #fresh > 0 then
+      local summaries = redis.call('HMGET', KEYS[4], unpack(fresh))
+      for j, root in ipairs(fresh) do
+        roots[#roots + 1] = root
+        roots[#roots + 1] = cjson.decode(summaries[j]).at
+      end
     end
   end
+  read = read + #ids
   high = '(' .. ids[#ids]
 end
 return { redis.call('GET', KEYS[1]) or '0', roots, high }
@@ -142,22 +178,42 @@ return { redis.call('GET', KEYS[1]) or '0', roots, high }
 
 /** Each root, its reply count, and its latest reply (false when it has none). KEYS: messages, summaries. ARGV: the roots. */
 const THREAD_ROWS = `
-local out = {}
+local summaries = redis.call('HMGET', KEYS[2], unpack(ARGV))
+local lasts, slot = {}, {}
 for i, root in ipairs(ARGV) do
-  local summary = cjson.decode(redis.call('HGET', KEYS[2], root))
+  summaries[i] = cjson.decode(summaries[i])
+  if tostring(summaries[i].at) ~= root then
+    lasts[#lasts + 1] = tostring(summaries[i].at)
+    slot[i] = #lasts
+  end
+end
+local rows = redis.call('HMGET', KEYS[1], unpack(ARGV))
+local lastRows = {}
+if #lasts > 0 then lastRows = redis.call('HMGET', KEYS[1], unpack(lasts)) end
+local out = {}
+for i = 1, #ARGV do
   local last = false
-  if tostring(summary.at) ~= root then last = redis.call('HGET', KEYS[1], tostring(summary.at)) end
-  out[i] = { redis.call('HGET', KEYS[1], root), summary.n, last }
+  if slot[i] then last = lastRows[slot[i]] end
+  out[i] = { rows[i], summaries[i].n, last }
 end
 return out
 `
 
 /** Each message's latest version at or before ARGV[1]. KEYS: the version data, then each message's versions. */
 const AT = `
-local out = {}
+local versions, slot = {}, {}
 for i = 2, #KEYS do
   local found = redis.call('ZREVRANGEBYSCORE', KEYS[i], ARGV[1], '-inf', 'LIMIT', 0, 1)
-  if #found == 0 then out[i - 1] = false else out[i - 1] = redis.call('HGET', KEYS[1], found[1]) end
+  if #found > 0 then
+    versions[#versions + 1] = found[1]
+    slot[i - 1] = #versions
+  end
+end
+local data = {}
+if #versions > 0 then data = redis.call('HMGET', KEYS[1], unpack(versions)) end
+local out = {}
+for i = 1, #KEYS - 1 do
+  if slot[i] then out[i] = data[slot[i]] else out[i] = false end
 end
 return out
 `
