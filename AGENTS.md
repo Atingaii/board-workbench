@@ -60,10 +60,9 @@ reply in an existing thread rather than starting one.
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
   a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  The Redis namespace is `vboard-factory-3`, separate from the v0 feedback bot's
-  (`vboard-3`). Both are new with A2's consumers, whose Redis layout an existing
-  prefix can't take, as A2 0.17's was before; production's logs are copied over
-  from `-2` when it moves. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  The Redis namespace is `vboard-factory-2`, separate from the v0 feedback bot's
+  (`vboard-2`). A2 0.21 reads what 0.17 to 0.20 wrote under them; work they
+  hadn't finished when 0.21 deployed is dropped. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub

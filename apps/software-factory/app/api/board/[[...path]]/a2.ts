@@ -10,9 +10,8 @@ export const store = env
       url: process.env.KV_REST_API_URL!,
       token: process.env.KV_REST_API_TOKEN!,
       // One Redis serves every environment: a preview never touches production's log.
-      // `-3` for A2's consumers, whose Redis layout `-2` (A2 0.17's) can't take; production's log is
-      // copied over from `-2` when it moves, as `vboard-factory`'s was to `-2`.
-      keyPrefix: env === "production" ? "vboard-factory-3" : `vboard-factory-3:${env}`,
+      // `-2` since A2 0.17 changed its Redis layout; the log under `vboard-factory` was copied over.
+      keyPrefix: env === "production" ? "vboard-factory-2" : `vboard-factory-2:${env}`,
     })
   : undefined;
 
