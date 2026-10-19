@@ -6,6 +6,10 @@ export {
   githubActions,
   oidc,
   type AccessRule,
+  type HostAccess,
+  type HostPrincipal,
+  type Principal,
+  type PrincipalKind,
   type AuthOptions,
   type IssuerConfig,
 } from './auth.ts'

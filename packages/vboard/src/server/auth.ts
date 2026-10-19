@@ -5,7 +5,7 @@ import {
   type JWTPayload,
   type JWTVerifyGetKey,
 } from 'jose'
-import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can } from './access.ts'
+import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can, type Permission } from './access.ts'
 import { unauthorized, forbidden } from './errors.ts'
 
 /** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
@@ -30,7 +30,8 @@ type Claims = JWTPayload & Record<string, unknown>
 
 /** What a verified token said: its issuer and its claims, never the token itself. */
 export type TokenFacts = {
-  issuer: 'vercel' | 'github' | 'oidc'
+  /** `host`: a host's own `access` function verified the caller; its claims are the access it granted. */
+  issuer: 'vercel' | 'github' | 'oidc' | 'host'
   iss: string
   claims: Readonly<Record<string, string | number | boolean>>
   /**
@@ -377,7 +378,12 @@ export function createVerifier(options: {
    */
   async function accessNow(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null> {
     let access: Access = FULL_ACCESS
-    if (principal.kind !== 'person' && principal.kind !== 'external' && !principal.id.startsWith('vboard:')) {
+    if (principal.facts?.issuer === 'host') {
+      // No request to ask the host's function again: the access it granted, until it expires.
+      const granted = grantedBy(principal.facts)
+      if (!granted) return null
+      access = granted
+    } else if (principal.kind !== 'person' && principal.kind !== 'external' && !principal.id.startsWith('vboard:')) {
       const facts = principal.facts ?? factsFromId(principal.id)
       if (!facts) return null
       try {
@@ -447,3 +453,66 @@ const deployment = (
   expiresAt,
   facts,
 })
+
+/**
+ * A host's own verifier, as `board({ access })`: the principal it returns is the caller,
+ * with what it may do in each channel. Throw, or return a `Response`, to reject.
+ */
+export type HostAccess = (request: Request) => HostPrincipal | Response | Promise<HostPrincipal | Response>
+
+/** What a host's `access` function returns: a principal in the board's ID scheme, and its `can`. */
+export type HostPrincipal = {
+  /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, …: records keep their shape. */
+  id: string
+  kind: PrincipalKind
+  handle: string
+  can: Can
+  expiresAt?: Date | null
+}
+
+const PRINCIPAL_ID = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[^\s+]{1,200}$/
+const KINDS: readonly PrincipalKind[] = ['person', 'deployment', 'workflow', 'external']
+const GRANT = 'can:'
+
+/**
+ * Checks what a host's `access` function returned. A malformed principal is the host's
+ * bug, so it fails the request rather than letting a half-identity write.
+ */
+export function hostPrincipal(value: HostPrincipal): Principal {
+  const fail = (why: string): never => {
+    throw new TypeError(`access returned an invalid principal: ${why}`)
+  }
+  if (typeof value !== 'object' || value === null) fail('not an object')
+  if (typeof value.id !== 'string' || !PRINCIPAL_ID.test(value.id) || value.id.startsWith('vboard:'))
+    fail(`id must look like \`vercel:user:<id>\`, got ${JSON.stringify(value.id)}`)
+  if (!KINDS.includes(value.kind)) fail(`kind must be one of ${KINDS.join(', ')}`)
+  if (typeof value.handle !== 'string' || !/^\S{1,64}$/.test(value.handle)) fail('handle must be 1-64 characters, no spaces')
+  let access: Access
+  try {
+    access = compileAccess(value.can)
+  } catch (error) {
+    return fail(`can: ${(error as Error).message}`)
+  }
+  const expiresAt = value.expiresAt ?? null
+  if (expiresAt !== null && (!(expiresAt instanceof Date) || Number.isNaN(expiresAt.getTime()))) fail('expiresAt must be a Date or null')
+  if (expiresAt !== null && expiresAt.getTime() <= Date.now()) throw unauthorized('token expired')
+  // What a schedule keeps: the grant itself, one claim per pattern, and when it ends.
+  const claims: Record<string, string | number> = {}
+  for (const [pattern, permissions] of Object.entries(access.summary())) claims[GRANT + pattern] = permissions.join(',')
+  if (expiresAt !== null) claims.exp = Math.floor(expiresAt.getTime() / 1000)
+  return { id: value.id, kind: value.kind, handle: value.handle, access, expiresAt, facts: { issuer: 'host', iss: '', claims } }
+}
+
+/** The access a host granted, as a schedule kept it: null once it has expired. */
+function grantedBy(facts: TokenFacts): Access | null {
+  const { exp, ...rest } = facts.claims
+  if (typeof exp === 'number' && exp * 1000 <= Date.now()) return null
+  const can: Record<string, Permission[]> = {}
+  for (const [name, value] of Object.entries(rest))
+    if (name.startsWith(GRANT) && typeof value === 'string') can[name.slice(GRANT.length)] = value === '' ? [] : (value.split(',') as Permission[])
+  try {
+    return compileAccess(can)
+  } catch {
+    return null
+  }
+}
