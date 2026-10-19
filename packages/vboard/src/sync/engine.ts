@@ -35,6 +35,7 @@ import { fileSize, typeOf } from '../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, type Attachment, type Author } from '../contract/schemas.ts'
 import type { IdentityChallenge, LinkedAccount } from '../api/routes.ts'
 import { actorSeen } from '../server/actors.ts'
+import { afterRetry } from '../server/attempts.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import type { BoardSession } from '../server/board.ts'
@@ -901,7 +902,7 @@ export function createSyncEngine(options: {
 
   async function settle(ctx: Ctx<'thread.synced' | 'message.posted'>, thread: string, failures: Failure[]) {
     if (failures.length === 0) return
-    if (ctx.attempt < DELIVERY_ATTEMPTS) throw failures[0]!.error
+    if (ctx.attempt < DELIVERY_ATTEMPTS || afterRetry(ctx.attempt)) throw failures[0]!.error
     for (const { id, target, error } of failures) {
       console.error(`[vboard] gave up delivering #${id} to ${target}:`, describe(error))
       await ctx.session.append(`failed:${id}:${target}`, {

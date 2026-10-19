@@ -7,6 +7,7 @@ import { boardContract, watchContract, watchSession, type BoardEvent, type Board
 import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, type ParsedFilters } from './feed.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
+import { A2_TRIES, afterRetry } from './attempts.ts'
 
 /** What a watcher's `run` gets. */
 export type WatcherContext = {
@@ -64,7 +65,7 @@ const RUN_ATTEMPTS = 5
  * last one a watcher sees. Throws give up at RUN_ATTEMPTS, so getting this far
  * means runs keep dying, and the 10th records the failure without running.
  */
-const KILLED_ATTEMPTS = RUN_ATTEMPTS * 2
+const KILLED_ATTEMPTS = A2_TRIES
 
 const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
 
@@ -87,11 +88,12 @@ export async function runMatch(input: {
     console.error(`[vboard] watcher ${watcher.id} gave up on event #${event.index} after ${attempt} tries:`, error)
     await input.record({ matched: match.id, thread: match.payload.thread, error })
   }
-  if (attempt >= KILLED_ATTEMPTS) return giveUp(`its run was cut short ${attempt - 1} times (a timeout, or out of memory)`)
+  const early = !afterRetry(attempt)
+  if (early && attempt >= KILLED_ATTEMPTS) return giveUp(`its run was cut short ${attempt - 1} times (a timeout, or out of memory)`)
   try {
     await watcher.run({ event, board: input.board() })
   } catch (error) {
-    if (attempt < RUN_ATTEMPTS) throw error
+    if (!early || attempt < RUN_ATTEMPTS) throw error
     await giveUp(describe(error))
   }
 }
