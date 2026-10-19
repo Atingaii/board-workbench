@@ -2,8 +2,9 @@ import { consumer } from 'experimental-a2/server'
 import { boardContract, type BoardEvent } from '../contract/contract.ts'
 import type { Message } from '../contract/reducers.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
-import type { MessageTables } from '../store/types.ts'
+import type { MessageFilter, MessageTables, Page } from '../store/types.ts'
 import type { BoardSession } from './board.ts'
+import { waitUntil } from './wait-until.ts'
 
 /** Keeps the tables from the board's log, one event at a time, from the first. */
 export function tablesConsumer(tables: MessageTables) {
@@ -20,6 +21,19 @@ export type TablesConsumer = ReturnType<typeof tablesConsumer>
  * say which index they reflect.
  */
 export function createReads(tables: MessageTables, session: BoardSession, projection: TablesConsumer) {
+  /**
+   * The first list read on an instance starts the tables catching up, and doesn't wait: after a deploy
+   * that adds them, or on a quiet board, nothing else may have yet.
+   */
+  let catching: Promise<unknown> | null = null
+  function catchUp(): void {
+    if (catching) return
+    catching = session.consume(projection).catch(() => {
+      catching = null
+    })
+    waitUntil(catching)
+  }
+
   /** Waits until the tables have applied `index`, or the whole log when it's omitted. */
   async function ensure(index?: number, signal?: AbortSignal): Promise<void> {
     if (index !== undefined && (await tables.position()) >= index) return
@@ -49,8 +63,14 @@ export function createReads(tables: MessageTables, session: BoardSession, projec
       await ensure(undefined, signal)
       return tables.byEventId(eventId)
     },
-    messages: tables.messages.bind(tables),
-    threads: tables.threads.bind(tables),
+    messages(filter: MessageFilter, page: Page) {
+      catchUp()
+      return tables.messages(filter, page)
+    },
+    threads(filter: MessageFilter, page: Page) {
+      catchUp()
+      return tables.threads(filter, page)
+    },
   }
 }
 

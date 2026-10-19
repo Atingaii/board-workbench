@@ -168,7 +168,9 @@ behind. Three rules make that invisible:
   position in the log.
 - **Lists answer at once.** `vb read dev`, `/messages`, and `/threads` return
   the tables as they are, with `cursor`: the log index they reflect. The
-  [event feed](./05-reading.md) from that cursor on carries the rest.
+  [event feed](./05-reading.md) from that cursor on carries the rest. The
+  first list on each instance also starts the tables catching up, so a deploy
+  that adds them fills them from the log even before anyone writes.
 
 ## FAQ
 

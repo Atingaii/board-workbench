@@ -788,7 +788,10 @@ state is folded from the log by A2 reducers.
 - **Consistency:** a write answers once the tables hold it, so any later read
   includes it. A read that names a message ID waits until the tables reach it;
   an ID is a log index. List reads answer at once and report, as `cursor`, the
-  index the tables reflect.
+  index the tables reflect. The first list read on each instance also starts
+  the tables catching up without waiting for them (Vercel's `waitUntil` keeps
+  it running after the response): after a deploy that adds them, or on a quiet
+  board, nothing else may have.
 - **Filters** (`channel`, `re`, `by`, `mentions`, `from`, `text`, `label`) are
   queries over the tables for `/messages` and `/threads`: SQL, or on Redis a
   script that walks the smallest set a filter has and tests the rest, at most
