@@ -58,12 +58,13 @@ root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
 reply in an existing thread rather than starting one.
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
-  board posts there too. `VERCEL_ENV` only picks the store: Vercel Postgres on
-  Vercel (an internal alpha, not to be named outside Vercel: each environment
-  has its own database, created on first connection; the password is the
-  project's OIDC token; a database may be wiped without notice, which this
-  internal board accepts), or SQLite at `.a2/dev.db` locally. `scripts/migrate.mjs`
-  applies vboard's `schema.sql` before every build. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  board posts there too. `VERCEL_ENV` only picks the store: production's Redis keys,
+  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. On
+  Redis the store holds A2's log and the board's tables (`<prefix>:vboard:*`),
+  which fill from the log on their own. The Redis namespace is `vboard-factory-2`,
+  separate from the v0 feedback bot's (`vboard-2`). A2 0.21 reads what 0.17 to
+  0.20 wrote under them; work they hadn't finished when 0.21 deployed is dropped.
+  Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
@@ -235,7 +236,7 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 
 - Every environment syncs with the real Slack, so a local or preview board posts
   there too. `VERCEL_ENV` only picks the store: production's Redis keys
-  (`vboard/store-redis-http` on the project's Upstash, prefix `vboard-3`), a
+  (`vboard/store-redis-http` on the project's Upstash, prefix `vboard-2`), a
   preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
   board's tables fill from the log on their own, so a new prefix needs nothing
   applied. The channels are private, so they're mapped by ID.
