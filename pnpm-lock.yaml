@@ -39,8 +39,8 @@ importers:
         specifier: ^7.0.130
         version: 7.0.130(zod@4.6.5)
       experimental-a2:
-        specifier: https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz
-        version: https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
+        specifier: 0.21.1
+        version: 0.21.1(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
       geist:
         specifier: ^1.7.2
         version: 1.7.2(next@16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
@@ -182,8 +182,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz
-        version: https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
+        specifier: 0.21.1
+        version: 0.21.1(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
       jose:
         specifier: ^6.2.12
         version: 6.2.12
@@ -1806,9 +1806,8 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  experimental-a2@https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz:
-    resolution: {integrity: sha512-H4RYJEV4oa7adVX9cIqsE1zIZkOY52dOs5ArTSrpovvgKuzVvxWhR8ND6TZCj5gqgGFamyGpCCMgrntgRn8Cbw==, tarball: https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz}
-    version: 0.19.0
+  experimental-a2@0.21.1:
+    resolution: {integrity: sha512-+yRRLRfBdbxIhAju2eVVTKNcSB1geIDxd43YRiwQiRfQsw6dFdPBeRyie7emS6QxKv0sRXGSwOA0QI8RxB164A==}
     engines: {node: '>=22.13'}
     peerDependencies:
       '@earendil-works/pi-ai': ^1.0.2
@@ -4435,7 +4434,7 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  experimental-a2@https://a2-preview-publisher-rel9m7ik0.labs.vercel.dev/experimental-a2.tgz(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0):
+  experimental-a2@0.21.1(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0):
     optionalDependencies:
       '@upstash/qstash': 2.12.0
       '@vercel/queue': 0.7.0
