@@ -30,22 +30,11 @@ export type Board<R extends BoardRuntime = BoardRuntime> = R & {
   POST: (request: Request) => Promise<Response>
 }
 
-/** The options a2() takes, each a mistake at the top level now. */
-const A2_OPTIONS = ['store', 'scheduler', 'access', 'sync', 'middleware', 'project', 'auth', 'streamMaxMs', 'blob'] as const
-
 /**
  * A board for this project, on `backend`: `a2({ store, … })` keeps it in this deployment, and
  * `http(url)` uses another board that speaks the protocol.
  */
 export function board<R extends BoardRuntime>(options: BoardOptions<R>): Board<R> {
-  const given = options as Record<string, unknown>
-  if (given.remote !== undefined) throw new Error("board: remote is now a backend: board({ backend: http('<url>') })")
-  if (given.trustedSources !== undefined)
-    throw new Error('board: trustedSources is now access, in a2(): list vercelProject() and githubActions() rules there, each with can')
-  const misplaced = A2_OPTIONS.filter((key) => given[key] !== undefined)
-  if (misplaced.length > 0)
-    throw new Error(`board: ${misplaced.join(', ')} ${misplaced.length === 1 ? 'goes' : 'go'} in a2(): board({ backend: a2({ ${misplaced.join(', ')} }) })`)
-  if (!options.backend) throw new Error('board: no backend: pass a2({ store, … }) to keep the board here, or http(url) to use one elsewhere')
   const { backend, ...setup } = options
   const runtime = backend.start(setup)
   return Object.assign(runtime, { GET: runtime.fetch, POST: runtime.fetch })

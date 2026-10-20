@@ -12,5 +12,3 @@ board({ store, scheduler, sync, access, middleware, blob, watch })
 // after
 board({ backend: a2({ store, scheduler, sync, access, middleware, blob }), watch })
 ```
-
-`board()` with an engine option on it, or with no backend, fails at startup and says what to write.

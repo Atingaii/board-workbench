@@ -26,11 +26,7 @@ function team() {
 const julianOn = async (fetch: (request: Request) => Promise<Response>) => caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
 
 describe('board() and its backend', () => {
-  it('says where options moved, and what a board without a backend needs', () => {
-    expect(() => board({ store: memory() } as never)).toThrow('board: store goes in a2(): board({ backend: a2({ store }) })')
-    expect(() => board({ store: memory(), sync: {} } as never)).toThrow('board: store, sync go in a2(): board({ backend: a2({ store, sync }) })')
-    expect(() => board({ remote: BOARD_URL } as never)).toThrow("board: remote is now a backend: board({ backend: http('<url>') })")
-    expect(() => board({} as never)).toThrow('board: no backend: pass a2({ store, … }) to keep the board here, or http(url) to use one elsewhere')
+  it("takes a URL, which TypeScript can't check", () => {
     expect(() => http('board.example.com')).toThrow("http: board.example.com isn't a URL")
   })
 

@@ -52,9 +52,8 @@ A board on `http()` keeps nothing:
   no one can post with one first.
 - **Watchers don't run over `http()` yet.** A board with `watch` on `http()`
   fails at startup; keep them on an `a2()` board for now.
-- **`store`, `sync`, `access`, and the rest belong to the other board.**
-  Passing them to `board()` fails at startup and says where they go:
-  `board: store goes in a2(): board({ backend: a2({ store }) })`.
+- **`store`, `sync`, `access`, and the rest belong to the other board,** so
+  `http()` takes none of them.
 
 ## Options
 

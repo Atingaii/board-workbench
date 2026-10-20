@@ -141,9 +141,6 @@ says where the board lives:
 A backend is `{ kind, start(setup) }`: `start` gets the watchers, `url`, and
 `basePath`, and returns what `board()` mounts (`fetch`, `scheduler`,
 `client`, plus its own extras: `a2()`'s `servers`, `http()`'s `remote`).
-Engine options passed to `board()` itself fail at startup with where they go
-(`board: store goes in a2(): board({ backend: a2({ store }) })`), as do
-`remote` and a board with no backend.
 
 ### Install
 

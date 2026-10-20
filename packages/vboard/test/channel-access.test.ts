@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { board, githubActions, oidc, vercelProject } from '../src/server/index.ts'
+import { a2, board, githubActions, oidc, vercelProject } from '../src/server/index.ts'
 import { PERMISSIONS } from '../src/server/access.ts'
 import { caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
@@ -122,8 +122,8 @@ describe('access rules', () => {
   })
 
   it('says how to move off trustedSources, and which rule has no can', () => {
-    expect(() => board({ trustedSources: [] } as never)).toThrow(
-      'board: trustedSources is now access, in a2(): list vercelProject() and githubActions() rules there, each with can',
+    expect(() => board({ backend: a2({ trustedSources: [] } as never) })).toThrow(
+      'a2: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can',
     )
     const hint = "needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'"
     expect(() => vercelProject({ project: 'docs' } as never)).toThrow(`vercelProject({ project: 'docs' }) ${hint}`)
