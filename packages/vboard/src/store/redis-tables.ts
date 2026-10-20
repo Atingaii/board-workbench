@@ -295,6 +295,11 @@ end
 return rows
 `
 
+/** The position and every channel, read together. KEYS: position, channels. */
+const CHANNELS = `
+return { redis.call('GET', KEYS[1]) or '0', redis.call('SMEMBERS', KEYS[2]) }
+`
+
 const SEP = '\u001f'
 
 /** How many IDs one query script reads before it hands back where it got to. */
@@ -487,14 +492,26 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     return Number(await evaluate(APPLY, keys, [event.index, mode, luaJson(encoded)])) === 1
   }
 
-  /** A filter as groups of sets, each group needing one: the query scripts' input. */
+  /**
+   * The channels under `path`, and the position that list reflects. A read's
+   * position goes no further: a post in a channel newer than the list is past
+   * it, so the feed from that position carries it.
+   */
+  async function channelsUnder(path: string) {
+    const [at, all] = (await evaluate(CHANNELS, [k.pos, k.channels], [])) as [unknown, string[]]
+    return { under: all.filter((c) => c.startsWith(`${path}/`)), asOf: Number(at) }
+  }
+
+  /** A filter as groups of sets, each group needing one: the query scripts' input, and the position it holds for. */
   async function compile(filter: MessageFilter, keys: string[]) {
     const slot = (key: string) => keys.push(key)
     const groups: number[][] = []
     const group = (sets: string[]) => groups.push(sets.map(slot))
+    let asOf = Number.POSITIVE_INFINITY
     if (filter.channel) {
       const { path, subtree } = filter.channel
-      const under = subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${path}/`)) : []
+      let under: string[] = []
+      if (subtree) ({ under, asOf } = await channelsUnder(path))
       group([path, ...under].map(k.channel))
     }
     if (filter.channels) group(filter.channels.map(k.channel))
@@ -505,7 +522,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     for (const label of filter.labels ?? [])
       group(label.values === null ? [k.label(`l${SEP}${label.key}`)] : label.values.map((value) => k.label(`lv${SEP}${label.key}${SEP}${value}`)))
     const drivers = groups.filter((sets) => sets.length === 1).map((sets) => sets[0]!)
-    return { groups, drivers, fallback: slot(k.all), text: filter.text ?? null }
+    return { spec: { groups, drivers, fallback: slot(k.all), text: filter.text ?? null }, asOf }
   }
 
   return {
@@ -549,8 +566,9 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     async messages(filter, page) {
       const keys = [k.pos, k.messages, k.metas]
       const asc = page.after !== undefined
+      const { spec: compiled, asOf } = await compile(filter, keys)
       const spec = {
-        ...(await compile(filter, keys)),
+        ...compiled,
         limit: page.limit,
         budget,
         asc,
@@ -569,7 +587,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
         if (asc) spec.min = next
         else spec.max = next
       }
-      return { messages: asc ? messages : messages.reverse(), position }
+      return { messages: asc ? messages : messages.reverse(), position: Math.min(position!, asOf) }
     },
 
     async threads(filter: MessageFilter, page: Page) {
@@ -578,8 +596,10 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
       let position: number | null = null
       // Each root and when its thread last changed: its latest reply, or itself.
       const roots = new Map<string, number>()
+      let asOf = Number.POSITIVE_INFINITY
       if (Object.keys(rest).length === 0 && !(channel && channels)) {
-        const under = channel?.subtree ? ((await call('SMEMBERS', k.channels)) as string[]).filter((c) => c.startsWith(`${channel.path}/`)) : []
+        let under: string[] = []
+        if (channel?.subtree) ({ under, asOf } = await channelsUnder(channel.path))
         const sets = channels ? channels.map(k.channelThreads) : channel ? [channel.path, ...under].map(k.channelThreads) : [k.threads]
         const spec = { limit: page.limit, asc, min: asc ? `(${page.after}` : '-inf' }
         const [at, pairs] = (await evaluate(LATEST, [k.pos, ...sets], [luaJson(spec)])) as [unknown, string[]]
@@ -587,7 +607,9 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
         for (let i = 0; i < pairs.length; i += 2) roots.set(pairs[i]!, Number(pairs[i + 1]))
       } else {
         const keys = [k.pos, k.messages, k.metas, k.summaries]
-        const spec = { ...(await compile(filter, keys)), budget, max: '+inf' }
+        const compiled = await compile(filter, keys)
+        asOf = compiled.asOf
+        const spec = { ...compiled.spec, budget, max: '+inf' }
         for (;;) {
           const [at, pairs, next] = (await evaluate(ROOTS, keys, [luaJson(spec)])) as [unknown, Array<string | number>, string | null]
           position ??= Number(at)
@@ -607,7 +629,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
         replies: Number(replies),
         last: parse<Message>(last),
       }))
-      return { threads: asc ? threads : threads.reverse(), position: position! }
+      return { threads: asc ? threads : threads.reverse(), position: Math.min(position!, asOf) }
     },
 
     async syncOf(thread) {

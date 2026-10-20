@@ -200,6 +200,25 @@ describe('sync', () => {
     }, { timeout: 10_000 })
   })
 
+  it("never sends text its author edited away, when a label change's delivery runs after the edit", async () => {
+    const { board, s } = setup({ slackRender: ({ message }) => `[${message.labels.state ?? '-'}] ${message.text}` })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    // The thread's deliveries back up behind its root's, which waits on Slack.
+    let open!: () => void
+    const slack = new Promise<void>((resolve) => (open = resolve))
+    const post = s.adapter.postChannelMessage!.bind(s.adapter)
+    s.adapter.postChannelMessage = async (...args) => {
+      await slack
+      return post(...args)
+    }
+    const { body: root } = await julian('POST', '/messages', { channel: 'firehose', text: 'the key is hunter2' })
+    await julian('POST', `/messages/${root.message.id}/labels`, { set: { state: 'open' } })
+    await julian('POST', `/messages/${root.message.id}/edit`, { text: 'the key is in the vault' })
+    open()
+    await vi.waitFor(() => expect(s.edits.at(-1)?.text).toContain('[open] the key is in the vault'))
+    expect([...s.channelPosts, ...s.edits].map((sent) => sent.text).join('\n')).not.toContain('hunter2')
+  })
+
   it('posts a reply to Slack as written, with no quote of the message it answers', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

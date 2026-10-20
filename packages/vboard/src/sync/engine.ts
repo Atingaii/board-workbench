@@ -1085,15 +1085,17 @@ export function createSyncEngine(options: {
   async function deliverLabels(ctx: Ctx<'labels.changed'>) {
     const { id } = ctx.event.payload
     const state = await latest(ctx)
-    // The message just after this change, against just before it: a later change has its own delivery.
-    const [after, before] = await Promise.all([
+    // The message as it is now, so text its author has since changed or deleted never goes out again,
+    // with the labels just after this change against just before it: a later change delivers its own.
+    const [current, after, before] = await Promise.all([
+      state.tables.message(id),
       state.tables.messagesAt([id], ctx.event.index).then((found) => found.get(id)),
       state.tables.messagesAt([id], ctx.event.index - 1).then((found) => found.get(id)),
     ])
-    const message = after
     const copies = (await state.tables.copiesOf([id])).get(id) ?? {}
-    if (!message || message.deleted || Object.keys(copies).length === 0) return
-    const previous = { ...message, labels: before?.labels ?? {} }
+    if (!current || current.deleted || !after || Object.keys(copies).length === 0) return
+    const message = { ...current, labels: after.labels }
+    const previous = { ...current, labels: before?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
       try {
         const body = renderFor(target, message, state.actors, copy.files === null)

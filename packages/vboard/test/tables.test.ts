@@ -311,6 +311,20 @@ function conformance(open: () => Promise<MessageTables>) {
     await tables.close()
   })
 
+  it('apply a message with more labels than SQLite binds in one statement', async () => {
+    const by = AUTHORS[0]
+    const labels = Object.fromEntries(Array.from({ length: 11_000 }, (_, i) => [`k${i}`, 'v']))
+    const events = [
+      { type: 'message.posted', id: 'p', payload: { channel: 'dev', text: 'many', re: null, replyTo: null, thread: 'p', labels: {}, noSync: false, mentions: [], by, origin: null, from: null } },
+      { type: 'labels.changed', id: 'l', payload: { id: 1, thread: 'p', by, set: labels, unset: [] } },
+    ].map((event, i) => ({ ...event, index: i + 1, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, i)).toISOString() }) as unknown as BoardEvent)
+    const tables = await applied(events)
+    expect(await tables.position()).toBe(2)
+    expect(await tables.message(1)).toEqual(fold(events).messages.byId[1])
+    expect((await tables.messages({ labels: [{ key: 'k10999', values: ['v'] }] }, { limit: 5 })).messages.map((m) => m.id)).toEqual([1])
+    await tables.close()
+  }, 60_000)
+
   it('apply an event that holds NUL or a lone surrogate, and still find it', async () => {
     // The board refuses both now; a log from before may hold them, and a script or a jsonb that can't take one would stop the tables.
     const by = AUTHORS[0]
@@ -452,6 +466,42 @@ afterAll(async () => {
     await admin.query(`drop database if exists ${database} with (force)`)
     await admin.end()
   }
+})
+
+describe.skipIf(!redisUrl)('the Redis tables', () => {
+  it("give a subtree read a position no later than the channels it read", async () => {
+    const by = AUTHORS[0]
+    const post = (index: number, channel: string) =>
+      ({
+        type: 'message.posted', id: `p${index}`, index, createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(),
+        payload: { channel, text: `in ${channel}`, re: null, replyTo: null, thread: `p${index}`, labels: {}, noSync: false, mentions: [], by, origin: null, from: null },
+      }) as unknown as BoardEvent
+    const client = new Redis(redisUrl!)
+    clients.push(client)
+    const prefix = `vbt${process.pid}x${++opened}`
+    const other = redisTables((command, ...args) => client.call(command, ...args), prefix)
+    await other.apply(post(1, 'dev'))
+    // A post to a new child channel lands right after the read lists the channels.
+    let land: (() => Promise<void>) | null = null
+    const tables = redisTables(async (command, ...args) => {
+      const reply = await client.call(command, ...args)
+      const listed = command === 'SMEMBERS' || (command === 'EVAL' && args.includes(`${prefix}:vboard:channels`) && args.length <= 4)
+      if (listed && land) {
+        const run = land
+        land = null
+        await run()
+      }
+      return reply
+    }, prefix)
+    land = () => other.apply(post(2, 'dev/new'))
+    const { messages, position } = await tables.messages({ channel: { path: 'dev', subtree: true } }, { limit: 10 })
+    // The feed from that position carries what the page missed.
+    expect(messages.map((m) => m.id)).toEqual([1])
+    expect(position).toBeLessThan(2)
+    land = () => other.apply(post(3, 'dev/newer'))
+    const threads = await tables.threads({ channel: { path: 'dev', subtree: true } }, { limit: 10 })
+    expect(threads.position).toBeLessThan(3)
+  })
 })
 
 describe('the SQL tables', () => {

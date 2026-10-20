@@ -171,6 +171,9 @@ const MENTION = '@'
 /** An attachment's term, the same way. */
 const ATTACHMENT = '^'
 
+/** Terms one insert takes, three parameters each. */
+const TERMS_PER_INSERT = 300
+
 class Params {
   readonly values: unknown[] = []
   add(value: unknown): string {
@@ -343,9 +346,12 @@ export function sqlTables(db: Db): MessageTables {
       out.push({ text: 'insert into vboard_versions (log_index, message_id, data) values ($1, $2, $3)', values: [index, m.id, m.data] })
       if (terms) {
         if (!m.created) out.push({ text: 'delete from vboard_terms where message_id = $1', values: [m.id] })
-        if (terms.length > 0) {
+        // A few hundred rows to a statement: a message's terms can outnumber SQLite's bound parameters.
+        for (let first = 0; first < terms.length; first += TERMS_PER_INSERT) {
           const p = new Params()
-          const tuples = terms.map(([term, value]) => `(${p.add(m.id)}, ${p.add(term)}, ${p.add(value)})`)
+          const tuples = terms
+            .slice(first, first + TERMS_PER_INSERT)
+            .map(([term, value]) => `(${p.add(m.id)}, ${p.add(term)}, ${p.add(value)})`)
           out.push({ text: `insert into vboard_terms (message_id, term, value) values ${tuples.join(', ')}`, values: p.values })
         }
       }
