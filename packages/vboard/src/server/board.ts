@@ -34,7 +34,7 @@ import { createBoardClient, type BoardClient } from '../client/client.ts'
 import { createSyncEngine } from '../sync/engine.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { VERSION } from '../version.ts'
-import { createVerifier, type AccessRule, type AuthOptions, type Principal } from './auth.ts'
+import { createVerifier, hostPrincipal, type AccessRule, type AuthOptions, type HostAccess, type Principal } from './auth.ts'
 import { parseScope, type Access } from './access.ts'
 import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
@@ -78,8 +78,13 @@ export type BoardOptions = {
    * environment it runs in (a production board's previews need a rule), and what
    * they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`.
    * The first rule that matches a token decides.
+   *
+   * Or a function, `(request) => ({ id, kind, handle, can })`, that replaces the built-in
+   * verifier: a host's own credentials, for a host serving many teams' boards. Nothing
+   * else is trusted then, not the board's own project nor any token's audience. To reject,
+   * return or throw a `Response`.
    */
-  access?: readonly AccessRule[]
+  access?: readonly AccessRule[] | HostAccess
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
   sync?: Record<string, SyncProvider>
   /**
@@ -242,10 +247,20 @@ async function readCapped(request: Request, max: number): Promise<Uint8Array> {
   return body
 }
 
-/** Mounts a board: one log in one route. Create it once, at module scope. */
+/** A host's `access` function rejected the request with this response. */
+class Rejected {
+  readonly response: Response
+  constructor(response: Response) {
+    this.response = response
+  }
+}
+
+/** Mounts a board: one log in one route. Create it once, at module scope, or one per tenant for a host. */
 export function board(options: BoardOptions = {}) {
   if ((options as { trustedSources?: unknown }).trustedSources !== undefined)
     throw new Error('board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can')
+  const host = typeof options.access === 'function' ? options.access : null
+  if (host && options.auth) throw new Error('board: an access function replaces the built-in verifier, so drop `auth`')
   const blob = options.blob ?? defaultBlob()
   const store = options.store ?? defaultStore()
   // The same A2 store object for every server: A2 recognizes its own stores by identity.
@@ -286,16 +301,32 @@ export function board(options: BoardOptions = {}) {
   const { verify, accessNow } = createVerifier({
     projectId: () => ownProjectId(options.project),
     teamId: () => ownTeamId(options.project),
-    access: options.access ?? [],
+    access: typeof options.access === 'function' ? [] : (options.access ?? []),
     ...(options.auth ? { auth: options.auth } : {}),
   })
   const streamMaxMs = options.streamMaxMs ?? 280_000
 
-  async function authenticate(request: Request, boardUrl: string): Promise<Principal> {
+  async function verified(request: Request, boardUrl: string): Promise<Principal> {
+    if (host) {
+      let result: Awaited<ReturnType<HostAccess>>
+      try {
+        result = await host(request)
+      } catch (error) {
+        // A thrown `Response` rejects like a returned one.
+        if (error instanceof Response) throw new Rejected(error)
+        throw error
+      }
+      if (result instanceof Response) throw new Rejected(result)
+      return hostPrincipal(result)
+    }
     const header = request.headers.get('authorization') ?? ''
     const token = header.match(/^Bearer\s+(.+)$/i)?.[1]
     if (!token) throw unauthorized('missing bearer token')
-    const principal = await verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
+    return verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
+  }
+
+  async function authenticate(request: Request, boardUrl: string): Promise<Principal> {
+    const principal = await verified(request, boardUrl)
     // Set by a proxy that holds the credential (Pi's sandbox); it only narrows.
     const scope = request.headers.get('x-board-scope')
     if (scope === null) return principal
@@ -445,7 +476,16 @@ export function board(options: BoardOptions = {}) {
   }
 
   engine?.bind({ session, writes, clientAs })
-  schedules.bind({ writes, accessNow })
+  // A schedule sends only under the verifier that made it: one from before the board
+  // switched to or from a host's function is revoked rather than trusted. The board's
+  // own code (`vboard:`, which a host's function can't return) sends under either.
+  schedules.bind({
+    writes,
+    accessNow: (principal) =>
+      principal.id.startsWith('vboard:') || (principal.facts?.issuer === 'host') === (host !== null)
+        ? accessNow(principal)
+        : Promise.resolve(null),
+  })
   watchers?.bind({ clientAs, reads })
 
   async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
@@ -741,6 +781,7 @@ export function board(options: BoardOptions = {}) {
       }
       throw notFound(`no route: ${request.method} ${url.pathname}`)
     } catch (error) {
+      if (error instanceof Rejected) return error.response
       return toErrorResponse(error)
     }
   }

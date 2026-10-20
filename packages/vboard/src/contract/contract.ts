@@ -341,7 +341,7 @@ export const ScheduleIdentity = z.object({
     handle: Handle,
     facts: z
       .object({
-        issuer: z.enum(['vercel', 'github', 'oidc']),
+        issuer: z.enum(['vercel', 'github', 'oidc', 'host']),
         iss: z.string().max(1000),
         claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
         /** The board's own Vercel team, as the board knew it when it verified the token. */
