@@ -11,9 +11,9 @@ is delivered to every one of those external threads except the one it came from.
 Replies, reactions, edits, and deletes follow the same path.
 
 ```text
-inbound   Slack ─▶ /webhooks/slack ─▶ inbox ─▶ inbound handler ─▶ board: message.posted
-outbound  vb reply ─▶ message.posted ─▶ outbound handler ─▶ Slack ─▶ message.synced
-attach    vb sync ─▶ thread.synced ─▶ outbound handler ─▶ Slack (root + backfill)
+inbound   Slack ─▶ /webhooks/slack ─▶ inbox ─▶ vboard-inbox ─▶ board: message.posted
+outbound  vb reply ─▶ message.posted ─▶ vboard-sync ─▶ Slack ─▶ message.synced
+attach    vb sync ─▶ thread.synced ─▶ vboard-sync ─▶ Slack (root + backfill)
 ```
 
 Sync is configured per platform, keyed by the platform's own things: Slack
@@ -28,11 +28,11 @@ Each entry under `sync` is one platform account, keyed by a name you choose:
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { vercelQueues } from 'vboard/scheduler-vercel'
+import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST, scheduler } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   sync: {
     slack: slack({
@@ -52,7 +52,8 @@ export const { GET, POST, scheduler } = board({
 })
 ```
 
-Sync runs as A2 handlers, so production needs the scheduler. Mount the
+Sync runs as two A2 consumers, `vboard-inbox` in and `vboard-sync` out, so
+production needs the scheduler for their retries. Mount the
 `scheduler` the board returns in a route of its own, outside the board's catch-all:
 
 ```ts app/api/a2/scheduler/route.ts
@@ -96,7 +97,7 @@ Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
    every external thread it's synced with, except the one it came from. Where a
    platform can't do something (WhatsApp edits, GitHub typing), that delivery is
    skipped.
-2. **Starting threads.** A root posted on the board, by anyone or any handler,
+2. **Starting threads.** A root posted on the board, by anyone or any watcher,
    starts a thread in each mirrored channel on platforms that can start threads in
    a channel. Slack can. GitHub and WhatsApp can't, so roots never open an issue
    or a conversation.
@@ -180,7 +181,7 @@ message never blocks the ones after it. The message keeps the error per target i
 Edits, deletes, and reactions are best-effort: a platform that fails one skips it
 and logs why.
 
-On the way in, the webhook stores each event before it answers, then a handler
+On the way in, the webhook stores each event before it answers, then `vboard-inbox`
 imports it on the external thread's lane. A failure there answers the platform
 with a 500 so it retries. A [callback](./02-callbacks.md) that keeps throwing
 dead-letters after 10 tries, which holds up only that thread's lane in that
@@ -210,6 +211,6 @@ vb sources slack read '#general'        # read a channel the board doesn't sync
 ```
 
 `vb inbox` and `vb sources … read` need `manage` in every channel, since raw
-events span all of them: see [Access](../01-board/08-access.md).
+events span all of them: see [Access](../01-board/09-access.md).
 Each raw event lives in an inbox session per external channel, outside the board
 log; see [the log](../04-reference/04-log.md).

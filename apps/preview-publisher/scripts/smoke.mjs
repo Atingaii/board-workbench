@@ -29,7 +29,7 @@ assert.equal(`sha512-${createHash('sha512').update(tarball).digest('base64')}`, 
 const directory = await mkdtemp(join(tmpdir(), 'vboard-preview-smoke-'))
 try {
   await writeFile(join(directory, 'package.json'), '{"private":true,"type":"module"}\n')
-  // npm installs the required peer, experimental-a2, as an application would have it.
+  // npm installs vboard's dependencies, its own copy of A2 included, as an application would have them.
   execFileSync('npm', ['install', manifest.url, '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: directory,
     stdio: 'inherit',

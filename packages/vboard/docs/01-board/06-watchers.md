@@ -32,7 +32,7 @@ vb tail firehose --from slack --json
 ## The expression
 
 A channel (or `prefix/` for a subtree) and the shared
-[filters](./04-reading.md#filters): `--re`, `--by`, `--mentions`, `--from`,
+[filters](./05-reading.md#filters): `--re`, `--by`, `--mentions`, `--from`,
 `--label`, `--text`, and `--all`.
 
 - **Positions aren't filters.** A watcher starts at the head when it's deployed
@@ -136,12 +136,12 @@ HTTP and no token.
 - **Scheduled messages post as the person who scheduled them.** A watcher that
   skips an agent's own messages should still let through ones with a
   `schedule` field, or the agent's reminders to itself never wake it. See
-  [Scheduled messages](./06-schedules.md).
+  [Scheduled messages](./07-schedules.md).
 
 ## How it runs
 
-Each board event is matched against every watcher in one handler, on the
-thread's lane, the one outbound sync uses. A match is appended to the watcher's
+Each board event is matched against every watcher by one A2 consumer,
+`vboard-watchers`, on the thread's lane. A match is appended to the watcher's
 own session (`watch:<id>`, outside the board log), and `run` happens there, on
 the thread's lane.
 

@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
-import { createServer, type A2Store, type A2Scheduler, type ServerOptions } from 'experimental-a2/server'
+import { createServer, type A2Scheduler } from 'experimental-a2/server'
 import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, watchSession, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, linkedTo, messagesReducer, syncReducer } from '../contract/reducers.ts'
+import { actorsReducer, channelsReducer, linkedTo } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
 import {
   EditBody,
@@ -35,14 +35,18 @@ import { createSyncEngine } from '../sync/engine.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { VERSION } from '../version.ts'
 import { createVerifier, hostPrincipal, type AccessRule, type AuthOptions, type HostAccess, type Principal } from './auth.ts'
-import { parseScope } from './access.ts'
+import { parseScope, type Access } from './access.ts'
 import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
 import { attachmentNotFound, attachmentResponse, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
-import { compileFilter, liveFeed, personView, pollFeed, view } from './feed.ts'
+import { liveFeed, personView, pollFeed, readableFilter, toMessageFilter, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
+import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
+import { defaultStore } from '../store/default.ts'
+import { TABLES_CONSUMER } from '../store/sql.ts'
+import type { BoardStore, MessageFilter } from '../store/types.ts'
 import { createWatchers, ID, type Watcher } from './watch.ts'
 import {
   authorizeMessage,
@@ -62,8 +66,11 @@ import {
 import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
 
 export type BoardOptions = {
-  /** Any A2 store. Omitted: SQLite in development, memory in tests, an error in production. */
-  store?: A2Store
+  /**
+   * Where the board keeps its log and tables: `postgres()`, `sqlite()`, or `memory()` from
+   * `vboard/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
+   */
+  store?: BoardStore
   /** Required for sync in production, and for scheduled messages. Mount the board's `scheduler` as `POST` in its own route. */
   scheduler?: A2Scheduler
   /**
@@ -107,7 +114,7 @@ export type BoardOptions = {
 const boardServer = (options: BoardOptions) =>
   createServer({
     contract: boardContract,
-    ...(options.store ? { store: options.store } : {}),
+    ...(options.store?.log ? { store: options.store.log } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   })
 
@@ -149,31 +156,21 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'attachment', pattern: /\/attachments\/([A-Za-z0-9_-]+)$/ },
 ]
 
-type BoardHandlers = NonNullable<ServerOptions<BoardEvents>['handlers']>
 /** What `vb stuck` needs of an A2 session, whatever its contract. */
 type Redrivable = {
-  deadLetters(): Promise<{ index: number; type: string; lane: string | null; attemptCount: number; failureCount: number; lastError: string | null; failedAt: Date }[]>
-  redrive(index: number, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
-}
-type BoardHandler = { lane?: unknown; handler: (ctx: never) => Promise<unknown> }
-
-/** A2 takes one handler per event type, so watchers and sync share it, on the same lanes: watchers first. */
-function combineHandlers(...sets: BoardHandlers[]): BoardHandlers {
-  const combined: Record<string, BoardHandler> = {}
-  for (const set of sets)
-    for (const [type, entry] of Object.entries(set) as [string, BoardHandler][]) {
-      const first = combined[type]
-      combined[type] = first
-        ? {
-            lane: first.lane,
-            handler: async (ctx: never) => {
-              await first.handler(ctx)
-              await entry.handler(ctx)
-            },
-          }
-        : entry
-    }
-  return combined as BoardHandlers
+  deadLetters(): Promise<
+    {
+      consumer: string
+      index: number
+      type: string
+      lane: string | null
+      attemptCount: number
+      failureCount: number
+      lastError: string | null
+      failedAt: Date
+    }[]
+  >
+  redrive(target: { consumer: string; index: number }, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
 }
 
 const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
@@ -265,25 +262,32 @@ export function board(options: BoardOptions = {}) {
   const host = typeof options.access === 'function' ? options.access : null
   if (host && options.auth) throw new Error('board: an access function replaces the built-in verifier, so drop `auth`')
   const blob = options.blob ?? defaultBlob()
+  const store = options.store ?? defaultStore()
+  // The same A2 store object for every server: A2 recognizes its own stores by identity.
+  const log = store.log
   const engine =
     options.sync && Object.keys(options.sync).length > 0
-      ? createSyncEngine({ entries: options.sync, store: options.store, scheduler: options.scheduler, blob })
+      ? createSyncEngine({ entries: options.sync, store: log, scheduler: options.scheduler, blob })
       : null
   const watchers =
     options.watch && Object.keys(options.watch).length > 0
-      ? createWatchers({ watch: options.watch, store: options.store, scheduler: options.scheduler })
+      ? createWatchers({ watch: options.watch, store: log, scheduler: options.scheduler })
       : null
-  const schedules = createSchedules({ store: options.store, scheduler: options.scheduler })
-  const handlers = [watchers?.boardHandlers, engine?.outboundHandlers].filter((set) => set !== undefined)
+  const schedules = createSchedules({ store: log, scheduler: options.scheduler })
+  const projection = tablesConsumer(store.tables)
+  // The tables, watchers, and sync each keep their own place in the board's log.
+  const consumers = [projection, watchers?.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
   const server = createServer({
     contract: boardContract,
-    ...(options.store ? { store: options.store } : {}),
+    ...(log ? { store: log } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    ...(handlers.length > 0 ? { handlers: combineHandlers(...handlers) } : {}),
+    consumers,
   })
   const session = server.session(BOARD_SESSION)
+  const reads = createReads(store.tables, session, projection)
   const writes: WriteContext = {
     session,
+    reads,
     configTargets: engine ? engine.configTargets : async () => [],
     ...(engine ? { findByEmail: engine.findByEmail } : {}),
     normalizeTarget: engine
@@ -333,7 +337,7 @@ export function board(options: BoardOptions = {}) {
     }
   }
 
-  /** The sessions whose handlers run on lanes, so a dead letter there stops the rest of its lane. */
+  /** The sessions whose consumers run on lanes, so a dead letter there stops the rest of its lane. */
   async function lanedSessions(): Promise<{ id: string; session: Redrivable }[]> {
     const ids: [string, { session(id: string): Redrivable }][] = [
       [BOARD_SESSION, server],
@@ -347,36 +351,52 @@ export function board(options: BoardOptions = {}) {
   async function stuck(): Promise<StuckEvent[]> {
     const found = (await Promise.all((await lanedSessions()).map(async ({ id, session }) => (await session.deadLetters()).map((dead) => ({ id, dead }))))).flat()
     if (found.length === 0) return []
-    const [{ state: messages }, { state: sync }] = await Promise.all([session.state(messagesReducer), session.state(syncReducer)])
-    const roots = new Map<string, number>()
-    for (const message of Object.values(messages.byId)) if (message.re === null) roots.set(message.thread, message.id)
-    return found.map(({ id, dead }) => {
+    // The tables first: reads and writes wait on them, so they're what to retry first.
+    found.sort((a, b) => Number(b.dead.consumer === TABLES_CONSUMER) - Number(a.dead.consumer === TABLES_CONSUMER))
+    // A thread's key is its root's post's event ID.
+    const roots = new Map<string, number | null>()
+    const rootOf = async (thread: string) => {
+      if (!roots.has(thread)) roots.set(thread, (await store.tables.byEventId(thread))?.id ?? null)
+      return roots.get(thread)!
+    }
+    return Promise.all(found.map(async ({ id, dead }) => {
       const laneThread = dead.lane?.startsWith('thread:') ? dead.lane.slice('thread:'.length) : null
       // An inbox's lanes are platform threads; everywhere else they're the board's.
       const inbox = id.startsWith('inbox:')
-      const thread = inbox ? (laneThread && (sync.byExternalThread[laneThread] ?? null)) : laneThread
+      const thread = inbox ? (laneThread && (await store.tables.threadOf(laneThread))) : laneThread
       return {
         session: id,
         index: dead.index,
+        consumer: dead.consumer,
         type: dead.type,
         lane: dead.lane,
         thread,
-        root: thread === null ? null : (roots.get(thread) ?? null),
+        root: thread === null ? null : await rootOf(thread),
         external: inbox ? laneThread : null,
         attempts: dead.attemptCount,
         failures: dead.failureCount,
         error: dead.lastError,
         failedAt: dead.failedAt.toISOString(),
       }
-    })
+    }))
   }
 
   async function redrive(body: z.infer<typeof RedriveBody>, by: string) {
     const target = (await lanedSessions()).find(({ id }) => id === body.session)
     if (!target) throw notFound(`no session ${body.session} on this board`)
-    const { redriven } = await target.session.redrive(body.index, { action: body.action })
-    if (redriven) console.info(`[vboard] ${by} ${body.action === 'retry' ? 'retried' : 'skipped'} stuck event ${body.session}#${body.index}`)
-    return { redriven }
+    // Without a consumer, every consumer the event is stuck for.
+    const consumers =
+      body.consumer !== undefined
+        ? [body.consumer]
+        : (await target.session.deadLetters()).filter((dead) => dead.index === body.index).map((dead) => dead.consumer)
+    const done: string[] = []
+    for (const consumer of consumers) {
+      const { redriven } = await target.session.redrive({ consumer, index: body.index }, { action: body.action })
+      if (redriven) done.push(consumer)
+    }
+    if (done.length > 0)
+      console.info(`[vboard] ${by} ${body.action === 'retry' ? 'retried' : 'skipped'} stuck event ${body.session}#${body.index} for ${done.join(', ')}`)
+    return { redriven: done.length > 0 }
   }
 
   /** The board's own bookkeeping spans every channel, so it needs `manage` in all of them. */
@@ -391,10 +411,36 @@ export function board(options: BoardOptions = {}) {
    */
   async function attachmentReadable(principal: Principal, id: string, uploadedBy: string | null) {
     if (principal.access.readsAll || uploadedBy === principal.id) return true
-    const { state } = await session.state(messagesReducer)
-    return Object.values(state.byId).some(
-      (message) => message.attachments.some((file) => file.id === id) && principal.access.readable(message.channel),
-    )
+    await reads.ensure()
+    return (await reads.tables.withAttachment(id)).some((message) => principal.access.readable(message.channel))
+  }
+
+  /**
+   * `filter`, narrowed to the channels `access` reads among those the log has,
+   * and the index that list reflects: a read's cursor goes no further, or the
+   * first post in a channel newer than the list would be in neither the page
+   * nor the feed after it.
+   */
+  async function readable(filter: MessageFilter, access: Access): Promise<{ filter: MessageFilter; through: number }> {
+    if (access.readsAll) return { filter, through: Number.POSITIVE_INFINITY }
+    const { state, index } = await session.state(channelsReducer)
+    return { filter: readableFilter(filter, Object.keys(state), access), through: index }
+  }
+
+  /** Who wrote, was mentioned, or reacted in the channels `access` reads, a page at a time. */
+  async function actorsIn(access: Access): Promise<Set<string>> {
+    const ids = new Set<string>()
+    const { filter } = await readable({}, access)
+    for (let before: number | undefined; ; ) {
+      const { messages } = await reads.messages(filter, { limit: 500, ...(before !== undefined ? { before } : {}) })
+      for (const message of messages) {
+        ids.add(message.by.actor)
+        for (const id of message.mentions) ids.add(id)
+        for (const reactors of Object.values(message.reactions)) for (const id of reactors) ids.add(id)
+      }
+      if (messages.length < 500) return ids
+      before = messages[0]!.id
+    }
   }
 
   /** Files a write carries, as the board stored them: each one the caller may have, or 404 as if it didn't exist. */
@@ -440,7 +486,7 @@ export function board(options: BoardOptions = {}) {
         ? accessNow(principal)
         : Promise.resolve(null),
   })
-  watchers?.bind({ clientAs })
+  watchers?.bind({ clientAs, reads })
 
   async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
     try {
@@ -509,14 +555,8 @@ export function board(options: BoardOptions = {}) {
           // A reader of every channel sees everyone; anyone else, who wrote, was mentioned, or reacted where they read, and themselves.
           let seen: ((id: string) => boolean) | null = null
           if (!principal.access.readsAll) {
-            const { state: messages } = await session.state(messagesReducer)
-            const ids = new Set([actor.id])
-            for (const message of Object.values(messages.byId)) {
-              if (!principal.access.readable(message.channel)) continue
-              ids.add(message.by.actor)
-              for (const id of message.mentions) ids.add(id)
-              for (const reactors of Object.values(message.reactions)) for (const id of reactors) ids.add(id)
-            }
+            const ids = await actorsIn(principal.access)
+            ids.add(actor.id)
             seen = (id) => ids.has(id)
           }
           const actors = Object.values(state.byId)
@@ -567,58 +607,46 @@ export function board(options: BoardOptions = {}) {
         }
         case 'messages': {
           const query = MessagesQuery.parse(queryObject(url))
-          const [{ state, index }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
-            session.state(actorsReducer),
-          ])
-          const matches = compileFilter(query, { me: actor.id, actors, messages: state, access: principal.access })
-          let found = Object.values(state.byId)
-            .filter(matches)
-            .sort((a, b) => a.id - b.id)
-          if (query.before !== undefined) found = found.filter((m) => m.id < query.before!)
-          const limit = query.limit ?? 50
-          found =
-            query.after !== undefined
-              ? found.filter((m) => m.id > query.after!).slice(0, limit)
-              : found.slice(-limit)
-          const reader = { access: principal.access, messages: state }
-          return json({ messages: found.map((m) => view(m, actors, reader)), cursor: index })
+          const { state: actors } = await session.state(actorsReducer)
+          const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+          const { messages, position } = await reads.messages(filter, {
+            ...(query.before !== undefined ? { before: query.before } : {}),
+            ...(query.after !== undefined ? { after: query.after } : {}),
+            limit: query.limit ?? 50,
+          })
+          const reader = await reads.reader(principal.access, messages)
+          return json({ messages: messages.map((m) => view(m, actors, reader)), cursor: Math.min(position, through) })
         }
         case 'threads': {
           const query = ThreadsQuery.parse(queryObject(url))
-          const [{ state, index }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
-            session.state(actorsReducer),
-          ])
-          const matches = compileFilter(query, { me: actor.id, actors, messages: state, access: principal.access })
-          const reader = { access: principal.access, messages: state }
-          const roots = new Set<number>()
-          for (const message of Object.values(state.byId)) if (matches(message)) roots.add(message.re ?? message.id)
-          let found = [...roots].map((id) => {
-            const replies = (state.replies[id] ?? []).map((reply) => state.byId[reply]!).filter((reply) => !reply.deleted)
-            const last = replies.at(-1) ?? null
-            return { root: state.byId[id]!, replies: replies.length, last, at: last?.id ?? id }
+          const { state: actors } = await session.state(actorsReducer)
+          const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+          const { threads, position } = await reads.threads(filter, {
+            ...(query.after !== undefined ? { after: query.after } : {}),
+            limit: query.limit ?? 50,
           })
-          found.sort((a, b) => a.at - b.at)
-          const limit = query.limit ?? 50
-          found = query.after !== undefined ? found.filter((t) => t.at > query.after!).slice(0, limit) : found.slice(-limit)
+          const reader = await reads.reader(principal.access, threads.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
           return json({
-            threads: found.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
-            cursor: index,
+            threads: threads.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
+            cursor: Math.min(position, through),
           })
         }
         case 'message': {
-          const [{ state, index }, { state: actors }] = await Promise.all([
-            session.state(messagesReducer),
-            session.state(actorsReducer),
-          ])
-          const message = state.byId[match.id!]
+          const message = await reads.message(match.id!, request.signal)
           if (!message || !principal.access.readable(message.channel))
             throw notFound(`message not found: #${match.id}`, 'message_not_found')
-          const root = message.re === null ? message : state.byId[message.re]!
-          const reader = { access: principal.access, messages: state }
-          const replies = (state.replies[root.id] ?? []).map((id) => view(state.byId[id]!, actors, reader))
-          return json({ message: view(root, actors, reader), replies, cursor: index, schedules: await schedules.forThread(root.id) })
+          const [{ messages, cursor }, { state: actors }] = await Promise.all([
+            reads.thread(message.re ?? message.id, request.signal),
+            session.state(actorsReducer),
+          ])
+          const [root, ...replies] = messages
+          const reader = await reads.reader(principal.access, messages)
+          return json({
+            message: view(root!, actors, reader),
+            replies: replies.map((reply) => view(reply, actors, reader)),
+            cursor,
+            schedules: await schedules.forThread(root!.id),
+          })
         }
         case 'post': {
           const body = PostBody.parse(await readJson(request))
@@ -745,7 +773,7 @@ export function board(options: BoardOptions = {}) {
           const after =
             query.after ?? (Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : undefined)
           const { state: actors } = await session.state(actorsReducer)
-          const feedOptions = { session, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
+          const feedOptions = { session, reads, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
           if ((request.headers.get('accept') ?? '').includes('text/event-stream'))
             return sse(feedOptions, request.signal, streamMaxMs)
           return json(await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal))
@@ -758,7 +786,10 @@ export function board(options: BoardOptions = {}) {
     }
   }
 
-  const handle = (request: Request) => dispatch(request, null)
+  const handle = (request: Request) => {
+    schedules.catchUp()
+    return dispatch(request, null)
+  }
   const servers = [
     server,
     ...(engine ? [engine.inboxServer] : []),
@@ -788,6 +819,7 @@ export function board(options: BoardOptions = {}) {
     /** For tests and tools. */
     engine,
     session,
+    store,
   }
 }
 

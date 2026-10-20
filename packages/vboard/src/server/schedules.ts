@@ -1,5 +1,5 @@
 import { idempotentId, reducer } from 'experimental-a2'
-import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
+import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { ScheduleBodyOutput, ScheduleView, SchedulesQueryOutput } from '../api/routes.ts'
 import { duration } from '../client/client.ts'
 import {
@@ -11,12 +11,13 @@ import {
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
 import type { Principal } from './auth.ts'
-import { actorsReducer, messagesReducer, type ActorsState } from '../contract/reducers.ts'
+import { actorsReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
 import { authorizePost, deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
 import { DroppedError } from './middleware.ts'
+import { waitUntil } from './wait-until.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -179,12 +180,12 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   let accessNow: AccessNow | null = null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
-  async function arm(ctx: HandlerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
+  async function arm(ctx: ConsumerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
     const hop = Math.min(at, Date.now() + MAX_HOP_MS)
     await ctx.session.schedule(name, { at: new Date(Math.max(hop, Date.now())) }, { type: 'schedule.due', payload: { id, n, at } })
   }
 
-  async function due(ctx: HandlerContext<ScheduleEvents, 'schedule.due'>) {
+  async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
     if (!writes || !accessNow) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
     const { state } = await ctx.session.state(schedulesReducer)
@@ -193,9 +194,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     if (!schedule || schedule.next !== at || schedule.sent !== n) return
     if (Date.now() < at - EARLY_MS) return arm(ctx, 'hop', id, n, at)
 
-    const { state: messages } = await writes.session.state(messagesReducer)
     if (schedule.re !== null) {
-      const root = messages.byId[schedule.re]
+      const root = await writes.reads.message(schedule.re, ctx.signal)
       if (!root || root.deleted) {
         await ctx.session.append('ended', {
           type: 'schedule.canceled',
@@ -244,25 +244,54 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     if (next !== null) await arm(ctx, 'next', id, n + 1, next)
   }
 
+  /**
+   * Arms each schedule's next send, from the first schedule on: a queue delivers a timer to the
+   * deployment that armed it, so one an earlier deployment armed may never reach this one. The
+   * deployment that gets there first sends, and `due` makes the other's a no-op.
+   */
+  const arming = consumer({
+    contract: schedulesContract,
+    name: 'vboard-schedules',
+    types: ['schedule.created'],
+    lane: 'schedules',
+    backfill: true,
+  }).run(async (ctx) => {
+    if (!options.scheduler) return
+    const { state } = await ctx.session.state(schedulesReducer)
+    const schedule = state.byId[ctx.event.index]
+    if (!schedule || schedule.next === null) return
+    await arm(ctx, 'first', schedule.id, schedule.sent, schedule.next)
+  })
+
+  /** Makes each due send, one schedule at a time. */
+  const sending = consumer({
+    contract: schedulesContract,
+    name: 'vboard-schedule-sends',
+    types: ['schedule.due'],
+    lane: ({ event }) => `schedule:${event.payload.id}`,
+  }).run(due)
+
   const server = createServer({
     contract: schedulesContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    handlers: {
-      'schedule.created': {
-        lane: 'schedules',
-        handler: async (ctx) => {
-          if (!options.scheduler) return
-          await arm(ctx, 'first', ctx.event.index, 0, ctx.event.payload.first)
-        },
-      },
-      'schedule.due': {
-        lane: ({ event }) => `schedule:${event.payload.id}`,
-        handler: due,
-      },
-    },
+    consumers: [arming, sending],
   })
   const session = server.session(SCHEDULES_SESSION)
+
+  /**
+   * The first request on an instance starts the arming catching up, and doesn't wait: on the
+   * first deploy with it, every schedule from before gets its next send armed here.
+   */
+  let catching: Promise<unknown> | null = null
+  function catchUp(): void {
+    if (catching || !options.scheduler) return
+    catching = session.consume(arming).catch((error: unknown) => {
+      console.warn('[vboard] schedules are not caught up:', (error as Error).message)
+      catching = null
+    })
+    waitUntil(catching)
+  }
 
   /** `visible`: which schedules the caller may see. */
   async function list(query: SchedulesQueryOutput & { root?: number }, visible: (schedule: Schedule) => boolean = () => true) {
@@ -284,6 +313,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   return {
     server,
     session,
+    catchUp,
     bind: (binding: { writes: WriteContext; accessNow: AccessNow }) => {
       writes = binding.writes
       accessNow = binding.accessNow
@@ -319,8 +349,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       let channel = body.channel
       let re: number | null = null
       if (body.re !== undefined) {
-        const { state: messages } = await writes.session.state(messagesReducer)
-        const target = messages.byId[body.re]
+        const target = await writes.reads.message(body.re)
         if (!target || target.deleted) throw notFound(`message not found: #${body.re}`, 'message_not_found')
         re = target.re ?? target.id
         channel = target.channel

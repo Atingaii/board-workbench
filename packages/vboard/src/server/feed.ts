@@ -3,17 +3,22 @@ import type { ActorView, Filters, MessageView, BoardEventView, PersonView } from
 import type { BoardEvent, Link } from '../contract/contract.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import {
+  channelsReducer,
   foldActors,
   foldMessages,
   iso,
   linkedTo,
-  messagesReducer,
   personOf,
   type ActorsState,
   type Message,
   type MessagesState,
 } from '../contract/reducers.ts'
+import { concernedMessageId } from '../store/project.ts'
+import type { MessageFilter } from '../store/types.ts'
 import type { BoardSession } from './board.ts'
+import type { BoardReads } from './reads.ts'
+
+export { concernedMessageId }
 
 export type ParsedFilters = z.output<typeof Filters>
 
@@ -34,20 +39,32 @@ export function actorView(actors: ActorsState, id: string): ActorView | null {
   return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(person ? { person } : {}) }
 }
 
-/** Who's reading a view, for what links show: a link to a board message they can't read shows nothing of it. */
-export type Reader = { access: Access; messages: MessagesState }
+/**
+ * Who's reading a view, for what links show: a link to a board message they
+ * can't read shows nothing of it. `channelOf` says where a linked message is,
+ * for a reader that can't read every channel.
+ */
+export type Reader = { access: Access; channelOf: (message: number) => string | undefined }
 
 /** The board's own code, which reads every channel: it needs no messages to say so. */
-export const OWN_CODE: Reader = { access: FULL_ACCESS, messages: { byId: {}, replies: {} } }
+export const OWN_CODE: Reader = { access: FULL_ACCESS, channelOf: () => undefined }
 
-/** Links as `reader` may see them. The log keeps each snapshot; it's hidden when it's read. */
+/** The board messages `links` point to, for `Reader.channelOf`. */
+export const linkedIds = (links: readonly Link[]): number[] => links.flatMap((link) => (link.message === null ? [] : [link.message]))
+
+/**
+ * Links as `reader` may see them. The log keeps each snapshot; it's hidden when
+ * it's read. A linked message the reader's lookup doesn't have hides too: its
+ * snapshot shows only where it's known to be readable.
+ */
 export function readableLinks(links: Link[], reader: Reader): Link[] {
   if (reader.access.readsAll) return links
   return links.map((link) => {
-    const linked = link.message === null ? undefined : reader.messages.byId[link.message]
-    return linked && !reader.access.readable(linked.channel)
-      ? { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
-      : link
+    if (link.message === null) return link
+    const channel = reader.channelOf(link.message)
+    return channel !== undefined && reader.access.readable(channel)
+      ? link
+      : { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
   })
 }
 
@@ -156,11 +173,77 @@ export function compileFilter(
   }
 }
 
-/** The message an event concerns, if any. */
-export function concernedMessageId(event: BoardEvent): number | null {
-  if (event.type === 'message.posted') return event.index
-  if ('id' in event.payload) return event.payload.id
-  return null
+/**
+ * `filter`, narrowed to the channels `access` reads among `known`, as the tables
+ * take it: a reader of every channel needs nothing more. A channel the caller
+ * didn't know of is left out, never let in.
+ */
+export function readableFilter(filter: MessageFilter, known: Iterable<string>, access: Access): MessageFilter {
+  if (access.readsAll) return filter
+  const { channel, ...rest } = filter
+  const within = (path: string) => !channel || path === channel.path || (channel.subtree && path.startsWith(`${channel.path}/`))
+  return { ...rest, channels: [...known].filter((path) => within(path) && access.readable(path)) }
+}
+
+/** The filters as the tables take them: handles resolved to who they cover, `me` to the caller. */
+export function toMessageFilter(filters: ParsedFilters, context: { me: string | null; actors: ActorsState }): MessageFilter {
+  const out: MessageFilter = {}
+  const channel = filters.channel
+  if (channel !== undefined)
+    out.channel = channel.endsWith('/') ? { path: channel.slice(0, -1), subtree: true } : { path: channel, subtree: false }
+  if (filters.re !== undefined) out.re = filters.re
+  if (filters.by !== undefined) {
+    const who = whoIs(filters.by, context.actors)
+    out.by = { actors: [...who.actors], principals: [...who.principals] }
+  }
+  if (filters.mentions !== undefined)
+    out.mentions =
+      filters.mentions === 'me'
+        ? context.me === null ? [] : [context.me, ...linkedTo(context.actors, context.me)]
+        : [...whoIs(filters.mentions, context.actors).actors]
+  if (filters.from !== undefined) out.from = filters.from
+  if (filters.text !== undefined) out.text = filters.text.toLowerCase()
+  if (filters.label?.length) out.labels = filters.label.map(([key, values]) => ({ key, values }))
+  return out
+}
+
+/**
+ * Loads into `messages`, as they were just before `event`, the message it
+ * concerns and that message's root: what folding it and matching filters need.
+ * `loaded` remembers what was asked for already, found or not.
+ */
+async function loadInto(
+  reads: BoardReads,
+  messages: MessagesState,
+  loaded: Set<number>,
+  event: BoardEvent,
+  signal?: AbortSignal,
+): Promise<void> {
+  const id = concernedMessageId(event)
+  if (id === null) return
+  const through = event.index - 1
+  const load = async (ids: number[]) => {
+    const wanted = ids.filter((want) => !loaded.has(want))
+    if (wanted.length === 0) return
+    const found = await reads.messagesAt(wanted, through, signal)
+    for (const want of wanted) {
+      loaded.add(want)
+      const message = found.get(want)
+      if (message) messages.byId[want] = message
+    }
+  }
+  // A post is new: the fold makes it. The rest concern a message that was already there.
+  if (event.type === 'message.posted') loaded.add(id)
+  else await load([id])
+  const re = event.type === 'message.posted' ? event.payload.re : (messages.byId[id]?.re ?? null)
+  if (re !== null) await load([re])
+}
+
+/** The message `event` concerns and its root, as they were just before it. */
+export async function loadBefore(reads: BoardReads, event: BoardEvent, signal?: AbortSignal): Promise<MessagesState> {
+  const messages: MessagesState = { byId: {}, replies: {} }
+  await loadInto(reads, messages, new Set(), event, signal)
+  return messages
 }
 
 /** Folds one event into `messages` and `actors`, and returns the message it concerns before and after. */
@@ -193,46 +276,83 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
 export type FeedItem = { index: number; view: BoardEventView | null }
 
 /**
- * Folds events one at a time from a known state and decides what a subscriber
- * sees. A label or reaction change is delivered when its message matched the
- * filter before *or* after it, so subscribers see messages leave a view too.
+ * Folds events one at a time and decides what a subscriber sees. It holds only
+ * the messages events have touched, each loaded from the tables as it was just
+ * before the first event that touched it. A label or reaction change is
+ * delivered when its message matched the filter before *or* after it, so
+ * subscribers see messages leave a view too.
  *
  * It's the one choke point for `/events` (tail, wait, and poll): an event about
  * a message shows only where `access` reads its channel, and one about no
  * message (who's who, a thread's sync) only to a reader of every channel.
  */
 export class FeedProjection {
-  private readonly messages: MessagesState
+  private readonly messages: MessagesState = { byId: {}, replies: {} }
+  private readonly loaded = new Set<number>()
+  private readonly reads: BoardReads
   readonly actors: ActorsState
   private readonly match: (message: Message | undefined) => boolean
   private readonly criteria: boolean
   private readonly all: boolean
   private readonly access: Access
+  /** Where each board message a view links to lives, for a reader that can't read every channel. */
+  private readonly linked = new Map<number, string | undefined>()
 
-  constructor(
-    messages: MessagesState,
-    actors: ActorsState,
-    match: (message: Message | undefined) => boolean,
-    criteria: boolean,
-    all: boolean,
-    access: Access,
-  ) {
-    this.messages = messages
-    this.actors = actors
-    this.match = match
-    this.criteria = criteria
-    this.all = all
-    this.access = access
+  constructor(options: FeedOptions) {
+    this.reads = options.reads
+    this.actors = options.actors
+    this.access = options.access
+    this.match = compileFilter(options.filters, { me: options.me, actors: options.actors, messages: this.messages, access: options.access })
+    this.criteria = hasCriteria(options.filters)
+    this.all = options.all
   }
 
-  step(event: BoardEvent): FeedItem {
+  /** Loads what `events` touch, all as of `index`, in two queries rather than two per event. */
+  async preload(events: readonly BoardEvent[], index: number): Promise<void> {
+    const ids = new Set<number>()
+    for (const event of events) {
+      const id = concernedMessageId(event)
+      if (id === null) continue
+      if (event.type !== 'message.posted') ids.add(id)
+      else if (event.payload.re !== null) ids.add(event.payload.re)
+    }
+    const load = async (wanted: number[]) => {
+      if (wanted.length === 0) return
+      const found = await this.reads.messagesAt(wanted, index)
+      for (const id of wanted) {
+        this.loaded.add(id)
+        const message = found.get(id)
+        if (message) this.messages.byId[id] = message
+      }
+    }
+    await load([...ids].filter((id) => !this.loaded.has(id) && id <= index))
+    const roots = Object.values(this.messages.byId).flatMap((message) => (message.re === null ? [] : [message.re]))
+    await load([...new Set(roots)].filter((id) => !this.loaded.has(id)))
+  }
+
+  async step(event: BoardEvent, signal?: AbortSignal): Promise<FeedItem> {
+    await loadInto(this.reads, this.messages, this.loaded, event, signal)
     const { id, before, after } = foldEvent(this.messages, this.actors, event)
     const message = after ?? before
     const readable = id === null ? this.access.readsAll : message !== undefined && this.access.readable(message.channel)
     const hidden = HIDDEN.has(event.type) && !this.all
     const visible = readable && !hidden && (this.criteria ? this.match(before) || this.match(after) : id !== null || this.all)
     if (!visible) return { index: event.index, view: null }
-    return { index: event.index, view: eventView(event, after, this.actors, { access: this.access, messages: this.messages }) }
+    await this.loadLinked([...(after?.links ?? []), ...((event.payload as { links?: Link[] }).links ?? [])], event.index, signal)
+    const reader: Reader = {
+      access: this.access,
+      channelOf: (message) => this.messages.byId[message]?.channel ?? this.linked.get(message),
+    }
+    return { index: event.index, view: eventView(event, after, this.actors, reader) }
+  }
+
+  /** Where the messages `links` point to live; a message never moves, so any version says. */
+  private async loadLinked(links: readonly Link[], index: number, signal?: AbortSignal): Promise<void> {
+    if (this.access.readsAll) return
+    const wanted = [...new Set(linkedIds(links))].filter((id) => !this.messages.byId[id] && !this.linked.has(id))
+    if (wanted.length === 0) return
+    const found = await this.reads.messagesAt(wanted, index, signal)
+    for (const id of wanted) this.linked.set(id, found.get(id)?.channel)
   }
 }
 
@@ -260,6 +380,7 @@ function nextOrAbort<T>(
 
 export type FeedOptions = {
   session: BoardSession
+  reads: BoardReads
   after: number | undefined
   filters: ParsedFilters
   all: boolean
@@ -269,22 +390,10 @@ export type FeedOptions = {
   access: Access
 }
 
-/** The starting state and index: `after`, or the current head when omitted. */
-async function start(options: FeedOptions) {
-  const head = await options.session.state(messagesReducer)
-  if (options.after === undefined || options.after >= head.index) return head
-  return options.session.state(messagesReducer, { through: options.after })
-}
-
-function projection(options: FeedOptions, messages: MessagesState) {
-  return new FeedProjection(
-    messages,
-    options.actors,
-    compileFilter(options.filters, { me: options.me, actors: options.actors, messages, access: options.access }),
-    hasCriteria(options.filters),
-    options.all,
-    options.access,
-  )
+/** Where a feed starts: `after`, or the head when it's omitted or past it. */
+async function start(options: FeedOptions): Promise<number> {
+  const { index: head } = await options.session.state(channelsReducer)
+  return options.after === undefined || options.after >= head ? head : options.after
 }
 
 /** Every event after the start, live, until the signal aborts. */
@@ -292,8 +401,8 @@ export async function* liveFeed(
   options: FeedOptions,
   signal: AbortSignal,
 ): AsyncGenerator<FeedItem> {
-  const { state, index } = await start(options)
-  const feed = projection(options, state)
+  const index = await start(options)
+  const feed = new FeedProjection(options)
   const iterator = options.session.stream({ startAfter: index })[Symbol.asyncIterator]()
   try {
     // The starting cursor, so a client that sees nothing yet can still resume exactly.
@@ -301,7 +410,7 @@ export async function* liveFeed(
     while (true) {
       const next = await nextOrAbort(iterator, signal)
       if (next === null || next.done) return
-      yield feed.step(next.value as BoardEvent)
+      yield await feed.step(next.value as BoardEvent, signal)
     }
   } finally {
     void iterator.return?.()
@@ -320,13 +429,14 @@ export async function pollFeed(
   waitMs: number,
   signal: AbortSignal,
 ): Promise<{ events: BoardEventView[]; cursor: number }> {
-  const { state, index } = await start(options)
-  const feed = projection(options, state)
+  const index = await start(options)
+  const feed = new FeedProjection(options)
   const events: BoardEventView[] = []
   let cursor = index
-  const backlog = await options.session.history({ gte: index + 1, lte: index + PAGE })
+  const backlog = (await options.session.history({ gte: index + 1, lte: index + PAGE })) as BoardEvent[]
+  await feed.preload(backlog, index)
   for (const event of backlog) {
-    const item = feed.step(event as BoardEvent)
+    const item = await feed.step(event, signal)
     cursor = item.index
     if (item.view) events.push(item.view)
   }
@@ -339,7 +449,7 @@ export async function pollFeed(
     while (true) {
       const next = await nextOrAbort(iterator, until)
       if (next === null || next.done) return { events, cursor }
-      const item = feed.step(next.value as BoardEvent)
+      const item = await feed.step(next.value as BoardEvent, until)
       cursor = item.index
       if (item.view) {
         events.push(item.view)

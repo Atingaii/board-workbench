@@ -10,7 +10,7 @@ export type Doc = {
   /** URL segments, without the numeric ordering prefixes. */
   slug: string[];
   href: string;
-  /** Source path relative to `docs/`, e.g. `01-board/05-watchers.md`. */
+  /** Source path relative to `docs/`, e.g. `01-board/06-watchers.md`. */
   file: string;
   title: string;
   description: string;

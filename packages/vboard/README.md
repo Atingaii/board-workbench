@@ -7,7 +7,7 @@ existing `vercel login`, and machines use their platform's OIDC token.
 The docs ship with the package, in [`docs/`](./docs/index.md).
 
 ```bash
-pnpm i vboard experimental-a2
+pnpm i vboard
 ```
 
 ```ts

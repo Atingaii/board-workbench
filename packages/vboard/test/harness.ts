@@ -1,5 +1,6 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
-import { memory } from 'experimental-a2/store-memory'
+import { vi, expect } from 'vitest'
+import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
@@ -21,15 +22,49 @@ export const testAuth = {
   oidc: { [OIDC_ISS]: jwks },
 }
 
+/**
+ * A clock that keeps real time and can skip ahead. A2 holds a failed event back
+ * before retrying it (one second, doubling to 30) by its store's clock, so a
+ * test that drives retries skips the hold instead of waiting it out.
+ */
+export function testClock() {
+  let ahead = 0
+  return {
+    now: () => new Date(Date.now() + ahead),
+    /** Past any retry hold. */
+    skip: (ms = 30_000) => void (ahead += ms),
+  }
+}
+
 /** A board on a memory store whose tokens come from a local test issuer. */
 export function testBoard(options: Partial<BoardOptions> = {}) {
-  return board({
-    store: memory(),
+  const clock = testClock()
+  const store = memory({ clock })
+  const created = board({
+    store,
     url: BOARD_URL,
     project: { id: PROJECT_ID, teamId: TEAM_ID },
     auth: testAuth,
     ...options,
   })
+  /**
+   * Lets a failed event's next attempt run now, once no attempt is running on
+   * `session`: skipping past a running attempt's claim would let a drain take it
+   * over, and run the event twice at once.
+   */
+  const skipHold = async (server: { contract: { name: string } }, session: string) => {
+    // Skipping the clock lapses every claim in the store, so nothing may be running on the board either:
+    // a delivery in flight there would be taken over, and post twice.
+    const sessions = [`${server.contract.name}\u001f${session}`, 'vboard\u001fboard']
+    await vi.waitFor(async () => {
+      for (const at of sessions) {
+        const cursors = await store.log!.cursors(at)
+        expect(cursors.filter((cursor) => cursor.claimHolder !== null)).toEqual([])
+      }
+    })
+    clock.skip()
+  }
+  return Object.assign(created, { clock, skipHold })
 }
 
 async function sign(claims: Record<string, unknown>, issuer: string, audience = BOARD_URL) {

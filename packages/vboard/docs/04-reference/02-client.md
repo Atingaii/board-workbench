@@ -38,7 +38,7 @@ const board = createClient({
 ```
 
 `token` is a Vercel or GitHub Actions OIDC token whose audience is the
-board's URL, or a function that returns one. See [Identity](../01-board/02-identity.md).
+board's URL, or a function that returns one. See [Identity](../01-board/03-identity.md).
 
 ### Options
 
@@ -180,7 +180,7 @@ await board.reply(812, { text: 'fixed, see after', attachments: [shot] })
 const file = await board.download(shot.id)
 ```
 
-See [Messages](../01-board/03-messages.md).
+See [Messages](../01-board/04-messages.md).
 
 ### sync
 
@@ -226,7 +226,7 @@ await board.cancelSchedule(s.id)
 canceled ones); `re` is any message in a thread. A schedule's creator may
 cancel it, and so may `manage` in its channel; `canceled` is false when it was
 already done or canceled. It needs a board
-with a scheduler. See [Scheduled messages](../01-board/06-schedules.md).
+with a scheduler. See [Scheduled messages](../01-board/07-schedules.md).
 
 ## Reading
 
@@ -297,7 +297,7 @@ discovery(): Promise<Discovery>     // unauthenticated: url, audience, team_id, 
 session, expiresAt, can }`. `can` maps each channel pattern to what you
 may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
 'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
-you can read; see [Access](../01-board/08-access.md).
+you can read; see [Access](../01-board/09-access.md).
 
 `source()` names where the Node client got its token: `VBOARD_TOKEN`, `vb
 serve`, `GitHub Actions OIDC`, `Vercel OIDC`, or `vercel login`. It's null for
@@ -330,13 +330,14 @@ syncing or storing it. Both need `manage` in every channel.
 
 ```ts
 stuck(): Promise<StuckEvent[]>
-redrive(session: string, index: number, action: 'retry' | 'skip'): Promise<{ redriven: boolean }>
+redrive(session: string, index: number, action: 'retry' | 'skip', consumer?: string): Promise<{ redriven: boolean }>
 ```
 
 `stuck` returns the events that failed 10 times and stopped their thread,
-oldest first in each session: `{ session, index, type, lane, thread, root,
-external, attempts, failures, error, failedAt }`. `redrive` retries one with a
-fresh 10 tries, or skips it; `redriven` is false when it wasn't stuck. Both
+oldest first in each session: `{ session, index, type, consumer, lane, thread,
+root, external, attempts, failures, error, failedAt }`. `redrive` retries one
+with a fresh 10 tries, or skips it, for `consumer` or for every consumer it's
+stuck for; `redriven` is false when it wasn't stuck. Both
 need `manage` in every channel. See [the log](./04-log.md#stuck-events).
 
 ## Live
@@ -467,5 +468,5 @@ export async function POST(request: Request) {
 
 Watchers and sync callbacks get the same kind of client as `board`, writing as
 the watcher or as the platform user who triggered the event. See
-[Mounting](../01-board/01-mounting.md), [Watchers](../01-board/05-watchers.md),
+[Mounting](../01-board/01-mounting.md), [Watchers](../01-board/06-watchers.md),
 and [Callbacks](../02-sync/02-callbacks.md).

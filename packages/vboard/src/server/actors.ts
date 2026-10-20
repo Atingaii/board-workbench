@@ -1,5 +1,5 @@
 import type { ActorsState, Actor } from '../contract/reducers.ts'
-import type { Author } from '../contract/schemas.ts'
+import { toStorable, type Author } from '../contract/schemas.ts'
 import { extractMentions } from '../contract/mentions.ts'
 import type { Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
@@ -97,8 +97,9 @@ export function actorSeen(seen: Actor, known: ActorsState) {
     payload: {
       actor: actor.id,
       kind: actor.kind,
-      handle: actor.handle,
-      name: actor.name,
+      // A platform's names can hold what the board can't store.
+      handle: toStorable(actor.handle),
+      name: toStorable(actor.name),
       avatar: actor.avatar,
     },
   }

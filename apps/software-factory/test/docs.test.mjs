@@ -53,9 +53,9 @@ test("every link between pages lands on a page, and on a heading when it names o
 
 test("a relative link resolves against the page it's on", async () => {
   const docs = await getDocs();
-  const watchers = docs.find((doc) => doc.file === "01-board/05-watchers.md");
+  const watchers = docs.find((doc) => doc.file === "01-board/06-watchers.md");
   assert.equal(linkHref(watchers, docs, "../02-sync/03-slack.md#files"), "/sync/slack#files");
-  assert.equal(linkHref(watchers, docs, "./04-reading.md"), "/board/reading");
+  assert.equal(linkHref(watchers, docs, "./05-reading.md"), "/board/reading");
   assert.equal(linkHref(watchers, docs, "../index.md"), "/");
   assert.throws(() => linkHref(watchers, docs, "./nope.md"), /isn't a page/);
 });

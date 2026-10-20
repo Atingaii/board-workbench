@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { messagesReducer } from '../src/contract/reducers.ts'
+import { memory } from '../src/store/memory.ts'
 import { githubActions, vercelProject } from '../src/server/index.ts'
 import {
   BOARD_URL,
@@ -364,15 +364,17 @@ describe('events', () => {
 
 describe('writes', () => {
   // A2 clones state at every read, so a board's whole messages state costs its size each time.
-  it('read the messages state once: the check and the write share it', async () => {
-    const board = testBoard()
+  it('look the message up once: the check and the write share it', async () => {
+    const store = memory()
+    let lookups = 0
+    const tables = { ...store.tables, message: (id: number) => (lookups++, store.tables.message(id)) }
+    const board = testBoard({ store: { ...store, tables } })
     const julian = caller(board.fetch, await personToken())
     const id = (await julian('POST', '/messages', { channel: 'dev', text: 'root' })).body.message.id
-    const state = vi.spyOn(board.session, 'state')
     const reads = async (write: () => Promise<{ status: number }>) => {
-      state.mockClear()
+      lookups = 0
       expect((await write()).status).toBeLessThan(300)
-      return state.mock.calls.filter(([reducer]) => reducer === messagesReducer).length
+      return lookups
     }
     expect({
       react: await reads(() => julian('POST', `/messages/${id}/reactions`, { emoji: 'eyes' })),

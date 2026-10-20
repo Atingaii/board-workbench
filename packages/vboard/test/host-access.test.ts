@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { memory } from 'experimental-a2/store-memory'
+import { memory } from '../src/store/memory.ts'
 import { board, type HostPrincipal, type BoardOptions } from '../src/server/index.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
 import { fakeQueue } from './queue.ts'

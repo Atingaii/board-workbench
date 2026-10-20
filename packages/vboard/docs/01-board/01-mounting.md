@@ -6,7 +6,7 @@ description: One `board()` call in one route gives you the log, the HTTP API, an
 ## One route
 
 ```package-install
-npm i vboard experimental-a2
+npm i vboard
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
@@ -18,7 +18,7 @@ export const { GET, POST } = board()
 That's a board. It answers at `/api/board`, and the CLI points at it with
 `VBOARD_URL` or `vb link`. Call `board()` once, at module scope. A host that
 serves many teams' boards creates one per team instead, and caches them: see
-[A host's own verifier](./08-access.md#a-hosts-own-verifier).
+[A host's own verifier](./09-access.md#a-hosts-own-verifier).
 
 A board is one log in one route of one Vercel project. The mount path is yours:
 the board infers it from requests. To get a second board (one the project's
@@ -28,12 +28,12 @@ own people can't all read, say), mount a second route.
 
 | Option | What it does |
 | --- | --- |
-| `store` | Any A2 store: `postgres()`, `redis()`, `redisHttp()`, SQLite. See [defaults](#defaults-by-environment) |
-| `blob` | Where [attachments](./03-messages.md#attachments) live: `vercelBlob()` from `vboard/adapter-vercel-blob`, with an optional `prefix` to share one store between boards |
-| `scheduler` | An A2 scheduler, for sync, watchers, and scheduled messages: `vercelQueues()` or `qstash()` |
+| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `sqlite()`, or `memory()` from `vboard/store-*`. See [Database](./02-database.md) |
+| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/adapter-vercel-blob`, with an optional `prefix` to share one store between boards |
+| `scheduler` | For sync, watchers, and scheduled messages: `vercelQueues()` from `vboard/scheduler-vercel`, or `qstash()` from `vboard/scheduler-qstash` |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack({…}) }`. See [Sync](../02-sync/01-overview.md) |
-| `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./05-watchers.md) |
-| `access` | Who besides the board's people and its own environment's deployments may call it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`. Or a function that verifies callers itself: see [A host's own verifier](./08-access.md#a-hosts-own-verifier) |
+| `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
+| `access` | Who besides the board's people and its own environment's deployments may call it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`. Or a function that verifies callers itself: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
 | `project` | `{ id, teamId? }`: the board's Vercel project. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercelProject()` rules named without one |
 | `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise |
@@ -50,20 +50,22 @@ refuses one whose discovery names another.
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { vercelBlob } from 'vboard/adapter-vercel-blob'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { vercelQueues } from 'vboard/scheduler-vercel'
+import { postgres } from 'vboard/store-postgres'
 
 // SSE streams close just before this, and clients reconnect where they left off.
 export const maxDuration = 300
 
 export const { GET, POST, scheduler, client } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
   blob: vercelBlob(),
   scheduler: vercelQueues({ topic: 'vboard' }),
 })
 ```
 
-`vercelBlob()` needs `@vercel/blob` installed and a private Blob store
+`postgres()` needs `pg` installed, and the board's tables applied to the
+database before the first deploy: see [Database](./02-database.md#postgres).
+`vercelQueues()` needs `@vercel/queue`. `vercelBlob()` needs `@vercel/blob` installed and a private Blob store
 connected to the project. It finds the store through `BLOB_READ_WRITE_TOKEN`,
 or the project's OIDC token and `BLOB_STORE_ID`.
 
@@ -97,7 +99,7 @@ pass the same scheduler to `board()` and to them, and hand the board's
 `servers` to its handler yourself:
 
 ```ts lib/queue.ts
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { vercelQueues } from 'vboard/scheduler-vercel'
 
 // One scheduler for the board (`board({ store, scheduler: queue })`) and your own A2 servers.
 export const queue = vercelQueues({ topic: 'vboard' })
@@ -142,7 +144,7 @@ export async function POST(request: Request) {
 - **A `key` makes its posts idempotent.** The same key and the same order of
   posts never post twice, so a redelivered webhook does nothing. Use the
   delivery's own ID.
-- **Its writes are ordinary writes.** They wake [watchers](./05-watchers.md)
+- **Its writes are ordinary writes.** They wake [watchers](./06-watchers.md)
   and [sync](../02-sync/01-overview.md) like anyone's.
 - It's the same client `createClient` returns; see the
   [client reference](../04-reference/02-client.md).
@@ -182,12 +184,13 @@ What the board uses when you leave an option out:
 | `scheduler` | none | none | none |
 
 Development state survives restarts. Sync and watchers need a scheduler in
-production. [Scheduled messages](./06-schedules.md) need one everywhere: without
+production. [Scheduled messages](./07-schedules.md) need one everywhere: without
 it, scheduling answers 501.
 
 ## Production checklist
 
-- **A store.** Postgres or Redis. A board without one doesn't start.
+- **A store.** `postgres()`, with its tables applied: see
+  [Database](./02-database.md#postgres). A board without one doesn't start.
 - **A blob store,** if anyone attaches files: `blob: vercelBlob()`.
 - **A scheduler,** if you use sync, watchers, or scheduled messages, mounted in
   [its own route](#the-scheduler-route) with its queue trigger.
@@ -202,4 +205,4 @@ it, scheduling answers 501.
   Webhooks need a way through too; Vercel Connect forwards them through
   protection.
 - **Access.** Access to the board is access to its Vercel project: everyone
-  who should post needs it. See [Identity](./02-identity.md).
+  who should post needs it. See [Identity](./03-identity.md).

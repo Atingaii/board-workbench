@@ -58,11 +58,13 @@ root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
 reply in an existing thread rather than starting one.
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
-  board posts there too. `VERCEL_ENV` only picks the log: production's Redis keys,
-  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally.
-  The Redis namespace is `vboard-factory-2`, separate from the v0 feedback bot's
-  (`vboard-2`). Both are new with A2 0.17, whose Redis layout an existing prefix
-  can't take; the factory's log under `vboard-factory` was copied over. Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
+  board posts there too. `VERCEL_ENV` only picks the store: production's Redis keys,
+  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. On
+  Redis the store holds A2's log and the board's tables (`<prefix>:vboard:*`),
+  which fill from the log on their own. The Redis namespace is `vboard-factory-2`,
+  separate from the v0 feedback bot's (`vboard-2`). A2 0.21 reads what 0.17 to
+  0.20 wrote under them; work they hadn't finished when 0.21 deployed is dropped.
+  Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
@@ -122,8 +124,8 @@ reply in an existing thread rather than starting one.
   what's new itself: a burst of replies costs one turn, not one each.
   A message that can't reach Pi (its sandbox fails to start or set up) is
   tried 3 times, then the watcher replies "Pi couldn't start" in the thread
-  instead of throwing: a watcher that throws dead-letters within half a minute,
-  which stops it on that thread for good. The next reply tries again. No
+  instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
+  then vboard drops that event without a word. The next reply tries again. No
   watcher's own reply wakes Pi or triage (`byWatcher`).
 - `crosspost` (`crosspost.ts`) links a factory PR's Slack thread and the Slack
   thread it was built for, both ways, once the PR's root lands in Slack (its tail
@@ -233,9 +235,11 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
 - Every environment syncs with the real Slack, so a local or preview board posts
-  there too. `VERCEL_ENV` only picks the log: production's Redis keys, a
+  there too. `VERCEL_ENV` only picks the store: production's Redis keys
+  (`vboard/store-redis-http` on the project's Upstash, prefix `vboard-2`), a
   preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
-  channels are private, so they're mapped by ID.
+  board's tables fill from the log on their own, so a new prefix needs nothing
+  applied. The channels are private, so they're mapped by ID.
 - `triage` acks each new thread in `#feedback-v0-vboard` and asks Luna's
   decision model (`openai/gpt-6-luna-decisions`) for its `kind` and how likely
   it's worth fixing (`worth=0.00`–`1.00`). A bug or feature at 0.7 or more gets
@@ -354,9 +358,21 @@ shared by the server and the client.
   answering, it writes the quote. (That's why replies sync without an
   automatic quote line.)
 
-- **One log.** Every board fact is an event in A2 session `board`. Views are
-  reducers in `src/contract/reducers.ts`. Bookkeeping that people don't read
-  (cursors, raw platform events) belongs in side contracts, not the board log.
+- **One log.** Every board fact is an event in A2 session `board`. Messages and
+  the sync state are read from tables the `vboard-tables` consumer keeps from it
+  (`src/store/`), built with `foldMessages` and `foldSync`; smaller views are reducers in
+  `src/contract/reducers.ts`. Nothing writes the tables but that consumer and
+  the board's own writes, each event once: whoever applies it claims its index.
+  Bookkeeping that people don't read (cursors, raw platform events) belongs in
+  side contracts, not the board log.
+- **The tables are one interface.** The board reads through `MessageTables`
+  (`src/store/types.ts`), in board terms; SQL (the same queries on Postgres and
+  SQLite) and Redis (`redis-tables.ts`, a script per write and per query) are
+  behind it. `test/tables.test.ts` is its conformance suite: random histories
+  against the full-state fold, every filter, and writers and the consumer taking
+  turns, on every backend. A change to either keeps it passing, and a new
+  backend joins its `BACKENDS`. Postgres and Redis run there when
+  `TEST_DATABASE_URL` and `TEST_REDIS_URL` are set, as in CI.
 - **Folds mutate in place.** A2 clones state at every read and snapshot
   boundary, so an event costs O(1). Never share a fold's state object outside
   the fold.

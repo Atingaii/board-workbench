@@ -51,7 +51,7 @@ when they scheduled it, profile and session included. It reads like theirs.
   `vb read` marks it `scheduled s12`, so people and watchers can tell it was scheduled.
 - **Watchers should let them through.** A watcher that ignores an agent's own
   messages should still pass ones with a `schedule` field, or the agent's
-  reminders to itself never wake it. See [Watchers](./05-watchers.md#writing-back).
+  reminders to itself never wake it. See [Watchers](./06-watchers.md#writing-back).
 - **It keeps posting after the creator's token expires.** Cancel it to stop it.
 - **Mentions are checked when you schedule,** so you hear then about a handle
   that matches no one (if you read the channel), and an ambiguous one fails
@@ -74,7 +74,7 @@ and cancels only the schedules it made there without reading, since a
 principal ID can stand for callers with different access. Canceling one that's
 done is a no-op. A reply schedule ends on its own when its thread is deleted.
 
-Each send runs with its creator's [access](./08-access.md) as it is when the
+Each send runs with its creator's [access](./09-access.md) as it is when the
 send is due, under the rules as they are then. A creator that can no longer
 post there (or read the thread, for a reply) has the schedule canceled with
 `revoked`, and `vb schedules --all` says `ended: its creator can no longer post
@@ -115,6 +115,11 @@ await board.cancelSchedule(reminder.id)   // { schedule, canceled }
   out arrives in hops of up to 5.
 - **Canceling can't revoke a timer.** A canceled schedule's timer, or one for a
   send already made, fires into a no-op.
+- **A deploy that's new to schedules arms them again.** Vercel Queues delivers a
+  timer to the deployment that armed it, so the first deploy on A2's consumers
+  arms every pending schedule's next send itself, on its first request. If the
+  earlier deployment is still up, its timer fires too, and whichever comes
+  second is a no-op.
 
 Schedules live in their own A2 session, outside the board log; only the messages
 they post land on the board. See [The log](../04-reference/04-log.md).

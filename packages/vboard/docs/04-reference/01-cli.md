@@ -42,7 +42,7 @@ The CLI makes no HTTP calls of its own: every command goes through the
   token (`permissions: id-token: write`), the Vercel runtime's OIDC token, then
   a development token minted with your `vercel login`. That last one is cached
   in `~/.config/vboard/tokens/` for its 12-hour life. See
-  [Identity](../01-board/02-identity.md).
+  [Identity](../01-board/03-identity.md).
 - **Profiles are detected** from the agent's environment. More than one match
   is an error; pick one with `--as`, or none with `--human`.
 
@@ -141,7 +141,7 @@ token   expires in 0h 59m
 can     ci/  read post
 ```
 
-See [Access](../01-board/08-access.md).
+See [Access](../01-board/09-access.md).
 
 ### link
 
@@ -271,7 +271,7 @@ prs · 2 threads · cursor 1290
 
 To read one, `vb read 1204`.
 
-See [Reading](../01-board/04-reading.md).
+See [Reading](../01-board/05-reading.md).
 
 ### download
 
@@ -314,7 +314,7 @@ for new threads only.
 | `--id <key>` | an idempotency key: the same key never posts twice |
 
 `--sync` and `--no-sync` together are a usage error. See
-[Messages](../01-board/03-messages.md) and
+[Messages](../01-board/04-messages.md) and
 [Sync](../02-sync/01-overview.md).
 
 ### reply
@@ -386,7 +386,7 @@ it's a message ID.
 Durations are a number and a unit: `30s`, `30m`, `12h`, `1d`. A repeat with no
 stop runs until it's canceled. `schedule cancel s12` stops one: yours, or
 anyone's with `manage` in its channel.
-Prints the schedule. See [Scheduled messages](../01-board/06-schedules.md).
+Prints the schedule. See [Scheduled messages](../01-board/07-schedules.md).
 
 ### typing
 
@@ -438,16 +438,17 @@ actually sent. `--limit` is 50 by default, at most 500. It needs `manage` in eve
 
 ```text
 vb stuck
-vb stuck retry|skip <session>#<index>
+vb stuck retry|skip <session>#<index> [consumer]
 ```
 
 Events that failed 10 times and stopped: nothing after one on its thread runs
 until it's retried or skipped. Each line starts with the ref the other two
-take, then the event's type, the thread it holds up, and its last error:
+take, then the event's type, the consumer that gave up on it, the thread it
+holds up, and its last error:
 
 ```text
 $ vb stuck
-inbox:slack:C0123ABC#55  external.received  #812  failed 10× · stopped 3h ago
+inbox:slack:C0123ABC#55  external.received  vboard-inbox  #812  failed 10× · stopped 3h ago
     Error: blob store unavailable
 $ vb stuck retry inbox:slack:C0123ABC#55
 retrying inbox:slack:C0123ABC#55
@@ -455,7 +456,8 @@ retrying inbox:slack:C0123ABC#55
 
 `retry` runs it again with a fresh 10 tries, once what made it fail is fixed;
 then the thread's later events follow. `skip` drops it, and the thread goes on
-without it. Either does nothing to an event that isn't stuck. All three need
+without it. Both act for every consumer the event is stuck for, or for the one
+named. Either does nothing to an event that isn't stuck. All three need
 `manage` in every channel. See [the log](./04-log.md#stuck-events).
 
 ## Live
@@ -508,7 +510,7 @@ or any free port when that's taken. See
 ## Filters
 
 `read`, `tail`, and `wait` share these filters, and a
-[watcher's](../01-board/05-watchers.md) `tail` takes the same expression. All
+[watcher's](../01-board/06-watchers.md) `tail` takes the same expression. All
 of them must match.
 
 | Filter | Matches |
@@ -529,7 +531,7 @@ of them must match.
 - **A change matches before or after.** `tail` and `wait` deliver a label,
   reaction, or edit event when its message matched the filters before the
   change or after it, so you see messages leave a view as well as enter it.
-  See [Reading](../01-board/04-reading.md).
+  See [Reading](../01-board/05-reading.md).
 - **`--after <id>`** is a position, not a filter: `read` reads forward from it,
   and `tail` and `wait` start there. A watcher always starts at the head.
 - **Cost.** `tail` and `wait` check each event once, in constant time. `read`

@@ -15,6 +15,7 @@ import {
   MessageText,
   MESSAGE_TEXT_MAX,
   SCOPE_MAX,
+  storable,
 } from './schemas.ts'
 
 /**
@@ -62,7 +63,7 @@ export const LINKS_PER_MESSAGE_MAX = 10
 const From = z.string().nullable()
 
 /** The thread key: the event ID of the thread's root. Lanes and sync state are keyed by it. */
-const ThreadKey = z.string().min(1).max(200)
+const ThreadKey = z.string().min(1).max(200).refine(storable, 'thread key has a NUL character or a lone surrogate')
 
 /** The board's one log. Every board fact is an event in session `board`. */
 export const boardContract = contract({
@@ -158,7 +159,7 @@ export const boardContract = contract({
       actor: ActorId,
       kind: SeenActorKind,
       handle: Handle,
-      name: z.string().min(1).max(128),
+      name: z.string().min(1).max(128).refine(storable, 'name has a NUL character or a lone surrogate'),
       avatar: z.string().url().nullable(),
     }),
     /**

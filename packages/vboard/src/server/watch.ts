@@ -1,13 +1,15 @@
 import { idempotentId } from 'experimental-a2'
-import { createServer, type A2Scheduler, type A2Store, type HandlerContext } from 'experimental-a2/server'
+import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { BoardEventView } from '../api/routes.ts'
 import { parseWatchTail } from '../api/tail.ts'
 import type { BoardClient } from '../client/client.ts'
-import { watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, messagesReducer, type Message, type MessagesState } from '../contract/reducers.ts'
+import { boardContract, watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
+import { actorsReducer, type Message, type MessagesState } from '../contract/reducers.ts'
 import { FULL_ACCESS } from './access.ts'
-import { compileFilter, eventView, foldEvent, hasCriteria, OWN_CODE, type ParsedFilters } from './feed.ts'
+import { compileFilter, eventView, foldEvent, hasCriteria, loadBefore, OWN_CODE, type ParsedFilters } from './feed.ts'
+import type { BoardReads } from './reads.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
+import { A2_TRIES, afterRetry } from './attempts.ts'
 
 /** What a watcher's `run` gets. */
 export type WatcherContext = {
@@ -51,7 +53,7 @@ const WATCHED = [
 const RECEIPTS = new Set(['message.synced', 'message.files_synced'])
 
 /**
- * A2 dead-letters a handler after 10 failures, and a dead letter stops its
+ * A2 dead-letters an event after 10 failures, and a dead letter stops its
  * lane, which is the thread's: the watcher would never run on that thread
  * again. So `run` gets a few tries, then the failure is recorded and the
  * thread moves on.
@@ -59,11 +61,13 @@ const RECEIPTS = new Set(['message.synced', 'message.files_synced'])
 const RUN_ATTEMPTS = 5
 
 /**
- * A run that's killed (a timeout, out of memory) never throws, and A2 doesn't
- * count kills toward a dead letter, so it would retry on the thread's lane
- * forever. Attempts count kills too: this many means runs keep dying.
+ * A run that's killed (a timeout, out of memory) never throws. A2 counts it
+ * toward the 10 failures when the next attempt takes over, and dead-letters
+ * the event at that takeover instead of running it: the 10th attempt is the
+ * last one a watcher sees. Throws give up at RUN_ATTEMPTS, so getting this far
+ * means runs keep dying, and the 10th records the failure without running.
  */
-const KILLED_ATTEMPTS = RUN_ATTEMPTS * 2
+const KILLED_ATTEMPTS = A2_TRIES
 
 const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
 
@@ -86,11 +90,12 @@ export async function runMatch(input: {
     console.error(`[vboard] watcher ${watcher.id} gave up on event #${event.index} after ${attempt} tries:`, error)
     await input.record({ matched: match.id, thread: match.payload.thread, error })
   }
-  if (attempt > KILLED_ATTEMPTS) return giveUp(`its run was cut short ${attempt - 1} times (a timeout, or out of memory)`)
+  const early = !afterRetry(attempt)
+  if (early && attempt >= KILLED_ATTEMPTS) return giveUp(`its run was cut short ${attempt - 1} times (a timeout, or out of memory)`)
   try {
     await watcher.run({ event, board: input.board() })
   } catch (error) {
-    if (attempt < RUN_ATTEMPTS) throw error
+    if (!early || attempt < RUN_ATTEMPTS) throw error
     await giveUp(describe(error))
   }
 }
@@ -99,7 +104,7 @@ export async function runMatch(input: {
 const identityOf = (id: string): Identity => deploymentIdentity(`vboard:watch:${id}`, id)
 
 /**
- * Watchers: a board-contract handler matches each event against every
+ * Watchers: a board-contract consumer matches each event against every
  * watcher's filters, the way a tail does, and appends what matched to that
  * watcher's session, where `run` happens on the thread's lane.
  */
@@ -125,38 +130,42 @@ export function createWatchers(options: {
   const byId = new Map(watchers.map((watcher) => [watcher.id, watcher]))
 
   let clientAs: ((identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient) | null = null
+  let reads: BoardReads | null = null
+
+  /** Runs a watcher on a board event it matched, one thread at a time. */
+  const runner = consumer({
+    contract: watchContract,
+    name: 'vboard-watch',
+    types: ['watch.matched'],
+    lane: ({ event }) => `thread:${event.payload.thread}`,
+  }).run(async (ctx) => {
+    // A watcher removed from config since it matched has nothing left to run.
+    const watcher = byId.get(ctx.session.id.slice('watch:'.length))
+    if (!watcher) return
+    const bound = clientAs
+    if (!bound) throw new Error('watchers used before the board bound them')
+    await runMatch({
+      watcher,
+      match: ctx.event,
+      attempt: ctx.attempt,
+      board: () => bound(watcher.identity, ctx.event.id, { via: { kind: 'watcher', id: watcher.id } }),
+      record: (payload) => ctx.session.append(`failed:${ctx.event.id}`, { type: 'watch.failed', payload }),
+    })
+  })
 
   const server = createServer({
     contract: watchContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    handlers: {
-      'watch.matched': {
-        lane: ({ event }) => `thread:${event.payload.thread}`,
-        handler: async (ctx) => {
-          // A watcher removed from config since it matched has nothing left to run.
-          const watcher = byId.get(ctx.session.id.slice('watch:'.length))
-          if (!watcher) return
-          const bound = clientAs
-          if (!bound) throw new Error('watchers used before the board bound them')
-          await runMatch({
-            watcher,
-            match: ctx.event,
-            attempt: ctx.attempt,
-            board: () => bound(watcher.identity, ctx.event.id, { via: { kind: 'watcher', id: watcher.id } }),
-            record: (payload) => ctx.session.append(`failed:${ctx.event.id}`, { type: 'watch.failed', payload }),
-          })
-        },
-      },
-    },
+    consumers: [runner],
   })
 
   /** Matches one board event; the message before or after it must match, as in a tail. */
-  async function dispatch(ctx: HandlerContext<BoardEvents>) {
+  async function dispatch(ctx: ConsumerContext<BoardEvents>) {
     const event = ctx.event as BoardEvent
     const through = event.index - 1
-    const [{ state: messages }, { state: actors }] = await Promise.all([
-      ctx.session.state(messagesReducer, { through }),
+    const [messages, { state: actors }] = await Promise.all([
+      messagesBefore(event, ctx.signal),
       ctx.session.state(actorsReducer, { through }),
     ])
     const { id, before, after } = foldEvent(messages, actors, event)
@@ -177,6 +186,12 @@ export function createWatchers(options: {
     }
   }
 
+  /** The message `event` concerns, and its thread's root, as they were just before it. */
+  async function messagesBefore(event: BoardEvent, signal: AbortSignal): Promise<MessagesState> {
+    if (!reads) throw new Error('watchers used before the board bound them')
+    return loadBefore(reads, event, signal)
+  }
+
   /** Didn't match before and does now; a new reply only counts if its thread wasn't already in view. */
   function entered(
     match: (message: Message | undefined) => boolean,
@@ -189,16 +204,25 @@ export function createWatchers(options: {
     return !match(root)
   }
 
-  const lane = ({ event }: { event: { payload: unknown } }) => `thread:${(event.payload as { thread: string }).thread}`
-  /** Board-contract handlers, on the same per-thread lanes as sync's. */
-  const boardHandlers = Object.fromEntries(WATCHED.map((type) => [type, { lane, handler: dispatch }]))
+  /**
+   * Matches board events against the watchers, on the same per-thread lanes as
+   * sync's but with its own place in the log: a watcher that fails holds up
+   * neither sync nor any other thread.
+   */
+  const boardConsumer = consumer({
+    contract: boardContract,
+    name: 'vboard-watchers',
+    types: WATCHED,
+    lane: ({ event }) => `thread:${(event.payload as { thread: string }).thread}`,
+  }).run(dispatch)
 
   return {
     server,
-    boardHandlers,
+    boardConsumer,
     ids: watchers.map((watcher) => watcher.id),
-    bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient }) => {
+    bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient; reads: BoardReads }) => {
       clientAs = binding.clientAs
+      reads = binding.reads
     },
   }
 }

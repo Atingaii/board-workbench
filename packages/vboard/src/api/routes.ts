@@ -9,6 +9,7 @@ import {
   MESSAGE_TEXT_MAX,
   MessageId,
   MessageText,
+  storable,
 } from '../contract/schemas.ts'
 import type { BoardEvent } from '../contract/contract.ts'
 import type { Actor, Channel, Message } from '../contract/reducers.ts'
@@ -72,7 +73,7 @@ export const PostBody = z
     noSync: z.boolean().optional(),
     /** External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. */
     sync: z.array(z.string().min(3).max(300)).max(10).optional(),
-    id: z.string().min(1).max(200).optional(),
+    id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
   })
@@ -149,6 +150,8 @@ export const InboxQuery = z.object({
 export const RedriveBody = z.object({
   session: z.string().min(1).max(300),
   index: z.number().int().min(1),
+  /** The consumer it's stuck for; without one, every consumer stuck on it. */
+  consumer: z.string().min(1).max(200).optional(),
   action: z.enum(['retry', 'skip']),
 })
 
@@ -351,6 +354,12 @@ export type StuckEvent = {
   /** The A2 session it's in: `board`, `inbox:<channel>`, `watch:<watcher>`, or `schedules`. */
   session: string
   index: number
+  /**
+   * What gave up on it: `vboard-sync` (delivery to platforms), `vboard-watchers`
+   * (matching watchers), `vboard-watch` (running one), `vboard-inbox` (platform
+   * events), `vboard-schedules`, or `vboard-schedule-sends`.
+   */
+  consumer: string
   type: string
   lane: string | null
   /** The board thread it holds up, when there is one, and its root. */

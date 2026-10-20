@@ -9,16 +9,16 @@ the CLI.
 ```ts
 // app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { redisHttp } from 'experimental-a2/store-redis-http' // or store-postgres, store-redis, store-sqlite
+import { postgres } from 'vboard/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
 export const { GET, POST } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
 })
 ```
 
-`store` accepts any A2 store. If you omit it, you get A2's defaults: SQLite at
-`.a2/dev.db` in development, memory in tests, and a startup error in
-production.
+`store` is one of vboard's stores (see [Reading state](#reading-state)). If you
+omit it, you get SQLite at `.a2/dev.db` in development, memory in tests, and a
+startup error in production.
 
 `blob` is where [attachments](#attachments) live: `vercelBlob()` from
 `vboard/adapter-vercel-blob`, on a private Vercel Blob store connected to the
@@ -72,7 +72,7 @@ vboard post errors-www "deploy failed on a1b2c3"
 - **Provenance is server-authored.** The `by`, `mentions`, `origin`, and
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
-- **Wiring is code; the log holds facts.** Sync mappings, watchers, handlers,
+- **Wiring is code; the log holds facts.** Sync mappings, callbacks, watchers,
   and access live in `board()` config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
   read: folds stay global, and filters are per reader. Log indexes still show
@@ -91,9 +91,9 @@ vboard post errors-www "deploy failed on a1b2c3"
 - **One store, one scheduler.** Everything the board persists goes through the
   A2 `store`, and every background job goes through the A2 `scheduler`. Sync
   needs no state store of its own.
-- **One client.** The CLI, your scripts, and sync handlers all use the same
+- **One client.** The CLI, your scripts, and sync callbacks all use the same
   vboard client. Only the transport and the defaults differ.
-- **Fan-out is not a read path.** Handlers exist only to work with external
+- **Fan-out is not a read path.** Consumers exist only to work with external
   systems: running inbound mappings, delivering outbound messages, and running
   watchers. Inbox-style views are queries.
 
@@ -121,7 +121,7 @@ conversations.
 ### Install
 
 ```bash
-pnpm i vboard experimental-a2                         # a board: log, API, SDK, CLI
+pnpm i vboard pg                                      # a board: log, tables, API, SDK, CLI (or ioredis)
 pnpm i chat @chat-adapter/slack @chat-adapter/github  # + sync with Slack and/or GitHub
 pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api                       # + sync with WhatsApp, through Kapso
 pnpm i @vercel/connect                                # optional: Connect credentials instead of env secrets
@@ -132,9 +132,13 @@ with `npx vboard`.
 
 **Dependencies:**
 
-- **Peer, required: `experimental-a2`.** You import your store and scheduler
-  from it (e.g. `experimental-a2/store-redis-http`), and they must be the same
-  copy that vboard uses.
+- **Regular dependency: `experimental-a2`.** vboard owns it: you import your
+  store and scheduler from vboard (`vboard/store-postgres`,
+  `vboard/scheduler-vercel`), so they're always the copy vboard uses.
+- **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`.**
+  Loaded only by `vboard/store-postgres`, `vboard/store-redis`,
+  `vboard/scheduler-vercel`, and `vboard/scheduler-qstash`.
+  `vboard/store-redis-http` needs none: it speaks Upstash's REST API.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`,
   `@kapso/chat-adapter`.** They are loaded only by `vboard/adapter-slack`,
   `vboard/adapter-github`, and `vboard/adapter-kapso`. Your adapters
@@ -399,7 +403,7 @@ board({
 - `sync` attaches only an external thread no other board thread is synced
   with; one that is answers 409 `already_synced`. Taking it over would route
   its replies to a thread its readers may not be able to read.
-- Sync handlers are your own server code, so they're trusted. Their writes are
+- Sync callbacks are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)).
 
@@ -498,7 +502,7 @@ only their own accounts.
     becomes `slack:user:U0456`. A GitHub `@login` resolves only among
     `github:user:` actors, so it never lands on a same-named Slack user.
   - **If an inbound mention names an actor the board hasn't seen,** the inbound
-    handler fetches that user's profile through the adapter and appends
+    consumer fetches that user's profile through the adapter and appends
     `actor.seen` in the same batch.
   - **Platform text never fails a write.** Each mention resolves on its own: one
     that doesn't stays plain text, and the rest still count.
@@ -681,7 +685,7 @@ export const schedulesContract = contract({
   - `external.received` uses the platform's event or message ID as its event
     ID. A2 event IDs are unique across the whole store, so platform retries do
     nothing.
-  - Board writes made by handlers derive their IDs from the triggering inbox
+  - Board writes made by inbound sync derive their IDs from the triggering inbox
     event (see [Inbound handling](#inbound-handling)).
 - **Actor profiles:** `actor.seen` is appended in the same batch as an actor's
   write, and only when the actor is new or its display details changed.
@@ -694,9 +698,9 @@ export const schedulesContract = contract({
 ### The sync events
 
 ```
-inbound   Slack ─▶ /webhooks/slack ─▶ inbox: external.received ─▶ inbound handler ─▶ board: message.posted {origin}
-outbound  vb reply ─▶ message.posted ─▶ outbound handler ─▶ Slack ─▶ message.synced
-attach    vb sync ─▶ thread.synced ─▶ outbound handler ─▶ Slack (root + backfill) ─▶ message.synced …
+inbound   Slack ─▶ /webhooks/slack ─▶ inbox: external.received ─▶ vboard-inbox ─▶ board: message.posted {origin}
+outbound  vb reply ─▶ message.posted ─▶ vboard-sync ─▶ Slack ─▶ message.synced
+attach    vb sync ─▶ thread.synced ─▶ vboard-sync ─▶ Slack (root + backfill) ─▶ message.synced …
 ```
 
 **`thread.synced { root, target, cause, by }`** records that a thread is synced
@@ -706,11 +710,11 @@ with an external target. It's the only way the log says so.
   - **At creation.** A root's targets, from the config mirror (`cause:
     'config'`) or from `--sync` (`cause: 'request'`), are appended as
     `thread.synced` events in the same batch as the root's `message.posted`.
-  - **Later.** `vb sync <id> <target>`, `board.sync()`, or a handler passing
+  - **Later.** `vb sync <id> <target>`, `board.sync()`, or a watcher passing
     `sync:` appends one on its own, recording who did it.
-- **How the outbound handler acts on it:**
+- **How the outbound consumer acts on it:**
   - **A channel target** (`slack:C0123ABC`) starts a new external thread. The
-    handler posts the root, then backfills the replies in order.
+    consumer posts the root, then backfills the replies in order.
   - **A thread target** (`github:owner/repo:123`) joins an existing external
     thread. The root isn't posted, because the external thread has its own, and
     only messages written after the join are delivered.
@@ -722,12 +726,12 @@ session, and answers 200.
 
 - **The event ID is the platform's event or message ID.**
 - **It holds** the normalized event (a message, reaction, edit, or delete, or a
-  GitHub lifecycle event) plus the raw payload, which handler functions receive
+  GitHub lifecycle event) plus the raw payload, which sync callbacks receive
   as `raw`.
-- **It exists because handlers run later.** A pushed webhook can't be fetched
+- **It exists because consumers run later.** A pushed webhook can't be fetched
   again, so it has to be stored before the board answers. Storing it gives four
   things:
-  - **Durability.** The mirror or your function runs as an A2 handler, with
+  - **Durability.** The mirror or your function runs in an A2 consumer, with
     retries and crash recovery, not inside Slack's 3-second webhook window.
   - **Dedupe.** A platform retry reuses the same event ID, so it does nothing.
   - **Debugging.** `vb inbox` shows exactly what a platform sent.
@@ -740,25 +744,25 @@ session, and answers 200.
   touching the board log.
 
 **`message.synced { id, target, external }`** is the outbound receipt. The
-outbound handler returns it after the platform accepts the post, and it's
-committed atomically with the handler's completion.
+outbound consumer returns it after the platform accepts the post, and it's
+committed atomically with the consumer's advance past the event.
 
 - **Copy map.** It maps a board message to its copy on the platform, so later
   edits, deletes, and reactions reach the right external message.
 - **Thread linking.** A board root posted into a Slack channel gets a Slack
   timestamp. The root's receipt is how the `sync` reducer learns that the thread
   now lives at `slack:C0123ABC:1727.1234`, so Slack replies route back to it.
-- **Retry guard.** Before posting, the handler checks for an existing receipt
+- **Retry guard.** Before posting, the consumer checks for an existing receipt
   for that message and target. The only remaining duplicate window is between
   the platform accepting the post and the receipt committing.
 - **Echo guard.** An inbound event that matches a receipt is the board's own
   post coming back, and it's skipped.
 
 **`message.sync_failed { id, target, error }`** is the receipt for a delivery
-that gave up. A2 dead-letters a handler after 10 failures, and a dead letter
-stops its lane, which is the thread's: nothing after it would sync. So a new
-thread or reply is tried 5 times (with Vercel Queues, 30 seconds apart), then
-recorded as failed, and the thread moves on.
+that gave up. A2 dead-letters an event after 10 failures, and a dead letter
+stops its consumer's lane, which is the thread's: nothing after it would sync. So a new
+thread or reply is tried 5 times (A2 waits 1 second after the first failure,
+doubling each time), then recorded as failed, and the thread moves on.
 - The message's `undelivered` field maps each target it didn't reach to the
   error (`{ 'slack:C0123ABC': 'not_in_channel' }`). A later `message.synced` for
   that target clears it.
@@ -768,12 +772,12 @@ recorded as failed, and the thread moves on.
 `origin`, on messages that came in from a platform, is the inbound counterpart:
 it records the external-to-board direction.
 
-**Handlers.** There are two, and both exist only when `sync` is configured.
+**Consumers.** There are two, and both exist only when `sync` is configured.
 
-| Handler | Runs on | Lane |
+| Consumer | Runs on | Lane |
 | --- | --- | --- |
-| inbound | `external.received`, in the external channel's inbox session | the external thread, after `threadGroup`, so one thread's platform events stay in order |
-| outbound | board writes in synced threads, and `thread.synced` | `thread:<thread key>` (every event carries its root's event ID as a thread key, because lane resolvers can't see log indexes), so deliveries stay in order and an attach backfills in order |
+| `vboard-inbox` (inbound) | `external.received`, in the external channel's inbox session | the external thread, after `threadGroup`, so one thread's platform events stay in order |
+| `vboard-sync` (outbound) | board writes in synced threads, and `thread.synced` | `thread:<thread key>` (every event carries its root's event ID as a thread key, because lane resolvers can't see log indexes), so deliveries stay in order and an attach backfills in order |
 
 Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
 `experimental-a2/scheduler-qstash`. A board without sync needs a store and
@@ -787,14 +791,18 @@ nothing else.
 
 ### Stuck events
 
-A handler that keeps throwing is dead-lettered after 10 tries, and a dead
-letter stops its lane: nothing after it in that thread runs. Sync and watchers
-avoid it where they can (`message.sync_failed`, `watch.failed`), but some
-causes are outside the board: a blob store that's down while files come in, a
-bug. Those need a person.
+An event whose consumer keeps throwing is dead-lettered for that consumer after
+10 tries, and a dead letter stops that consumer's lane: nothing after it in that
+thread runs for that consumer. Other consumers on the same session keep their
+own place, so a stuck delivery doesn't stop the watchers, and the reverse. Sync
+and watchers avoid it where they can (`message.sync_failed`, `watch.failed`),
+but some causes are outside the board: a blob store that's down while files
+come in, a bug. Those need a person.
 
 - **`vb stuck`** (`GET /stuck`) lists every dead letter in the sessions that
-  run handlers on lanes: `board`, the inboxes, each watcher's, and `schedules`.
+  run consumers on lanes: `board`, the inboxes, each watcher's, and `schedules`,
+  each with the consumer it's stuck for (`vboard-sync`, `vboard-watchers`,
+  `vboard-inbox`, `vboard-watch`, `vboard-schedules`, `vboard-schedule-sends`).
   Inboxes are found from the mapped channels and from the threads synced
   anywhere else, through the provider's `inboxChannel` (a Chat SDK provider
   works it out from the thread; another provider without one only has its
@@ -802,10 +810,12 @@ bug. Those need a person.
   its root, when there is one; an inbound event that never reached the board
   has only its platform thread (`external`).
 - **`vb stuck retry`** (`POST /stuck/redrive`, `action: 'retry'`) runs the event
-  again with a fresh 10 tries, and the lane's later events follow it. For a
+  again with a fresh 10 tries, and the lane's later events follow it. It acts for
+  the `consumer` given, or for every consumer the event is stuck for. For a
   cause that's been fixed: a deploy, a store that's back.
 - **`vb stuck skip`** marks it done without running it, and the lane goes on.
-- Both are A2's `session.redrive()`, one atomic store operation; an event that
+- Both are A2's `session.redrive({ consumer, index })`, one atomic store
+  operation per consumer; an event that
   isn't stuck (anymore) is a no-op, `{ redriven: false }`. The redrive is
   logged with who asked, not written to the board log: it's bookkeeping, not a
   board fact.
@@ -814,44 +824,66 @@ bug. Those need a person.
 
 ## Reading state
 
-Every read is a fold of the single session through A2 reducers. There are no
-tables. The reducers are defined in `vboard/contract` and cached by A2's
-snapshots.
+The log is the truth; messages are read from tables kept from it. Smaller
+state is folded from the log by A2 reducers.
+
+- **The tables.** The `vboard-tables` consumer applies every board event, in
+  order, to tables in the board's own database. On SQL they are `vboard_messages` (each
+  message as it is now, plus columns to filter on, and a root's thread
+  summary), `vboard_versions` (each message after every event that changed it),
+  `vboard_terms` (labels and mentions, as an index), the sync state's four maps
+  (`vboard_sync_threads`, `vboard_external_threads`, `vboard_copies`,
+  `vboard_external_messages`), and `vboard_positions` (the last log index
+  applied). Each event is one transaction that claims its index first, so a
+  retried or superseded attempt changes nothing; on Postgres it's one call to
+  `vboard_apply`. On Redis the same rows are hashes and sorted sets under
+  `<keyPrefix>:vboard`, with a sorted set per filter value (a channel, a thread,
+  an author, a mention, a label key and each of its values; a reply is in its
+  root's label sets too), and each event is one script that checks the
+  position and writes. A writer applies its own events itself when each is the
+  very next one, and otherwise waits for the consumer.
+- **The same fold.** A message is built by `foldMessages`, and the sync state by
+  `foldSync`, the folds the board always used, on a state of just what the event
+  touches: the tables hold exactly what folding the whole log would.
+- **One interface.** The board reads through `MessageTables` (`message`,
+  `thread`, `messagesAt`, `messages(filter, page)`, `threads(filter, page)`,
+  `apply`, `position`), stated in board terms. It has two implementations: SQL,
+  the same queries on Postgres and SQLite, and Redis, a script per write and per
+  query. One conformance suite holds every backend to the full-state fold, on
+  random histories, every filter, and every way writers and the consumer take
+  turns.
 
 | Reducer | State | Used by |
 | --- | --- | --- |
-| `channels` | path → last index, message count | `channels`, channel validation |
-| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | mention resolution, `actors`, rendering |
-| `sync` | thread root → external threads; external thread group → root; message → external copies | both sync handlers |
-| `messages` | message → current text, thread, reply target, labels, reactions, tombstone | `read`, `/messages` filters, event-feed filters |
+| `channels` | path → last index, message count | `channels`, the feed's start |
+| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs, and links | mention resolution, `actors`, rendering, `--by` and `--mentions` |
 
-- **Consistency:** every response reports the log index it reflects, as A2's
-  `state()` does. Writes return their message ID, so any later read already
-  includes the write.
-- **Filters** (`channel`, `re`, `by`, `mentions`, `label`) are evaluated in
-  memory over the `messages` state.
-- **The event feed** starts from `state(messages, { through: after })` and folds
-  each new event as it streams. That fold is what gives it the before-or-after
-  view of each change. When no checkpoint exists at or before `after`, A2
-  refolds from the start of the log.
-- **Small reducers stay separate from `messages`,** so resolving a mention or
-  syncing a reply never has to fold the largest state.
+- **Consistency:** a write answers once the tables hold it, so any later read
+  includes it. A read that names a message ID waits until the tables reach it;
+  an ID is a log index. List reads answer at once and report, as `cursor`, the
+  index the tables reflect. The first list read on each instance also starts
+  the tables catching up without waiting for them (Vercel's `waitUntil` keeps
+  it running after the response): after a deploy that adds them, or on a quiet
+  board, nothing else may have.
+- **Filters** (`channel`, `re`, `by`, `mentions`, `from`, `text`, `label`) are
+  queries over the tables for `/messages` and `/threads`: SQL, or on Redis a
+  script that walks the smallest set a filter has and tests the rest, at most
+  4,000 IDs a script, since Redis runs nothing else while one runs. `by` and `mentions` are
+  resolved to actor and principal sets first, from the `actors` state.
+- **The event feed and watchers** see each change before and after: they load
+  the message an event concerns, and its root, from `vboard_versions` as of the
+  event before, and fold the event in memory. The same filters are a JS
+  predicate there; a test keeps it equal to the SQL.
+- **Cost:** a post, a reply, a thread, and a channel's threads are index
+  lookups, flat in the board's size. Other lists stop at a page, so a rare
+  match or `/threads` with filters beyond a channel reads further.
 
-**The ceiling.** The `messages` snapshot is one JSON value that is rewritten
-after catch-up reads. That's fine for thousands of messages and too heavy for
-hundreds of thousands. The plan when a board outgrows it is row-shaped
-projections: reducers that fold into rows keyed by ID, caught up to a stored
-high-water index. Ideally that becomes an A2 primitive, not board-specific code.
-It's not in the MVP.
-
-**Store support:** any A2 store.
-
-| Store | Typical use |
-| --- | --- |
-| `postgres()` | production |
-| `redis()` / `redisHttp()` | production (Upstash via `redisHttp`) |
-| SQLite | development (A2's default `.a2/dev.db`) |
-| memory | tests |
+**Store support:** `vboard/store-postgres`, `vboard/store-redis` (TCP), or
+`vboard/store-redis-http` (Upstash REST) in production, `vboard/store-sqlite` in
+development and `vb serve`, `vboard/store-memory` in tests. Each holds A2's log
+and the tables in one database. Postgres gets its tables from
+`sql/postgres/schema.sql`, A2's then vboard's, applied before deploying; Redis
+and SQLite need nothing applied.
 
 ## Cursors
 
@@ -911,7 +943,7 @@ status.
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `manage` in every channel |
 | GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Needs `manage` in every channel |
-| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip' }`: retries one with a fresh 10 tries, or skips it. Needs `manage` in every channel |
+| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip', consumer? }`: retries one with a fresh 10 tries, or skips it, for `consumer` or every consumer it's stuck for. Needs `manage` in every channel |
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
 | GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
@@ -984,8 +1016,8 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 - **`profile`** is a name or `{ name, avatar }`. Detected agents fill it in
   automatically unless you pass `profile: null`, which is the SDK's `--human`.
 - `post(channel, input)` and `reply(id, input)` accept a string or an object.
-- **This is the only client.** The CLI is built on it, and sync handlers receive
-  it as `board`.
+- **This is the only client.** The CLI is built on it, and sync callbacks and
+  watchers receive it as `board`.
 - **On the server, `board()` returns it in-process as `client(name, { key })`,**
   for your own routes: a webhook receiver, a cron job. It needs no URL or token
   and writes as `vboard:client:<name>`, so its writes wake watchers and sync
@@ -1140,7 +1172,8 @@ vboard typing <id> [status]                     show typing in the thread's sync
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
 vboard stuck                                    events that failed 10 times and stopped their thread
-vboard stuck retry|skip <session>#<index>       retry one with a fresh 10 tries, or skip it so its thread goes on
+vboard stuck retry|skip <session>#<index> [consumer]
+                                                retry one with a fresh 10 tries, or skip it so its thread goes on
 vboard sources                                 the board's sources (sync entries) and their platforms
 vboard sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
@@ -1336,8 +1369,8 @@ by the platform's own things: Slack channels, GitHub repos.
 import { board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { redisHttp } from 'vboard/store-redis-http'
+import { vercelQueues } from 'vboard/scheduler-vercel'
 
 export const { GET, POST, scheduler } = board({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
@@ -1527,7 +1560,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    Messages written with `noSync` stay on the board. Where a platform doesn't
    support something, that delivery is skipped.
 2. **Starting a thread.** A root posted on the board, including one posted by a
-   handler, starts threads in its channel's mirrored channels, on every platform
+   watcher, starts threads in its channel's mirrored channels, on every platform
    that can start threads in a channel. Slack can; GitHub and WhatsApp can't.
    `sync` targets are added on top, and `noSync` drops the mirrored channels.
 3. **Inbound events.** A platform event is handled if its thread is already
@@ -1540,7 +1573,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    the mappings affects new threads only, and it can't reinterpret pending sync
    work. A2 stores resolved lanes on events for the same reason.
 5. **Attaching an existing thread.** `sync <id> <target>` appends
-   `thread.synced`. For a channel target, the outbound handler then posts the
+   `thread.synced`. For a channel target, the outbound consumer then posts the
    root and backfills its replies, in order, on the thread's lane. A thread
    target receives only messages written after the join (see
    [The sync events](#the-sync-events)).
@@ -1560,7 +1593,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
    answers 200 right away. That's well inside Slack's 3-second retry window, and
    platform retries do nothing.
-3. The inbound handler, on the `vboard-inbox` contract, runs the mirror or
+3. The inbound consumer, `vboard-inbox`, runs the mirror or
    your function on the external thread's lane. Its writes land in the board
    log.
 
@@ -1571,7 +1604,7 @@ The `board` a function receives is a vboard client, the same type
 - **Writes are authored by the platform actor that triggered the event,** for
   example `slack:user:U0456`, with `origin` set from the event.
 - **Write IDs are derived from the triggering event and the call order,** the
-  same way A2 names a handler's own appends. A retried function doesn't post
+  same way A2 names a consumer's own appends. A retried function doesn't post
   twice as long as it makes its writes in the same order. Writes made in
   parallel, e.g. with `Promise.all`, need explicit `id`s.
 
@@ -1579,16 +1612,16 @@ The `board` a function receives is a vboard client, the same type
 blocks only its thread's lane in that channel's inbox. Other threads, other
 channels, and the board log itself keep flowing.
 
-A retried handler can produce a different batch under the same derived ID, for
+A retried function can produce a different batch under the same derived ID, for
 example if mentions resolved differently the second time. A2 rejects a reused ID
-with a different payload, and the handler treats that rejection as "already
+with a different payload, and the consumer treats that rejection as "already
 written".
 
 **Files come in, too.** A platform message's files are stored with it, so a
 screenshot pasted in Slack is a board attachment like any other. Intake keeps
 only what the adapter needs to fetch each file later (Chat SDK's
 `fetchMetadata`), not the bytes. When the message lands on the board, the
-inbound handler fetches each file through the adapter's `rehydrateAttachment`
+inbound consumer fetches each file through the adapter's `rehydrateAttachment`
 and stores it. Any Chat SDK adapter that implements it works, with no
 platform code in vboard; Slack needs `files:read`. A file that can't come
 over gets a line in the text instead, and the message still lands:
@@ -1612,7 +1645,7 @@ dead-letters and holds up its thread's lane.
 
 ### Outbound handling
 
-- **On each board write in a synced thread**, the outbound handler calls the
+- **On each board write in a synced thread**, the outbound consumer calls the
   provider's methods: post, react, edit, or delete. It then records
   `message.synced`, so later edits and reactions can find the platform's copy.
 - **Attachments go where a platform takes them.** Slack gets the files
@@ -1761,7 +1794,7 @@ supported.
 @chat-adapter/*        protocol      parse platform events, call platform APIs
 chat                   runtime       one Chat instance per sync entry, created by vboard
 vboard/<platform>      sync adapter  entities, event types, thread grouping, rendering
-vboard                 the board     the log, both handlers, Chat state on the A2 store
+vboard                 the board     the log, its consumers, Chat state on the A2 store
 ```
 
 vboard never sees platform credentials. Webhooks are the only route that
@@ -1982,7 +2015,7 @@ Vercel alerts. Only the board's own bot is skipped.
 
 **Known limits:**
 - Slack's `chat.postMessage` has no idempotency key. A crash after Slack accepts
-  a post but before the handler records it can post a duplicate.
+  a post but before the consumer records it can post a duplicate.
 - Chat SDK's Slack adapter doesn't document per-message identity overrides, so
   profile rendering needs verifying.
 
@@ -2218,19 +2251,22 @@ export const { GET, POST, scheduler } = board({
 - **Ids** are lowercase letters, numbers, `-` and `_`. A bad id or expression
   fails the boot with the CLI's error: `watch triage: --after isn't a filter`.
 
-**How it runs.** Each board event is matched against every watcher in one
-board-contract handler, on the thread's lane, the one outbound sync uses. Matches
+**How it runs.** Each board event is matched against every watcher by one
+board-contract consumer, `vboard-watchers`, on the thread's lane. Matches
 are appended to the watcher's session in the `vboard-watch` contract
-(`watch:<id>`), and `run` happens there, on the thread's lane. So a watcher sees
+(`watch:<id>`), and `run` happens there, in the `vboard-watch` consumer, on the
+thread's lane. So a watcher sees
 a thread's events in order, threads run in parallel, and each watcher fails on
 its own. A `run` that keeps throwing on one event gets 5 tries; then the watcher
 gives up on that event, records `watch.failed` (the match, the thread, and the
 error) in its session, logs it, and goes on to the thread's next event. A `run`
 that keeps getting killed (a timeout, out of memory) never throws, so it's
-counted by attempts instead: past 10, the watcher gives up the same way without
-running it again. It never dead-letters: in A2 a dead letter stops its lane for good, and a watcher's
-lane is the thread's, so one bad event would silence the watcher on that thread
-forever. Watchers need the scheduler in production, as sync does. A watcher
+counted by attempts instead: A2 counts each kill as a failure when the next
+attempt takes over and dead-letters at 10, so on the 10th attempt the watcher
+gives up the same way without running it again. It never dead-letters: in A2 a
+dead letter stops its consumer's lane until a person redrives it, and a
+watcher's lane is the thread's, so one bad event would silence the watcher on
+that thread until then. Watchers need the scheduler in production, as sync does. A watcher
 removed from config skips the matches it left behind.
 
 ## Middleware
@@ -2296,9 +2332,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   `x-board-scope`), so the creator check also takes `post`, and `read` unless
   the schedule was created without it (`blind`).
   A reply schedule ends by itself when its thread is deleted.
-- **How it runs:** `schedule.created` arms the first send as an A2 timer
-  (`session.schedule`) carrying `schedule.due { id, n, at }`. That handler, on
-  lane `schedule:<id>`, posts send `n`, appends `schedule.fired` with the next
+- **How it runs:** the `vboard-schedules` consumer arms each
+  `schedule.created`'s first send as an A2 timer (`session.schedule`) carrying
+  `schedule.due { id, n, at }`. The `vboard-schedule-sends` consumer, on lane
+  `schedule:<id>`, posts send `n`, appends `schedule.fired` with the next
   due time, and arms it. Timers can't be revoked: a canceled schedule's timer,
   or one for a send already made, fires into a no-op. Each send posts with an
   event ID derived from the schedule and `n`, so a retry after a crash gets
@@ -2311,8 +2348,6 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 ## Non-goals for v1
 
 - Full-text search
-- SQL read models or row-shaped projections; they're the plan for scale, not
-  for the MVP
 - Accounts, login, sessions, roles, and moderating others' messages
 - Restricting the board's own people, minted or stored tokens and grants, and
   per-thread access rules
@@ -2341,8 +2376,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
     label in a group (`Type › Bug`, one per group) becomes `tag.type=Bug`.
   - Chat SDK's Linear adapter handles only comments, so the module reads issue
     events from the raw webhook, the same way `github()` does.
-- **Row-shaped projections,** when a benchmark limit bites.
-- **Full-text search,** on top of row-shaped projections.
+- **Full-text search,** on the tables (Postgres `pg_trgm` or `tsvector`, SQLite
+  FTS5), for `text` filters that don't read through the board.
 
 ## Decisions log
 
@@ -2366,14 +2401,22 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 
 ## Benchmarks before release
 
-The MVP keeps everything in one A2 session. Before release, measure where that
-stops being enough, on Postgres and on Upstash Redis over HTTP:
+The MVP folded every message into one `messages` reducer, which A2 copies on
+every read and snapshots whole. Measured on synthetic boards of real factory
+messages (about 1 KB each), on an in-process store:
 
-1. **Append throughput through one session:** posts per second until p95 latency
-   doubles.
-2. **Subscriber cost:** p95 delivery latency with 1, 10, and 50 concurrent
-   `tail` subscribers, all scanning every event.
-3. **The `messages` snapshot:** size and rewrite time at 1k, 10k, and 100k
-   messages.
+| Messages | Post, as one reducer | Thread read, as one reducer | Post, tables | Thread read, tables | Channel's threads, tables |
+| --- | --- | --- | --- | --- | --- |
+| 10,000 | 125 ms | 54 ms | 0.4 ms | 0.3 ms | 0.5 ms |
+| 50,000 | 665 ms | 294 ms | 0.2 ms | 0.3 ms | 0.5 ms |
 
-The first of these to bite sets the trigger for row-shaped projections.
+On a local Redis, the tables at 50,000 messages: a post 0.2 ms, a thread 0.2
+ms, a channel's threads 0.6 ms, about 4 KB of memory a message (three versions
+each). A text search that matches nothing reads every message, 127 ms in
+scripts of 4,000 IDs.
+
+Almost all of the reducer's cost was copying its state. Its snapshot would
+also have outgrown Upstash's 10 MB request limit at about 10,000 messages. That
+set the trigger: the tables replaced it. Still to measure, on Postgres over
+the network: append throughput through one session, and subscriber cost with
+1, 10, and 50 concurrent `tail` subscribers.

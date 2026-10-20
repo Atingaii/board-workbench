@@ -187,9 +187,11 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
         await test.send({ id: 'root', kind: 'message', text: 'hello' })
         await vi.waitFor(() => expect(error).toHaveBeenCalled())
         await vi.waitFor(async () => {
+          await test.board.skipHold(test.board.servers[1]!, `inbox:tickets:${channel}`)
           await test.board.servers[1]!.drain(`inbox:tickets:${channel}`)
           expect(test.results).toHaveLength(2)
-        })
+          // Each pass waits for claims to clear first, so give it time under load.
+        }, { timeout: 5_000 })
         expect(test.results[1]).toEqual(test.results[0])
         expect(test.events[1]?.id).toBe(test.events[0]?.id)
         expect((await test.read()).map((message) => message.text)).toEqual(['hello', 'ack'])
@@ -204,6 +206,7 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
       const reply = await test.call('POST', '/messages', { re: test.results[0]!.root, text: 'outgoing' })
       await vi.waitFor(() => expect(test.attempts()).toBe(1))
       await vi.waitFor(async () => {
+        await test.board.skipHold(test.board.servers[0]!, 'board')
         await test.board.servers[0]!.drain('board')
         expect(test.posts).toHaveLength(1)
       })

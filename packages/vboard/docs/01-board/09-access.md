@@ -5,7 +5,7 @@ description: "The board's code says what each caller may do in each channel: rea
 
 ## Who gets what
 
-Every caller is an OIDC principal (see [Identity](./02-identity.md)). Some get
+Every caller is an OIDC principal (see [Identity](./03-identity.md)). Some get
 everything without asking; the rest get what `access` gives them:
 
 | Caller | Default |
@@ -227,7 +227,7 @@ schedule canceled with `revoked`. Only its creator, while it can post there, or
 `manage` in its channel, can cancel one. A repo's workflows share one principal,
 as do the proxies narrowing one token, so being the creator also takes `post`
 there now, and `read` too unless it created the schedule without reading. See
-[Schedules](./06-schedules.md).
+[Schedules](./07-schedules.md).
 
 ## Check yours
 

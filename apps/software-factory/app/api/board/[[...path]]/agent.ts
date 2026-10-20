@@ -317,9 +317,9 @@ const RETRY_MS = 5_000;
 
 /**
  * Runs `start` until it works, up to TRIES times, and if it never does, says so in the thread instead of throwing.
- * A watcher that throws is retried 10 times in about half a minute and then dead-lettered, which stops it on that
- * thread for good: one bad start (setup hitting GitHub's rate limit) left a thread's Pi deaf to every reply after it.
- * Saying so leaves the watcher listening, so the next reply tries again.
+ * A watcher that throws gets 5 tries in about 15 seconds, then vboard drops that event without a word in the thread:
+ * one bad start (setup hitting GitHub's rate limit) would leave a reply unanswered, with no reason given. Saying so
+ * tells the thread, and the next reply tries again.
  */
 export async function startOrSay(
   board: Pick<WatcherContext["board"], "reply">,
@@ -382,7 +382,7 @@ async function giveTokens(sandbox: Sandbox, thread: number) {
 
 /** Pi's OIDC tokens can die before its session does (`tokens.ts`), so these give it new ones first. */
 export const piTokens = tokenRefreshes({
-  store,
+  store: store?.log,
   scheduler: queues,
   give: async (thread) => {
     const { Sandbox } = await import("@vercel/sandbox");

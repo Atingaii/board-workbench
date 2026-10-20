@@ -1,23 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { idempotentId } from 'experimental-a2'
 import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
-import {
-  actorsReducer,
-  foldMessages,
-  messagesReducer,
-  postedReducer,
-  syncReducer,
-  type Actor,
-  type ActorsState,
-  type Message,
-  type SyncState,
-} from '../contract/reducers.ts'
+import { actorsReducer, foldMessages, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
 import type { BoardSession } from './board.ts'
+import type { BoardReads } from './reads.ts'
 import { badRequest, duplicateId, forbidden, HttpError, notFound } from './errors.ts'
 import { view, type Reader } from './feed.ts'
 import type { MessageView } from '../api/routes.ts'
@@ -39,6 +30,8 @@ export function deploymentIdentity(actor: string, handle: string): Identity {
 
 export type WriteContext = {
   session: BoardSession
+  /** The board's tables, where writes check what they write to. */
+  reads: BoardReads
   /** External channels a new root in this board channel starts threads in. */
   configTargets: (channel: string) => Promise<ResolvedTarget[]>
   /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
@@ -112,8 +105,7 @@ export async function authorizeMessage<P extends Permission>(
   permission: P,
   id: number,
 ): Promise<Authorized<P>> {
-  const { state } = await ctx.session.state(messagesReducer)
-  const message = state.byId[id]
+  const message = await ctx.reads.message(id)
   if (!message) throw messageNotFound(id)()
   return { message, proof: authorize(access, permission, message.channel, messageNotFound(id)) }
 }
@@ -131,8 +123,7 @@ export async function authorizeOwn(
   id: number,
   verb: 'edit' | 'delete',
 ): Promise<Authorized<'post'>> {
-  const { state } = await ctx.session.state(messagesReducer)
-  const message = state.byId[id]
+  const message = await ctx.reads.message(id)
   if (!message) throw messageNotFound(id)()
   const readable = principal.access.readable(message.channel)
   if (message.by.principal !== principal.id || (!readable && !message.blind)) {
@@ -250,19 +241,17 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   if (input.sync?.length) spend(input.proofs.sync, 'sync', { channel })
 
   const chain = middlewareFor(ctx, input)
-  if (chain && id !== undefined) {
-    // A retry of a write that landed: what's on the board stands, whatever the middleware would say now.
-    const { state: posted } = await ctx.session.state(postedReducer)
-    const messages = posted[id] === undefined ? null : (await ctx.session.state(messagesReducer)).state
-    const landed = messages?.byId[posted[id]!]
-    if (messages && landed) {
+  if (chain && input.id !== undefined) {
+    // A retry of a write that landed (only a caller's own ID can be one): what's on the board stands, whatever the middleware would say now.
+    const landed = await ctx.reads.byEventId(input.id)
+    if (landed) {
       // Only the same author's post in the same place is a retry. Text and labels can't tell:
       // the middleware may have changed them, and edits may have since.
       if (!sameAuthor(landed.by, identity.author) || landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo)
         throw duplicateId()
       const { access } = identity.principal
       const { state: actors } = await ctx.session.state(actorsReducer)
-      if (access.readable(channel)) return shownTo(view(landed, actors, { access, messages }), access, sent)
+      if (access.readable(channel)) return shownTo(view(landed, actors, await readerFor(ctx, access, landed)), access, sent)
       // A caller that can't read gets back what it sent, as it landed: never what others have added since.
       // A post written by a caller that could read isn't its to replay, as `authorizeOwn` holds.
       if (!landed.blind) throw duplicateId()
@@ -303,10 +292,9 @@ async function commitPost(
     if (!input.noSync)
       for (const target of await ctx.configTargets(channel!))
         if (target.target !== originChannel) targets.push({ target: target.target, kind: target.kind, cause: 'config' })
-    const sync = input.sync?.length ? (await ctx.session.state(syncReducer)).state : null
     for (const requested of input.sync ?? []) {
       const target = await ctx.normalizeTarget(requested)
-      unclaimed(sync!, target, thread, identity.principal.access)
+      await unclaimed(ctx, target, thread, identity.principal.access)
       if (!targets.some((t) => t.target === target.target)) targets.push({ target: target.target, kind: target.kind, cause: 'request' })
     }
   }
@@ -355,6 +343,7 @@ async function commitPost(
     ...synced,
   )
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
+  await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
   const known = seen ? { ...actors, byId: { ...actors.byId, [identity.actor.id]: identity.actor } } : actors
   return shownTo(view(message, known, await readerFor(ctx, identity.principal.access, message)), identity.principal.access, sent, unknown)
@@ -374,22 +363,22 @@ const shownTo = (shown: MessageView, access: Access, sent: string, unknown: stri
       ? { ...shown, unknownMentions: unknown }
       : shown
 
-/** The writer, as the reader of the view its write returns. Only a link to a board message needs the messages state. */
-async function readerFor(ctx: WriteContext, access: Access, message: Message): Promise<Reader> {
-  const needed = !access.readsAll && message.links.some((link) => link.message !== null)
-  return { access, messages: needed ? (await ctx.session.state(messagesReducer)).state : { byId: {}, replies: {} } }
-}
+/** The writer, as the reader of the view its write returns. Only a link to a board message needs a lookup. */
+const readerFor = (ctx: WriteContext, access: Access, message: Message): Promise<Reader> => ctx.reads.reader(access, [message])
 
 /**
  * Refuses an external thread another board thread is synced with: taking it
  * over would send its replies away from that thread, to a caller who may not
- * read it. A reader of that thread's channel learns which thread it is.
+ * read it. A reader of that thread's channel learns which thread it is. It
+ * reads the tables once they've applied the whole log, so a sync just made
+ * counts.
  */
-function unclaimed(sync: SyncState, target: ResolvedTarget, thread: string, access: Access) {
+async function unclaimed(ctx: WriteContext, target: ResolvedTarget, thread: string, access: Access) {
   if (target.kind !== 'thread') return
-  const owner = sync.byExternalThread[target.target]
-  if (owner === undefined || owner === thread) return
-  const synced = sync.threads[owner]
+  await ctx.reads.ensure()
+  const owner = await ctx.reads.tables.threadOf(target.target)
+  if (owner === null || owner === thread) return
+  const synced = await ctx.reads.tables.syncOf(owner)
   const which = synced && access.readable(synced.channel) ? `#${synced.root}` : 'another thread'
   throw new HttpError(409, 'already_synced', `${target.target} is already synced with ${which}`)
 }
@@ -401,6 +390,30 @@ export const channelOf = (externalThread: string) => {
   const colon = rest.indexOf(':')
   return colon === -1 ? externalThread : externalThread.slice(0, at + 1 + colon)
 }
+
+/**
+ * Waits until the tables hold a write, so any read after it includes it. Most often
+ * nothing was written in between, and the writer applies its own events itself; else
+ * it waits for the tables' consumer. The write landed either way: if the tables are
+ * slow or stuck, it still succeeds.
+ */
+async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[]) {
+  const events = ([...rows] as unknown as BoardEvent[]).sort((a, b) => a.index - b.index)
+  const last = events.at(-1)!.index
+  try {
+    let caughtUp = true
+    for (const event of events) if (!(caughtUp = await ctx.reads.tables.applyNext(event))) break
+    if (caughtUp) return
+  } catch {
+    // The consumer applies them.
+  }
+  await ctx.reads.ensure(last, AbortSignal.timeout(LANDED_WAIT_MS)).catch((error: unknown) => {
+    console.warn(`[vboard] the tables haven't applied #${last} yet:`, (error as Error).message)
+  })
+}
+
+/** How long a write waits for the tables before it answers anyway. */
+const LANDED_WAIT_MS = 10_000
 
 /** The message a by-ID write targets, as the board looked it up, once its proof is spent on the message's channel. */
 function spent<P extends Permission>(authorized: Authorized<P>, permission: P): Message {
@@ -448,7 +461,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
     input.from != null,
     input.identity.principal.access.readsAll,
   )
-  await ctx.session.append(...(seen ? [seen] : []), ...named, {
+  const rows = await ctx.session.append(...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
       id: message.id,
@@ -459,6 +472,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
       from: input.from ?? null,
     },
   })
+  await untilApplied(ctx, rows)
   // As on a post: which handles matched no one is only for a caller that reads the channel.
   return unknown.length && input.identity.principal.access.readable(message.channel) ? { unknownMentions: unknown } : {}
 }
@@ -470,10 +484,10 @@ export async function writeLinks(
 ) {
   const message = spent(input.authorized, 'post')
   if (message.deleted) return
-  await ctx.session.append({
+  await untilApplied(ctx, await ctx.session.append({
     type: 'message.linked',
     payload: { id: message.id, thread: message.thread, links: input.links, by: input.identity.author, from: input.from },
-  })
+  }))
 }
 
 export async function writeDelete(
@@ -484,10 +498,10 @@ export async function writeDelete(
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can delete a message')
   if (message.deleted) return
-  await ctx.session.append({
+  await untilApplied(ctx, await ctx.session.append({
     type: 'message.deleted',
     payload: { id: message.id, thread: message.thread, by: input.identity.author, from: input.from ?? null },
-  })
+  }))
 }
 
 export async function writeReaction(
@@ -498,7 +512,7 @@ export async function writeReaction(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  await ctx.session.append(...(seen ? [seen] : []), {
+  await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
     type: input.remove ? 'reaction.removed' : 'reaction.added',
     payload: {
       id: message.id,
@@ -507,7 +521,7 @@ export async function writeReaction(
       by: input.identity.author,
       from: input.from ?? null,
     },
-  })
+  }))
 }
 
 export async function writeLabels(
@@ -518,7 +532,7 @@ export async function writeLabels(
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  await ctx.session.append(...(seen ? [seen] : []), {
+  await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
     type: 'labels.changed',
     payload: {
       id: message.id,
@@ -527,7 +541,7 @@ export async function writeLabels(
       unset: input.unset ?? [],
       by: input.identity.author,
     },
-  })
+  }))
 }
 
 /** Attaches a thread to an external target. Attaching twice is a no-op; a thread another one is synced with is a 409. */
@@ -538,13 +552,13 @@ export async function writeAttach(
   const message = spent(input.authorized, 'sync')
   const resolved = await ctx.normalizeTarget(input.target)
   const { target, kind } = resolved
-  const { state: sync } = await ctx.session.state(syncReducer)
-  if (sync.threads[message.thread]?.targets.includes(target)) return { target, attached: false }
-  unclaimed(sync, resolved, message.thread, input.identity.principal.access)
-  await ctx.session.append({
+  if ((await ctx.reads.tables.syncOf(message.thread))?.targets.includes(target)) return { target, attached: false }
+  await unclaimed(ctx, resolved, message.thread, input.identity.principal.access)
+  // Applied before it answers, so replies from the platform thread find it at once.
+  await untilApplied(ctx, await ctx.session.append({
     type: 'thread.synced',
     id: await idempotentId('vboard', message.thread, 'sync', target),
     payload: { thread: message.thread, target, kind, cause: 'request', by: input.identity.author },
-  })
+  }))
   return { target, attached: true }
 }

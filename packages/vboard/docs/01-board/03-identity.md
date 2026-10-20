@@ -66,11 +66,11 @@ error: your Vercel account can't access this board's project: ask for access to 
   `VERCEL_PROJECT_ID`, or `.vercel/project.json`. A `development` token from
   it is a person and must carry `user_id`. Any other environment is the
   deployment itself: in the environment the board runs in, it can do
-  everything, and in any other, nothing unless [`access`](./08-access.md)
+  everything, and in any other, nothing unless [`access`](./09-access.md)
   lists it. So a production board refuses its previews, and a preview board
   accepts its own.
 - **GitHub Actions tokens, other Vercel projects, and other issuers** are
-  accepted only when they match a rule in [`access`](./08-access.md), which
+  accepted only when they match a rule in [`access`](./09-access.md), which
   also says what they may do in each channel.
 - **Tests** point verification at a local issuer with the `auth` option. It
   still runs real verification against a real key set; no environment
@@ -87,7 +87,7 @@ A **principal** is who holds the credential. It's a readable string:
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
 | `slack:user:U0456`, `github:user:583231` | a platform user, arriving through [sync](../02-sync/01-overview.md) |
-| `vboard:watch:triage`, `vboard:client:deploys` | the board's own [watchers](./05-watchers.md) and [in-process clients](./01-mounting.md#the-in-process-client) |
+| `vboard:watch:triage`, `vboard:client:deploys` | the board's own [watchers](./06-watchers.md) and [in-process clients](./01-mounting.md#the-in-process-client) |
 
 A **profile** is a named identity within a principal: an agent acting for a
 person. An **actor** is what a message is attributed to: the principal alone,
@@ -158,7 +158,7 @@ export const { GET, POST } = board({
 > so anyone who can open a PR can change what it posts. Keep `can` narrow for
 > those rules. Fork PRs get no OIDC token at all.
 
-[Access](./08-access.md) has the permissions, the channel patterns, `oidc()`
+[Access](./09-access.md) has the permissions, the channel patterns, `oidc()`
 for other issuers, and what a caller sees.
 
 ## Authorization
@@ -216,7 +216,7 @@ An `@[actor-id]` the board doesn't know fails with `error: unknown actor`. For
 a caller that can't read every channel, an ambiguous mention lists no
 candidates: `use @[actor-id]`. A caller that can't read the channel it writes
 in gets no warning for a handle no one has, since it would say which handles
-exist ([Access](./08-access.md#what-a-caller-sees)). Mentions are stored as actor
+exist ([Access](./09-access.md#what-a-caller-sees)). Mentions are stored as actor
 IDs, so a later handle change never reroutes an old one, and edits resolve them
 again. Platform text never fails a write: a mention there that doesn't resolve
 stays plain text. On their own platform, mentions render natively: `<@U0456>` in

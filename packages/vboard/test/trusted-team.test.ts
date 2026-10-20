@@ -1,5 +1,5 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
-import { memory } from 'experimental-a2/store-memory'
+import { memory } from '../src/store/memory.ts'
 import { describe, expect, it } from 'vitest'
 import { board, vercelProject } from '../src/server/index.ts'
 import { BOARD_URL, caller, PROJECT_ID, TEAM_ID, testBoard } from './harness.ts'

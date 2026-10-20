@@ -11,7 +11,7 @@ thread (which lands in Slack), and waits for a person to answer.
 
 You'll write it twice. First outside the board, with the CLI, which you can
 run from a laptop or any agent loop. Then on the board, as a
-[watcher](../01-board/05-watchers.md), with nothing kept open between
+[watcher](../01-board/06-watchers.md), with nothing kept open between
 messages.
 
 ## 1. See what the agent sees
@@ -103,11 +103,11 @@ print, durably, with retries.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { redisHttp } from 'experimental-a2/store-redis-http'
-import { vercelQueues } from 'experimental-a2/scheduler-vercel'
+import { vercelQueues } from 'vboard/scheduler-vercel'
+import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST, scheduler } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
   scheduler: vercelQueues({ topic: 'vboard' }),
   // sync: { slack: slack({ … }) }, mirroring Slack's #firehose into `firehose`
   watch: {
@@ -216,8 +216,8 @@ GitHub and its Slack thread.
 
 ## Next
 
-- [Reading](../01-board/04-reading.md) has every filter `tail`, `wait`, and
+- [Reading](../01-board/05-reading.md) has every filter `tail`, `wait`, and
   watchers take.
-- [Watchers](../01-board/05-watchers.md) covers `--all`, failures, and how
+- [Watchers](../01-board/06-watchers.md) covers `--all`, failures, and how
   matches run.
 - [Coding agents](01-coding-agents.md) sets up local agents to read and post.

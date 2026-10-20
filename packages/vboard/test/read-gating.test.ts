@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { memory } from 'experimental-a2/store-memory'
+import { memory } from '../src/store/memory.ts'
 import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
 import { board as mount, githubActions, vercelProject, type Middleware } from '../src/server/index.ts'
 import { slack } from '../src/sync/slack.ts'
-import type { MessagesState } from '../src/contract/reducers.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { fakeQueue } from './queue.ts'
@@ -206,14 +205,43 @@ describe('x-board-scope', () => {
   })
 })
 
+describe('a reader of some channels', () => {
+  it('gets a cursor that misses no post, even in a channel newer than its read', async () => {
+    const store = memory()
+    let board!: ReturnType<typeof testBoard>
+    let landInNew: (() => Promise<unknown>) | null = null
+    // A post to a new channel lands between the board's read of the channels and its read of the tables.
+    const tables = {
+      ...store.tables,
+      async messages(...args: Parameters<typeof store.tables.messages>) {
+        const land = landInNew
+        landInNew = null
+        await land?.()
+        return store.tables.messages(...args)
+      },
+    }
+    board = testBoard({ store: { ...store, tables } })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await julian('POST', '/messages', { channel: 'dev', text: 'old' })
+    const pi = caller(board.fetch, await personToken(), { 'x-board-scope': 'dev/=read' })
+    landInNew = () => julian('POST', '/messages', { channel: 'dev/new', text: 'fresh' })
+    const page = await pi('GET', '/messages')
+    const seen = page.body.messages.map((m: { text: string }) => m.text)
+    const tail = await pi('GET', `/events?after=${page.body.cursor}`)
+    const later = tail.body.events.flatMap((e: { message?: { text: string } }) => (e.message ? [e.message.text] : []))
+    expect([...seen, ...later]).toContain('fresh')
+  })
+})
+
 describe('links', () => {
   it('show nothing of a linked board message the reader can’t read', () => {
-    const messages = { byId: { 7: { id: 7, channel: 'security' } }, replies: {} } as unknown as MessagesState
+    const channelOf = (id: number) => (id === 7 ? 'security' : undefined)
     const link = { url: 'https://slack.test/p1', message: 7, snapshot: { author: 'ada', text: 'the key is…', createdAt: null, files: [] }, unavailable: null }
-    expect(readableLinks([link], { access: compileAccess({ 'dev/': ['read'] }), messages })).toEqual([
-      { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' },
-    ])
-    expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), messages })).toEqual([link])
+    const hidden = { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
+    expect(readableLinks([link], { access: compileAccess({ 'dev/': ['read'] }), channelOf })).toEqual([hidden])
+    expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([link])
+    // One the reader's lookup doesn't have shows nothing either.
+    expect(readableLinks([{ ...link, message: 8 }], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([hidden])
   })
 
   it('show nothing of it on any route', async () => {
@@ -375,7 +403,6 @@ describe('schedules', () => {
   /** Two deployments of the same board, before and after its access changed: one store, one queue. */
   async function deploys(before: Parameters<typeof githubActions>[0]['can'], after: Parameters<typeof githubActions>[0]['can']) {
     const queue = fakeQueue()
-    const { memory } = await import('experimental-a2/store-memory')
     const store = memory()
     const first = testBoard({ store, scheduler: queue.scheduler, access: [githubActions({ repository: 'basehub-ai/www', can: before })] })
     const ci = caller(first.fetch, await workflowToken())
@@ -497,8 +524,9 @@ describe('schedules', () => {
       for (const [who, token] of Object.entries(callers)) {
         // A store that drops the claims from each schedule, as a board before this one wrote it.
         const store = memory()
-        const append = store.append.bind(store)
-        store.append = ((session, events, options) =>
+        const log = store.log!
+        const append = log.append.bind(log)
+        log.append = ((session, events, options) =>
           append(
             session,
             events.map((event: any) => {
@@ -507,7 +535,7 @@ describe('schedules', () => {
               return { ...event, payload: { ...event.payload, as: { ...event.payload.as, principal } } }
             }),
             options,
-          )) as typeof store.append
+          )) as typeof log.append
         const queue = fakeQueue()
         const access = [
           vercelProject({ project: 'prj_marketing', can: 'all' }),

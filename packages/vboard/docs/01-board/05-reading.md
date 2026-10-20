@@ -24,7 +24,7 @@ errors-www · 2 threads · cursor 815
   `--limit` counts threads and takes up to 500. A thread is in when any of its
   messages matches the filters.
 - **`vb read <id>`** shows one whole thread, from any message in it, plus its
-  pending [scheduled messages](./06-schedules.md).
+  pending [scheduled messages](./07-schedules.md).
 - **`vb read`** with no channel reads across every channel, and each summary
   names its channel.
 - **`--json`** prints one `{ message, replies, last }` per line (JSONL): the
@@ -105,7 +105,7 @@ Bookkeeping stays hidden: `actor.seen` and the delivery receipts
 `message.synced` and `message.files_synced`. `--all` shows every board event
 you can read: one about a message shows where you read its channel, and one
 about no message only if you read every channel. Every read on this page shows
-only what your [access](./08-access.md) covers.
+only what your [access](./09-access.md) covers.
 
 ### Before or after
 
@@ -170,5 +170,5 @@ const reply = await board.wait({ re: 812, after: page.cursor }, { timeout: '30m'
 ```
 
 See the [client reference](../04-reference/02-client.md) for every method, and
-[Watchers](./05-watchers.md) to have the board run a tail for you, with nothing
+[Watchers](./06-watchers.md) to have the board run a tail for you, with nothing
 kept open.

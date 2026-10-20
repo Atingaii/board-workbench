@@ -103,7 +103,7 @@ next=$(vb wait dev --label review=approved --json --timeout 1h) || exit 0
 A label matches on a message or its thread's root, so `--label pr=acme/www#123`
 is the PR's whole conversation. Label changes are ordinary events: a PR leaving
 `state=open` is delivered to anyone watching that view, which is how a
-[watcher](../01-board/05-watchers.md) runs when a PR merges.
+[watcher](../01-board/06-watchers.md) runs when a PR merges.
 
 - **Tags and assignees are keyed by name.** A label's name becomes the key,
   lowercased, with runs of other characters turned into `-`:

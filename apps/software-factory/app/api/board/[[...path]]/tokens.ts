@@ -1,5 +1,5 @@
 import { contract } from "experimental-a2";
-import { createServer, type A2Scheduler, type A2Store } from "experimental-a2/server";
+import { consumer, createServer, type A2Scheduler, type A2Store } from "experimental-a2/server";
 import { z } from "zod";
 
 // Pi's OIDC tokens (AI Gateway's, and the board's, exchanged from it) die when the function's own does. Vercel
@@ -38,24 +38,26 @@ export function tokenRefreshes(options: {
   scheduler: A2Scheduler;
   give: (thread: number) => Promise<Given>;
 }) {
+  const refresh = consumer({ contract: tokens, name: "factory-pi-tokens", types: ["tokens.expiring"] }).run(
+    async ({ event }) => {
+      const { thread } = event.payload;
+      let given: Given;
+      try {
+        given = await options.give(thread);
+      } catch (error) {
+        // The next message brings new tokens anyway. A throw would retry, then dead-letter the thread's timers.
+        console.error(`[factory] couldn't refresh Pi's tokens on board thread #${thread}:`, error);
+        return;
+      }
+      if (given) await later(thread, given);
+    },
+  );
+
   const server = createServer({
     contract: tokens,
     ...(options.store ? { store: options.store } : {}),
     scheduler: options.scheduler,
-    handlers: {
-      "tokens.expiring": async ({ event }) => {
-        const { thread } = event.payload;
-        let given: Given;
-        try {
-          given = await options.give(thread);
-        } catch (error) {
-          // The next message brings new tokens anyway. A throw would retry, then dead-letter the thread's timers.
-          console.error(`[factory] couldn't refresh Pi's tokens on board thread #${thread}:`, error);
-          return;
-        }
-        if (given) await later(thread, given);
-      },
-    },
+    consumers: [refresh],
   });
 
   async function later(thread: number, given: NonNullable<Given>) {

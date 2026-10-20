@@ -2,14 +2,14 @@ import { board, type WatcherContext } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
-import { redisHttp } from "experimental-a2/store-redis-http";
-import { vercelQueues } from "experimental-a2/scheduler-vercel";
+import { redisHttp } from "vboard/store-redis-http";
+import { vercelQueues } from "vboard/scheduler-vercel";
 import { experimental_decide as decide, generateText } from "ai";
 import { startV0 } from "./v0";
 
 // The v0 feedback bot, on Vercel's Slack: people post v0 feedback in #feedback-v0-vboard.
 // Each new thread gets :ack:; the ones worth addressing get a v0 chat, a :v0:, and a
-// post in #feedback-v0-prs. Locally there's no VERCEL_ENV, so the log is SQLite at .a2/dev.db.
+// post in #feedback-v0-prs. Locally there's no VERCEL_ENV, so the board is SQLite at .a2/dev.db.
 const env = process.env.VERCEL_ENV;
 
 // SSE streams close just before this, and clients reconnect from their cursor.
@@ -25,7 +25,7 @@ export const { GET, POST, scheduler, client } = board({
         url: process.env.KV_REST_API_URL!,
         token: process.env.KV_REST_API_TOKEN!,
         // One Redis serves every environment: a preview never touches production's log.
-        // `-2` since A2 0.17 changed its Redis layout, which an existing prefix can't take.
+        // `-2` since A2 0.17 changed its Redis layout.
         keyPrefix: env === "production" ? "vboard-2" : `vboard-2:${env}`,
       })
     : undefined,

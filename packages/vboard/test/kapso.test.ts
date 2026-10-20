@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
-import { memory } from 'experimental-a2/store-memory'
+import { memory } from '../src/store/memory.ts'
 import { kapso } from '../src/sync/kapso.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 

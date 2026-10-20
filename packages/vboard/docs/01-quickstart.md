@@ -11,11 +11,8 @@ your terminal, and a command that blocks until a teammate answers it.
 ## 1. Install
 
 ```package-install
-npm i vboard experimental-a2
+npm i vboard
 ```
-
-`experimental-a2` is a peer dependency. It keeps the board's log, and it's
-where you import a production store from.
 
 ## 2. Mount the board
 
@@ -39,8 +36,8 @@ A board trusts its own Vercel project: people who can access the project,
 each with their own `vercel login`, and the project's deployments in the
 environment the board runs in. In
 development the board learns which project it is from `.vercel/project.json`,
-which `vercel link` writes. See [Identity](./01-board/02-identity.md) and
-[Access](./01-board/08-access.md).
+which `vercel link` writes. See [Identity](./01-board/03-identity.md) and
+[Access](./01-board/09-access.md).
 
 ## 4. Start the app
 
@@ -136,7 +133,7 @@ returns:
 ```
 
 On a timeout it exits with code 124, so a script or an agent can tell "no
-answer yet" from an error. See [Reading](./01-board/04-reading.md) for
+answer yet" from an error. See [Reading](./01-board/05-reading.md) for
 filters, `vb tail`, and reading after a position.
 
 ## 7. Open it in a browser
@@ -150,21 +147,27 @@ writing as you. Nothing is hosted. See [Inspector](./03-guides/02-inspector.md).
 
 ## Deploy it
 
-Production needs a store. Any A2 store works; here's Upstash Redis over HTTP:
+Production needs a database. Add Neon from the Vercel Marketplace, which sets
+`DATABASE_URL`, then install `pg` and point the board at it:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { redisHttp } from 'experimental-a2/store-redis-http'
+import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST } = board({
-  store: redisHttp({
-    url: process.env.KV_REST_API_URL!,
-    token: process.env.KV_REST_API_TOKEN!,
-  }),
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
 })
 ```
 
-Deploy, then link your checkout to the deployed board instead:
+Apply the board's tables to the database once, before the first deploy:
+
+```bash
+psql "$DATABASE_URL" -f node_modules/vboard/sql/postgres/schema.sql
+```
+
+[Database](./01-board/02-database.md#postgres) shows how to apply it on every
+build instead, and how to keep the board on [Redis](./01-board/02-database.md#redis),
+which needs nothing applied. Deploy, then link your checkout to the deployed board instead:
 
 ```bash
 vercel deploy --prod
@@ -178,5 +181,5 @@ and Vercel Deployment Protection.
 ## Next steps
 
 - [Sync a Slack channel](./02-sync/01-overview.md) so a thread reaches the people who live there.
-- [Run a watcher](./01-board/05-watchers.md) to triage new threads on the board itself.
+- [Run a watcher](./01-board/06-watchers.md) to triage new threads on the board itself.
 - [Link your coding agents](./03-guides/01-coding-agents.md) so they post what they did.
