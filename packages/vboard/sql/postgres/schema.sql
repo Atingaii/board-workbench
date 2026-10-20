@@ -149,13 +149,17 @@ create table if not exists a2_presence (
 -- since this release runs no handlers to finish it. Every event is kept.
 -- Causes gain the dispatcher that appended them, the handlers table
 -- (`a2.handlers`), and its lane. Then the old dispatch columns go, and
--- their indexes with them. The block commits whole, or not at all.
+-- their indexes with them. The block locks the events first, so an earlier
+-- release still writing waits and then fails, rather than committing between
+-- its statements, and it commits whole, or not at all.
 do $$ begin
   if exists (
     select 1 from pg_attribute
      where attrelid = to_regclass('a2_events')
        and attname = 'processed_at' and not attisdropped
   ) then
+    lock table a2_events in access exclusive mode;
+
     update a2_events child
        set cause = jsonb_build_object(
              'consumer', 'a2.handlers',
@@ -201,7 +205,7 @@ drop table if exists a2_schema;
 -- every statement would share the first one's snapshot, so it refuses to run.
 -- Created only if missing, as the indexes are: a later release that changes it
 -- adds a function with a new name.
-do $$ begin
+do $$ declare grantee text; begin
   if to_regprocedure('a2_batch(text[], jsonb)') is null then
     create function a2_batch(statements text[], params jsonb)
     returns setof jsonb
@@ -230,6 +234,28 @@ do $$ begin
       end loop;
     end
     $batch$;
+    -- Default privileges can grant a new function to roles besides PUBLIC, as
+    -- platforms that serve functions over an API grant theirs: it starts with
+    -- none but its owner's. Grants made after it exist are left alone.
+    for grantee in
+      select acl.grantee::regrole::text
+        from pg_proc proc, aclexplode(proc.proacl) acl
+       where proc.oid = to_regprocedure('a2_batch(text[], jsonb)')
+         and acl.grantee not in (0, proc.proowner)
+    loop
+      execute format('revoke execute on function a2_batch(text[], jsonb) from %s', grantee);
+    end loop;
+  end if;
+  -- It runs any statement it's handed, as its caller: only its owner, the role
+  -- that applies this file, may call it, and not every role, as Postgres lets
+  -- by default. Platforms that serve functions over an API would serve it too.
+  if pg_has_role(
+    current_user,
+    (select proowner from pg_proc
+      where oid = to_regprocedure('a2_batch(text[], jsonb)')),
+    'usage'
+  ) then
+    revoke execute on function a2_batch(text[], jsonb) from public;
   end if;
 end $$;
 --> statement-breakpoint
