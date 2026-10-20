@@ -256,6 +256,8 @@ export type Discovery = {
   project_id: string | null
   /** The board's sync entries: `key` names its webhook and inbox, `platform` is e.g. `slack`. */
   sync: { key: string; platform: string }[]
+  /** A board on another backend keeps nothing here: clients read and write this board instead. */
+  remote?: string
 }
 
 export type Me = {

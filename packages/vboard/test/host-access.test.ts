@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { board, type HostPrincipal, type BoardOptions } from '../src/server/index.ts'
+import type { HostPrincipal } from '../src/server/index.ts'
+// The engine itself, as a2() starts it: these tests are about what it does.
+import { a2Board as board, type A2Options, type BoardSetup } from '../src/server/board.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
 import { fakeQueue } from './queue.ts'
 import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, testAuth, testBoard } from './harness.ts'
@@ -17,7 +19,7 @@ const PLATFORM: Record<string, { team: string; principal: HostPrincipal }> = {
 }
 
 /** One board per team, like a host would build them, each answering only for its own team. */
-function hosted(team: string, options: Partial<BoardOptions> = {}) {
+function hosted(team: string, options: Partial<A2Options & BoardSetup> = {}) {
   return board({
     store: memory(),
     url: BOARD_URL,

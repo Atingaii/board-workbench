@@ -65,7 +65,8 @@ import {
 } from './writes.ts'
 import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
 
-export type BoardOptions = {
+/** `a2()`'s options: the board in this deployment, on A2's log, and everything that runs beside it. */
+export type A2Options = {
   /**
    * Where the board keeps its log and tables: `postgres()`, `sqlite()`, or `memory()` from
    * `vboard/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
@@ -92,14 +93,8 @@ export type BoardOptions = {
    * watchers, schedules. Each calls `next()` to pass the write on; one that doesn't drops it.
    */
   middleware?: readonly Middleware[]
-  /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
-  watch?: Record<string, Watcher>
   /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */
   project?: { id: string; teamId?: string }
-  /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
-  url?: string
-  /** The mount path, e.g. `/api/board`. Inferred from requests otherwise. */
-  basePath?: string
   /** Test issuers. Production uses Vercel's and GitHub's. */
   auth?: AuthOptions
   /** SSE streams close after this long, before the platform's limit; clients reconnect. */
@@ -111,7 +106,17 @@ export type BoardOptions = {
   blob?: BlobStore
 }
 
-const boardServer = (options: BoardOptions) =>
+/** What every backend is given: the watchers that run in this project, and where the board is mounted. */
+export type BoardSetup = {
+  /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
+  watch?: Record<string, Watcher>
+  /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
+  url?: string
+  /** The mount path, e.g. `/api/board`. Inferred from requests otherwise. */
+  basePath?: string
+}
+
+const boardServer = (options: A2Options) =>
   createServer({
     contract: boardContract,
     ...(options.store?.log ? { store: options.store.log } : {}),
@@ -183,7 +188,7 @@ const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
 
-function route(method: string, pathname: string, basePath?: string): Match | null {
+export function route(method: string, pathname: string, basePath?: string): Match | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
   if (basePath !== undefined) {
     const base = basePath.replace(/\/+$/, '')
@@ -256,11 +261,12 @@ class Rejected {
 }
 
 /** Mounts a board: one log in one route. Create it once, at module scope, or one per tenant for a host. */
-export function board(options: BoardOptions = {}) {
+/** The board in this deployment, on A2's log: what `a2()` starts. */
+export function a2Board(options: A2Options & BoardSetup = {}) {
   if ((options as { trustedSources?: unknown }).trustedSources !== undefined)
-    throw new Error('board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can')
+    throw new Error('a2: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can')
   const host = typeof options.access === 'function' ? options.access : null
-  if (host && options.auth) throw new Error('board: an access function replaces the built-in verifier, so drop `auth`')
+  if (host && options.auth) throw new Error('a2: an access function replaces the built-in verifier, so drop `auth`')
   const blob = options.blob ?? defaultBlob()
   const store = options.store ?? defaultStore()
   // The same A2 store object for every server: A2 recognizes its own stores by identity.
@@ -653,6 +659,10 @@ export function board(options: BoardOptions = {}) {
           const proofs = await authorizePost(writes, principal.access, body)
           if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
             throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
+          // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
+          // one else can post with one first and make its retry fail.
+          if (!injected && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
+            throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
           const attachments = await attachmentsFor(principal, body.attachments)
           const { unknownMentions, ...message } = await writePost(writes, {
             attachments,

@@ -1,6 +1,6 @@
 ---
 title: Mounting
-description: One `board()` call in one route gives you the log, the HTTP API, and everything the CLI and SDK talk to.
+description: "One `board()` call in one route, on a backend: `a2()` keeps the board in this deployment, and `http()` uses another one."
 ---
 
 ## One route
@@ -10,9 +10,9 @@ npm i vboard
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 
-export const { GET, POST } = board()
+export const { GET, POST } = board({ backend: a2() })
 ```
 
 That's a board. It answers at `/api/board`, and the CLI points at it with
@@ -24,7 +24,50 @@ A board is one log in one route of one Vercel project. The mount path is yours:
 the board infers it from requests. To get a second board (one the project's
 own people can't all read, say), mount a second route.
 
+## Backends
+
+`backend` says where the board lives:
+
+| Backend | What it does |
+| --- | --- |
+| `a2({ store, … })` | Keeps the board in this deployment, on A2's log: the store, the scheduler, sync, access, and everything else below |
+| `http(url)` | Uses the board at `url`, which keeps the log. This project reads and writes it as itself |
+
+```ts app/api/board/[[...path]]/route.ts
+import { board, http } from 'vboard'
+
+export const { GET, POST, client } = board({ backend: http('https://board.example.com/api/board') })
+```
+
+A board on `http()` keeps nothing:
+
+- **Its discovery names the other board,** and every other route answers 404
+  with code `remote`. The CLI pointed at it says where to go:
+  `error: https://www.example.com/api/board keeps no log: use https://board.example.com/api/board`.
+- **`client(name, { key })` writes there as this deployment,** with `name` as
+  its profile: `vercel:project:prj_x:production+deploys`. Names start with a
+  letter and use up to 32 letters, numbers, and hyphens. With a `key`, its
+  posts get IDs derived from the key, `key:<principal>:…`, which the other
+  board takes only from that principal, so the same key never posts twice and
+  no one can post with one first.
+- **Watchers don't run over `http()` yet.** A board with `watch` on `http()`
+  fails at startup; keep them on an `a2()` board for now.
+- **`store`, `sync`, `access`, and the rest belong to the other board.**
+  Passing them to `board()` fails at startup and says where they go:
+  `board: store goes in a2(): board({ backend: a2({ store }) })`.
+
 ## Options
+
+`board()` takes the backend and what every backend shares:
+
+| Option | What it does |
+| --- | --- |
+| `backend` | `a2({ … })` or `http(url)`. Required |
+| `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
+| `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
+| `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise |
+
+`a2()` takes the rest:
 
 | Option | What it does |
 | --- | --- |
@@ -32,11 +75,9 @@ own people can't all read, say), mount a second route.
 | `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/adapter-vercel-blob`, with an optional `prefix` to share one store between boards |
 | `scheduler` | For sync, watchers, and scheduled messages: `vercelQueues()` from `vboard/scheduler-vercel`, or `qstash()` from `vboard/scheduler-qstash` |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack({…}) }`. See [Sync](../02-sync/01-overview.md) |
-| `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
+| `middleware` | Runs on every post and edit before it lands. See [Middleware](./08-middleware.md) |
 | `access` | Who besides the board's people and its own environment's deployments may call it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`. Or a function that verifies callers itself: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
 | `project` | `{ id, teamId? }`: the board's Vercel project. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercelProject()` rules named without one |
-| `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
-| `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |
 | `auth` | Test issuers, for tests only. Production verifies against Vercel's and GitHub's |
 
@@ -48,7 +89,7 @@ refuses one whose discovery names another.
 ## A production board
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { vercelBlob } from 'vboard/adapter-vercel-blob'
 import { vercelQueues } from 'vboard/scheduler-vercel'
 import { postgres } from 'vboard/store-postgres'
@@ -57,9 +98,11 @@ import { postgres } from 'vboard/store-postgres'
 export const maxDuration = 300
 
 export const { GET, POST, scheduler, client } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  blob: vercelBlob(),
-  scheduler: vercelQueues({ topic: 'vboard' }),
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+    blob: vercelBlob(),
+    scheduler: vercelQueues({ topic: 'vboard' }),
+  }),
 })
 ```
 
@@ -95,13 +138,13 @@ platform webhooks all call them.
 
 The scheduler serves every A2 server behind the board: the log, the sync inbox,
 watchers, and schedules. To share one scheduler with A2 servers of your own,
-pass the same scheduler to `board()` and to them, and hand the board's
+pass the same scheduler to `a2()` and to them, and hand the board's
 `servers` to its handler yourself:
 
 ```ts lib/queue.ts
 import { vercelQueues } from 'vboard/scheduler-vercel'
 
-// One scheduler for the board (`board({ store, scheduler: queue })`) and your own A2 servers.
+// One scheduler for the board (`board({ backend: a2({ store, scheduler: queue }) })`) and your own A2 servers.
 export const queue = vercelQueues({ topic: 'vboard' })
 ```
 
@@ -120,9 +163,10 @@ export const POST = queue.handler(...servers /*, ordersServer */)
 | --- | --- |
 | `GET`, `POST` | The board's fetch handlers. Export both from the route |
 | `fetch` | The same handler, for runtimes that take one function |
-| `scheduler` | The scheduler's callback, for its own route. A board without a scheduler answers 404 there |
-| `servers` | The A2 servers behind the board, to pass to a shared scheduler |
-| `client(name, { key })` | An in-process client for your own server code |
+| `scheduler` | The scheduler's callback, for its own route. A board without a scheduler answers 404 there, as does one on `http()` |
+| `servers` | On `a2()`: the A2 servers behind the board, to pass to a shared scheduler |
+| `client(name, { key })` | A client for your own server code: in-process on `a2()`, over HTTP on `http()` |
+| `remote` | On `http()`: the URL of the board it uses |
 
 ## The in-process client
 
@@ -175,7 +219,7 @@ so a local board can verify the development tokens people send it.
 
 ## Defaults by environment
 
-What the board uses when you leave an option out:
+What `a2()` uses when you leave an option out:
 
 | Option | Development | Tests | Production |
 | --- | --- | --- | --- |

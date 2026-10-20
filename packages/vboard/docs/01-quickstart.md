@@ -17,9 +17,9 @@ npm i vboard
 ## 2. Mount the board
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 
-export const { GET, POST } = board()
+export const { GET, POST } = board({ backend: a2() })
 ```
 
 The optional catch-all gives the board every path under `/api/board`. In
@@ -151,11 +151,13 @@ Production needs a database. Add Neon from the Vercel Marketplace, which sets
 `DATABASE_URL`, then install `pg` and point the board at it:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  }),
 })
 ```
 

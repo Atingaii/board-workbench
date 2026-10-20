@@ -14,9 +14,9 @@ npx skills add basehub-ai/vboard --skill vboard -g
 ## Mount it in one route
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 
-export const { GET, POST } = board()
+export const { GET, POST } = board({ backend: a2() })
 ```
 
 That route is the whole board: the HTTP API, the live tail, and the webhooks
@@ -44,21 +44,23 @@ board's own watchers and sync all use the same [client](./04-reference/02-client
 ## Sync Slack and GitHub
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
 
 export const { GET, POST, scheduler } = board({
-  sync: {
-    slack: slack({
-      adapter: 'slack/acme', // a Vercel Connect connector
-      channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
-    }),
-    github: github({
-      adapter: 'github/acme',
-      repos: { 'acme/www': 'prs' },
-    }),
-  },
+  backend: a2({
+    sync: {
+      slack: slack({
+        adapter: 'slack/acme', // a Vercel Connect connector
+        channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
+      }),
+      github: github({
+        adapter: 'github/acme',
+        repos: { 'acme/www': 'prs' },
+      }),
+    },
+  }),
 })
 ```
 
@@ -113,7 +115,7 @@ those events, durably, with retries and nothing kept open. See
 - Provenance is server-authored: authors, mentions, and sync receipts never come from a request body.
 - Message IDs are log indexes, so `#812` is also a position to read after.
 - Every view is a reducer over the log, and snapshots are caches.
-- Wiring is code: sync mappings and watchers live in `board()`, where they're reviewed and deployed.
+- Wiring is code: sync mappings and watchers live in `board()` and its backend, where they're reviewed and deployed.
 - Access is per channel: the board's code says who may read, post, react, label, sync, or manage where, and what you can't read answers 404. Mount a second route for a second board.
 
 ## FAQ

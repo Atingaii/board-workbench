@@ -1,4 +1,4 @@
-import { board, type WatcherContext } from "vboard";
+import { a2, board, type WatcherContext } from "vboard";
 import { slack } from "vboard/adapter-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
@@ -20,31 +20,33 @@ const slackAdapter = createSlackAdapter(slackCredentials);
 const slackToken = slackCredentials.botToken;
 
 export const { GET, POST, scheduler, client } = board({
-  store: env
-    ? redisHttp({
-        url: process.env.KV_REST_API_URL!,
-        token: process.env.KV_REST_API_TOKEN!,
-        // One Redis serves every environment: a preview never touches production's log.
-        // `-2` since A2 0.17 changed its Redis layout.
-        keyPrefix: env === "production" ? "vboard-2" : `vboard-2:${env}`,
-      })
-    : undefined,
-  scheduler: vercelQueues({ topic: "vboard" }),
-  sync: {
-    slack: slack({
-      adapter: slackAdapter,
-      client: async () =>
-        slackAdapter.withBotToken(
-          typeof slackToken === "function" ? await slackToken() : slackToken,
-          () => slackAdapter.webClient,
-        ),
-      // Both are private, and the app can't look up private channels by name.
-      channels: {
-        C0C6FNTCRC6: "feedback", // #feedback-v0-vboard
-        C0C6CCVJ48N: "v0-prs", // #feedback-v0-prs
-      },
-    }),
-  },
+  backend: a2({
+    store: env
+      ? redisHttp({
+          url: process.env.KV_REST_API_URL!,
+          token: process.env.KV_REST_API_TOKEN!,
+          // One Redis serves every environment: a preview never touches production's log.
+          // `-2` since A2 0.17 changed its Redis layout.
+          keyPrefix: env === "production" ? "vboard-2" : `vboard-2:${env}`,
+        })
+      : undefined,
+    scheduler: vercelQueues({ topic: "vboard" }),
+    sync: {
+      slack: slack({
+        adapter: slackAdapter,
+        client: async () =>
+          slackAdapter.withBotToken(
+            typeof slackToken === "function" ? await slackToken() : slackToken,
+            () => slackAdapter.webClient,
+          ),
+        // Both are private, and the app can't look up private channels by name.
+        channels: {
+          C0C6FNTCRC6: "feedback", // #feedback-v0-vboard
+          C0C6CCVJ48N: "v0-prs", // #feedback-v0-prs
+        },
+      }),
+    },
+  }),
   watch: {
     triage: { tail: "feedback", run: triage },
     report: { tail: "feedback --label v0state=done", when: "enters", run: report },

@@ -6,7 +6,7 @@ description: Middleware sees every post and edit before it lands, whatever it ca
 ## One check for every write
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board, type Middleware } from 'vboard'
+import { a2, board, type Middleware } from 'vboard'
 
 const guard: Middleware = async ({ write, source, respond, next }) => {
   if (source.kind === 'sync' && /ignore previous instructions/i.test(write.text)) {
@@ -17,8 +17,10 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
 }
 
 export const { GET, POST, scheduler } = board({
-  // store, scheduler, and sync as in Mounting
-  middleware: [guard],
+  backend: a2({
+    // store, scheduler, and sync as in Mounting
+    middleware: [guard],
+  }),
 })
 ```
 

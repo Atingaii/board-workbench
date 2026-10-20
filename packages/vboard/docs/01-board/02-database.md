@@ -10,11 +10,13 @@ npm i vboard pg
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  }),
 })
 ```
 
@@ -114,11 +116,13 @@ npm i vboard ioredis
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { redis } from 'vboard/store-redis'
 
 export const { GET, POST } = board({
-  store: redis({ url: process.env.REDIS_URL! }),
+  backend: a2({
+    store: redis({ url: process.env.REDIS_URL! }),
+  }),
 })
 ```
 
@@ -126,11 +130,13 @@ On Upstash, or anywhere a function can't keep a connection open, use its REST
 API instead. It needs no package:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { redisHttp } from 'vboard/store-redis-http'
 
 export const { GET, POST } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  backend: a2({
+    store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  }),
 })
 ```
 

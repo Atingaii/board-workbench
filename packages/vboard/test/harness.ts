@@ -1,7 +1,8 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { board, type BoardOptions } from '../src/server/index.ts'
+import { a2, board } from '../src/server/index.ts'
+import type { A2Options, BoardSetup } from '../src/server/board.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
 export const PROJECT_ID = 'prj_board'
@@ -37,15 +38,16 @@ export function testClock() {
 }
 
 /** A board on a memory store whose tokens come from a local test issuer. */
-export function testBoard(options: Partial<BoardOptions> = {}) {
+export function testBoard(options: A2Options & BoardSetup = {}) {
   const clock = testClock()
   const store = memory({ clock })
+  const { watch, url, basePath, ...engine } = options
   const created = board({
-    store,
-    url: BOARD_URL,
-    project: { id: PROJECT_ID, teamId: TEAM_ID },
-    auth: testAuth,
-    ...options,
+    backend: a2({ store, project: { id: PROJECT_ID, teamId: TEAM_ID }, auth: testAuth, ...engine }),
+    // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
+    url: 'url' in options ? url : BOARD_URL,
+    ...(watch ? { watch } : {}),
+    ...(basePath ? { basePath } : {}),
   })
   /**
    * Lets a failed event's next attempt run now, once no attempt is running on

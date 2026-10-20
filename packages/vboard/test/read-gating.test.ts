@@ -3,7 +3,7 @@ import { memory } from '../src/store/memory.ts'
 import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
-import { board as mount, githubActions, vercelProject, type Middleware } from '../src/server/index.ts'
+import { a2, board as mount, githubActions, vercelProject, type Middleware } from '../src/server/index.ts'
 import { slack } from '../src/sync/slack.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakePlatform } from './sync-fixtures.ts'
@@ -499,7 +499,7 @@ describe('schedules', () => {
       const store = memory()
       const queue = fakeQueue()
       const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { store, url: BOARD_URL, project: { id: PROJECT_ID }, auth: testAuth, access, scheduler: queue.scheduler }
+      const options = { backend: a2({ store, project: { id: PROJECT_ID }, auth: testAuth, access, scheduler: queue.scheduler }), url: BOARD_URL }
       const route = mount(options)
       mount(options)
       const platform = await deploymentToken('board', PROJECT_ID)

@@ -102,13 +102,15 @@ for you: the same expression, and `run` gets each event the tail would
 print, durably, with retries.
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { vercelQueues } from 'vboard/scheduler-vercel'
 import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST, scheduler } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'vboard' }),
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+    scheduler: vercelQueues({ topic: 'vboard' }),
+  }),
   // sync: { slack: slack({ … }) }, mirroring Slack's #firehose into `firehose`
   watch: {
     triage: {

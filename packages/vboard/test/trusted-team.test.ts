@@ -1,7 +1,9 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { memory } from '../src/store/memory.ts'
 import { describe, expect, it } from 'vitest'
-import { board, vercelProject } from '../src/server/index.ts'
+import { vercelProject } from '../src/server/index.ts'
+// The engine itself, as a2() starts it.
+import { a2Board as board } from '../src/server/board.ts'
 import { BOARD_URL, caller, PROJECT_ID, TEAM_ID, testBoard } from './harness.ts'
 
 // Vercel signs every team's tokens, each under its own issuer

@@ -9,28 +9,30 @@ A string mapping imports every event into one channel. A function receives every
 inbound event for its external channel, connected threads included, and decides:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { github, GitHubPayload } from 'vboard/adapter-github'
 
 export const { GET, POST, scheduler } = board({
-  sync: {
-    github: github({
-      adapter: 'github/acme',
-      repos: {
-        'acme/www': async ({ event, board }) => {
-          const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
-          await board.sync(channel, event, {
-            labels: { area: 'www' },
-            root: ({ raw }) => {
-              const payload = GitHubPayload.parse(raw)
-              const item = payload.pull_request ?? payload.issue
-              return { text: [item?.title, item?.body, item?.html_url].filter(Boolean).join('\n\n') }
-            },
-          })
+  backend: a2({
+    sync: {
+      github: github({
+        adapter: 'github/acme',
+        repos: {
+          'acme/www': async ({ event, board }) => {
+            const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
+            await board.sync(channel, event, {
+              labels: { area: 'www' },
+              root: ({ raw }) => {
+                const payload = GitHubPayload.parse(raw)
+                const item = payload.pull_request ?? payload.issue
+                return { text: [item?.title, item?.body, item?.html_url].filter(Boolean).join('\n\n') }
+              },
+            })
+          },
         },
-      },
-    }),
-  },
+      }),
+    },
+  }),
 })
 ```
 

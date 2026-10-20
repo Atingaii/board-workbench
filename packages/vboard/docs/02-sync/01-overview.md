@@ -25,30 +25,32 @@ two-way mirror) or to a function that handles inbound events however you like.
 Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
 import { vercelQueues } from 'vboard/scheduler-vercel'
 import { postgres } from 'vboard/store-postgres'
 
 export const { GET, POST, scheduler } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'vboard' }),
-  sync: {
-    slack: slack({
-      adapter: 'slack/acme', // a Vercel Connect connector
-      channels: {
-        '#errors-www': 'errors-www',
-        '#prs': 'prs',
-      },
-    }),
-    github: github({
-      adapter: 'github/acme',
-      repos: {
-        'acme/www': { pulls: 'prs', issues: 'issues' },
-      },
-    }),
-  },
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+    scheduler: vercelQueues({ topic: 'vboard' }),
+    sync: {
+      slack: slack({
+        adapter: 'slack/acme', // a Vercel Connect connector
+        channels: {
+          '#errors-www': 'errors-www',
+          '#prs': 'prs',
+        },
+      }),
+      github: github({
+        adapter: 'github/acme',
+        repos: {
+          'acme/www': { pulls: 'prs', issues: 'issues' },
+        },
+      }),
+    },
+  }),
 })
 ```
 

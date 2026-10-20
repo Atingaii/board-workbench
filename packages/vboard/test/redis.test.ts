@@ -1,6 +1,7 @@
 import { Redis } from 'ioredis'
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { board } from '../src/server/index.ts'
+// The engine itself, as a2() starts it.
+import { a2Board as board } from '../src/server/board.ts'
 import { redis } from '../src/store/redis.ts'
 import type { BoardStore } from '../src/store/types.ts'
 import { BOARD_URL, caller, PROJECT_ID, personToken, TEAM_ID, testAuth } from './harness.ts'

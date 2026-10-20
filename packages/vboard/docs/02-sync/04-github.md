@@ -10,20 +10,22 @@ connector and a map of repos to [mappings](./01-overview.md#mappings). vboard
 builds the Chat SDK adapter and people's sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { github } from 'vboard/adapter-github'
 
 export const { GET, POST, scheduler } = board({
-  sync: {
-    github: github({
-      adapter: 'github/acme',
-      repos: {
-        'acme/www': 'dev',                                 // PRs and issues, both in dev
-        'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
-        'acme/api': { pulls: 'prs', issues: 'issues' },
-      },
-    }),
-  },
+  backend: a2({
+    sync: {
+      github: github({
+        adapter: 'github/acme',
+        repos: {
+          'acme/www': 'dev',                                 // PRs and issues, both in dev
+          'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
+          'acme/api': { pulls: 'prs', issues: 'issues' },
+        },
+      }),
+    },
+  }),
 })
 ```
 
@@ -156,7 +158,7 @@ Without Connect, pass the App's credentials to a Chat SDK adapter
 (`npm i chat @chat-adapter/github`):
 
 ```ts
-// in board({ sync: { … } }):
+// in board({ backend: a2({ sync: { … } }) }):
 github: github({
   adapter: createGitHubAdapter({
     appId: process.env.GITHUB_APP_ID!,

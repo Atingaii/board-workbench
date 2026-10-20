@@ -58,7 +58,7 @@ function factsOf(issuer: TokenFacts['issuer'], iss: string, claims: Claims): Tok
 /** What a rule may compare claims to: the board's own Vercel team and project, when they're known. */
 export type MatchContext = { teamId: string | null; projectId: string | null }
 
-/** One entry in `board({ access })`: who it matches, and what they may do. The first entry that matches decides. */
+/** One entry in `a2({ access })`: who it matches, and what they may do. The first entry that matches decides. */
 export type AccessRule = {
   /** `vercel` and `github` are their platforms' issuers; `oidc` is the exact `url`. */
   issuer: 'vercel' | 'github' | 'oidc'
@@ -455,7 +455,7 @@ const deployment = (
 })
 
 /**
- * A host's own verifier, as `board({ access })`: the principal it returns is the caller,
+ * A host's own verifier, as `a2({ access })`: the principal it returns is the caller,
  * with what it may do in each channel. To reject, return or throw a `Response`;
  * anything else thrown is a 500.
  */

@@ -131,20 +131,22 @@ Machines outside the board's project need a rule in `access`, and the rule
 says what they may do in each channel:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board, githubActions, vercelProject } from 'vboard'
+import { a2, board, githubActions, vercelProject } from 'vboard'
 
 export const { GET, POST } = board({
-  access: [
-    vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
-  ],
+  backend: a2({
+    access: [
+      vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
+      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
+    ],
+  }),
 })
 ```
 
 - **A project name without `team` means the board's own team.** Names are only
   unique within a team, so another team's `marketing` doesn't match. A project
   ID matches on any team, since IDs are unique. The board knows its team from
-  `board({ project: { teamId } })`, `VERCEL_ORG_ID`, the linked project, or on
+  `board({ backend: a2({ project: { teamId } }) })`, `VERCEL_ORG_ID`, the linked project, or on
   Vercel the platform's token. When it can't tell, a name matches nothing.
 - **Names are for reading; IDs are stored.** A rule matches a project or repo
   by name, but the principal records its ID, so a rename doesn't change who

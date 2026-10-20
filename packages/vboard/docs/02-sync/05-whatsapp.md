@@ -15,7 +15,7 @@ a read operation, and a map of WhatsApp phone number IDs to
 [mappings](./01-overview.md#mappings):
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { kapso } from 'vboard/adapter-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
@@ -26,13 +26,15 @@ const client = new WhatsAppClient({
 })
 
 export const { GET, POST, scheduler } = board({
-  sync: {
-    kapso: kapso({
-      adapter: createKapsoAdapter({ client }),
-      markRead: (input) => client.messages.markRead(input),
-      numbers: { '16315558151': 'support' },
-    }),
-  },
+  backend: a2({
+    sync: {
+      kapso: kapso({
+        adapter: createKapsoAdapter({ client }),
+        markRead: (input) => client.messages.markRead(input),
+        numbers: { '16315558151': 'support' },
+      }),
+    },
+  }),
 })
 ```
 

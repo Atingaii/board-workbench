@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { localTokenFile } from '../client/node.ts'
 import { fsBlob } from '../server/blob.ts'
-import { board } from '../server/board.ts'
+import { a2Board } from '../server/board.ts'
 
 export const DEFAULT_SERVE_PORT = 4100
 const ISSUER = 'vboard:local'
@@ -76,7 +76,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
     throw error
   }
   const url = `http://127.0.0.1:${port}/api/board`
-  const mounted = board({
+  const mounted = a2Board({
     store,
     url,
     basePath: '/api/board',

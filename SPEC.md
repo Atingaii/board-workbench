@@ -8,11 +8,13 @@ the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { postgres } from 'vboard/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
 export const { GET, POST } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  }),
 })
 ```
 
@@ -30,7 +32,7 @@ board works).
 ```ts
 import { vercelBlob } from 'vboard/adapter-vercel-blob'
 
-export const { GET, POST } = board({ store, blob: vercelBlob() })
+export const { GET, POST } = board({ backend: a2({ store, blob: vercelBlob() }) })
 ```
 
 ```bash
@@ -59,7 +61,7 @@ vboard post errors-www "deploy failed on a1b2c3"
 
 ## Principles
 
-- **Access is per channel, and code says it.** `board({ access })` says what
+- **Access is per channel, and code says it.** `board({ backend: a2({ access }) })` says what
   each kind of principal may do in each channel: `read`, `post`, `react`,
   `label`, `sync`, or `manage`. Reads are gated, so a write-only caller is
   `['post']`, and what a caller can't read answers 404. Nothing is minted or
@@ -73,7 +75,7 @@ vboard post errors-www "deploy failed on a1b2c3"
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
 - **Wiring is code; the log holds facts.** Sync mappings, callbacks, watchers,
-  and access live in `board()` config, where they're reviewed and deployed.
+  and access live in `board()` and its backend's config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
   read: folds stay global, and filters are per reader. Log indexes still show
   how busy the board is.
@@ -103,7 +105,7 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()` and the access helpers (`vercelProject()`, `githubActions()`, `oidc()`) | server |
+| `vboard` | `board()`, its backends (`a2()`, `http()`), and the access helpers (`vercelProject()`, `githubActions()`, `oidc()`) | server |
 | `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
 | `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
 | `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
@@ -117,6 +119,31 @@ Sync adapters are named for the Chat SDK adapter they take: `adapter-kapso`
 takes `@kapso/chat-adapter`, which leaves `adapter-whatsapp` for
 `@chat-adapter/whatsapp`, Meta's own, whose threads are contacts rather than
 conversations.
+
+### Backends
+
+`board({ backend, watch, url, basePath })` mounts a board on a backend, which
+says where the board lives:
+
+- **`a2({ store, scheduler, blob, sync, access, middleware, project, auth, streamMaxMs })`**
+  keeps the board in this deployment, on A2's log. Everything else in this
+  spec describes it.
+- **`http(url, { fetch?, token? })`** uses the board at `url`, which keeps the
+  log. This deployment reads and writes it as itself: discovery names it as
+  `remote`, every other route answers 404 with code `remote`, and the CLI
+  pointed here says `error: <url> keeps no log: use <remote>`.
+  `client(name, { key })` writes there with `name` as its profile, and keyed
+  posts get IDs `key:<principal>:<sha256 of the key and order>`. Any board
+  takes a `key:<principal>:` ID only from that principal, so the same key
+  never posts twice and no one can post with one first. Watchers don't run
+  over `http()` yet: a board with `watch` there fails at startup.
+
+A backend is `{ kind, start(setup) }`: `start` gets the watchers, `url`, and
+`basePath`, and returns what `board()` mounts (`fetch`, `scheduler`,
+`client`, plus its own extras: `a2()`'s `servers`, `http()`'s `remote`).
+Engine options passed to `board()` itself fail at startup with where they go
+(`board: store goes in a2(): board({ backend: a2({ store }) })`), as do
+`remote` and a board with no backend.
 
 ### Install
 
@@ -245,7 +272,7 @@ talking to.
     (`https://oidc.vercel.com/<team>`).
   - `aud` must be the board's URL.
   - The board knows its own project: `project_id` is compared to
-    `VERCEL_PROJECT_ID`, or to `board({ project })` in local development.
+    `VERCEL_PROJECT_ID`, or to `board({ backend: a2({ project }) })` in local development.
   - A `development` token from it is a person and must carry `user_id`. Any
     other environment is the deployment itself. The one the board runs in
     (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
@@ -271,13 +298,15 @@ talking to.
 
 ```ts
 board({
-  store: postgres(),
-  access: [
-    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
-    oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
-    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-  ],
+  backend: a2({
+    store: postgres(),
+    access: [
+      vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
+      oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
+      vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
+    ],
+  }),
 })
 ```
 
@@ -288,7 +317,7 @@ board({
   named `marketing` on their own team and mint a token for the board's
   audience, so `vercelProject({ project })` without `team` matches only the board's own
   team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
-  knows its team from `board({ project: { teamId } })`, `VERCEL_ORG_ID`, or
+  knows its team from `board({ backend: a2({ project: { teamId } }) })`, `VERCEL_ORG_ID`, or
   `.vercel/project.json`, and on Vercel from the platform's
   `x-vercel-oidc-token`, verified and for its own `project_id`. When none of
   them says, a name without `team` matches nothing.
@@ -782,7 +811,7 @@ it records the external-to-board direction.
 Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
 `experimental-a2/scheduler-qstash`. A board without sync needs a store and
 nothing else.
-- **Pass the scheduler to `board()`, and mount the `scheduler` it returns in its
+- **Pass the scheduler to `a2()`, and mount the `scheduler` `board()` returns in its
   own route:** `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
   It serves the board server and the inbox server. To share one scheduler with
   other A2 servers, `board()` also returns `servers` for `scheduler.handler(...)`.
@@ -1197,7 +1226,7 @@ computer who don't need it on the internet. No config file: it's flags only.
   any other board (remote, or its own `board()` dev server on localhost) keeps
   its link, and `serve` prints the `VBOARD_URL` to use instead.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
-  (`auth.local` in `board()`), and signs one token for you, the OS user (or
+  (`auth.local` in `a2()`), and signs one token for you, the OS user (or
   `--handle`), into `~/.config/vboard/local/<hash of url>.json`, mode 0600, removed
   on exit. The Node client uses that file for a loopback URL when there's no
   `VBOARD_TOKEN`. Everyone on the machine who can read it is
@@ -1366,43 +1395,45 @@ by the platform's own things: Slack channels, GitHub repos.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 import { github } from 'vboard/adapter-github'
 import { redisHttp } from 'vboard/store-redis-http'
 import { vercelQueues } from 'vboard/scheduler-vercel'
 
 export const { GET, POST, scheduler } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
-  scheduler: vercelQueues({ topic: 'vboard' }),
-  sync: {
-    slack: slack({
-      adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
-      channels: {
-        '#errors-www': 'errors-www',
-        '#firehose-www': 'firehose-www',
-        '#prs': 'prs',
-        '#alerts': async ({ event, board }) => {
-          if (event.kind !== 'message') return
-          const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-          await board.sync(`alerts/${project}`, event)
+  backend: a2({
+    store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
+    scheduler: vercelQueues({ topic: 'vboard' }),
+    sync: {
+      slack: slack({
+        adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
+        channels: {
+          '#errors-www': 'errors-www',
+          '#firehose-www': 'firehose-www',
+          '#prs': 'prs',
+          '#alerts': async ({ event, board }) => {
+            if (event.kind !== 'message') return
+            const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+            await board.sync(`alerts/${project}`, event)
+          },
         },
-      },
-    }),
-    acme: slack({                                         // a second Slack workspace
-      adapter: 'slack/acme',
-      channels: { '#support': 'acme-support' },
-    }),
-    github: github({
-      adapter: 'github/basehub',
-      repos: {
-        'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
-        'basehub-ai/docs': async ({ event, board }) => {
-          await board.sync('prs', event, { labels: { area: 'docs' } })
+      }),
+      acme: slack({                                         // a second Slack workspace
+        adapter: 'slack/acme',
+        channels: { '#support': 'acme-support' },
+      }),
+      github: github({
+        adapter: 'github/basehub',
+        repos: {
+          'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
+          'basehub-ai/docs': async ({ event, board }) => {
+            await board.sync('prs', event, { labels: { area: 'docs' } })
+          },
         },
-      },
-    }),
-  },
+      }),
+    },
+  }),
 })
 ```
 
@@ -2195,7 +2226,9 @@ with nothing kept open.
 
 ```ts
 export const { GET, POST, scheduler } = board({
-  sync: { … },
+  backend: a2({
+    sync: { … },
+  }),
   watch: {
     triage: {
       tail: 'firehose --from slack',
@@ -2271,7 +2304,7 @@ removed from config skips the matches it left behind.
 
 ## Middleware
 
-`board({ middleware: [...] })` runs on every post and edit before it's written,
+`board({ backend: a2({ middleware: [...] }) })` runs on every post and edit before it's written,
 from every source: the HTTP API, sync (default imports and callbacks' writes),
 watchers, in-process clients, and scheduled sends. It is the one place to filter
 what reaches the board, such as prompt injection from a synced platform. Each

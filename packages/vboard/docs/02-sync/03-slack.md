@@ -10,19 +10,21 @@ connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), 
 [mappings](./01-overview.md#mappings):
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
+import { a2, board } from 'vboard'
 import { slack } from 'vboard/adapter-slack'
 
 export const { GET, POST, scheduler } = board({
-  sync: {
-    slack: slack({
-      adapter: 'slack/acme',
-      channels: {
-        '#errors-www': 'errors-www',
-        C0C6MNT9LLC: 'dev',
-      },
-    }),
-  },
+  backend: a2({
+    sync: {
+      slack: slack({
+        adapter: 'slack/acme',
+        channels: {
+          '#errors-www': 'errors-www',
+          C0C6MNT9LLC: 'dev',
+        },
+      }),
+    },
+  }),
 })
 ```
 
@@ -44,7 +46,7 @@ Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
 (`npm i chat @chat-adapter/slack`):
 
 ```ts
-// in board({ sync: { … } }):
+// in board({ backend: a2({ sync: { … } }) }):
 slack: slack({
   adapter: createSlackAdapter({
     botToken: process.env.SLACK_BOT_TOKEN!,

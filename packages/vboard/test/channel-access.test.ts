@@ -123,7 +123,7 @@ describe('access rules', () => {
 
   it('says how to move off trustedSources, and which rule has no can', () => {
     expect(() => board({ trustedSources: [] } as never)).toThrow(
-      'board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can',
+      'board: trustedSources is now access, in a2(): list vercelProject() and githubActions() rules there, each with can',
     )
     const hint = "needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'"
     expect(() => vercelProject({ project: 'docs' } as never)).toThrow(`vercelProject({ project: 'docs' }) ${hint}`)
