@@ -169,8 +169,9 @@ reply in an existing thread rather than starting one.
   that links its PR when the change is visible (a captioned video, for a flow),
   never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
-  `vb` is pinned (`VBOARD` in `agent.ts`): bump it with each release Pi should
-  use, since setup upgrades sandboxes to exactly that. So is `gh` (`GH`), which
+  `vb` is pinned (`VBOARD` in `agent.ts`) to the vboard the factory was built
+  with, so each release reaches Pi when the factory deploys, with no bump; setup
+  upgrades sandboxes to exactly that. `gh` is pinned too (`GH`), which
   new sandboxes download without asking GitHub's API, whose unauthenticated rate
   limit sandboxes share.
 - Pi's sandbox also gets the factory's own skills and extensions, from
