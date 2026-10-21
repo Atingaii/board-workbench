@@ -36,14 +36,23 @@ its own session, which the board's `authenticate` recognizes. See the
 
 ### From your terminal
 
-There's no login command. The CLI reads the board's discovery document, asks
-Vercel for a development token for the board's project with your Vercel CLI
-login, and exchanges it for one whose audience is the URL it talks to. It caches
-the result in `~/.config/vboard/tokens` (or under `$XDG_CONFIG_HOME`) for its
-12-hour life.
+There's no login command. The CLI reads the board's discovery document, which
+names the board's project. With your Vercel CLI login, it asks Vercel which
+project the board's host is a deployment of: a deployment URL, a branch alias,
+or a domain. When the two agree, it asks Vercel for a development token for that
+project and exchanges it for one whose audience is the URL it talks to. It
+caches the result in `~/.config/vboard/tokens` (or under `$XDG_CONFIG_HOME`) for
+its 12-hour life.
 
 Vercel only mints that token for accounts that can access the project, so
 **access to the board is access to its Vercel project**.
+
+Discovery is the board's word, and any board can name any project you can
+access. A development token for your project would get past Deployment
+Protection wherever Trusted Sources trust that project, whatever its audience.
+So the CLI mints only for the project Vercel finds behind the host. A board on
+localhost runs on your machine, and Vercel has no host to ask about, so it
+mints for the project that board names.
 
 ```text
 $ vb whoami
@@ -57,7 +66,14 @@ When it can't, it says what fixes it:
 
 ```text
 error: not signed in to Vercel: run `vercel login`
+error: your Vercel login can't see the project www.example.com belongs to: run `vercel login` or ask for access to it
 error: your Vercel account can't access this board's project: ask for access to it
+```
+
+When the board's host is another project's deployment, it gets no token:
+
+```text
+error: the board at https://www.example.com/api/board says its project is prj_abc123, but it's a deployment of prj_def456, so vb won't sign in to it
 ```
 
 ## How the board verifies

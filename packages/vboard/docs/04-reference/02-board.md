@@ -488,7 +488,8 @@ when there was no HTTP response.
 | `wrong_audience` | the board's discovery names another URL: use that one |
 | `no_project` | the board doesn't know its Vercel project, so the handle can't mint a token for it |
 | `not_logged_in` | no Vercel login to mint a token: run `vercel login` |
-| `no_access` | your Vercel account can't access the board's project |
+| `no_access` | your Vercel account can't access the board's project, or can't see the project the board's host belongs to |
+| `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
 | `ambiguous_agent` | several agent environments are detected: pick a `profile` |

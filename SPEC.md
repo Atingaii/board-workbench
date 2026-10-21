@@ -401,11 +401,11 @@ Other runtimes bring credentials in `http(url, { fetch })` (see [The handle](#th
 | A local board (`vb serve`) | the token file it writes for its URL, only for loopback URLs | `local:user:<os user>` |
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
-| A local terminal | `@vercel/oidc` `refreshToken({ project, team })` with the board's IDs, then an exchange for the board's audience | `vercel:user:<user_id>` |
+| A local terminal | your Vercel CLI login mints a development token for the project the board's host is a deployment of, then an exchange for the board's audience | `vercel:user:<user_id>` |
 
-- **Local minting uses the Vercel CLI login.** `refreshToken` reads the CLI
-  credentials, or calls `vercel project token <id>` when they're in the
-  keyring. It then calls `api.vercel.com/v1/projects/<id>/token` and caches the
+- **Local minting uses the Vercel CLI login.** With the CLI's credentials
+  (`getVercelToken`) the client calls `api.vercel.com/v1/projects/<id>/token`,
+  or `vercel project token <id>` when they're in the keyring, and caches the
   result. Vercel only mints this token for accounts that can access the
   project, so **access to the board equals access to its Vercel project**.
 - **The `user_id` claim identifies the person.** On development tokens it holds
@@ -419,6 +419,19 @@ Other runtimes bring credentials in `http(url, { fetch })` (see [The handle](#th
   mints and sends nothing and fails with `wrong_audience`, naming the board's
   URL. Otherwise a board could claim another board's audience and project, and
   replay the token it's sent there.
+- **Nor its project.** Any board can name any project the person can access,
+  and Deployment Protection's Trusted Sources ignore `aud`, so a development
+  token for that project could be replayed past the protection of deployments
+  that trust it. Before minting, the client asks Vercel with the person's login
+  which project the board URL's host is a deployment of (`findProject`, as for
+  the bypass below: `/v13/deployments/<host>`, which resolves deployment URLs,
+  branch aliases, and domains, then `/now/aliases/<host>`, in their scope and
+  then each team). It mints for that project and its owner, and only when it's
+  the one discovery names: otherwise `wrong_project`, or `no_access` when
+  Vercel finds nothing there for the person, and discovery's `team_id` plays no
+  part. A loopback host has nothing to look up: a board there runs on the
+  person's machine (`next dev`), so the client mints for the project and team
+  it names.
 - **Deployment protection:** hosted Vercel clients send their audience-bound
   OIDC token in `x-vercel-trusted-oidc-idp-token` for the edge and in
   `Authorization` for the board. Discovery uses an explicit `token` or

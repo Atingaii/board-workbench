@@ -376,6 +376,11 @@ The board knows its project from the `project` option, `VERCEL_PROJECT_ID` on
 Vercel, or `.vercel/project.json` locally. Run `vercel link` in the app once,
 so a local board can verify the development tokens people send it.
 
+The CLI doesn't take discovery's word for it. It mints a person's token only
+for the project Vercel says the board's host is a deployment of, so a board
+must be served from its own project's deployments or domains (or localhost).
+See [Identity](./03-identity.md#from-your-terminal).
+
 ## Defaults by environment
 
 What `a2()` uses when you leave an option out:
