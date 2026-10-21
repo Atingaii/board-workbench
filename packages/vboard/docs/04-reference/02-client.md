@@ -25,6 +25,13 @@ In Node, the URL comes from `url`, then `VBOARD_URL`, the project link
 `vercel login`, refreshed a minute before it expires. The [CLI](./01-cli.md#configuration)
 documents the same order, because the CLI is this client.
 
+A board on [`http()`](../01-board/01-mounting.md#backends) keeps nothing, and
+its discovery names the board it uses. Node follows it there with a token it
+mints for that board, except for what the first board does for its own sync
+entries: `linkAccount`, `checkAccount`, and `readSource` on one of them stay
+with it. With `token` or `VBOARD_TOKEN`, a token for one board, it doesn't
+follow.
+
 ```tsx app/board.tsx
 'use client'
 import { createClient } from 'vboard/client'

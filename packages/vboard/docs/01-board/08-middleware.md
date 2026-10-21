@@ -45,16 +45,16 @@ goes to the board it uses.
   emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **A retry of a post goes through it again.** It runs before the backend,
-  which is what knows whether a post with that `id` landed. One it passes
-  returns the message on the board, whatever it changed this time: the same
-  `id` from the same author, in the same channel or thread, is that message.
-  One it drops answers 422, though the first try is on the board. An author
-  that can't read the channel gets it back as it landed, and only if it posted
-  without reading too. Anyone else's post with that `id` fails with
-  `duplicate_id`. Keep side effects like `respond` idempotent, or cheap to
-  repeat. A platform event sync imports is the exception: sync finds it on the
-  board by its platform IDs first, so it goes through once.
+- **A retry of a post that landed skips it.** Before it runs, `board()` asks
+  the backend for the caller's post with that `id` (`GET /posts/:id`). The
+  same `id` from the same author, in the same channel or thread, returns the
+  message on the board, whatever the middleware would say now. That covers
+  the API, a keyed `client()`, watchers, schedule sends, and a sync callback's
+  posts. An author that can't read the channel gets it back as it landed, and
+  only if it posted without reading too. Anyone else's post with that `id`
+  fails with `duplicate_id`. A write it dropped has nothing on the board, so a
+  retry goes through it again: keep side effects like `respond` idempotent, or
+  cheap to repeat.
 
 ## What it gets
 

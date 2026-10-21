@@ -181,9 +181,12 @@ export const { GET, POST } = board({
   and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
   in its `access`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 
-Linking an account starts on this board, where sync runs: `vb identity link`
-against it. Two boards that sync the same platform channel into one board each
-import its events and each deliver to it, so give each channel one syncer.
+A [callback](./02-callbacks.md)'s writes land on the other board as the
+platform user, and its reads are this deployment's. The CLI pointed at this
+board follows it to the other one, and sends `vb identity link` for this
+board's entries here, where sync runs: the link lands on the other board. Two
+boards that sync the same platform channel into one board each import its
+events and each deliver to it, so give each channel one syncer.
 
 ## Set up webhooks
 

@@ -194,16 +194,17 @@ The backends vboard ships:
   own routes are `/stuck` and `/stuck/redrive`. It delivers sync's
   subscription in-process, on the `vboard-sync` consumer's thread lanes, and
   what sync pushes to its inbox on `vboard-inbox`'s platform-thread lanes, so
-  both keep A2's retries and dead letters. `sync` or `middleware` passed to it
-  is an error that says they're `board()`'s.
+  both keep A2's retries and dead letters. It takes no `sync` or `middleware`:
+  TypeScript flags them there.
 - **`http(url, { fetch?, token?, init? })`** uses the board at `url`, which
   keeps the log: its methods call it with the SDK. A `{ self }` caller writes
   there as this deployment with `self` as its profile, and a post whose ID
   `board()` derived from a trigger gets `key:<principal>:<sha256 of that ID>`.
   Any board takes a `key:<principal>:` ID only from that principal, so the
-  same key never posts twice and no one can post with one first. A request's
-  `{ identity }` answers 404 `remote` (`<url> keeps no log: use <remote>`) and
-  discovery names the other board as `remote`, unless `init` is given:
+  same key never posts twice and no one can post with one first (and `posted`,
+  a retry's lookup, asks for the same). A request's `{ identity }` answers 404
+  `remote` (`<url> keeps no log: use <remote>`) and discovery names the other
+  board as `remote`, unless `init` is given:
   `init({ caller })` returns a `RequestInit` merged into each request the
   caller's call makes there (a token minted for it, say), and discovery then
   names no other board. Its own routes are `POST /wake` and `POST /watchers`
@@ -211,7 +212,12 @@ The backends vboard ships:
   (below), and so does its sync: it registers with `sync: true`, pulls what to
   deliver as matches of watcher `@sync`, and pulls back what it pushed to its
   inbox after each webhook and when it's woken. Sync's own calls go as the
-  deployment itself, which the other board must let `sync`.
+  deployment itself, which the other board must let `sync`. The Node client
+  pointed at such a board follows `remote`: it mints a token for the other
+  board and sends its requests there, except `/identity/link`,
+  `/identity/check`, and `/sources/:key/read` for the sync keys this board's
+  discovery lists, which only it can answer. A client handed a token for this
+  board (`token`, `VBOARD_TOKEN`, `vb serve`'s) doesn't follow.
 
 ### IDs, cursors, and versions
 
@@ -1619,10 +1625,10 @@ permission in the channel concerned:
 
 | Method | Route | What it keeps |
 | --- | --- | --- |
-| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key: `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs, or `seen` (a platform user to know, for `@[email]`) |
+| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key (null for a callback's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
 | `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
 | `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
-| `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, who an account is linked to and how, a person's accounts |
+| `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, the post an import made with a client ID, who an account is linked to and how, a person's accounts |
 | `syncCopies` | `GET /sync/copies` | messages' copies, by target |
 | `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
 | `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
@@ -1844,14 +1850,16 @@ The `board` a function receives is a vboard client, the same type
 
 - **The transport is in-process,** with no HTTP and no token.
 - **Writes are authored by the platform actor that triggered the event,** for
-  example `slack:user:U0456`, with `origin` set from the event.
+  example `slack:user:U0456`, with `origin` set from the event for the import.
+  The function's own writes (`reply`, `label`, `react`, and `edit` and `delete`
+  of the actor's own messages) are imports too, `syncImport` as that actor
+  with `from: null`, naming a message by its board ID: they sync out like a
+  message written on the board, and work the same on every backend. Its reads,
+  and anything else it does, are sync's own caller's.
 - **Write IDs are derived from the triggering event and the call order,** the
   same way A2 names a consumer's own appends. A retried function doesn't post
   twice as long as it makes its writes in the same order. Writes made in
   parallel, e.g. with `Promise.all`, need explicit `id`s.
-- **On a board on `http()`, only `board.sync()` reaches the other board.** It's
-  an import. The client's other calls are the platform user's own, which
-  `http()` answers 404 `remote`, as it does any caller it doesn't forward.
 
 **Failure:** a function that keeps throwing dead-letters after 10 tries. That
 blocks only its thread's lane in that channel's inbox. Other threads, other
@@ -2534,12 +2542,13 @@ refs: an edit's `id`, a write's `re`, its thread's root), its `author`, its
 `source`, `respond(text)`, an in-process `board` client, and `next(patch?)`.
 Calling `next` passes the write on, optionally changing its text or a post's
 labels; not calling it drops the write, which never reaches the log, and so
-does emptying a write that has no files. A retried post runs the chain again,
-since only the backend knows whether its `id` landed: one the chain passes
-returns the message that landed, whatever it changed this time, and one it
-drops answers 422. Anyone else's post with that `id` answers 409
-`duplicate_id`. Sync finds an event it imported by its platform IDs first, so
-an import goes through the chain once.
+does emptying a write that has no files. A retried post whose `id` already
+landed, by the same author in the same channel or thread, returns that message
+without running the chain again: only the backend knows whether it landed, so
+`board()` asks it first, with `posted` (`GET /posts/:id`, the caller's own post
+by the client ID it gave), and for a sync callback's post with `syncFind`'s
+`post`. Anyone else's answers 409 `duplicate_id`. Sync finds an event it
+imported by its platform IDs first, so an import goes through the chain once.
 
 `respond` answers where the write came from: a reply in the platform thread for
 sync, and the message of the `422 dropped` error the API answers with otherwise.

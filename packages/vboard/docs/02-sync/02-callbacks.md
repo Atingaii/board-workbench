@@ -47,10 +47,12 @@ event is skipped; the thread stays connected, so later events still reach you.
 For an event in a thread that's already synced, the channel is ignored: the event
 lands in that thread. The channel only places new roots.
 
-The function's other writes through `board` are the platform user's own, and go
-through the [middleware](../01-board/08-middleware.md) like the import. On a
-board on `http()`, only `board.sync()` reaches the board it uses: the client's
-other calls answer 404 `remote`.
+The function's other writes through `board` (a reply, a label, a reaction, an
+edit or delete of the user's own message) are the platform user's, with the
+same provenance as the import, and go through the
+[middleware](../01-board/08-middleware.md) like it. Its reads, and anything
+else it does, are sync's own. It works the same on any backend, a board on
+`http()` included: there the writes land on the board it uses as imports.
 
 ## The event
 

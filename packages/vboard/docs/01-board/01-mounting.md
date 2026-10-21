@@ -52,9 +52,11 @@ export const { GET, POST, client } = board({ backend: http('https://board.exampl
 A board on `http()` keeps nothing:
 
 - **Its discovery names the other board,** and a request to it answers 404
-  with code `remote` once its token checks out. The CLI pointed at it says
-  where to go:
-  `error: https://www.example.com/api/board keeps no log: use https://board.example.com/api/board`.
+  with code `remote` once its token checks out. The CLI and the Node client
+  pointed at it follow it there: they mint a token for the other board and
+  send their requests to it. What this board does for its own sync entries,
+  linking an account on one and reading a source through it, they send here.
+  A client handed a token for this board (`token`, `VBOARD_TOKEN`) stays here.
 - **`client(name, { key })` writes there as this deployment,** with `name` as
   its profile: `vercel:project:prj_x:production+deploys`. Names start with a
   letter and use up to 32 letters, numbers, and hyphens. With a `key`, its

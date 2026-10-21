@@ -93,6 +93,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
+| GET | `/posts/:id` | Your post with client ID `id`, as `POST /messages` answered it: `{ message }`, or 404 `post_not_found`. Someone else's is as good as missing |
 | POST | `/messages` | Post or reply. Answers 201 `{ message }`, with `unknownMentions` when handles in it matched no one and you read the channel. See [Posting](#posting) |
 | POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }`, with `unknownMentions` like a post |
 | POST | `/messages/:id/delete` | `{}`. Answers `{ ok: true }` |
@@ -139,10 +140,10 @@ lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each with `origin: { thread, message? }` naming the platform message it changes (no `message`: the root of the board thread the platform thread belongs to), or `seen`, a platform user the board should know. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find |
+| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find |
 | POST | `/sync/receipts` | What sync did, about board message `message`: `kind: 'message'` (it landed on `target` as `external`, with its `files`), `files`, `failed` (with `error`), or `thread` (its thread syncs with `target`, a `targetKind` channel or thread, by `cause` `config` or `request`). Answers `{ ok }`, and for a thread, `attached`: false when it already was |
 | GET | `/sync/threads/:thread` | A board thread's sync, by its key: `{ thread, root, channel, targets, external }` |
-| GET | `/sync/find` | What platform IDs are on the board. Query: `thread` (and `message` in it), `account`, `person`. Answers `{ thread, message, person, accounts }`: the board thread and message, who an account is linked to and how, and a person's linked accounts |
+| GET | `/sync/find` | What platform IDs are on the board. Query: `post` (an import's client ID), `thread` (and `message` in it), `account`, `person`. Answers `{ thread, message, person, accounts }`: the board thread and message, who an account is linked to and how, and a person's linked accounts |
 | GET | `/sync/copies` | Messages' copies on platforms. Query: `message`, repeated. Answers `{ copies }`, by message, then target |
 | GET | `/sync/roots` | `{ roots }`: person `by`'s roots since `since` (epoch milliseconds), to tell their own copies coming back from new messages |
 | POST | `/inbox/:key` | `{ events }`: platform events for the caller's inbox, each `{ id, event, raw }`, where `id` is the platform's own and lands once |
