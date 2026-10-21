@@ -368,23 +368,36 @@ async function hostedToken(url: string): Promise<string> {
   }
 }
 
+/** A host this deployment answers on, as Vercel's system variables name them (bare hosts). */
+const ownHost = (host: string) =>
+  [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
+    .some((own) => !!own && own.toLowerCase() === host.toLowerCase())
+
 /** Explicit bypass wins; otherwise hosted calls use OIDC and local people use their saved bypass. */
 function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<string>): typeof fetch {
   const host = new URL(url).host
   let secret: Promise<string | null> | undefined
   let looked: Promise<{ secret: string; created: boolean }> | undefined
+  // On Vercel, a rejected VERCEL_AUTOMATION_BYPASS_SECRET isn't sent again: OIDC follows.
+  let envRejected = false
   return async (input, init = {}) => {
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
     init = { ...init, headers }
-    // An explicit bypass secret still wins, hosted or not: it's what hosted callers
-    // and `vercel env pull` setups used before Trusted Sources.
+    // An explicit bypass secret still wins: it's what `vercel env pull` setups used before
+    // Trusted Sources. On Vercel it's a system variable, the deployment's own project's secret,
+    // so it never leaves its own hosts: another project's board gets OIDC, not a key to this one.
     const fromEnv = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
-    if (fromEnv)
-      return through(doFetch, input, init, fromEnv).catch((error) => {
-        throw error instanceof Wall
-          ? new BoardError('protected', `${url} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against ${WHERE}`, error.status)
-          : error
-      })
+    if (fromEnv && !envRejected && (process.env.VERCEL !== '1' || ownHost(host))) {
+      try {
+        return await through(doFetch, input, init, fromEnv)
+      } catch (error) {
+        if (!(error instanceof Wall)) throw error
+        // Hosted, try the board's trust in this project instead.
+        if (process.env.VERCEL !== '1')
+          throw new BoardError('protected', `${url} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against ${WHERE}`, error.status)
+        envRejected = true
+      }
+    }
     // Without one, hosted workloads use project trust, never a person's saved bypass credentials.
     if (process.env.VERCEL === '1') {
       if (!headers.has('x-vercel-trusted-oidc-idp-token')) {
