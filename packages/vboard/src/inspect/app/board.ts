@@ -55,7 +55,9 @@ const client = board({
       const headers = new Headers(init?.headers)
       headers.set('x-inspect-token', token)
       if (profile !== undefined) headers.set('x-inspect-profile', profile ?? '')
+      // The feed is a long-poll: it's live while one is out, and each answers when there's news.
       const live = String(input).includes('/board/events')
+      if (live) set((s) => (s.live === 'reconnecting' ? s : { ...s, live: 'live' }))
       try {
         const response = await fetch(input, { ...init, headers })
         if (live) set((s) => ({ ...s, live: response.ok ? 'live' : 'reconnecting' }))
