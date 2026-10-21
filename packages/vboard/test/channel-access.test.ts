@@ -123,10 +123,7 @@ describe('access rules', () => {
     expect((await ci('GET', `/messages?re=${id}&after=${id}`)).status).toBe(200)
   })
 
-  it('says how to move off trustedSources, and which rule has no can', () => {
-    expect(() => board({ backend: a2(), trustedSources: [] } as never)).toThrow(
-      'board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can',
-    )
+  it('says which rule has no can', () => {
     const hint = "needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'"
     expect(() => vercelProject({ project: 'docs' } as never)).toThrow(`vercelProject({ project: 'docs' }) ${hint}`)
     expect(() => githubActions({ repository: 'acme/www' } as never)).toThrow(`githubActions({ repository: 'acme/www' }) ${hint}`)

@@ -245,8 +245,6 @@ const sourceOf = (caller: Caller): WriteSource | null => {
  * scope, or one per tenant for a host.
  */
 export function board(options: BoardOptions): Board {
-  if ((options as { trustedSources?: unknown }).trustedSources !== undefined)
-    throw new Error('board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can')
   const { backend } = options
   const host = typeof options.access === 'function' ? options.access : null
   if (host && options.auth) throw new Error('board: an access function replaces the built-in verifier, so drop `auth`')

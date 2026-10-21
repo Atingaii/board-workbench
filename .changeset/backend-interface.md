@@ -14,4 +14,6 @@
 - A client name a backend can't take fails the client's first call, not `client()` itself.
 - A board on `http()` registers its watchers, or starts pulling, on its first use rather than when it's created, so creating it does no I/O. A request to it is verified before it answers 404 `remote`.
 
+Options that moved, like `trustedSources` (now `access`), aren't checked at runtime: TypeScript flags them.
+
 New: `http(url, { init })` forwards requests to the board it uses. `init({ caller })` returns what to merge into each request the caller's call makes there, such as a token you mint for it, and discovery then sends no one elsewhere.

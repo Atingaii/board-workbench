@@ -1055,9 +1055,6 @@ function build(options: A2Options, binding: BoardBinding) {
  * `scheduler` in a route of its own. Nothing is built or connected until board() binds it.
  */
 export function a2(given: A2Options = {}) {
-  for (const moved of ['sync', 'middleware'] as const)
-    if ((given as Record<string, unknown>)[moved] !== undefined)
-      throw new Error(`a2: ${moved} is board()'s now, so it runs wherever the board lives: board({ backend: a2({ … }), ${moved} })`)
   const { options, missing } = complete(given)
   let built: ReturnType<typeof build> | null = null
   const ready = () => {
