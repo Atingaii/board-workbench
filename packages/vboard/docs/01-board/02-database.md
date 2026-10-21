@@ -30,7 +30,8 @@ export const { GET, POST } = board({
 | `memory({ clock })` | `vboard/backend-a2/store-memory` | tests |
 
 Leave `store` out and the board picks for you: SQLite at `.a2/dev.db` in
-development, memory in tests. In production it doesn't start without one.
+development, memory in tests. In production it's required: see
+[Mounting](./01-mounting.md#options).
 
 ## What a store keeps
 

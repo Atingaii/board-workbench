@@ -48,15 +48,21 @@ import {
   type WriteContext,
 } from './writes.ts'
 import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
+import { localScheduler } from '../scheduler/local.ts'
 
 /** `a2()`'s options: the board in this deployment, on A2's log, and everything that runs beside it. */
 export type A2Options = {
   /**
    * Where the board keeps its log and tables: `postgres()`, `sqlite()`, or `memory()` from
-   * `vboard/backend-a2/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
+   * `vboard/backend-a2/store-*`. Omitted: SQLite in development, memory in tests. Required in production.
    */
   store?: BoardStore
-  /** Required for sync in production, and for scheduled messages. Mount the backend's `scheduler` as `POST` in its own route. */
+  /**
+   * What runs the board's consumers, retries, and timers: `vercelQueues()` or `qstash()` from
+   * `vboard/backend-a2/scheduler-*`. Mount the backend's `scheduler` as `POST` in its own route.
+   * Omitted: one in this process in development, with tasks in memory, and none in tests.
+   * Required in production.
+   */
   scheduler?: A2Scheduler
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
   sync?: Record<string, SyncProvider>
@@ -67,7 +73,7 @@ export type A2Options = {
   middleware?: readonly Middleware[]
   /**
    * Where attachments live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`. Omitted: memory
-   * in tests, `.a2/attachments` in development, and no uploads in production.
+   * in tests, `.a2/attachments` in development. Required in production.
    */
   blob?: BlobStore
   /** For tests: how the board POSTs wake-ups to boards on `http()`. Defaults to https to public addresses only. */
@@ -146,6 +152,29 @@ function identityOf(caller: Caller): Identity {
   if (origin.via?.kind === 'watcher') return deploymentIdentity(`vboard:watch:${self}`, self)
   if (!ID.test(self)) throw badRequest(`client: names use lowercase letters, numbers, - and _, got: ${self}`)
   return deploymentIdentity(`vboard:client:${self}`, self)
+}
+
+/**
+ * The options with what every board on `a2()` needs filled in, so the whole protocol works in
+ * every environment: in development, a scheduler in this process. In production nothing is
+ * assumed, and `missing` names what isn't there. The board says so on its first use rather than
+ * when it's created, since a build loads the route without its runtime environment.
+ */
+function complete(options: A2Options): { options: A2Options; missing: string | null } {
+  const env = process.env.NODE_ENV
+  if (env === 'production') {
+    const missing = (['store', 'scheduler', 'blob'] as const).filter((key) => options[key] === undefined)
+    return {
+      options,
+      missing:
+        missing.length === 0
+          ? null
+          : `a2() needs ${missing.join(', ').replace(/, ([^,]*)$/, ' and $1')} in production: postgres() from ` +
+            'vboard/backend-a2/store-postgres, vercelQueues() from vboard/backend-a2/scheduler-vercel, and vercelBlob() from vboard/backend-a2/blob-vercel, say',
+    }
+  }
+  // Tests bring their own, or none, so nothing runs on a timer they didn't ask for.
+  return { options: options.scheduler || env === 'test' ? options : { ...options, scheduler: localScheduler() }, missing: null }
 }
 
 /** Everything behind a board on `a2()`, built once board() binds it. Nothing in it connects until it's used. */
@@ -671,9 +700,12 @@ function build(options: A2Options, binding: BoardBinding) {
  * attachments. It's the backend itself: pass it to `board({ backend })`, and mount its
  * `scheduler` in a route of its own. Nothing is built or connected until board() binds it.
  */
-export function a2(options: A2Options = {}) {
+export function a2(given: A2Options = {}) {
+  const { options, missing } = complete(given)
   let built: ReturnType<typeof build> | null = null
   const ready = () => {
+    // Said to every caller, so the CLI shows it: a board that can't do its whole job doesn't half-serve.
+    if (missing) throw new HttpError(500, 'not_configured', missing)
     if (!built) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
     // The first call on an instance starts the schedules catching up, and doesn't wait.
     built.schedules.catchUp()
@@ -707,13 +739,17 @@ export function a2(options: A2Options = {}) {
     routes,
     bind(binding: BoardBinding) {
       if (built) throw new Error('a2: this backend already serves a board: create one a2() per board()')
-      built = build(options, binding)
+      // Missing a piece, it builds nothing: A2 refuses a server without a store in production,
+      // and the first call says what's missing instead.
+      if (!missing) built = build(options, binding)
     },
     /** The scheduler's callback: `export { scheduler as POST }` from a route of its own. A board without a scheduler answers 404. */
     scheduler: (request: Request): Promise<Response> => ready().scheduler(request),
     /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
     get servers() {
-      return ready().servers
+      // A board missing a piece in production built none, and a route that loads them (to share
+      // its scheduler, say) must still load, at build time too. Its requests say what's missing.
+      return missing ? [] : ready().servers
     },
     /** For tests and tools. */
     get engine() {

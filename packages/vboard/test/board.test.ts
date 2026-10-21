@@ -46,6 +46,30 @@ describe('scheduler', () => {
     expect(response.status).toBe(404)
     expect(await response.json()).toMatchObject({ error: { message: 'this board has no scheduler' } })
   })
+
+  it('runs in this process in development, so scheduled messages work with nothing else running', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    try {
+      const julian = caller(testBoard().fetch, await personToken())
+      const { body } = await julian('POST', '/messages', { channel: 'dev', text: 'deploy failed' })
+      const scheduled = await julian('POST', '/schedules', { re: body.message.id, text: 'still broken?', in: '1d' })
+      expect(scheduled).toMatchObject({ status: 201, body: { schedule: { state: 'pending' } } })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('says on first use what a production board is missing, without failing when the route loads', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      // A build loads the route with NODE_ENV=production and none of its runtime environment.
+      const board = testBoard({ store: undefined })
+      const response = await caller(board.fetch, await personToken())('GET', '/me')
+      expect(response).toMatchObject({ status: 500, body: { error: { code: 'not_configured', message: expect.stringMatching(/^a2\(\) needs store, scheduler and blob in production: /) } } })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
 
 describe('auth', () => {

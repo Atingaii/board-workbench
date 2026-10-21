@@ -55,8 +55,8 @@ Then the rest, a group each in the report:
 
 Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board on `a2()`
-without a scheduler fails `schedules`, with the reason it answered:
-`this board has no scheduler, so it can't schedule messages`.
+passes everywhere: `vb serve` and a dev server schedule on a scheduler in
+their own process.
 
 ## The report
 

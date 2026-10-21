@@ -114,6 +114,9 @@ importers:
       '@chat-adapter/slack':
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(debug@4.4.3)(zod@4.6.5)
+      '@vercel/blob':
+        specifier: ^2.8.0
+        version: 2.8.0
       '@vercel/connect':
         specifier: ^2.3.4
         version: 2.3.4(@chat-adapter/slack@4.41.1(ai@7.0.130(zod@4.6.5))(debug@4.4.3)(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ai@7.0.130(zod@4.6.5))

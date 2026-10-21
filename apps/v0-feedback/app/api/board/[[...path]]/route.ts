@@ -1,5 +1,6 @@
 import { board, type WatcherContext } from "vboard";
 import { a2 } from "vboard/backend-a2";
+import { vercelBlob } from "vboard/backend-a2/blob-vercel";
 import { slack } from "vboard/sync-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
@@ -31,6 +32,9 @@ const backend = a2({
       })
     : undefined,
   scheduler: vercelQueues({ topic: "vboard" }),
+  // A private Blob store connected to the project. Its credentials are read on the first
+  // upload, so the board serves without one; uploads fail until it's connected.
+  blob: env ? vercelBlob() : undefined,
   sync: {
     slack: slack({
       adapter: slackAdapter,

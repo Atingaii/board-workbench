@@ -54,8 +54,14 @@ export function mount(options: MountOptions) {
     ...(auth ? { auth } : {}),
     ...(streamMaxMs !== undefined ? { streamMaxMs } : {}),
   })
-  const { scheduler, servers, engine, session, store } = backend
-  return Object.assign(created, { backend, scheduler, servers, engine, session, store })
+  // Read when a test asks: a board missing a piece in production builds none of them.
+  const lazy = (read: () => unknown) => ({ get: read, enumerable: true })
+  return Object.defineProperties(Object.assign(created, { backend, scheduler: backend.scheduler }), {
+    servers: lazy(() => backend.servers),
+    engine: lazy(() => backend.engine),
+    session: lazy(() => backend.session),
+    store: lazy(() => backend.store),
+  }) as typeof created & { backend: typeof backend; scheduler: typeof backend.scheduler } & Pick<typeof backend, 'servers' | 'engine' | 'session' | 'store'>
 }
 
 /** A board on a memory store whose tokens come from a local test issuer. */

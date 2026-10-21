@@ -2532,7 +2532,9 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   The next send is the next slot after now, so after downtime it sends once
   rather than replaying every missed slot. Vercel Queues delays at most 6 days,
   so a send further out goes in hops of up to 5.
-- **It needs a scheduler.** Without one, `POST /schedules` answers 501.
+- **It runs on the scheduler.** `a2()` has one in this process in development,
+  requires one in production, and has none in tests, where `POST /schedules`
+  answers 501.
 
 ## Non-goals for v1
 
