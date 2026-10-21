@@ -6,17 +6,24 @@ import { VERSION } from '../version.ts'
 import type { BackendRoute } from './backend.ts'
 import { badRequest, HttpError } from './errors.ts'
 
+/** board()'s own routes: discovery and the files it serves, and sync's, which run where board() does. */
+export const BOARD_ROUTES = ['avatar', 'openapi', 'webhook', 'sourceRead', 'typing', 'identityLink', 'identityCheck', 'identityUnlink', 'sync'] as const
+export type BoardRoute = 'discovery' | (typeof BOARD_ROUTES)[number]
+
 /** What a request is for: one of board()'s own routes, a protocol method, or one of the backend's routes. */
-export type Target = { kind: 'board'; name: 'discovery' | 'avatar' | 'openapi' } | { kind: 'protocol'; name: Method } | { kind: 'backend'; route: BackendRoute }
+export type Target = { kind: 'board'; name: BoardRoute } | { kind: 'protocol'; name: Method } | { kind: 'backend'; route: BackendRoute }
 
-export type Match = { target: Target; base: string; param: string | null }
+/** `params` by name, from the path's `:name` segments; `param` is the first, for a backend's own routes. */
+export type Match = { target: Target; base: string; param: string | null; params: Record<string, string> }
 
-type Pattern = { method: string; pattern: RegExp; target: Target; segments: number; literals: number; own: boolean }
+type Pattern = { method: string; pattern: RegExp; names: string[]; target: Target; segments: number; literals: number; own: boolean }
 
 /** Every protocol method, by the route it's served at. */
 export const METHODS: readonly Method[] = [
-  'me', 'channels', 'actors', 'identity', 'messages', 'threads', 'message', 'post', 'edit', 'delete', 'react', 'label', 'typing',
+  'me', 'channels', 'actors', 'identity', 'messages', 'threads', 'message', 'post', 'edit', 'delete', 'react', 'label',
   'schedule', 'schedules', 'cancelSchedule', 'upload', 'attachment', 'watchers', 'register', 'matches', 'ack', 'events',
+  'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'syncRoots', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
+  'syncCode', 'syncAccount', 'syncUnlink',
 ]
 
 const escape = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -27,6 +34,7 @@ function compile(method: string, path: string, target: Target, own: boolean): Pa
   return {
     method,
     pattern: new RegExp(`${source}$`),
+    names: parts.filter((part) => part.startsWith(':')).map((part) => part.slice(1)),
     target,
     segments: parts.length,
     literals: parts.filter((part) => !part.startsWith(':')).length,
@@ -41,21 +49,23 @@ function compile(method: string, path: string, target: Target, own: boolean): Pa
  */
 export function createRouter(backendRoutes: readonly BackendRoute[], basePath?: string) {
   const patterns: Pattern[] = [
-    compile('GET', '/avatars/:name', { kind: 'board', name: 'avatar' }, false),
-    compile('GET', '/openapi.json', { kind: 'board', name: 'openapi' }, false),
+    ...BOARD_ROUTES.map((name) => compile(routes[name].method, routes[name].path, { kind: 'board', name }, false)),
     ...METHODS.map((name) => compile(routes[name].method, routes[name].path, { kind: 'protocol', name }, false)),
     ...backendRoutes.map((route) => compile(route.method, route.path, { kind: 'backend', route }, true)),
   ].sort((a, b) => b.segments - a.segments || b.literals - a.literals || Number(b.own) - Number(a.own))
 
   /** A segment that isn't URI-encoded names nothing: no route. */
-  const found = (candidate: Pattern, base: string, param: string | undefined): Match | null => {
-    if (param === undefined) return { target: candidate.target, base, param: null }
+  const found = (candidate: Pattern, base: string, values: string[]): Match | null => {
+    const params: Record<string, string> = {}
     try {
-      return { target: candidate.target, base, param: decodeURIComponent(param) }
+      candidate.names.forEach((name, i) => (params[name] = decodeURIComponent(values[i]!)))
     } catch {
       return null
     }
+    const first = candidate.names[0]
+    return { target: candidate.target, base, param: first === undefined ? null : params[first]!, params }
   }
+  const discovery = (base: string): Match => ({ target: { kind: 'board', name: 'discovery' }, base, param: null, params: {} })
 
   return function route(method: string, pathname: string): Match | null {
     const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
@@ -63,19 +73,19 @@ export function createRouter(backendRoutes: readonly BackendRoute[], basePath?: 
       const base = basePath.replace(/\/+$/, '')
       if (path !== base && !path.startsWith(`${base}/`)) return null
       const rest = path.slice(base.length) || '/'
-      if (rest === '/') return method === 'GET' ? { target: { kind: 'board', name: 'discovery' }, base, param: null } : null
+      if (rest === '/') return method === 'GET' ? discovery(base) : null
       for (const candidate of patterns) {
         const hit = candidate.method === method ? rest.match(new RegExp(`^${candidate.pattern.source}`)) : null
-        if (hit) return found(candidate, base, hit[1])
+        if (hit) return found(candidate, base, hit.slice(1))
       }
       return null
     }
     for (const candidate of patterns) {
       if (candidate.method !== method) continue
       const hit = path.match(candidate.pattern)
-      if (hit) return found(candidate, path.slice(0, hit.index), hit[1])
+      if (hit) return found(candidate, path.slice(0, hit.index), hit.slice(1))
     }
-    return method === 'GET' ? { target: { kind: 'board', name: 'discovery' }, base: path === '/' ? '' : path, param: null } : null
+    return method === 'GET' ? discovery(path === '/' ? '' : path) : null
   }
 }
 

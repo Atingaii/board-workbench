@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { idempotentId } from 'experimental-a2'
 import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
-import { actorsReducer, foldMessages, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
+import { actorsReducer, foldMessages, isThreadTarget, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
@@ -12,9 +12,7 @@ import type { BoardReads } from './reads.ts'
 import { badRequest, duplicateId, forbidden, HttpError, notFound } from './errors.ts'
 import { view, type Reader } from './feed.ts'
 import type { MessageView } from '../api/routes.ts'
-import type { ResolvedTarget } from '../sync/provider.ts'
-import type { BoardClient } from '../client/client.ts'
-import { runMiddleware, type Middleware, type WriteSource } from './middleware.ts'
+import type { WriteSource } from './middleware.ts'
 
 /** Who a write is attributed to. */
 export type Identity = { principal: Principal; author: Author; actor: Actor }
@@ -32,45 +30,40 @@ export type WriteContext = {
   session: BoardSession
   /** The board's tables, where writes check what they write to. */
   reads: BoardReads
-  /** External channels a new root in this board channel starts threads in. */
-  configTargets: (channel: string) => Promise<ResolvedTarget[]>
-  /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
-  normalizeTarget: (target: string) => Promise<ResolvedTarget>
-  /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
-  findByEmail?: (email: string) => Promise<Actor | null>
-  /** Runs on every post and edit, in order, before it lands. */
-  middleware?: readonly Middleware[]
-  /** The in-process client middleware writes with. */
-  middlewareClient?: () => BoardClient
-}
-
-/** Where a write came from; `middleware` is the middleware's own client, which skips it. */
-export type Via = WriteSource | { kind: 'middleware' }
-
-/** How a write reaches the middleware: where it's from, and how to answer there. */
-export type WriteOrigin = { via?: Via; respond?: (text: string) => Promise<void> }
-
-const middlewareFor = (ctx: WriteContext, origin: WriteOrigin) =>
-  origin.via?.kind === 'middleware' || !ctx.middleware?.length ? null : ctx.middleware
-
-const sourceOf = (origin: WriteOrigin): WriteSource => (origin.via as WriteSource | undefined) ?? { kind: 'api' }
-
-const middlewareClient = (ctx: WriteContext) => () => {
-  if (!ctx.middlewareClient) throw new Error('middleware used before the board bound it')
-  return ctx.middlewareClient()
 }
 
 /**
- * `@[ada@vercel.com]`: each email a synced platform knows becomes that user's exact
- * mention, `@[slack:user:U0456]`, so it reads natively there; the rest stay plain text.
+ * Where a write came from: `middleware` is the middleware's own client, which skips it, and
+ * `engine` is sync's own lookups and receipts.
  */
-async function withEmailMentions(ctx: WriteContext, text: string): Promise<{ text: string; found: Actor[] }> {
+export type Via = WriteSource | { kind: 'middleware' } | { kind: 'engine' }
+
+/**
+ * How a write reaches the middleware: where it's from, and how to answer there. `schedule` marks a
+ * schedule's send, which a backend's own schedules set in-process: no request carries it.
+ */
+export type WriteOrigin = {
+  via?: Via
+  respond?: (text: string) => Promise<void>
+  schedule?: { id: number; n: number }
+  /**
+   * The targets a new root's channel syncs with, as board()'s sync resolved them, so they land with
+   * it. Only board() sets it, in-process; sync records them later for a root that came another way.
+   */
+  config?: SyncTarget[]
+}
+
+/**
+ * `@[ada@vercel.com]`: each email `find` knows (a synced platform's user) becomes that user's
+ * exact mention, `@[slack:user:U0456]`, so it reads natively there; the rest stay plain text.
+ */
+export async function withEmailMentions(text: string, find?: (email: string) => Promise<Actor | null>): Promise<{ text: string; found: Actor[] }> {
   const emails = extractMentions(text).flatMap((token) =>
     token.kind === 'actor' && token.actor.includes('@') ? [token.actor] : [],
   )
   if (emails.length === 0) return { text, found: [] }
   const byEmail = new Map<string, Actor | null>()
-  for (const email of emails) byEmail.set(email, (await ctx.findByEmail?.(email).catch(() => null)) ?? null)
+  for (const email of emails) byEmail.set(email, (await find?.(email).catch(() => null)) ?? null)
   return {
     text: replaceMentions(text, (token) => {
       if (token.kind !== 'actor' || !byEmail.has(token.actor)) return null
@@ -151,7 +144,7 @@ const hasLabels = (labels: Labels | undefined) => Object.keys(labels ?? {}).leng
 export async function authorizePost(
   ctx: WriteContext,
   access: Access,
-  input: { channel?: string | undefined; re?: number | undefined; labels?: Labels | undefined; sync?: string[] | undefined },
+  input: { channel?: string | undefined; re?: number | undefined; labels?: Labels | undefined; sync?: readonly unknown[] | undefined },
 ): Promise<PostProofs> {
   let channel: string
   let re: Message | undefined
@@ -195,7 +188,10 @@ export type PostInput = WriteOrigin & {
   labels?: Labels | undefined
   noSync?: boolean | undefined
   id?: string | undefined
-  sync?: string[] | undefined
+  /** Targets the new thread starts with, as the board that syncs them resolved them; a plain one's kind goes by its shape. */
+  sync?: (string | SyncTarget)[] | undefined
+  /** The targets its channel syncs with: `WriteOrigin.config`. */
+  config?: SyncTarget[] | undefined
   origin?: Origin | null
   from?: string | null
   /** Platform text: mentions the board can't resolve are left as plain text. */
@@ -207,6 +203,13 @@ export type PostInput = WriteOrigin & {
   /** The schedule send that posts it. */
   schedule?: { id: number; n: number }
 }
+
+/** A sync target, resolved: a platform channel to start a thread in, or a thread to join. */
+export type SyncTarget = { target: string; kind: 'channel' | 'thread' }
+
+/** A target as a post or a receipt names it, resolved: a plain one's kind goes by its shape. */
+export const syncTarget = (target: string | SyncTarget): SyncTarget =>
+  typeof target === 'string' ? { target, kind: isThreadTarget(target) ? 'thread' : 'channel' } : target
 
 /**
  * A post as it landed. `unknownMentions` lists the handles in it that matched
@@ -240,9 +243,8 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   if (hasLabels(input.labels)) spend(input.proofs.label, 'label', { channel })
   if (input.sync?.length) spend(input.proofs.sync, 'sync', { channel })
 
-  const chain = middlewareFor(ctx, input)
-  if (chain && input.id !== undefined) {
-    // A retry of a write that landed (only a caller's own ID can be one): what's on the board stands, whatever the middleware would say now.
+  if (input.id !== undefined) {
+    // A retry of a write that landed (only a caller's own ID can be one): what's on the board stands.
     const landed = await ctx.reads.byEventId(input.id)
     if (landed) {
       // Only the same author's post in the same place is a retry. Text and labels can't tell:
@@ -260,18 +262,6 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
       return shownTo(view(posted, actors, await readerFor(ctx, access, posted)), access, sent)
     }
   }
-  if (chain)
-    return runMiddleware(
-      chain,
-      {
-        write: { kind: 'post', channel: channel!, re, text: input.text, labels: input.labels ?? {}, attachments: input.attachments ?? [] },
-        author: identity.actor,
-        source: sourceOf(input),
-        board: middlewareClient(ctx),
-        ...(input.respond ? { respond: input.respond } : {}),
-      },
-      (write) => commitPost(ctx, { ...input, text: write.text, labels: write.labels }, { channel: channel!, re, replyTo, thread, id, sent }),
-    )
   return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id, sent })
 }
 
@@ -286,21 +276,21 @@ async function commitPost(
   const { identity } = input
   const { channel, re, replyTo, thread, id, sent } = placed
   const { state: actors } = await ctx.session.state(actorsReducer)
+  // The targets its channel syncs with, but never back to where it came from, and the ones it asks for.
   const targets: { target: string; kind: 'channel' | 'thread'; cause: 'config' | 'request' }[] = []
   if (re === null) {
     const originChannel = input.origin ? input.origin.channel ?? channelOf(input.origin.thread) : null
-    if (!input.noSync)
-      for (const target of await ctx.configTargets(channel!))
-        if (target.target !== originChannel) targets.push({ target: target.target, kind: target.kind, cause: 'config' })
+    if (!input.noSync) for (const target of input.config ?? []) if (target.target !== originChannel) targets.push({ ...target, cause: 'config' })
     for (const requested of input.sync ?? []) {
-      const target = await ctx.normalizeTarget(requested)
+      const target = syncTarget(requested)
       await unclaimed(ctx, target, thread, identity.principal.access)
-      if (!targets.some((t) => t.target === target.target)) targets.push({ target: target.target, kind: target.kind, cause: 'request' })
+      if (!targets.some((t) => t.target === target.target)) targets.push({ ...target, cause: 'request' })
     }
   }
 
   const seen = actorSeen(identity.actor, actors)
-  const { text, found } = await withEmailMentions(ctx, input.text)
+  // Emails sync knows are mentions by now: board() resolved them. The rest are plain text.
+  const { text, found } = await withEmailMentions(input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
   const { mentions, unknown } = resolveMentions(
     text,
@@ -373,7 +363,7 @@ const readerFor = (ctx: WriteContext, access: Access, message: Message): Promise
  * reads the tables once they've applied the whole log, so a sync just made
  * counts.
  */
-async function unclaimed(ctx: WriteContext, target: ResolvedTarget, thread: string, access: Access) {
+async function unclaimed(ctx: WriteContext, target: SyncTarget, thread: string, access: Access) {
   if (target.kind !== 'thread') return
   await ctx.reads.ensure()
   const owner = await ctx.reads.tables.threadOf(target.target)
@@ -434,25 +424,13 @@ export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ 
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
-  const chain = middlewareFor(ctx, input)
-  if (!chain) return commitEdit(ctx, input, message)
-  return runMiddleware(
-    chain,
-    {
-      write: { kind: 'edit', id: message.id, channel: message.channel, re: message.re, text: input.text },
-      author: input.identity.actor,
-      source: sourceOf(input),
-      board: middlewareClient(ctx),
-      ...(input.respond ? { respond: input.respond } : {}),
-    },
-    (write) => commitEdit(ctx, { ...input, text: write.text }, message),
-  )
+  return commitEdit(ctx, input, message)
 }
 
 async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<{ unknownMentions?: string[] }> {
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = actorSeen(input.identity.actor, actors)
-  const { text, found } = await withEmailMentions(ctx, input.text)
+  const { text, found } = await withEmailMentions(input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
   const { mentions, unknown } = resolveMentions(
     text,
@@ -544,21 +522,24 @@ export async function writeLabels(
   }))
 }
 
-/** Attaches a thread to an external target. Attaching twice is a no-op; a thread another one is synced with is a 409. */
+/**
+ * Syncs a message's thread with a target, resolved by the sync that delivers it. Attaching twice
+ * is a no-op; a platform thread another board thread is synced with is a 409.
+ */
 export async function writeAttach(
   ctx: WriteContext,
-  input: { identity: Identity; authorized: Authorized<'sync'>; target: string },
-) {
+  input: { identity: Identity; authorized: Authorized<'sync'>; target: SyncTarget; cause: 'config' | 'request' },
+): Promise<{ attached: boolean }> {
   const message = spent(input.authorized, 'sync')
-  const resolved = await ctx.normalizeTarget(input.target)
-  const { target, kind } = resolved
-  if ((await ctx.reads.tables.syncOf(message.thread))?.targets.includes(target)) return { target, attached: false }
-  await unclaimed(ctx, resolved, message.thread, input.identity.principal.access)
+  const { target, kind } = input.target
+  await ctx.reads.ensure()
+  if ((await ctx.reads.tables.syncOf(message.thread))?.targets.includes(target)) return { attached: false }
+  await unclaimed(ctx, input.target, message.thread, input.identity.principal.access)
   // Applied before it answers, so replies from the platform thread find it at once.
   await untilApplied(ctx, await ctx.session.append({
     type: 'thread.synced',
     id: await idempotentId('vboard', message.thread, 'sync', target),
-    payload: { thread: message.thread, target, kind, cause: 'request', by: input.identity.author },
+    payload: { thread: message.thread, target, kind, cause: input.cause, by: input.identity.author },
   }))
-  return { target, attached: true }
+  return { attached: true }
 }

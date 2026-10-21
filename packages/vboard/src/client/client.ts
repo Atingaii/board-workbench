@@ -10,6 +10,15 @@ import type {
   IdentityCheck,
   IdentityView,
   InboxEntry,
+  InboxItem,
+  LinkedAccount,
+  SyncAccountInput,
+  SyncCopiesView,
+  SyncFindInput,
+  SyncFindView,
+  SyncImportInput,
+  SyncReceiptInput,
+  SyncThreadView,
   StuckEvent,
   SourceRead,
   Me,
@@ -351,7 +360,7 @@ export function createBoardClient(options: ClientOptions) {
     /** Events that failed 10 times and stopped their thread, oldest first. Full access only. */
     stuck: async () => (await call<{ stuck: StuckEvent[] }>('GET', '/stuck')).stuck,
     /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
-    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }> }) =>
+    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: boolean }) =>
       call<RegistrationView>('POST', '/watchers', { body: input }),
     /** Registered watchers: every one to `manage` everywhere, the caller's own to anyone else. */
     watchers: async () => (await call<{ watchers: RegistrationView[] }>('GET', '/watchers')).watchers,
@@ -380,6 +389,40 @@ export function createBoardClient(options: ClientOptions) {
       call<SourceRead>('GET', `/sources/${key}/read${queryString({ target, ...opts })}`),
 
     poll,
+
+    // Sync's records: what a sync running elsewhere reads and writes here. Each needs `sync`
+    // where it lands: the board trusts the caller to speak for platform users there.
+
+    /** A platform's write, as its platform author: idempotent per platform event for a post, found from its origin otherwise. */
+    syncImport: (body: SyncImportInput) => call<{ message: string | null }>('POST', '/sync/imports', { body }),
+    /** What sync did on a platform: a delivery, its files, a failure, or a thread's new target. */
+    syncReceipt: (body: SyncReceiptInput) => call<{ ok: true; attached?: boolean }>('POST', '/sync/receipts', { body }),
+    /** A board thread's sync, by its key. */
+    syncThread: (thread: string) => call<SyncThreadView>('GET', `/sync/threads/${path(thread)}`),
+    /** What platform IDs are on the board: a thread, a message, who an account is, a person's accounts. */
+    syncFind: (query: SyncFindInput, opts: { signal?: AbortSignal } = {}) =>
+      call<SyncFindView>('GET', `/sync/find${queryString(query)}`, opts.signal ? { signal: opts.signal } : {}),
+    /** Messages' copies on platforms, by message and target. */
+    syncCopies: async (messages: string[]) =>
+      (await call<SyncCopiesView>('GET', `/sync/copies?${messages.map((id) => `message=${encodeURIComponent(id)}`).join('&')}`)).copies,
+    /** A person's roots since `since`. */
+    syncRoots: async (by: string, since: Date | number) =>
+      (await call<{ roots: MessageView[] }>('GET', `/sync/roots${queryString({ by, since: since instanceof Date ? since.getTime() : since })}`)).roots,
+    /** Pushes platform events into your inbox for sync key `key`; each platform ID lands once. */
+    inboxPush: (key: string, events: { id: string; event: InboxItem['event']; raw: unknown }[]) =>
+      call<{ ok: true }>('POST', `/inbox/${path(key)}`, { body: { events } }),
+    /** Your next inbox events for `key`, leased to you until you ack them, one platform thread at a time. */
+    inboxNext: async (key: string, opts: { limit?: number } = {}) =>
+      (await call<{ items: InboxItem[] }>('GET', `/inbox/${path(key)}/next${queryString(opts)}`)).items,
+    /** How an inbox event went: done, or an error to try it again. */
+    inboxAck: (key: string, id: string, body: { lease: string; error?: string }) =>
+      call<{ ok: true }>('POST', `/inbox/${path(key)}/${path(id)}/ack`, { body }),
+    /** A one-time code for linking an account on `sync`: yours, or with `person`, theirs. */
+    syncCode: (sync: string, opts: { person?: string } = {}) => call<{ code: string; expiresAt: string }>('POST', '/sync/codes', { body: { sync, ...opts } }),
+    /** Links a platform account: by the code posted from it, or for the person who signed in with it. */
+    syncAccount: (body: SyncAccountInput) => call<{ person: string; link: LinkedAccount }>('POST', '/sync/accounts', { body }),
+    /** Unlinks a platform account: your own, or anyone's with `sync`. */
+    syncUnlink: (account: string) => call<{ ok: true }>('POST', '/sync/accounts/unlink', { body: { account } }),
 
     /** Live events. Reconnects from the last seen index whenever the stream closes. */
     async *events(

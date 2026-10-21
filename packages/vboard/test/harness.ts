@@ -42,11 +42,13 @@ export type MountOptions = A2Options & Omit<BoardOptions, 'backend'>
 
 /** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
 export function mount(options: MountOptions) {
-  const { watch, url, basePath, access, project, auth, streamMaxMs, ...rest } = options
+  const { watch, url, basePath, access, project, auth, streamMaxMs, sync, middleware, ...rest } = options
   const backend = a2(rest)
   const created = board({
     backend,
     ...(watch ? { watch } : {}),
+    ...(sync ? { sync } : {}),
+    ...(middleware ? { middleware } : {}),
     ...('url' in options ? { url } : {}),
     ...(basePath !== undefined ? { basePath } : {}),
     ...(access ? { access } : {}),
@@ -58,10 +60,9 @@ export function mount(options: MountOptions) {
   const lazy = (read: () => unknown) => ({ get: read, enumerable: true })
   return Object.defineProperties(Object.assign(created, { backend, scheduler: backend.scheduler }), {
     servers: lazy(() => backend.servers),
-    engine: lazy(() => backend.engine),
     session: lazy(() => backend.session),
     store: lazy(() => backend.store),
-  }) as typeof created & { backend: typeof backend; scheduler: typeof backend.scheduler } & Pick<typeof backend, 'servers' | 'engine' | 'session' | 'store'>
+  }) as typeof created & { backend: typeof backend; scheduler: typeof backend.scheduler } & Pick<typeof backend, 'servers' | 'session' | 'store'>
 }
 
 /** A board on a memory store whose tokens come from a local test issuer. */

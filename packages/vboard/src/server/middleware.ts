@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { Labels, MESSAGE_TEXT_MAX, type Attachment } from '../contract/schemas.ts'
 import { HttpError } from './errors.ts'
 
-/** Where a write came from. */
+/** Where a write came from, as the middleware sees it. */
 export type WriteSource =
   /** The HTTP API: the CLI, the SDK, scripts, CI. */
   | { kind: 'api' }
@@ -17,10 +17,10 @@ export type WriteSource =
   /** A scheduled message's send. */
   | { kind: 'schedule'; id: number }
 
-/** The message a write would put on the board. */
+/** The message a write would put on the board. `re` is its thread's root, and IDs are as clients see them. */
 export type Write =
-  | { kind: 'post'; channel: string; re: number | null; text: string; labels: Labels; attachments: readonly Attachment[] }
-  | { kind: 'edit'; id: number; channel: string; re: number | null; text: string }
+  | { kind: 'post'; channel: string; re: string | null; text: string; labels: Labels; attachments: readonly Attachment[] }
+  | { kind: 'edit'; id: string; channel: string; re: string | null; text: string }
 
 /** What `next` may change before the write lands. Labels apply to posts only. */
 export type WritePatch = { text?: string; labels?: Labels }

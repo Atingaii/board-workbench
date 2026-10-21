@@ -15,8 +15,8 @@ import { actorsReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
-import { authorizePost, deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
-import { DroppedError } from './middleware.ts'
+import { authorizePost, deploymentIdentity, type Identity, type WriteContext, type WriteOrigin } from './writes.ts'
+import { BoardError, type BoardClient } from '../client/client.ts'
 import { indexOf, ref } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 
@@ -179,6 +179,8 @@ const refused = (error: unknown): null => {
 export function createSchedules(options: { store?: A2Store | undefined; scheduler?: A2Scheduler | undefined }) {
   let writes: WriteContext | null = null
   let accessNow: AccessNow | null = null
+  /** A client through the board as `identity`, so a send goes through what every post does: its middleware too. */
+  let clientAs: ((identity: Identity, origin: WriteOrigin) => BoardClient) | null = null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
   async function arm(ctx: ConsumerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
@@ -187,7 +189,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   }
 
   async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
-    if (!writes || !accessNow) throw new Error('schedules used before the board bound them')
+    if (!writes || !accessNow || !clientAs) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
     const { state } = await ctx.session.state(schedulesReducer)
     const schedule = state.byId[id]
@@ -214,27 +216,22 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'revoked' } })
       return
     }
-    // A retry after the post landed gets the same event ID, so A2 hands back the message it already posted.
+    // A retry after the post landed gets the same event ID, so the board hands back the message it already posted.
+    // The send is marked as the schedule's, and a handle that's ambiguous since it was checked stays plain text.
+    const board = clientAs({ ...schedule.as, principal: { ...schedule.as.principal, access } }, { via: { kind: 'schedule', id }, schedule: { id, n } })
+    const options = {
+      id: await idempotentId('vboard-schedule', String(id), String(n)),
+      text: schedule.text,
+      labels: schedule.labels,
+      noSync: schedule.noSync,
+      ...(schedule.attachments.length ? { attachments: schedule.attachments.map((file) => file.id) } : {}),
+    }
     let posted: number
     try {
-      posted = indexOf((
-      await writePost(writes, {
-        via: { kind: 'schedule', id },
-        identity: { ...schedule.as, principal: { ...schedule.as.principal, access } },
-        proofs,
-        id: await idempotentId('vboard-schedule', String(id), String(n)),
-        ...(schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }),
-        text: schedule.text,
-        labels: schedule.labels,
-        noSync: schedule.noSync,
-        ...(schedule.attachments.length ? { attachments: schedule.attachments } : {}),
-        schedule: { id, n },
-        // Checked when it was scheduled; a handle that's ambiguous since stays plain text.
-        lenientMentions: true,
-      })
-    ).id)!
+      const sent = schedule.re === null ? await board.post(schedule.channel, options) : await board.reply(ref(schedule.re), options)
+      posted = indexOf(sent.id)!
     } catch (error) {
-      if (!(error instanceof DroppedError)) throw error
+      if (!(error instanceof BoardError && error.code === 'dropped')) throw error
       // Its text never changes, so the middleware would drop every send after this one too.
       console.info(`[vboard] the middleware dropped schedule s${id}: ${error.message}`)
       await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'dropped' } })
@@ -315,9 +312,10 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     server,
     session,
     catchUp,
-    bind: (binding: { writes: WriteContext; accessNow: AccessNow }) => {
+    bind: (binding: { writes: WriteContext; accessNow: AccessNow; clientAs: (identity: Identity, origin: WriteOrigin) => BoardClient }) => {
       writes = binding.writes
       accessNow = binding.accessNow
+      clientAs = binding.clientAs
     },
     list,
     /** The pending schedules that reply in the thread rooted at `root`. */

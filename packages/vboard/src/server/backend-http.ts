@@ -4,7 +4,7 @@ import type { Method, Protocol } from '../api/protocol.ts'
 import { BoardError, type BoardClient } from '../client/client.ts'
 import { createClient } from '../client/node.ts'
 import type { Attachment } from '../contract/schemas.ts'
-import type { Backend, BackendRoute, BoardBinding, Caller, ProtocolMethods } from './backend.ts'
+import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { HttpError, json } from './errors.ts'
 import { watchersHash, type WatcherSpec } from './registry.ts'
 import { METHODS } from './routing.ts'
@@ -91,6 +91,8 @@ export function http(url: string, options: HttpOptions = {}) {
   const doFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
   let binding: BoardBinding | null = null
   const specs: Record<string, WatcherSpec> = {}
+  /** Whether this board's sync subscribes too. */
+  let syncing = false
   let hash = watchersHash(specs)
   const bound = () => {
     if (!binding) throw new Error("http: this backend isn't serving a board yet: pass it to board({ backend })")
@@ -120,9 +122,9 @@ export function http(url: string, options: HttpOptions = {}) {
     return client
   }
 
-  /** The client a caller's call goes through: this deployment's own, or one `init` takes over. */
+  /** The client a caller's call goes through: this deployment's own, or one `init` takes over. Sync's is the deployment itself. */
   async function clientOf(caller: Caller): Promise<BoardClient> {
-    if ('self' in caller) return asProfile(caller.self)
+    if ('self' in caller) return caller.origin.via?.kind === 'engine' ? own : asProfile(caller.self)
     if (!options.init) throw new HttpError(404, 'remote', `${bound().url() ?? 'this board'} keeps no log: use ${remote}`)
     const init = await options.init({ caller })
     return sdk(null, (input, request = {}) => {
@@ -152,10 +154,13 @@ export function http(url: string, options: HttpOptions = {}) {
   /** One protocol call on the remote, as `client`: the same route, with the input back on the wire. */
   async function call(client: BoardClient, method: Method, input: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
     const route = routes[method]
-    const { id, ...rest } = input
-    const named = route.path.includes(':id')
-    const path = named ? route.path.replace(':id', encodeURIComponent(String(id))) : route.path
-    const fields = named ? rest : input
+    // Each `:name` in the path is the input's field of that name; the rest are the query or the body.
+    const fields = { ...input }
+    const path = route.path.replace(/:(\w+)/g, (_, name: string) => {
+      const value = fields[name]
+      delete fields[name]
+      return encodeURIComponent(String(value))
+    })
     let response: Response
     if (method === 'upload') {
       const { data, name, type } = input as Protocol['upload']['input']
@@ -206,7 +211,7 @@ export function http(url: string, options: HttpOptions = {}) {
   function register(here: string | null): Promise<RegistrationView> {
     if (last && last.url === here && last.result.hash === hash && Date.now() - last.at < REGISTER_EVERY_MS) return Promise.resolve(last.result)
     registering ??= own
-      .register({ url: here, watch: specs })
+      .register({ url: here, watch: specs, ...(syncing ? { sync: true } : {}) })
       .then((result) => {
         last = { url: here, at: Date.now(), result }
         return result
@@ -220,10 +225,10 @@ export function http(url: string, options: HttpOptions = {}) {
   /** Runs one match and acks it: done, its error, or a skip for a watcher this board no longer has. */
   async function runOne(match: MatchView) {
     let outcome: { error?: string; skip?: boolean } = {}
-    if (!bound().watch[match.watcher]) outcome = { skip: true }
+    if (!bound().subscriptions[match.watcher]) outcome = { skip: true }
     else
       try {
-        await bound().run(match.watcher, match.event, { trigger: `watch:${match.watcher}:${match.id}` })
+        await bound().run(match.watcher, match.event, { trigger: `watch:${match.watcher}:${match.id}`, attempt: match.attempt + 1 })
       } catch (error) {
         console.error(`[vboard] watcher ${match.watcher} failed:`, error)
         outcome = { error: describe(error) }
@@ -232,7 +237,10 @@ export function http(url: string, options: HttpOptions = {}) {
     await own.ack(match.id, { lease: match.lease, ...outcome }).catch((error) => console.error(`[vboard] couldn't ack a match:`, describe(error)))
   }
 
-  /** Pulls and runs what's matched until nothing's left, or this run's time is up. A thread's matches come one at a time. */
+  /**
+   * Pulls and runs what's matched until nothing's left, or this run's time is up, and what sync
+   * queued in its inbox. A thread's matches come one at a time.
+   */
   async function drain(): Promise<number> {
     let ran = 0
     const until = Date.now() + DRAIN_MS
@@ -243,7 +251,8 @@ export function http(url: string, options: HttpOptions = {}) {
       await Promise.all(matches.map(runOne))
       ran += matches.length
     }
-    return ran
+    // An inbox event whose wait after an error is over: what woke this board may be it.
+    return ran + (await bound().pull())
   }
 
   let polling: AbortController | null = null
@@ -257,6 +266,8 @@ export function http(url: string, options: HttpOptions = {}) {
           await register(null)
           const matches = await own.matches({ limit: 10, wait: POLL_WAIT_S, signal: controller.signal })
           await Promise.all(matches.map(runOne))
+          // Sync's inbox too: an event that failed tries again once its wait is over.
+          await bound().pull()
           pause = 1000
         } catch (error) {
           if (controller.signal.aborted) break
@@ -274,7 +285,7 @@ export function http(url: string, options: HttpOptions = {}) {
    * its mount path from a request (a `POST /watchers`, or a wake-up); one that can't be woken pulls instead.
    */
   function start() {
-    if (started || Object.keys(specs).length === 0) return
+    if (started || (Object.keys(specs).length === 0 && !syncing)) return
     const here = wakeable(bound().url())
     if (here) {
       started = true
@@ -316,16 +327,20 @@ export function http(url: string, options: HttpOptions = {}) {
     ...methods,
     /** With `init`, requests here are forwarded, so discovery names no other board. */
     remote: options.init ? null : remote,
-    sync: [],
     routes: routesHere,
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')
-      for (const [id, spec] of Object.entries(next.watch)) {
+      for (const [id, spec] of Object.entries(next.subscriptions)) {
+        // Sync subscribes as itself, beside the watchers: the remote sends it what it may sync.
+        if (spec.kind === 'sync') {
+          syncing = id === SYNC
+          continue
+        }
         if (!PROFILE.test(id)) throw new Error(`watch ${id}: ${PROFILE_RULE}`)
         compileWatcher(id, spec)
         specs[id] = { tail: spec.tail, when: spec.when }
       }
-      hash = watchersHash(specs)
+      hash = watchersHash(specs, syncing)
       binding = next
     },
     /** Registers this board's watchers with the board it uses now, as `POST /watchers` does. */

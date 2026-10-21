@@ -1,53 +1,60 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash, randomBytes } from 'node:crypto'
 import type { z } from 'zod'
-import { createServer, type A2Scheduler } from 'experimental-a2/server'
-import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, linkedTo } from '../contract/reducers.ts'
-import { RemoteWatcherId } from '../contract/schemas.ts'
+import { A2Error, idempotentId, reducer } from 'experimental-a2'
+import { consumer, createServer, type A2Scheduler, type ConsumerContext } from 'experimental-a2/server'
 import {
-  IdentityCheckBody,
-  IdentityLinkBody,
-  IdentityUnlinkBody,
-  InboxQuery,
-  RedriveBody,
-  SourceReadQuery,
-  SyncBody,
-  type IdentityView,
-  type Me,
-  type StuckEvent,
-} from '../api/routes.ts'
-import { createSyncEngine } from '../sync/engine.ts'
-import type { SyncProvider } from '../sync/provider.ts'
-import type { Access } from './access.ts'
+  boardContract,
+  BOARD_SESSION,
+  IDENTITY_SESSION,
+  identityContract,
+  inboxContract,
+  INBOXES_SESSION,
+  inboxSession,
+  SCHEDULES_SESSION,
+  type BoardEvent,
+  type BoardEvents,
+  type ExternalAuthor,
+  type InboxEvent,
+  type Link,
+} from '../contract/contract.ts'
+import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type IdentityCode, type Message } from '../contract/reducers.ts'
+import { RemoteWatcherId, type Author } from '../contract/schemas.ts'
+import { RedriveBody, type InboxEntry, type LinkedAccount, type Me, type StuckEvent } from '../api/routes.ts'
+import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import type { Principal } from './auth.ts'
-import type { Backend, BackendRoute, BoardBinding, Caller, ProtocolMethods } from './backend.ts'
+import { actorSeen } from './actors.ts'
+import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { attachmentBody, attachmentNotFound, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
-import { indexOf, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
+import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { defaultStore } from '../store/default.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
-import { ack, pull } from './registered.ts'
+import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type Registration } from './registry.ts'
-import { queryObject, readJson, METHODS } from './routing.ts'
+import { readJson, METHODS } from './routing.ts'
 import { publicPost, type Post } from './transport.ts'
 import {
   authorizeMessage,
   authorizeOwn,
   authorizePost,
+  trusted,
   writeAttach,
   writeDelete,
   writeEdit,
   writeLabels,
+  writeLinks,
   writePost,
   writeReaction,
   deploymentIdentity,
   type Identity,
   type WriteContext,
 } from './writes.ts'
-import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
+import { MIDDLEWARE_ACTOR } from './middleware.ts'
 import { localScheduler } from '../scheduler/local.ts'
 
 /** `a2()`'s options: the board in this deployment, on A2's log, and everything that runs beside it. */
@@ -64,13 +71,6 @@ export type A2Options = {
    * Required in production.
    */
   scheduler?: A2Scheduler
-  /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
-  sync?: Record<string, SyncProvider>
-  /**
-   * Runs on every post and edit before it lands, whatever it came from: the API, sync,
-   * watchers, schedules. Each calls `next()` to pass the write on; one that doesn't drops it.
-   */
-  middleware?: readonly Middleware[]
   /**
    * Where attachments live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`. Omitted: memory
    * in tests, `.a2/attachments` in development. Required in production.
@@ -106,7 +106,8 @@ type Redrivable = {
   redrive(target: { consumer: string; index: number }, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
 }
 
-const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
+/** Sync's own lookups and receipts, from board() in this deployment. */
+const SYNC_ACTOR = 'vboard:sync'
 
 /** A cursor or message ref in a request, as this board's log index: decimals, from 0. */
 function cursorAt(value: string): number {
@@ -142,17 +143,65 @@ const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 /** A request to the board, as opposed to a write the board's own code makes in-process. */
 const fromRequest = (caller: Caller) => 'identity' in caller && (caller.origin.via?.kind ?? 'api') === 'api'
 
+/** Sync in board() in this deployment, as opposed to a sync elsewhere that uses this board. */
+const ownSync = (caller: Caller) => 'self' in caller && caller.origin.via?.kind === 'engine'
+
 /**
  * Who a caller writes as. This deployment's own code writes as `vboard:client:<name>` from
- * `client(name)`, and as `vboard:watch:<id>` from a watcher, which its own writes never wake.
+ * `client(name)`, as `vboard:watch:<id>` from a watcher, which its own writes never wake, and as
+ * `vboard:middleware` and `vboard:sync` from board()'s middleware and sync.
  */
 function identityOf(caller: Caller): Identity {
   if ('identity' in caller) return caller.identity
   const { self, origin } = caller
   if (origin.via?.kind === 'watcher') return deploymentIdentity(`vboard:watch:${self}`, self)
+  if (origin.via?.kind === 'middleware') return deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
+  if (origin.via?.kind === 'engine') return deploymentIdentity(SYNC_ACTOR, 'sync')
   if (!ID.test(self)) throw badRequest(`client: names use lowercase letters, numbers, - and _, got: ${self}`)
   return deploymentIdentity(`vboard:client:${self}`, self)
 }
+
+/** A platform user, writing through sync: full access, and each write still proved against the channel it lands in. */
+function externalIdentity(author: ExternalAuthor): Identity {
+  const principal: Principal = { id: author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
+  return {
+    principal,
+    author: { actor: author.id, principal: author.id, profile: null, session: null },
+    actor: { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar },
+  }
+}
+
+/**
+ * A one-time code for linking an account: `vb-` and eight letters and digits that
+ * can't be misread. Only its hash is kept.
+ */
+const CODE_LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+const CODE_TTL_MS = 10 * 60_000
+const newCode = () => {
+  const letters = [...randomBytes(8)].map((byte) => CODE_LETTERS[byte % CODE_LETTERS.length]).join('')
+  return `vb-${letters.slice(0, 4)}-${letters.slice(4)}`
+}
+const hashCode = (code: string) => createHash('sha256').update(code.toUpperCase()).digest('base64url')
+
+/** The board events sync delivers: what a platform shows, and a thread's new targets. */
+const DELIVERED = ['thread.synced', 'message.posted', 'message.edited', 'message.deleted', 'reaction.added', 'reaction.removed', 'labels.changed'] as const
+
+/** The inboxes that have had an event, so `vb stuck` finds each one's dead letters. */
+const inboxesReducer = reducer({
+  contract: inboxContract,
+  name: 'vboard.inboxes.v1',
+  initialState: {} as Record<string, true>,
+}).fold((state, event) => {
+  if (event.type === 'inbox.opened') state[event.payload.channel] = true
+  return state
+})
+
+/** A platform event in an inbox. */
+type Received = Extract<InboxEvent, { type: 'external.received' }>
+type PlatformEvent = Received['payload']['event']
+
+/** An append that holds an event ID already in the log. */
+const duplicate = (error: unknown) => error instanceof A2Error && error.code === 'PARTIAL_DUPLICATE_BATCH'
 
 /**
  * The options with what every board on `a2()` needs filled in, so the whole protocol works in
@@ -183,24 +232,52 @@ function build(options: A2Options, binding: BoardBinding) {
   const store = options.store ?? defaultStore()
   // The same A2 store object for every server: A2 recognizes its own stores by identity.
   const log = store.log
-  const engine =
-    options.sync && Object.keys(options.sync).length > 0
-      ? createSyncEngine({ entries: options.sync, store: log, scheduler: options.scheduler, blob })
-      : null
   const registry = createRegistry({ store: log, scheduler: options.scheduler })
   const post = options.transport?.post ?? publicPost
+  const tails = Object.fromEntries(
+    Object.entries(binding.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),
+  )
   // Always, since boards on http() may register watchers here at any time.
   const watchers = createWatchers({
-    watch: binding.watch,
-    run: (id, event, trigger) => binding.run(id, event, { trigger }),
+    watch: tails,
+    run: (id, event, trigger, attempt) => binding.run(id, event, { trigger, attempt }),
     store: log,
     scheduler: options.scheduler,
     registered: { state: registry.state, accessNow: (principal) => binding.accessFor(principal), wake },
   })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
+
+  /** Sync's delivery in progress here: its receipts are its consumer's appends, fenced by its attempt. */
+  const delivering = new AsyncLocalStorage<ConsumerContext<BoardEvents>>()
+
+  /**
+   * Sync's outbound, when board() syncs: each event it delivers, on its thread's lane, with its own
+   * place in the log, so no watcher holds it up. A2 retries what throws, and dead-letters it after 10.
+   */
+  const outbound = binding.subscriptions[SYNC]
+    ? consumer({
+        contract: boardContract,
+        name: 'vboard-sync',
+        types: DELIVERED,
+        lane: ({ event }) => `thread:${(event.payload as { thread: string }).thread}`,
+      }).run(async (ctx) => {
+        const event = ctx.event as BoardEvent
+        const [messages, { state: actors }] = await Promise.all([
+          loadBefore(reads, event, ctx.signal),
+          ctx.session.state(actorsReducer, { through: event.index - 1 }),
+        ])
+        const { before, after } = foldEvent(messages, actors, event)
+        // A thread's sync is about its root, which came before it.
+        const about = event.type === 'thread.synced' ? ((await reads.ensure(event.index - 1, ctx.signal), await store.tables.byEventId(event.payload.thread)) ?? undefined) : after
+        // A label change re-renders a copy only when the labels change what it shows: sync compares them.
+        const shown = { ...eventView(event, about, actors, OWN_CODE), ...(event.type === 'labels.changed' && before ? { before: view(before, actors, OWN_CODE) } : {}) }
+        await delivering.run(ctx as ConsumerContext<BoardEvents>, () => binding.run(SYNC, shown, { trigger: ctx.event.id, attempt: ctx.attempt }))
+      })
+    : undefined
+
   // The tables, watchers, and sync each keep their own place in the board's log.
-  const consumers = [projection, watchers.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
+  const consumers = [projection, watchers.boardConsumer, outbound].filter((consumer) => consumer !== undefined)
   const server = createServer({
     contract: boardContract,
     ...(log ? { store: log } : {}),
@@ -209,31 +286,43 @@ function build(options: A2Options, binding: BoardBinding) {
   })
   const session = server.session(BOARD_SESSION)
   const reads = createReads(store.tables, session, projection)
-  const writes: WriteContext = {
-    session,
-    reads,
-    configTargets: engine ? engine.configTargets : async () => [],
-    ...(engine ? { findByEmail: engine.findByEmail } : {}),
-    normalizeTarget: engine
-      ? engine.normalizeTarget
-      : async () => {
-          throw badRequest('this board has no sync configured')
-        },
-    middleware: options.middleware ?? [],
-    middlewareClient: () => binding.client({ identity: MIDDLEWARE_IDENTITY, origin: { via: { kind: 'middleware' } } }, null),
-  }
-  engine?.bind({ session, writes, clientAs: (identity, trigger, origin) => binding.client({ identity, origin }, trigger) })
-  // A schedule sends only under the verifier that made it; board()'s `accessFor` says so.
-  schedules.bind({ writes, accessNow: binding.accessFor })
+  const writes: WriteContext = { session, reads }
+
+  /** Sync's inbound: each platform event board()'s sync pushed here, one platform thread at a time. */
+  const inbound = consumer({
+    contract: inboxContract,
+    name: 'vboard-inbox',
+    types: ['external.received'],
+    lane: ({ event }) => `thread:${event.payload.event.thread}`,
+  }).run(async (ctx) => {
+    const { payload } = ctx.event as Received
+    await binding.receive(payload.sync, { event: payload.event, raw: payload.raw }, { id: ctx.event.id, attempt: ctx.attempt, signal: ctx.signal })
+  })
+  const inboxServer = createServer({
+    contract: inboxContract,
+    ...(log ? { store: log } : {}),
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+    consumers: [inbound],
+  })
+  const identityServer = createServer({ contract: identityContract, ...(log ? { store: log } : {}) })
+  const codes = identityServer.session(IDENTITY_SESSION)
+  const inboxes = inboxServer.session(INBOXES_SESSION)
+  /** The inboxes this instance knows have an `inbox.opened`, so most pushes write nothing more. */
+  const opened = new Set<string>()
+
+  // A schedule sends only under the verifier that made it; board()'s `accessFor` says so. It posts
+  // through the board, as its creator, so the board's middleware sees it.
+  schedules.bind({ writes, accessNow: binding.accessFor, clientAs: (identity, origin) => binding.client({ identity, origin }, null) })
   watchers.bind({ reads })
 
   /** The sessions whose consumers run on lanes, so a dead letter there stops the rest of its lane. */
   async function lanedSessions(): Promise<{ id: string; session: Redrivable }[]> {
+    const channels = Object.keys((await inboxes.state(inboxesReducer)).state)
     const ids: [string, { session(id: string): Redrivable }][] = [
       [BOARD_SESSION, server],
       [SCHEDULES_SESSION, schedules.server],
       ...(await watchers.sessions()).map((id): [string, typeof watchers.server] => [id, watchers.server]),
-      ...(engine ? (await engine.inboxChannels()).map((channel): [string, typeof engine.inboxServer] => [inboxSession(channel), engine.inboxServer]) : []),
+      ...channels.map((channel): [string, typeof inboxServer] => [inboxSession(channel), inboxServer]),
     ]
     return ids.map(([id, owner]) => ({ id, session: owner.session(id) }))
   }
@@ -369,8 +458,8 @@ function build(options: A2Options, binding: BoardBinding) {
       return false
     }
   }
-  /** A registrant's queue, in the watch contract. */
-  const queueOf = (owner: string) => watchers.server.session(registrantSession(owner)) as never
+  /** A registrant's queue, in the watch contract: its watchers' and sync's matches, and its inbox. */
+  const queueOf = (owner: string) => watchers.server.session(registrantSession(owner))
 
   const methods: ProtocolMethods = {
     async me(caller) {
@@ -426,11 +515,8 @@ function build(options: A2Options, binding: BoardBinding) {
         method: state.links[id]!.method,
         at: state.links[id]!.at,
       }))
-      const unlinked = Object.entries(options.sync ?? {})
-        .filter(([, entry]) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`)))
-        .map(([key]) => key)
-      const body: IdentityView = { principal: principal.id, links, unlinked, cursor: ref(index) }
-      return body
+      // Which sync entries have none is board()'s to say: it has the entries.
+      return { principal: principal.id, links, cursor: ref(index) }
     },
     async messages(caller, query) {
       const { principal, actor } = identityOf(caller)
@@ -485,6 +571,7 @@ function build(options: A2Options, binding: BoardBinding) {
       if (fromRequest(caller) && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
         throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
       const attachments = await attachmentsFor(principal, body.attachments)
+      const { schedule, config } = caller.origin
       const { unknownMentions, ...message } = await writePost(writes, {
         attachments,
         identity,
@@ -496,14 +583,16 @@ function build(options: A2Options, binding: BoardBinding) {
         noSync: body.noSync,
         id: body.id,
         sync: body.sync,
-        ...caller.origin,
+        config,
+        // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
+        ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
       })
       return { message, ...(unknownMentions ? { unknownMentions } : {}) }
     },
     async edit(caller, { id, text }) {
       const identity = identityOf(caller)
       const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
-      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, ...caller.origin })
+      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text })
       return { ok: true, ...(unknownMentions ? { unknownMentions } : {}) }
     },
     async delete(caller, { id }) {
@@ -523,14 +612,6 @@ function build(options: A2Options, binding: BoardBinding) {
       const authorized = await authorizeMessage(writes, identity.principal.access, 'label', messageAt(id))
       await writeLabels(writes, { identity, authorized, set, unset })
       return { ok: true }
-    },
-    async typing(caller, { id, status }) {
-      const { principal } = identityOf(caller)
-      // Typing is a reply about to come: `post` and `read` where the thread is.
-      const at = messageAt(id)
-      const { message } = await authorizeMessage(writes, principal.access, 'post', at)
-      if (message.deleted) throw notFound(`message not found: #${at}`, 'message_not_found')
-      return { targets: engine ? await engine.typing(message.thread, status) : [] }
     },
     async schedule(caller, parsed) {
       const identity = identityOf(caller)
@@ -585,12 +666,12 @@ function build(options: A2Options, binding: BoardBinding) {
           throw badRequest((error as Error).message, 'bad_watcher')
         }
       }
-      return registry.register(storedPrincipal(principal), { url: body.url ?? null, watch: body.watch })
+      return registry.register(storedPrincipal(principal), { url: body.url ?? null, watch: body.watch, sync: body.sync ?? false })
     },
     async matches(caller, query, signal) {
       const { principal } = identityOf(caller)
       if (!(await registry.state()).byOwner[principal.id]) throw notFound('this token has no watchers registered here', 'no_registration')
-      const queue = queueOf(principal.id)
+      const queue = queueOf(principal.id) as unknown as QueueSession
       const pulling = { access: principal.access, limit: query.limit ?? 10, timers: options.scheduler !== undefined }
       const deadline = Date.now() + (query.wait ?? 0) * 1000
       for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
@@ -601,7 +682,7 @@ function build(options: A2Options, binding: BoardBinding) {
     },
     async ack(caller, { id, ...body }) {
       const { principal } = identityOf(caller)
-      const result = await ack(queueOf(principal.id), id, body, { now: Date.now(), timers: options.scheduler !== undefined })
+      const result = await ack(queueOf(principal.id) as unknown as QueueSession, id, body, { now: Date.now(), timers: options.scheduler !== undefined })
       if (result === 'gone') throw notFound(`no match ${id} is waiting for this token`, 'no_match')
       if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the match was pulled again')
       return { ok: true }
@@ -614,14 +695,321 @@ function build(options: A2Options, binding: BoardBinding) {
       const { events, cursor } = await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
       return { events, cursor: ref(cursor) }
     },
+
+    // Sync's records. A caller with `sync` in a channel speaks for platform users there.
+
+    async syncImport(caller, body) {
+      const { principal } = needSync(caller, 'import')
+      if (body.op === 'seen') {
+        const { state: actors } = await session.state(actorsReducer)
+        const seen = actorSeen(externalIdentity(body.author).actor, actors)
+        if (seen) await session.append(seen)
+        return { message: null }
+      }
+      const author = externalIdentity(body.author)
+      const may = (channel: string) => principal.access.can('sync', channel)
+      if (body.op === 'post') {
+        if ((body.channel === undefined) === (body.re === undefined)) throw badRequest('an import needs `channel`; a reply needs `re`')
+        let re: number | undefined
+        let channel = body.channel
+        if (body.re !== undefined) {
+          re = messageAt(body.re)
+          const root = await reads.message(re)
+          if (!root || !principal.access.readable(root.channel)) throw notFound(`message not found: #${body.re}`, 'message_not_found')
+          channel = root.channel
+        }
+        if (!may(channel!)) throw forbidden(`this token can't sync in ${channel}, so it can't import there`)
+        const proofs = await trusted.post(writes, { channel: body.channel, re, labels: body.labels })
+        // A sync elsewhere names its posts under its own principal, so it can't take an ID anyone else would use.
+        const id = body.id === undefined || ownSync(caller) ? body.id : `sync:${principal.id}:${createHash('sha256').update(`vboard-sync\u001f${body.id}`).digest('hex').slice(0, 32)}`
+        const posted = await writePost(writes, {
+          identity: author,
+          proofs,
+          channel: body.channel,
+          re,
+          text: body.text,
+          labels: body.labels,
+          noSync: body.noSync,
+          id,
+          origin: body.origin,
+          from: body.from,
+          lenientMentions: true,
+          attachments: await attachmentsFor(principal, body.attachments),
+          links: linksOf(body.links),
+          config: caller.origin.config,
+        })
+        return { message: posted.id }
+      }
+      // The message it changes, found from its platform IDs; one the caller can't sync is as good as missing.
+      const id = await locate(body.origin)
+      const found = id === null ? null : await reads.message(id)
+      if (!found || !may(found.channel)) return { message: null }
+      const authorized = <P extends Permission>(permission: P) => trusted.message(writes, permission, found.id)
+      if (body.op === 'edit') await writeEdit(writes, { identity: author, authorized: await authorized('post'), text: body.text, from: body.from, asAuthor: false })
+      else if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor: false })
+      else if (body.op === 'react')
+        await writeReaction(writes, { identity: author, authorized: await authorized('react'), emoji: body.emoji, remove: body.remove ?? false, from: body.from })
+      else if (body.op === 'labels') await writeLabels(writes, { identity: author, authorized: await authorized('label'), set: body.set, unset: body.unset })
+      else await writeLinks(writes, { identity: author, authorized: await authorized('post'), links: linksOf(body.links) ?? [], from: body.from })
+      return { message: ref(found.id) }
+    },
+
+    async syncReceipt(caller, body) {
+      // A message the caller can't read is missing; one it can, but can't sync, is a 403.
+      const identity = identityOf(caller)
+      const authorized = await authorizeMessage(writes, identity.principal.access, 'sync', messageAt(body.message))
+      const { message } = authorized
+      if (body.kind === 'thread')
+        return { ok: true, ...(await writeAttach(writes, { identity, authorized, target: { target: body.target, kind: body.targetKind }, cause: body.cause })) }
+      const about = { id: message.id, thread: message.thread, target: body.target }
+      if (body.kind === 'message')
+        await receipt(caller, `receipt:${message.id}:${body.target}`, [
+          { type: 'message.synced', payload: { ...about, external: body.external } },
+          ...(body.files !== undefined ? [{ type: 'message.files_synced' as const, payload: { ...about, files: body.files } }] : []),
+        ])
+      else if (body.kind === 'files') await receipt(caller, `files:${message.id}:${body.target}`, [{ type: 'message.files_synced', payload: { ...about, files: body.files } }])
+      else await receipt(caller, `failed:${message.id}:${body.target}`, [{ type: 'message.sync_failed', payload: { ...about, error: body.error } }])
+      return { ok: true }
+    },
+
+    async syncThread(caller, { thread }) {
+      const { principal } = needSync(caller, 'look up a sync')
+      await reads.ensure()
+      const synced = await store.tables.syncOf(thread)
+      if (!synced || !principal.access.can('sync', synced.channel)) throw notFound(`no thread ${thread} on this board`, 'thread_not_found')
+      return { thread, root: ref(synced.root), channel: synced.channel, targets: [...synced.targets], external: { ...synced.external } }
+    },
+
+    async syncFind(caller, query, signal) {
+      const { principal } = needSync(caller, 'look up a sync')
+      const { tables } = store
+      let thread: string | null = null
+      let message: string | null = null
+      if (query.thread !== undefined) {
+        // A thread synced just now may not be in the tables yet: a miss waits for them.
+        let key = query.message === undefined ? await tables.threadOf(query.thread) : null
+        if (key === null) {
+          await reads.ensure(undefined, signal)
+          key = await tables.threadOf(query.thread)
+        }
+        const synced = key === null ? null : await tables.syncOf(key)
+        if (synced && principal.access.can('sync', synced.channel)) thread = key
+        if (query.message !== undefined) {
+          const id = await tables.messageOf(query.thread, query.message)
+          const found = id === null ? null : await tables.message(id)
+          if (found && principal.access.can('sync', found.channel)) message = ref(found.id)
+        }
+      }
+      const { state: actors } = query.account !== undefined || query.person !== undefined ? await session.state(actorsReducer) : { state: null }
+      const link = query.account !== undefined ? actors?.links[query.account] : undefined
+      return {
+        thread,
+        message,
+        person: link ? { id: link.to, method: link.method } : null,
+        accounts: query.person === undefined || !actors ? [] : linkedTo(actors, query.person).map((id) => ({ id, method: actors.links[id]!.method })),
+      }
+    },
+
+    async syncCopies(caller, query) {
+      const { principal } = needSync(caller, 'look up a sync')
+      await reads.ensure()
+      const ids = [...new Set(query.message.map(indexOf).filter((id) => id !== null && id > 0))] as number[]
+      const [copies, messages] = await Promise.all([store.tables.copiesOf(ids), store.tables.messagesAt(ids, await store.tables.position())])
+      const out: Record<string, Record<string, import('../contract/reducers.ts').ExternalCopy>> = {}
+      for (const id of ids) {
+        const found = messages.get(id)
+        if (found && principal.access.can('sync', found.channel)) out[ref(id)] = { ...(copies.get(id) ?? {}) }
+      }
+      return { copies: out }
+    },
+
+    async syncRoots(caller, { by, since }) {
+      const { principal } = needSync(caller, 'look up a sync')
+      await reads.ensure()
+      const roots = (await store.tables.recentRoots(by, since)).filter((root) => principal.access.can('sync', root.channel))
+      const { state: actors } = await session.state(actorsReducer)
+      const reader = await reads.reader(principal.access, roots)
+      return { roots: roots.map((root) => view(root, actors, reader)) }
+    },
+
+    async inboxPush(caller, { key, events }) {
+      const { principal } = needSync(caller, 'push to an inbox')
+      for (const { event } of events)
+        for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
+          if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`an inbox's platform locations belong to its sync key: ${location} isn't ${key}'s`)
+      if (ownSync(caller)) {
+        // This board's own sync: each platform channel's inbox, delivered here on its threads' lanes.
+        for (const { id, event, raw } of events) {
+          await openInbox(event.channel)
+          await inboxServer.session(inboxSession(event.channel)).append({
+            type: 'external.received',
+            id: await idempotentId('vboard-inbox', key, id),
+            payload: { sync: key, event, raw },
+          })
+        }
+        return { ok: true }
+      }
+      // A sync elsewhere: its own queue, for it to pull back.
+      const queue = queueOf(principal.id)
+      const matched = await Promise.all(
+        events.map(async ({ id, event, raw }) => ({
+          type: 'watch.matched' as const,
+          id: await idempotentId('vboard-inbox', key, id),
+          payload: { thread: event.thread, inbox: key, event: { sync: key, event, raw } },
+        })),
+      )
+      await queue.append(...matched).catch(async (error: unknown) => {
+        if (!duplicate(error)) throw error
+        for (const one of matched) await queue.append(one)
+      })
+      return { ok: true }
+    },
+
+    async inboxNext(caller, { key, limit }) {
+      // This board's own sync gets its inbox delivered here.
+      if (ownSync(caller)) return { items: [] }
+      const { principal } = needSync(caller, 'pull from an inbox')
+      const leased = await pullInbox(queueOf(principal.id) as unknown as QueueSession, key, { access: principal.access, limit: limit ?? 10, now: Date.now(), timers: options.scheduler !== undefined })
+      return {
+        items: leased.map(({ id, thread, lease, attempt, event }) => {
+          const item = event as { event: PlatformEvent; raw: unknown }
+          return { id, key, thread, lease, attempt, event: item.event, raw: item.raw }
+        }),
+      }
+    },
+
+    async inboxAck(caller, { id, lease, error }) {
+      const { principal } = needSync(caller, 'ack an inbox event')
+      const result = await ack(queueOf(principal.id) as unknown as QueueSession, id, { lease, error }, { now: Date.now(), timers: options.scheduler !== undefined })
+      if (result === 'gone') throw notFound(`no inbox event ${id} is waiting for this token`, 'no_item')
+      if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the event was pulled again')
+      return { ok: true }
+    },
+
+    async inbox(caller, { key, channel, limit }) {
+      // Raw platform payloads. This board's own inbox spans every channel; a caller's own pushes are its own.
+      const { principal } = needSync(caller, 'read an inbox')
+      const entries: InboxEntry[] = []
+      if (principal.access.everywhere('sync')) {
+        const channels = channel !== undefined ? [channel] : Object.keys((await inboxes.state(inboxesReducer)).state).filter((found) => found.startsWith(`${key}:`))
+        for (const found of channels)
+          for (const event of await inboxServer.session(inboxSession(found)).history())
+            if (event.type === 'external.received' && event.payload.sync === key)
+              entries.push({ id: event.id, channel: found, createdAt: new Date(event.createdAt).toISOString(), ...event.payload } as InboxEntry)
+      }
+      for (const event of await queueOf(principal.id).history()) {
+        const pushed = event.payload as { inbox?: string; event?: { sync: string; event: PlatformEvent; raw: unknown } }
+        if (event.type !== 'watch.matched' || pushed.inbox !== key || !pushed.event) continue
+        if (channel !== undefined && pushed.event.event.channel !== channel) continue
+        entries.push({ id: event.id, channel: pushed.event.event.channel, createdAt: new Date(event.createdAt).toISOString(), ...pushed.event } as InboxEntry)
+      }
+      return { events: entries.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit ?? 50) }
+    },
+
+    async syncCode(caller, { sync, person }) {
+      const identity = identityOf(caller)
+      let principal = identity.principal.id
+      if (person !== undefined) {
+        // Speaking for someone: sync's, once it knows who's asking.
+        needSync(caller, 'issue a code for someone')
+        principal = person
+      } else if (identity.principal.kind !== 'person') throw forbidden('only people link platform accounts')
+      const code = newCode()
+      const expiresAt = new Date(Date.now() + CODE_TTL_MS).toISOString()
+      await codes.append({ type: 'identity.code_issued', payload: { hash: hashCode(code), principal, sync, expiresAt } })
+      return { code, expiresAt }
+    },
+
+    async syncAccount(caller, body) {
+      const identity = needSync(caller, 'link accounts')
+      const { account } = body
+      if ('person' in body) return { person: body.person, link: await link(account, body.person, 'consent', identity.author) }
+      const hash = hashCode(body.code)
+      const issued = (await codes.state(identityCodesReducer)).state[hash]
+      const bad = () => notFound("that code isn't live: it expired, was used, or was issued for another sync entry", 'bad_code')
+      if (!issued || issued.sync !== body.sync) throw bad()
+      // A used code claims again only for a retry of the message that used it.
+      const usedHere = (used: IdentityCode | undefined) => used?.usedBy === account.id && used.usedIn === (body.message ?? null)
+      if (issued.usedBy === null ? Date.parse(issued.expiresAt) < Date.now() : !usedHere(issued)) throw bad()
+      await codes.append({ type: 'identity.code_used', id: `used:${hash}`, payload: { hash, actor: account.id, ...(body.message !== undefined ? { message: body.message } : {}) } })
+      // Two posts of it at once: the one the log took first wins.
+      if (!usedHere((await codes.state(identityCodesReducer)).state[hash])) throw bad()
+      return { person: issued.principal, link: await link(account, issued.principal, 'code', externalIdentity(account).author, `link:${hash}`) }
+    },
+
+    async syncUnlink(caller, { account }) {
+      const { principal, author } = identityOf(caller)
+      const { state } = await session.state(actorsReducer)
+      const found = state.links[account]
+      // Your own account, or anyone's for a caller that speaks for platform users.
+      if (!found || (found.to !== principal.id && !principal.access.anywhere('sync'))) throw notFound(`${account} isn't linked`, 'not_linked')
+      await session.append({ type: 'actor.unlinked', payload: { actor: account, by: author } })
+      return { ok: true }
+    },
   }
 
-  const needSync = () => {
-    if (!engine) throw notFound('this board has no sync configured')
-    return engine
+  /** The caller, when it may sync somewhere: what every sync route needs. */
+  function needSync(caller: Caller, what: string): Identity {
+    const identity = identityOf(caller)
+    if (!identity.principal.access.anywhere('sync')) throw forbidden(`this token can't ${what}: it needs sync`)
+    return identity
   }
 
-  /** a2()'s routes beside the protocol, by name. The sync ones move to board() with sync. */
+  /** The board message an import changes: a platform message, or the root of the thread a platform thread belongs to. */
+  async function locate(origin: { thread: string; message?: string | undefined }): Promise<number | null> {
+    await reads.ensure()
+    if (origin.message !== undefined) return store.tables.messageOf(origin.thread, origin.message)
+    const thread = await store.tables.threadOf(origin.thread)
+    return thread === null ? null : ((await store.tables.syncOf(thread))?.root ?? null)
+  }
+
+  /** An import's links, with the board messages they name as log indexes. */
+  const linksOf = (links: readonly (Omit<Link, 'message'> & { message: string | null })[] | undefined): Link[] | undefined =>
+    links?.map((link) => ({ ...link, message: link.message === null ? null : indexOf(link.message) }))
+
+  /**
+   * A receipt. This board's own sync, while it delivers here, appends it as its consumer, keyed by
+   * `key`: a retry after a crash lands it once, and an attempt that was taken over can't. Anyone
+   * else's lands once by `key`.
+   */
+  async function receipt(caller: Caller, key: string, events: { type: 'message.synced' | 'message.files_synced' | 'message.sync_failed'; payload: unknown }[]) {
+    const ctx = delivering.getStore()
+    if (ctx && ownSync(caller)) {
+      await ctx.session.append(key, ...(events as never[]))
+      return
+    }
+    for (const [i, event] of events.entries())
+      await session.append({ ...event, id: await idempotentId('vboard-receipt', key, String(i)) } as never).catch((error: unknown) => {
+        if (!duplicate(error)) throw error
+      })
+  }
+
+  /** Records that the inbox for `channel` exists, the first time anything lands in it. */
+  async function openInbox(channel: string) {
+    if (opened.has(channel)) return
+    if (!(await inboxes.state(inboxesReducer)).state[channel])
+      await inboxes.append({ type: 'inbox.opened', id: await idempotentId('vboard-inbox', 'opened', channel), payload: { channel } })
+    opened.add(channel)
+  }
+
+  /** Records that `account` is `to`, unless it already is. `id` makes a retry a no-op. */
+  async function link(account: ExternalAuthor, to: string, method: 'code' | 'consent', by: Author, id?: string): Promise<LinkedAccount> {
+    const { state: actors } = await session.state(actorsReducer)
+    const seen = actorSeen({ id: account.id, kind: 'external', handle: account.handle, name: account.name, avatar: account.avatar }, actors)
+    const existing = actors.links[account.id]
+    // A code is news even for an account already linked (`id` keeps its retries single); a sign-in check isn't.
+    if (existing?.to === to && !id) {
+      if (seen) await session.append(seen)
+      return { actor: account.id, handle: account.handle, name: account.name, method: existing.method, at: existing.at }
+    }
+    await session.append(
+      ...(seen ? [{ ...seen, ...(id ? { id: `${id}:seen` } : {}) }] : []),
+      { type: 'actor.linked' as const, ...(id ? { id } : {}), payload: { actor: account.id, to, method, by } },
+    )
+    return { actor: account.id, handle: account.handle, name: account.name, method, at: new Date().toISOString() }
+  }
+
+  /** a2()'s routes beside the protocol, by name. */
   const handlers = {
     async stuck(caller: Caller) {
       // What failed, with its errors, like the inbox.
@@ -633,53 +1021,11 @@ function build(options: A2Options, binding: BoardBinding) {
       requireManage(principal, 'retry or skip stuck events')
       return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
     },
-    async sync(caller: Caller, request: Request, param: string) {
-      const identity = identityOf(caller)
-      const authorized = await authorizeMessage(writes, identity.principal.access, 'sync', messageAt(param))
-      const body = SyncBody.parse(await readJson(request))
-      return json(await writeAttach(writes, { identity, authorized, target: body.target }))
-    },
-    async inbox(caller: Caller, request: Request, param: string) {
-      // Raw platform payloads, from every channel.
-      requireManage(identityOf(caller).principal, 'read the inbox')
-      const query = InboxQuery.parse(queryObject(new URL(request.url)))
-      return json({ events: await needSync().readInbox(param, query.channel, query.limit ?? 50) })
-    },
-    async sourceRead(caller: Caller, request: Request, param: string) {
-      // The app's token reads what the app can, not what the caller can.
-      requireManage(identityOf(caller).principal, 'read a source')
-      const sync = needSync()
-      const query = SourceReadQuery.parse(queryObject(new URL(request.url)))
-      return json(await sync.readSource(param, query.target, query.limit ?? 50))
-    },
-    // Platforms can't send a board token: the adapter verifies the request.
-    webhook: (request: Request, param: string) => needSync().handleWebhook(param, request),
-    async identityLink(caller: Caller, request: Request) {
-      const sync = needSync()
-      const body = IdentityLinkBody.parse(await readJson(request))
-      return json(await sync.startLink(identityOf(caller), body.sync, body.method))
-    },
-    async identityCheck(caller: Caller, request: Request) {
-      const sync = needSync()
-      const body = IdentityCheckBody.parse(await readJson(request))
-      return json({ linked: await sync.checkLink(identityOf(caller), body.sync) })
-    },
-    async identityUnlink(caller: Caller, request: Request) {
-      const { principal, author } = identityOf(caller)
-      if (principal.kind !== 'person') throw forbidden('only people link platform accounts')
-      const body = IdentityUnlinkBody.parse(await readJson(request))
-      const { state } = await session.state(actorsReducer)
-      const mine = linkedTo(state, principal.id)
-      const wanted = body.actor.replace(/^@/, '').toLowerCase()
-      const found = mine.filter((id) => id === body.actor || state.byId[id]?.handle.toLowerCase() === wanted)
-      if (found.length === 0) throw notFound(`${body.actor} isn't linked to you`, 'not_linked')
-      if (found.length > 1) throw badRequest(`${body.actor} names several of your accounts: use ${found.join(' or ')}`, 'ambiguous_actor')
-      await session.append({ type: 'actor.unlinked', payload: { actor: found[0]!, by: author } })
-      return json({ ok: true, actor: found[0]! })
-    },
   }
 
-  const servers = [server, ...(engine ? [engine.inboxServer] : []), schedules.server, registry.server, watchers.server]
+  // The inbox's second and the watchers' last, where tests and tools look for them. The identity
+  // session has no consumers or timers.
+  const servers = [server, inboxServer, schedules.server, registry.server, watchers.server]
   return {
     methods,
     handlers,
@@ -689,7 +1035,6 @@ function build(options: A2Options, binding: BoardBinding) {
       ? options.scheduler.handler(...servers)
       : async (_request: Request) => toErrorResponse(notFound('this board has no scheduler')),
     servers,
-    engine,
     session,
     store,
   }
@@ -701,6 +1046,9 @@ function build(options: A2Options, binding: BoardBinding) {
  * `scheduler` in a route of its own. Nothing is built or connected until board() binds it.
  */
 export function a2(given: A2Options = {}) {
+  for (const moved of ['sync', 'middleware'] as const)
+    if ((given as Record<string, unknown>)[moved] !== undefined)
+      throw new Error(`a2: ${moved} is board()'s now, so it runs wherever the board lives: board({ backend: a2({ … }), ${moved} })`)
   const { options, missing } = complete(given)
   let built: ReturnType<typeof build> | null = null
   const ready = () => {
@@ -724,18 +1072,10 @@ export function a2(given: A2Options = {}) {
   const routes: BackendRoute[] = [
     authed('GET', '/stuck', (caller) => ready().handlers.stuck(caller)),
     authed('POST', '/stuck/redrive', (caller, request) => ready().handlers.redrive(caller, request)),
-    authed('POST', '/messages/:id/sync', (caller, request, param) => ready().handlers.sync(caller, request, param)),
-    authed('GET', '/inbox/:key', (caller, request, param) => ready().handlers.inbox(caller, request, param)),
-    authed('GET', '/sources/:key/read', (caller, request, param) => ready().handlers.sourceRead(caller, request, param)),
-    { method: 'POST', path: '/webhooks/:key', auth: false, handle: (request, { param }) => ready().handlers.webhook(request, param ?? '') },
-    authed('POST', '/identity/link', (caller, request) => ready().handlers.identityLink(caller, request)),
-    authed('POST', '/identity/check', (caller, request) => ready().handlers.identityCheck(caller, request)),
-    authed('POST', '/identity/unlink', (caller, request) => ready().handlers.identityUnlink(caller, request)),
   ]
   const backend = {
     ...methods,
     remote: null,
-    sync: Object.entries(options.sync ?? {}).map(([key, entry]) => ({ key, platform: entry.platform })),
     routes,
     bind(binding: BoardBinding) {
       if (built) throw new Error('a2: this backend already serves a board: create one a2() per board()')
@@ -752,9 +1092,6 @@ export function a2(given: A2Options = {}) {
       return missing ? [] : ready().servers
     },
     /** For tests and tools. */
-    get engine() {
-      return ready().engine
-    },
     get session() {
       return ready().session
     },
@@ -763,7 +1100,7 @@ export function a2(given: A2Options = {}) {
     },
   }
   // What tests and tools look at stays out of a spread, so `{ ...a2(), delete }` is a backend too.
-  for (const key of ['servers', 'engine', 'session', 'store']) Object.defineProperty(backend, key, { enumerable: false })
+  for (const key of ['servers', 'session', 'store']) Object.defineProperty(backend, key, { enumerable: false })
   return backend satisfies Backend
 }
 

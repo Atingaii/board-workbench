@@ -185,7 +185,7 @@ export type BoardEvents = typeof boardContract.events
 export type BoardEvent = ContractEvent<BoardEvents>
 export type Origin = z.infer<typeof Origin>
 
-const ExternalAuthor = z.object({
+export const ExternalAuthor = z.object({
   /** The platform principal, e.g. `slack:user:U0456`. */
   id: z.string().min(1),
   handle: z.string().min(1),
@@ -292,6 +292,8 @@ export const inboxContract = contract({
       event: ExternalEvent,
       raw: z.unknown(),
     }),
+    /** An inbox got its first event: session `inboxes` lists them, so `vb stuck` finds each one. */
+    'inbox.opened': z.object({ channel: ExternalTarget }),
   },
 })
 
@@ -301,25 +303,35 @@ export type InboxEvent = ContractEvent<InboxEvents>
 /** `inbox:slack:C0123ABC`: the inbox session for one external channel. */
 export const inboxSession = (channel: string) => `inbox:${channel}`
 
+/** The session that lists the inboxes: one `inbox.opened` each. */
+export const INBOXES_SESSION = 'inboxes'
+
 /** What watchers matched, outside the board log: one session per watcher, so each fails on its own. */
 const MatchId = z.string().min(1).max(200)
 const LeaseId = z.string().min(1).max(64)
+/** What a queue keeps in order: a board thread's key, or a platform thread for an inbox. */
+const QueueLane = z.string().min(1).max(300).refine(storable, 'lane has a NUL character or a lone surrogate')
 
 export const watchContract = contract({
   name: 'vboard-watch',
   events: {
     'watch.matched': z.object({
-      thread: ThreadKey,
-      /** The board event, as `vb tail --json` prints it, as the watcher may see it. */
+      /** The board thread, or for an inbox the platform thread: each one's matches go one at a time. */
+      thread: QueueLane,
+      /** The board event, as `vb tail --json` prints it, as the watcher may see it, or a platform event for an inbox. */
       event: z.unknown(),
       /** A registered watcher's ID: its registrant's session holds all of its watchers' matches. */
       watcher: RemoteWatcherId.optional(),
+      /** The registrant's sync, which gets every event it delivers to platforms. */
+      sync: z.literal(true).optional(),
+      /** A platform event the registrant pushed to its inbox for this sync key, to pull back and import. */
+      inbox: z.string().min(1).max(64).optional(),
     }),
     /** The watcher gave up on one match: `run` kept failing, and the thread's later events go on without it. */
     'watch.failed': z.object({
       /** The `watch.matched` event's ID. */
       matched: MatchId,
-      thread: ThreadKey,
+      thread: QueueLane,
       error: z.string().min(1).max(500),
     }),
     /** A registrant pulled a match: it's theirs to run until `until`, or until they ack it. */
@@ -391,6 +403,8 @@ export const registryContract = contract({
       /** Where to wake it: `<url>/wake`. Without one, it pulls on its own. */
       url: z.string().url().max(500).nullable(),
       watch: z.record(RemoteWatcherId, WatcherSpec),
+      /** Its sync subscribes too: every post, change, and thread sync where it may sync. Older registrations have none. */
+      sync: z.boolean().optional(),
       /** `watchersHash(watch)`, which every wake-up carries so the board can tell it's stale. */
       hash: z.string().min(1).max(100),
     }),

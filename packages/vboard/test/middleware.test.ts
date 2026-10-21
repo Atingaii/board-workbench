@@ -59,16 +59,16 @@ describe('middleware', () => {
     expect(body.message).toMatchObject({ text: 'hello', labels: { kind: 'bug', checked: 'yes' } })
   })
 
-  it("doesn't run again on a retry of a write that landed", async () => {
+  it('hands back what landed on a retry it lets through, whatever it changes the second time', async () => {
     let calls = 0
-    // Passes the first time and drops after: a judge that doesn't answer the same twice.
-    const board = testBoard({ middleware: [async ({ next }) => (calls++ === 0 ? next() : undefined)] })
+    // A judge that doesn't answer the same twice: board() runs it before the backend, which keeps what landed.
+    const board = testBoard({ middleware: [async ({ next }) => next({ text: `pass ${++calls}` })] })
     const julian = await person(board)
     const first = await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })
     const retry = await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })
     expect([first.status, retry.status]).toEqual([201, 201])
-    expect(retry.body.message.id).toBe(first.body.message.id)
-    expect(calls).toBe(1)
+    expect(retry.body.message).toMatchObject({ id: first.body.message.id, text: 'pass 1' })
+    expect(await texts(julian, 'dev')).toEqual(['pass 1'])
   })
 
   it("doesn't look for a retry when the post brings no ID: a new one can't have landed", async () => {

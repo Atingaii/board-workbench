@@ -29,19 +29,24 @@ export const storedPrincipal = (principal: Pick<Principal, 'id' | 'kind' | 'hand
 /** What a registration shows: the principal's token facts stay on the board. */
 export const viewOf = ({ principal: _principal, ...view }: Registration): RegistrationView => view
 
-/** The same on both ends: a board on `http()` hashes its watchers, and the board it uses the ones it holds. */
-export function watchersHash(watch: Record<string, WatcherSpec>): string {
-  const canonical = Object.keys(watch)
+/**
+ * The same on both ends: a board on `http()` hashes its watchers, and whether its sync subscribes,
+ * and the board it uses hashes what it holds.
+ */
+export function watchersHash(watch: Record<string, WatcherSpec>, sync = false): string {
+  const canonical: unknown[] = Object.keys(watch)
     .sort()
     .map((id) => [id, watch[id]!.tail, watch[id]!.when])
+  // Older registrations hashed only their watchers: one with no sync hashes as it did.
+  if (sync) canonical.push('sync')
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 32)
 }
 
 function foldRegistry(state: RegistryState, event: ContractEvent<RegistryEvents>): RegistryState {
   if (event.type === 'watchers.registered') {
-    const { owner, principal, url, watch, hash } = event.payload
+    const { owner, principal, url, watch, sync, hash } = event.payload
     const copied = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when }]))
-    state.byOwner[owner] = { owner, principal: structuredClone(principal), url, watch: copied, hash }
+    state.byOwner[owner] = { owner, principal: structuredClone(principal), url, watch: copied, sync: sync ?? false, hash }
   }
   return state
 }
@@ -69,14 +74,17 @@ export function createRegistry(options: { store?: A2Store | undefined; scheduler
      * Replaces `principal`'s registration. One that changes nothing writes nothing, so asking
      * again is free, unless the principal's token facts changed: those decide what it may read.
      */
-    async register(principal: StoredPrincipal, input: { url: string | null; watch: Record<string, WatcherSpec> }): Promise<RegistrationView> {
+    async register(principal: StoredPrincipal, input: { url: string | null; watch: Record<string, WatcherSpec>; sync: boolean }): Promise<RegistrationView> {
       const owner = principal.id
-      const hash = watchersHash(input.watch)
+      const hash = watchersHash(input.watch, input.sync)
       const current = (await state()).byOwner[owner]
       if (current && current.url === input.url && current.hash === hash && JSON.stringify(current.principal) === JSON.stringify(principal))
         return viewOf(current)
-      await session.append({ type: 'watchers.registered', payload: { owner, principal, url: input.url, watch: input.watch, hash } })
-      return { owner, url: input.url, watch: input.watch, hash }
+      await session.append({
+        type: 'watchers.registered',
+        payload: { owner, principal, url: input.url, watch: input.watch, ...(input.sync ? { sync: true } : {}), hash },
+      })
+      return { owner, url: input.url, watch: input.watch, sync: input.sync, hash }
     },
     async list(): Promise<RegistrationView[]> {
       return Object.values((await state()).byOwner)

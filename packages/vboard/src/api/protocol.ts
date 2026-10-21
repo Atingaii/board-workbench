@@ -8,6 +8,13 @@ import type {
   EventsPage,
   EventsQuery,
   IdentityView,
+  InboxAckBody,
+  InboxEntry,
+  InboxItem,
+  InboxNextQuery,
+  InboxPushBody,
+  InboxQuery,
+  LinkedAccount,
   LabelBody,
   MatchesQuery,
   MatchView,
@@ -24,14 +31,24 @@ import type {
   SchedulesQuery,
   ScheduleView,
   ThreadsPage,
+  SyncAccountBody,
+  SyncCodeBody,
+  SyncCopiesQuery,
+  SyncCopiesView,
+  SyncFindQuery,
+  SyncFindView,
+  SyncImportBody,
+  SyncReceiptBody,
+  SyncRootsQuery,
+  SyncThreadView,
+  SyncUnlinkBody,
   ThreadsQuery,
   ThreadView,
-  TypingBody,
-  TypingResult,
 } from './routes.ts'
 
 type Input<S extends z.ZodType> = NonNullable<z.output<S>>
 type Id = { id: string }
+type Key = { key: string }
 type Nothing = Record<string, never>
 
 /**
@@ -51,7 +68,6 @@ export type Protocol = {
   delete: { input: Id; output: { ok: true } }
   react: { input: Id & Input<typeof ReactBody>; output: { ok: true } }
   label: { input: Id & Input<typeof LabelBody>; output: { ok: true } }
-  typing: { input: Id & Input<typeof TypingBody>; output: TypingResult }
   schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; unknownMentions?: string[] } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
@@ -63,6 +79,27 @@ export type Protocol = {
   ack: { input: Id & Input<typeof AckBody>; output: { ok: true } }
   /** Long-polls with `wait`. board() serves SSE from it, so a backend has one way to read events. */
   events: { input: Input<typeof EventsQuery>; output: EventsPage }
+
+  // Sync's records, which sync in board() keeps through these wherever the board lives. Each needs `sync`.
+  /** A platform's write as its platform author, idempotent per platform event. */
+  syncImport: { input: Input<typeof SyncImportBody>; output: { message: string | null } }
+  /** A delivery, its files, a failure, or a thread's new target. `attached` is false for a target the thread had. */
+  syncReceipt: { input: Input<typeof SyncReceiptBody>; output: { ok: true; attached?: boolean } }
+  syncThread: { input: { thread: string }; output: SyncThreadView }
+  syncFind: { input: Input<typeof SyncFindQuery>; output: SyncFindView }
+  syncCopies: { input: Input<typeof SyncCopiesQuery>; output: SyncCopiesView }
+  syncRoots: { input: Input<typeof SyncRootsQuery>; output: { roots: MessageView[] } }
+  /** Platform events into the caller's inbox, deduplicated by their platform IDs. */
+  inboxPush: { input: Key & Input<typeof InboxPushBody>; output: { ok: true } }
+  /** The caller's next inbox events, leased, one platform thread at a time and in order. */
+  inboxNext: { input: Key & Input<typeof InboxNextQuery>; output: { items: InboxItem[] } }
+  inboxAck: { input: Key & Id & Input<typeof InboxAckBody>; output: { ok: true } }
+  /** Raw platform events, newest first, for debugging sync. */
+  inbox: { input: Key & Input<typeof InboxQuery>; output: { events: InboxEntry[] } }
+  syncCode: { input: Input<typeof SyncCodeBody>; output: { code: string; expiresAt: string } }
+  /** 404 `bad_code` for a code that isn't live. */
+  syncAccount: { input: Input<typeof SyncAccountBody>; output: { person: string; link: LinkedAccount } }
+  syncUnlink: { input: Input<typeof SyncUnlinkBody>; output: { ok: true } }
 }
 
 export type Method = keyof Protocol

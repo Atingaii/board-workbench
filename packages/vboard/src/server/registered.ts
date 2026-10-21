@@ -24,9 +24,15 @@ export const SWEEP_MS = 60_000
 /** The sweep that covers `at`: the next minute at least a second after it, since a timer may land up to a second early. */
 export const sweepFor = (at: number) => Math.ceil((at + 1000) / SWEEP_MS) * SWEEP_MS
 
+/** The queue a registrant's sync pulls: every event it delivers. Watcher IDs start with a letter, so none is this. */
+export const SYNC_QUEUE = '@sync'
+/** The queue of platform events a registrant pushed for sync key `key`. */
+export const inboxQueue = (key: string) => `@inbox:${key}`
+
 type Pending = {
   id: string
-  watcher: string
+  /** A registered watcher's ID, `SYNC_QUEUE`, or an `inboxQueue`. */
+  queue: string
   thread: string
   event: unknown
   /** Tries that ended without finishing: errors and leases that ran out. */
@@ -44,13 +50,13 @@ export type QueueState = {
   sweeps: number[]
 }
 
-const queueKey = (watcher: string, thread: string) => `${watcher}\u001f${thread}`
+const queueKey = (queue: string, thread: string) => `${queue}\u001f${thread}`
 
 function remove(state: QueueState, id: string) {
   const found = state.pending[id]
   if (!found) return
   delete state.pending[id]
-  const key = queueKey(found.watcher, found.thread)
+  const key = queueKey(found.queue, found.thread)
   const rest = (state.queues[key] ?? []).filter((queued) => queued !== id)
   if (rest.length > 0) state.queues[key] = rest
   else delete state.queues[key]
@@ -59,11 +65,12 @@ function remove(state: QueueState, id: string) {
 function foldQueue(state: QueueState, event: ContractEvent<WatchEvents>): QueueState {
   switch (event.type) {
     case 'watch.matched': {
-      const { watcher, thread } = event.payload
+      const { watcher, sync, inbox, thread } = event.payload
+      const queue = watcher ?? (sync ? SYNC_QUEUE : inbox !== undefined ? inboxQueue(inbox) : undefined)
       // A config watcher's match runs in-process; only registered ones queue here.
-      if (watcher === undefined || state.pending[event.id]) return state
-      state.pending[event.id] = { id: event.id, watcher, thread, event: event.payload.event, attempts: 0, lease: null, retryAt: null }
-      ;(state.queues[queueKey(watcher, thread)] ??= []).push(event.id)
+      if (queue === undefined || state.pending[event.id]) return state
+      state.pending[event.id] = { id: event.id, queue, thread, event: event.payload.event, attempts: 0, lease: null, retryAt: null }
+      ;(state.queues[queueKey(queue, thread)] ??= []).push(event.id)
       return state
     }
     case 'watch.leased': {
@@ -115,7 +122,7 @@ function foldQueue(state: QueueState, event: ContractEvent<WatchEvents>): QueueS
 
 export const queueReducer = reducer({
   contract: watchContract,
-  name: 'vboard.watch-queue.v2',
+  name: 'vboard.watch-queue.v3',
   initialState: { queues: {}, pending: {}, sweeps: [] } as QueueState,
 }).fold(foldQueue)
 
@@ -130,9 +137,13 @@ export type QueueSession = {
 
 const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
 
-/** Whether `access` may see `event` now, as it was matched: a message's channel, or every channel for none. */
-function readable(access: Access, event: unknown) {
+/**
+ * Whether `access` may see `event` now, as it was matched: a message's channel, or every channel for
+ * none. Sync's queue gets what its registrant may sync, since it speaks for platform users there.
+ */
+function readable(access: Access, event: unknown, queue: string) {
   const channel = (event as BoardEventView).message?.channel
+  if (queue === SYNC_QUEUE) return channel === undefined ? access.everywhere('sync') : access.can('sync', channel)
   return channel === undefined ? access.readsAll : access.readable(channel)
 }
 
@@ -145,22 +156,47 @@ const free = (found: Pending, now: number) => !(found.lease && found.lease.until
 /** Whether the registrant has anything to pull now. */
 export const hasWork = (state: QueueState, now: number) => Object.values(state.queues).some((ids) => free(state.pending[ids[0]!]!, now))
 
+/** One item a pull leased: what was queued, and the lease its ack names. */
+export type Leased = { id: string; queue: string; thread: string; event: unknown; lease: string; attempt: number }
+
 /**
- * Hands out what the registrant may run now: each queue's oldest match, if it's free, leased to
- * this pull. What the pull changes goes in one append, and one read after tells which leases
- * are this pull's: two pulls at once derive the same lease ID for a try, and only one lands.
+ * Hands out what the registrant's watchers and sync may run now: each queue's oldest match, if it's
+ * free, leased to this pull. The inbox's queues are `pullInbox`'s.
  */
 export async function pull(
   session: QueueSession,
   options: { access: Access; limit: number; now: number; timers: boolean },
 ): Promise<MatchView[]> {
+  const leased = await lease(session, { ...options, queues: (queue) => !queue.startsWith('@inbox:'), visible: (event, queue) => readable(options.access, event, queue) })
+  return leased.map(({ id, queue, thread, lease, attempt, event }) => ({ id, watcher: queue, thread, lease, attempt, event: event as BoardEventView }))
+}
+
+/**
+ * Hands out the platform events the registrant pushed for sync key `key`: each platform thread's
+ * oldest, if it's free, while the registrant may still sync somewhere.
+ */
+export function pullInbox(session: QueueSession, key: string, options: { access: Access; limit: number; now: number; timers: boolean }): Promise<Leased[]> {
+  const queue = inboxQueue(key)
+  return lease(session, { ...options, queues: (name) => name === queue, visible: () => options.access.anywhere('sync') })
+}
+
+/**
+ * Leases what's free in the queues `queues` picks: each one's oldest item, which `visible` says
+ * its registrant may still have. What the pull changes goes in one append, and one read after
+ * tells which leases are this pull's: two pulls at once derive the same lease ID for a try, and
+ * only one lands.
+ */
+async function lease(
+  session: QueueSession,
+  options: { limit: number; now: number; timers: boolean; queues: (queue: string) => boolean; visible: (event: unknown, queue: string) => boolean },
+): Promise<Leased[]> {
   const { state } = await session.state(queueReducer)
   const events: WatchInput[] = []
   const offered: { head: Pending; lease: string; attempt: number }[] = []
   for (const ids of Object.values(state.queues)) {
     if (offered.length >= options.limit) break
     const head = state.pending[ids[0]!]!
-    if (!free(head, options.now)) continue
+    if (!options.queues(head.queue) || !free(head, options.now)) continue
     let attempts = head.attempts
     if (head.lease) {
       // It ran out before a sweep said so: a try that didn't finish.
@@ -171,8 +207,8 @@ export async function pull(
         continue
       }
     }
-    if (!readable(options.access, head.event)) {
-      events.push({ type: 'watch.skipped', payload: { matched: head.id, reason: "its registrant can't read it anymore" } })
+    if (!options.visible(head.event, head.queue)) {
+      events.push({ type: 'watch.skipped', payload: { matched: head.id, reason: "its registrant can't have it anymore" } })
       continue
     }
     const lease = randomBytes(16).toString('hex')
@@ -193,7 +229,7 @@ export async function pull(
   const { state: after } = await session.state(queueReducer)
   const handed = offered.filter(({ head, lease }) => after.pending[head.id]?.lease?.id === lease)
   if (handed.length > 0 && options.timers) await arm(session, after, options.now + LEASE_MS)
-  return handed.map(({ head, lease, attempt }) => ({ id: head.id, watcher: head.watcher, thread: head.thread, lease, attempt, event: head.event as BoardEventView }))
+  return handed.map(({ head, lease, attempt }) => ({ id: head.id, queue: head.queue, thread: head.thread, lease, attempt, event: head.event }))
 }
 
 /** Records how a pulled match went: done, skipped, or an error that waits, then tries again. */
@@ -255,6 +291,6 @@ export async function due(session: QueueSession, payload: { matched?: string | u
 
 /** Gives up on a match: `watch.failed`, said in the logs too. */
 function failure(found: Pending, error: string): WatchInput {
-  console.error(`[vboard] a registered watcher ${found.watcher} gave up on a match after ${MATCH_TRIES} tries:`, error)
+  console.error(`[vboard] a registrant's ${found.queue} gave up on an item after ${MATCH_TRIES} tries:`, error)
   return { type: 'watch.failed', payload: { matched: found.id, thread: found.thread, error: describe(error) } }
 }

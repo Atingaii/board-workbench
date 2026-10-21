@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import type { Message, Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/reducers.ts'
 import type { BoardClient } from '../client/client.ts'
-import type { SourceRead } from '../api/routes.ts'
+import type { MessageView, SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
 import { immutable, type ProviderEvent, type SyncOverrides, type SyncResult, type SyncRoot } from './events.ts'
 import type { UserTokens } from './users.ts'
@@ -40,7 +40,8 @@ export type ProviderMapping = {
 }
 
 export type RenderInput = {
-  message: Readonly<Message>
+  /** The message as clients see it: its IDs are refs. */
+  message: Readonly<MessageView>
   author: Readonly<Actor> | null
   /** How this platform mentions an actor, through linked accounts; null when it can't. */
   mentionOf: (actor: string) => string | null
