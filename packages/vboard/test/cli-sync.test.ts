@@ -78,7 +78,7 @@ describe('the CLI on a project whose board is on http()', () => {
     )
     const julian = caller(team.fetch, await personToken('u_julian', teamUrl))
     await vi.waitFor(async () => expect((await julian('GET', '/identity')).body.links).toEqual([expect.objectContaining({ actor: 'slack:user:U_JULIAN', method: 'code' })]))
-    expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '100', emoji: 'check', added: true }])
+    await vi.waitFor(() => expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '100', emoji: 'check', added: true }]))
 
     // The CLI reads it there too, and posts there.
     const listed = await vb(['identity'])

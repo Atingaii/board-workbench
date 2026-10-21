@@ -137,7 +137,7 @@ describe('sync on a board on http()', () => {
     await vi.waitFor(async () => expect((await here('GET', '/identity')).body.links).toEqual([expect.objectContaining({ actor: 'slack:user:U_JULIAN', method: 'code' })]))
     // The code was claimed, not imported, and Slack shows it worked.
     expect(await read(here, 'firehose')).toEqual([])
-    expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '100', emoji: 'check', added: true }])
+    await vi.waitFor(() => expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '100', emoji: 'check', added: true }]))
   })
 
   it("lands a callback's own writes on the board it uses, as the Slack user its event came from", async () => {
