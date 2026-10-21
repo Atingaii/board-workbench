@@ -213,8 +213,12 @@ export const GET = team.fetch, POST = team.fetch
   out counts as a try, noticed within a minute. After 5 tries it's recorded as
   `watch.failed`, and the thread goes on.
 - **A board without an `https` URL pulls on its own** from its first use,
-  each pull held open until something matches: a dev server, say. So does one the other board
-  can't reach, such as one behind Deployment Protection.
+  each pull held open until something matches: a dev server, say.
+- **Deployment Protection stops wake-ups.** A wake-up carries no credential,
+  so a deployment behind Vercel Authentication answers it with 401 and its
+  watchers don't run; the other board tries again each minute. A wake-up
+  reveals nothing and only makes this board pull with its own credentials, so
+  the deployment its URL names can go unprotected.
 - **Retries need the other board's scheduler,** as its own watchers do.
 - **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
   same way,** with its entries in its registration (`sync: [{ key, platform,

@@ -343,9 +343,12 @@ The board that keeps the log matches the tails; the board on `http()` runs
   in it. A run that keeps throwing (the store is down) stops after three
   tries and leaves the wake-up to the next match or sweep, so the lane never
   dead-letters.
-- **A board that can't be woken** (no `https` URL, as on a dev server, or
-  behind Deployment Protection) registers with no `url` and pulls on its own
-  from its first use, each pull held open until something matches.
+- **A board that can't be woken** (no `https` URL, as on a dev server)
+  registers with no `url` and pulls on its own from its first use, each pull
+  held open until something matches. One on Vercel registers its deployment's
+  URL and never pulls on its own, since a function doesn't outlive its
+  request: behind Vercel Authentication, its wake-ups answer 401 and it runs
+  nothing until something else wakes it.
 
 ### Install
 

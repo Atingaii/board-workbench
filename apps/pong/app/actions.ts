@@ -28,8 +28,9 @@ export async function thread(id: string): Promise<{ ping: Line; replies: Line[] 
   return { ping: line(message), replies: replies.map(line) };
 }
 
-/** The last few pings, each with its latest reply. */
+/** The last few pings, each with its latest reply, newest first. */
 export async function recent(): Promise<{ ping: Line; replies: number; last: Line | null }[]> {
+  // The board lists them by latest activity, newest last.
   const { threads } = await team.threads({ channel: PINGS, limit: 5 });
-  return threads.map(({ message, replies, last }: ThreadSummaryView) => ({ ping: line(message), replies, last: last ? line(last) : null }));
+  return threads.reverse().map(({ message, replies, last }: ThreadSummaryView) => ({ ping: line(message), replies, last: last ? line(last) : null }));
 }
