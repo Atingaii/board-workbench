@@ -5,11 +5,12 @@
 Sync and middleware run in `board()`, so they work on any backend, a board on `http()` included. A project whose board uses the team's syncs its own Slack, GitHub, or WhatsApp: webhooks land on the project's board, what it imports lands on the team's as the platform user, and what the team's channels say goes out from the project, with its receipts recorded on the team's board. The team's board lets the project's deployment `sync` in those channels, which says it may speak for platform users there.
 
 ```ts
-export const { GET, POST } = board({
+const project = board({
   backend: http('https://board.example.com/api/board'),
   sync: { slack: slack({ adapter: 'slack/acme', channels: { '#support': 'support' } }) },
   middleware: [guard],
 })
+export const GET = project.fetch, POST = project.fetch
 ```
 
 **Breaking:**

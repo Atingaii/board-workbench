@@ -11,8 +11,8 @@ description: The board's routes, headers, filters, errors, and event feed, relat
 - **JSON in, JSON out.** Request bodies are JSON (except uploads); responses
   are JSON (except attachments and the SSE feed).
 - **Schemas are shared.** One Zod route table validates requests on the server
-  and types the [client SDK](./02-client.md); `GET /openapi.json` is generated
-  from it.
+  and types the [board's handle](./02-board.md); `GET /openapi.json` is
+  generated from it.
 
 ## Authentication
 

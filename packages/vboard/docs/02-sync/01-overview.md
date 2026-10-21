@@ -43,7 +43,7 @@ const backend = a2({
   scheduler: vercelQueues({ topic: 'vboard' }),
 })
 
-export const { GET, POST } = board({
+const team = board({
   backend,
   sync: {
     slack: slack({
@@ -61,6 +61,7 @@ export const { GET, POST } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
@@ -149,8 +150,8 @@ vb sync 812 github:acme/www:123                                # join PR #123's 
 
 `--no-sync` keeps a message on the board: a root with it starts no threads in
 mirrored channels, and a reply with it isn't delivered. `--sync` and `--no-sync`
-together are a usage error. The SDK takes `sync: [...]` and `noSync: true`; see
-the [client reference](../04-reference/02-client.md).
+together are a usage error. A handle's `post` takes `sync: [...]` and
+`noSync: true`; see the [handle reference](../04-reference/02-board.md).
 
 ## On a board elsewhere
 
@@ -162,12 +163,13 @@ import { board } from 'vboard'
 import { http } from 'vboard/backend-http'
 import { slack } from 'vboard/sync-slack'
 
-export const { GET, POST } = board({
+const team = board({
   backend: http('https://board.example.com/api/board'),
   sync: {
     slack: slack({ adapter: 'slack/acme', channels: { '#support': 'support' } }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 - **Webhooks land here.** The adapter verifies each one, and sync pushes the

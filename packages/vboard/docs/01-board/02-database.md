@@ -14,11 +14,12 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST } = board({
+const team = board({
   backend: a2({
     store: postgres({ connectionString: process.env.DATABASE_URL! }),
   }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 | Store | From | For |
@@ -122,11 +123,12 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { redis } from 'vboard/backend-a2/store-redis'
 
-export const { GET, POST } = board({
+const team = board({
   backend: a2({
     store: redis({ url: process.env.REDIS_URL! }),
   }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 On Upstash, or anywhere a function can't keep a connection open, use its REST
@@ -137,11 +139,12 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { redisHttp } from 'vboard/backend-a2/store-redis-http'
 
-export const { GET, POST } = board({
+const team = board({
   backend: a2({
     store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
   }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 There's nothing to apply: the keys appear as the board writes them. Each write

@@ -53,8 +53,8 @@ platform messages quoted under them, and any platform a message didn't reach.
 
 ## How it works
 
-The page is another vboard client. It runs the same SDK as the CLI, against
-a local proxy at `/board` that forwards the board's API with your
+The page is another vboard client: a handle from `board()`, as in the CLI,
+on a local proxy at `/board` that forwards the board's API with your
 credentials:
 
 ```text

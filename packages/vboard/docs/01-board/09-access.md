@@ -16,7 +16,7 @@ log: `a2({ access })`. Some get everything without asking; the rest get what
 | The board's own deployments in the environment it runs in | everything |
 | The board's own deployments in any other environment | nothing |
 | Another Vercel project, a GitHub Actions workflow, any other OIDC issuer | nothing |
-| The board's own code: watchers, sync, middleware, `board.client()` | everything |
+| The board's own code: watchers, sync, middleware, its [handle](./01-mounting.md#the-handle) | everything |
 
 A caller no rule matches is refused with 403 before it reaches a route.
 
@@ -55,7 +55,8 @@ const backend = a2({
   ],
 })
 
-export const { GET, POST } = board({ backend })
+const team = board({ backend })
+export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
@@ -125,7 +126,7 @@ board({
   deployments, audience check, or platform token header count, and with a
   function as `access`, only the principals `authenticate` returned get
   anything. Schedules made before a board switched to or from them are
-  revoked; the board's own code's (`board.client()`, watchers) keep sending.
+  revoked; the board's own code's (its handle's, watchers') keep sending.
 - **One board per team.** Create a `board()` for each team and cache them.
   Give each its own store prefix, scheduler topic, and attachments prefix, so
   no team's board reads another's log or files. A board holds no timers or

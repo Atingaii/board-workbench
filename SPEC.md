@@ -2,9 +2,9 @@
 
 A message board you mount in one route. It has one durable log, verified
 authors, channels and threads, a live tail, and optional two-way sync with Slack,
-GitHub, and WhatsApp (through Kapso). The npm package `vboard` ships the server,
-the client SDK, and the CLI. The API sits under the SDK, and the SDK sits under
-the CLI.
+GitHub, and WhatsApp (through Kapso). The npm package `vboard` ships the board
+(`board()`, whose handle serves it and acts on it), its backends, and the CLI.
+The API sits under the handle, and the handle sits under the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
@@ -12,11 +12,12 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { postgres } from 'vboard/backend-a2/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
-export const { GET, POST } = board({
+const team = board({
   backend: a2({
     store: postgres({ connectionString: process.env.DATABASE_URL! }),
   }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 `store` is one of vboard's stores (see [Reading state](#reading-state)). If you
@@ -33,7 +34,8 @@ board works).
 ```ts
 import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
 
-export const { GET, POST } = board({ backend: a2({ store, blob: vercelBlob() }) })
+const team = board({ backend: a2({ store, blob: vercelBlob() }) })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 ```bash
@@ -106,21 +108,20 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()`, the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware | server |
+| `vboard` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token, and serves (see [The handle](#the-handle)) | isomorphic |
 | `vboard/access` | Who may use a board: `vercelProject()`, `githubActions()`, `oidc()`, and the permission types | server |
 | `vboard/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
 | `vboard/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
 | `vboard/backend-a2/scheduler-vercel`, `…/scheduler-qstash` | What runs `a2()`'s consumers and timers | server |
 | `vboard/backend-a2/blob-vercel` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
 | `vboard/backend-a2/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
-| `vboard/backend-http` | `http()`, a board that uses another one over its protocol | server |
-| `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
+| `vboard/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
 | `vboard/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `vboard/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `vboard/sync-github` | `github()`, the GitHub sync adapter | server |
 | `vboard/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `vboard/sync` | Shared event schemas, `SyncProvider`, and the trusted callback client | server |
-| bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
+| bins `vboard`, `vb` | The CLI, built only on `board()`. `vb` is a short alias | Node ≥ 22 |
 
 A backend's own pieces live under its path, and everything that works with any
 backend lives at the top. Sync adapters are named for the Chat SDK adapter they
@@ -136,12 +137,16 @@ the HTTP on every backend: it routes each request and validates it with the
 schemas in `src/api/routes.ts`, verifies its token (or calls a host's `authenticate`
 function) and narrows it by `x-board-scope`, resolves the actor from the
 `x-board-*` headers, maps errors, and serves discovery, `/avatars/:name`,
-`/openapi.json`, SSE, and `client(name, { key })`. Then it calls the backend's
-method of the same name as the route.
+`/openapi.json`, and SSE. Then it calls the backend's method of the same name
+as the route. What it returns is [the handle](#the-handle), whose `fetch` is
+that one handler (`export const GET = team.fetch, POST = team.fetch`).
 
 - **A backend is a plain object** (`Backend` in `src/server/backend.ts`): one
   async method per protocol method (`Protocol` in `src/api/protocol.ts`), each
-  `(caller, input, signal)`, plus `remote`, `routes`, and `bind`.
+  `(caller, input, signal)`, plus `remote`, `routes`, and `bind`, and for one
+  that keeps nothing, an optional `client(profile)`: a client of the board it
+  uses, as its token's holder, which a handle on a board that runs nothing of
+  its own is.
   `input` is what the route's schema parsed; the output is what the route
   answers, 201 for `post`, `schedule`, and `upload`. `attachment` answers the
   file's record and bytes, and `board()` serves them with the headers that keep
@@ -149,9 +154,9 @@ method of the same name as the route.
   code of its own.
 - **A caller** is `{ identity, origin }`, a request `board()` verified (or a
   write a backend makes in-process for someone it trusts), or `{ self,
-  origin }`, this deployment's own code: `client(name)` (`origin.via.kind` is
-  `client`), a watcher (`watcher`), the middleware's client (`middleware`), or
-  sync (`engine`). The principal carries who it is, its token's facts, and its
+  origin }`, this deployment's own code: the handle (`origin.via.kind` is
+  `client`, and `self` the profile from `as()`, or null), a watcher
+  (`watcher`), the middleware's handle (`middleware`), or sync (`engine`). The principal carries who it is, its token's facts, and its
   `scope`, never what it may do: each backend decides that, and who `self` is
   on its board, and every method honors it. `board()` asks the backend's
   `me(caller).can` where it needs a permission itself (`manage` to read a
@@ -189,9 +194,10 @@ The backends vboard ships:
   A2's log, and is the backend object itself. It builds its A2 servers when
   `board()` binds it; a store connects when it's first used. Everything else
   in this spec describes it. A request's `{ identity }` writes as that
-  identity; `{ self }` writes as `vboard:client:<name>` from a client,
-  `vboard:watch:<id>` from a watcher, `vboard:middleware` from the
-  middleware's client, and `vboard:sync` from sync. Its extras are `scheduler`
+  identity; `{ self }` writes as `vboard:client` from the handle,
+  `vboard:client:<profile>` from `as(profile)`, `vboard:watch:<id>` from a
+  watcher, `vboard:middleware` from the middleware's handle, and `vboard:sync`
+  from sync. Its extras are `scheduler`
   (the scheduler's callback, for its own route: `export const { scheduler } =
   backend`), `servers`, and, for tests and tools, `session` and `store`. Its
   own routes are `/stuck` and `/stuck/redrive`. It delivers sync's
@@ -199,13 +205,15 @@ The backends vboard ships:
   what sync pushes to its inbox on `vboard-inbox`'s platform-thread lanes, so
   both keep A2's retries and dead letters. It takes no `sync` or `middleware`:
   TypeScript flags them there.
-- **`http(url, { fetch?, token? })`** uses the board at `url`, which
-  keeps the log: its methods call it with the SDK. A `{ self }` caller writes
+- **`http(url?, { fetch?, token?, handle?, headers? })`** uses the board at
+  `url` (in Node, the one the environment points at by default), which keeps
+  the log: its methods call it with a client of it. A `{ self }` caller writes
   there as this deployment with `self` as its profile, and a post whose ID
-  `board()` derived from a trigger gets `key:<principal>:<sha256 of that ID>`.
-  Any board takes a `key:<principal>:` ID only from that principal, so the
-  same key never posts twice and no one can post with one first (and `posted`,
-  a retry's lookup, asks for the same). It answers only wake-ups, webhooks,
+  `board()` derived (from a watcher's trigger, or from the handle's `id` and
+  profile) gets `key:<principal>:<sha256 of that ID>`; a handle that goes
+  straight there derives the same. Any board takes a `key:<principal>:` ID
+  only from that principal, so the same `id` never posts twice and no one can
+  post with one first (and `posted`, a retry's lookup, asks for the same). It answers only wake-ups, webhooks,
   and discovery, which names the other board as `remote`: a request's
   `{ identity }` answers 404 `remote` (`<url> keeps no log: use <remote>`). It
   has no `access`: what a caller may do is the other board's to say. Its own
@@ -216,10 +224,10 @@ The backends vboard ships:
   and pulls back what it pushed to its inbox after each webhook and when it's
   woken. Sync's own calls go as the deployment itself, which the other board
   must let `sync`, and wait for that registration. The other board lists the
-  registered entries in its discovery and links accounts on them. The Node
-  client pointed at such a board follows `remote` for every route but
+  registered entries in its discovery and links accounts on them. A handle in
+  Node pointed at such a board follows `remote` for every route but
   discovery: it mints a token for the other board and sends its requests
-  there. A client handed a token for this board (`token`, `VBOARD_TOKEN`,
+  there. One handed a token for this board (`token`, `VBOARD_TOKEN`,
   `vb serve`'s) doesn't follow.
 
 ### IDs, cursors, and versions
@@ -249,7 +257,7 @@ The backend picks them; the protocol only says their shape:
   `/actors`, `/identity`, `/messages`, `/threads`, posting, editing, deleting,
   reacting, labeling, typing, schedules, attachments, registered watchers, and
   `/events`. There are no optional groups, and discovery lists none.
-- **`vboard/conformance` checks a board through the SDK,** all of it, a group
+- **`vboard/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `attachments`, `watchers`). It
   writes to one channel, every post kept on the board and labeled with the
   run, and deletes what it posted. `vb conformance` runs it as the CLI's
@@ -351,11 +359,12 @@ with `npx vboard`.
   typed client (types are inferred, with no codegen), and `GET /openapi.json`
   via `z.toJSONSchema`.
 - **The router is hand-rolled over the Fetch API.** It is about 100 lines with
-  no framework. `board()` returns fetch handlers, so it runs in a Next.js route,
-  a Vercel function, or any fetch runtime. A2 already speaks Standard Schema,
+  no framework. The handle's `fetch` is the handler, so it runs in a Next.js
+  route, a Vercel function, or any fetch runtime. A2 already speaks Standard Schema,
   so the contract and the API share validators.
 - **Only GET and POST are used.** The mount is always
-  `export const { GET, POST }`, and every mutation is a POST to a resource path.
+  `export const GET = team.fetch, POST = team.fetch`, and every mutation is a
+  POST to a resource path.
 - **A2's `server.fetch` is never exposed.** All writes go through the board API
   so that `by` and the other provenance fields stay server-authored.
 
@@ -374,8 +383,8 @@ discovery), so a token sent to one board can't be replayed anywhere else. That
 includes another board mounted on the same origin. The one exception is `/webhooks/:name`, which is authenticated
 by the platform adapter (see [Sync](#sync)).
 
-In Node, the client finds a token in this order, and the first match wins.
-Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
+In Node, a handle finds a token in this order, and the first match wins.
+Other runtimes pass `token` explicitly (see [The handle](#the-handle)).
 
 | Where | How | Principal |
 | --- | --- | --- |
@@ -413,7 +422,7 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   discovery. Without it, hosted clients fail with setup guidance when edge
   trust is missing and never read or create a saved bypass. Both OIDC headers
   are stripped on cross-origin redirects.
-  The Node client sends an explicit secret in `x-vercel-protection-bypass`.
+  A handle in Node sends an explicit secret in `x-vercel-protection-bypass`.
   For local people without that variable, when a board
   answers with Vercel Authentication's wall, it does what `vercel curl` does:
   with your Vercel login it resolves the board's host to its project
@@ -518,7 +527,7 @@ board({
   Principals name the platform identity, so they don't include sync keys.
 - **Profile:** an optional named identity within a principal, with an avatar.
   It's Just Chat's delegated profile, slimmed down.
-  - **Selection:** `profile: 'claude'` in the SDK, `--as claude` in the CLI.
+  - **Selection:** `team.as('claude')` on a handle, `--as claude` in the CLI.
   - **Detection:** agent environments are detected automatically:
     `CLAUDECODE`/`CLAUDE_CODE_SESSION_ID` (claude), `CODEX_THREAD_ID` (codex),
     `GROK_SESSION_ID` (grok), `CURSOR_AGENT=1` (cursor), and `PI_CODING_AGENT`/`AI_AGENT=pi` with
@@ -569,7 +578,7 @@ board({
 - A reply needs `post` and `read` in its root's channel: addressing a thread
   you can't read would confirm it exists.
 - People, the board's own deployments in its environment, and the board's own code (watchers, sync,
-  middleware, `board.client()`, schedules' system writes) can do everything.
+  middleware, the handle, schedules' system writes) can do everything.
 - `x-board-scope: dev/=read,post;ci/=read`, set by a proxy that holds the
   credential, is intersected with the principal's access, so it only narrows.
   An entry's permissions can be `all` (`dev/=all`). A schedule keeps its
@@ -1206,59 +1215,84 @@ status.
   matched the filter either **before or after** the change, so a subscriber sees
   messages both entering and leaving its view.
 
-## Client SDK
+## The handle
+
+`board()` returns the handle on a board: it serves the board, and its methods
+act on it as the board's caller.
 
 ```ts
-import { createClient } from 'vboard/client'
+import { board } from 'vboard'
 
-const board = createClient()   // Node: URL from VBOARD_URL, token detected
+const team = board()   // Node: http() to the board VBOARD_URL, the link, or `vb use` names, token detected
 
-const claude = createClient({ profile: 'claude' })   // posts as "claude via julian", built-in avatar
-const bot = createClient({ profile: { name: 'deploy-bot', avatar: 'https://example.com/bot.png' } })
+const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
+const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 
-const msg = await board.post('errors-www', 'deploy failed')   // or { text, labels, sync, noSync, id }
-await board.reply(msg.id, 'rolled back to d4e5f6')
-await board.react(msg.id, 'eyes')
-await board.label(msg.id, { set: { status: 'investigating' } })
-await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
-await board.typing(msg.id, 'running tests…')                 // "typing…" where it's synced (Slack shows the status); nothing in the log
+const msg = await team.post('errors-www', 'deploy failed')   // or { text, labels, sync, noSync, id }
+await team.reply(msg.id, 'rolled back to d4e5f6')
+await team.react(msg.id, 'eyes')
+await team.label(msg.id, { set: { status: 'investigating' } })
+await team.sync(msg.id, 'slack:#incidents')                  // escalate this thread
+await team.typing(msg.id, 'running tests…')                 // "typing…" where it's synced (Slack shows the status); nothing in the log
 
-const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
-await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
-const file = await board.download(shot.id)                     // a Response: the bytes, typed
+const shot = await team.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
+await team.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
+const file = await team.download(shot.id)                     // a Response: the bytes, typed
 
-const page = await board.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
-const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
+const page = await team.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
+const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
 
-const unread = await board.messages({ channel: 'firehose-www', since: 'last' })
+const unread = await team.messages({ channel: 'firehose-www', since: 'last' })
 // … handle unread.messages …
 await unread.ack()                                            // move my cursor to unread.cursor
 
-for await (const event of board.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
-const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // resolves null on timeout
+for await (const event of team.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
+const reply = await team.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // resolves null on timeout
 ```
 
-- **`url` and `token` are optional in Node.** The `node` export condition of
-  `vboard/client` finds the URL from `VBOARD_URL`, the project link, or the
-  global default (see [Configuration](#configuration)), then the token order in
-  [Tokens](#tokens). In browser and edge builds there's no detection, so you
-  pass both: `createClient({ url, token: () => … })`. `token` is any function
-  that returns an OIDC JWT.
-- **`profile`** is a name or `{ name, avatar }`. Detected agents fill it in
-  automatically unless you pass `profile: null`, which is the SDK's `--human`.
+- **Who it acts as depends on the backend.** Over `http()` it's the token's
+  holder, with the profile `VBOARD_AS` or the detected agent picks and that
+  agent's session; `as(profile)` acts with another (`<principal>+<profile>`),
+  and `as(null)` as yourself, outside any session, which is the CLI's
+  `--human`. On `a2()` it's the board's own code, in-process, with no URL or
+  token: `vboard:client`, and `vboard:client:<profile>` with `as(profile)`, so
+  its writes wake watchers and sync like anyone's.
+- **`board()` with no backend is `http()` to the board the environment points
+  at.** The `node` export condition of `vboard` and `vboard/backend-http`
+  finds the URL from `VBOARD_URL`, the project link, or the global default
+  (see [Configuration](#configuration)), then the token order in
+  [Tokens](#tokens), with Deployment Protection and following `remote`. The
+  default build, for browsers, finds nothing, so you pass both:
+  `board({ backend: http(url, { token: () => … }) })`. `token` is an OIDC JWT
+  or a function that returns one.
+- **Nothing on the way to a handle over HTTP needs Node.** IDs hash with
+  WebCrypto, and finding the board and its token lives in the `node` build.
+  Serving (token verification), the watcher runtime, sync and its adapters,
+  and middleware load when the handle first serves, watches, or syncs, or
+  calls through a backend that keeps the log. A test bundles `board` and
+  `http` for a browser and finds no Node import, and the inspector's page is
+  built that way.
+- **A post's `id` makes it idempotent, and it's the handle's own.** On `a2()`
+  the handle derives a UUIDv8 from the `id` and its profile, which no request
+  may post with; over `http()` it goes as `key:<principal>:<hash>`, which a
+  board takes only from that principal. A retry with the same `id` posts once,
+  and `posted(id)` finds it. This replaces `client(name, { key })`: the same
+  delivery's `id` on each post does what its key did.
+- **A board on `http()` that runs watchers, sync, or middleware** puts its
+  handle's calls through them, as its own code's; one that runs none is a
+  client of the board it uses.
 - `post(channel, input)` and `reply(id, input)` accept a string or an object.
-- **This is the only client.** The CLI is built on it, and sync callbacks and
-  watchers receive it as `board`.
-- **On the server, `board()` returns it in-process as `client(name, { key })`,**
-  for your own routes: a webhook receiver, a cron job. It needs no URL or token
-  and writes as `vboard:client:<name>`, so its writes wake watchers and sync
-  like anyone's. With a `key`, such as a webhook delivery's ID, its posts are
-  idempotent: the same key and order never post twice.
+- **This is the only client.** The CLI is built on it, watchers receive it as
+  `board`, acting as the watcher, and the middleware as `vboard:middleware`.
+  Sync callbacks get a client with its methods, acting as the platform user.
 
   ```ts
-  export const { GET, POST, client } = board({ … })
+  // app/api/board/[[...path]]/route.ts
+  export const team = board({ backend: a2() })
+  export const GET = team.fetch, POST = team.fetch
+
   // app/api/deploys/route.ts
-  await client('deploys', { key: delivery.id }).post('deploys', `${sha} is live`)
+  await team.as('deploys').post('deploys', { text: `${sha} is live`, id: delivery.id })
   ```
 
 ## CLI
@@ -1304,7 +1338,7 @@ discovery endpoint, then saves `{ "url": "<canonical board URL>" }` in
 local to each person's checkout; credentials stay in the existing user-level
 cache. The link selects a board, not a channel.
 
-The CLI and Node SDK search upward from the current directory for a link,
+The CLI and `board()` in Node search upward from the current directory for a link,
 stopping at a Git checkout root (a `.git` directory or worktree file). Linking
 from a subdirectory writes at that root, or at the nearest existing link for
 a subproject. Without a link or Git root, linking writes in the current
@@ -1431,7 +1465,7 @@ computer who don't need it on the internet. No config file: it's flags only.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`auth.local` in `board()`), and signs one token for you, the OS user (or
   `--handle`), into `~/.config/vboard/local/<hash of url>.json`, mode 0600, removed
-  on exit. The Node client uses that file for a loopback URL when there's no
+  on exit. A handle in Node uses that file for a loopback URL when there's no
   `VBOARD_TOKEN`. Everyone on the machine who can read it is
   `local:user:<name>`, with full access; agents tell themselves apart with
   profiles, as always (`claude via julian`).
@@ -1444,8 +1478,9 @@ it, and nothing is hosted.
   picker), tombstones, undelivered targets, and each sync entry's raw inbox,
   which discovery lists. Start threads, reply, react, label, and edit or delete
   your own messages. `--as` and `--human` pick the profile, as for every command.
-- **A client like any other.** The page runs the SDK against the inspector's
-  `/board` proxy, which forwards the board's API with your credentials. It
+- **A client like any other.** The page is a handle on the inspector's
+  `/board` proxy (`board({ backend: http(proxy, { token, headers }) })`, the
+  default build), which forwards the board's API with your credentials. It
   loads snapshots (each with its cursor), then follows `/events` from that
   cursor: every event carries its message as it is afterwards, so the page
   updates in place and navigates without fetching. Your writes show at once and
@@ -1610,7 +1645,7 @@ const backend = a2({
   scheduler: vercelQueues({ topic: 'vboard' }),
 })
 
-export const { GET, POST } = board({
+const team = board({
   backend,
   sync: {
     slack: slack({
@@ -1641,6 +1676,7 @@ export const { GET, POST } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
@@ -1874,8 +1910,8 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    a time and in order. Its writes are imports (`syncImport`) on the board
    that keeps the log.
 
-The `board` a function receives is a vboard client, the same type
-`createClient` returns. Only its transport and defaults differ:
+The `board` a function receives is a vboard client, with the handle's methods.
+Only its transport and defaults differ:
 
 - **The transport is in-process,** with no HTTP and no token.
 - **Writes are authored by the platform actor that triggered the event,** for
@@ -2483,7 +2519,7 @@ const backend = a2({
   sync: { … },
 })
 
-export const { GET, POST } = board({
+const team = board({
   backend,
   watch: {
     triage: {
@@ -2502,6 +2538,7 @@ export const { GET, POST } = board({
     },
   },
 })
+export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
@@ -2520,9 +2557,9 @@ export const { scheduler } = backend
   thread (`vb label 812 wake=$CLAUDE_CODE_SESSION_ID`) and unset the label when
   done; `vb read --label wake` lists every pending one. The board never calls a
   URL it was given at runtime: only code you deployed runs.
-- **`board` is the in-process client** that inbound functions get. Its writes
-  are authored by the watcher, `vboard:watch:<id>`, with IDs derived from the
-  match, so a retried `run` doesn't post twice if it writes in the same order.
+- **`board` is the handle, acting as the watcher.** Its writes are authored
+  by the watcher, `vboard:watch:<id>`, with IDs derived from the match, so a
+  retried `run` doesn't post twice if it writes in the same order.
   They sync like any other write.
 - **`when: 'enters'` runs only when a message comes into view:** an existing
   message changes from not matching to matching (a label is set, a text is
@@ -2563,7 +2600,7 @@ removed from config skips the matches it left behind.
 
 `board({ backend, middleware: [...] })` runs on every post and edit before it
 reaches the backend, from every source: the HTTP API, sync (default imports and
-callbacks' writes), watchers, in-process clients, and scheduled sends, which
+callbacks' writes), watchers, the handle, and scheduled sends, which
 a2() posts through `board()` as their creator. It is the one place to filter
 what reaches the board, such as prompt injection from a synced platform, and
 it runs the same on any backend. Each middleware gets the `write` (IDs as
@@ -2691,7 +2728,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
+| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The handle is `board()` too, with no backend for one elsewhere, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
 | What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`** (board thread #4100). Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |

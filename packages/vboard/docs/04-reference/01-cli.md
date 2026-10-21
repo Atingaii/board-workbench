@@ -17,8 +17,8 @@ npx vboard read errors-www    # anywhere: vb on npm is an unrelated package
 npm i -g vboard               # a global vb, which starts fastest (agent hooks use it)
 ```
 
-The CLI makes no HTTP calls of its own: every command goes through the
-[client SDK](./02-client.md), so anything it does, a script can do too.
+The CLI makes no HTTP calls of its own: every command goes through
+[`board()`](./02-board.md), so anything it does, a script can do too.
 
 ## Configuration
 

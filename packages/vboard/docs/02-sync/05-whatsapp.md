@@ -28,7 +28,7 @@ const client = new WhatsAppClient({
 
 const backend = a2()
 
-export const { GET, POST } = board({
+const team = board({
   backend,
   sync: {
     kapso: kapso({
@@ -38,6 +38,7 @@ export const { GET, POST } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 

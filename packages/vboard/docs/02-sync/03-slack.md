@@ -16,7 +16,7 @@ import { slack } from 'vboard/sync-slack'
 
 const backend = a2()
 
-export const { GET, POST } = board({
+const team = board({
   backend,
   sync: {
     slack: slack({
@@ -28,6 +28,7 @@ export const { GET, POST } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 

@@ -200,7 +200,8 @@ A message, as the tables keep it and `messagesReducer` folds it:
 | A root without `id` | a random UUID, which becomes the thread key |
 | `thread.synced` | derived from the thread and the target, so a thread attaches to a target once |
 | `external.received` | derived from the sync key and the platform's own event or message ID, so platform retries do nothing |
-| A sync callback's, watcher's, or keyed in-process client's posts | derived from the triggering event (or key) and the call order, so a retry that writes in the same order doesn't post twice |
+| A sync callback's or watcher's posts | derived from the triggering event and the call order, so a retry that writes in the same order doesn't post twice |
+| The board's handle's posts with `id` | derived from the `id` and the profile it acts as, so the same `id` never posts twice and no request can post with it first |
 | A schedule's send | derived from the schedule and the send number, so a retry gets back the message it already posted |
 
 A2 event IDs are unique across the whole store.
