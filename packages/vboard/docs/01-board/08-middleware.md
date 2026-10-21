@@ -18,18 +18,23 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
 }
 
 const backend = a2({
-  // store, scheduler, and sync as in Mounting
-  middleware: [guard],
+  // store and scheduler as in Mounting
 })
 
-export const { GET, POST } = board({ backend })
+export const { GET, POST } = board({
+  backend,
+  // sync as in Sync
+  middleware: [guard],
+})
 export const { scheduler } = backend
 ```
 
-Every post and edit goes through `middleware`, in order, before it's written:
-the API (the CLI, the SDK, CI), messages synced in from Slack, GitHub, and
-WhatsApp (sync callbacks' writes included), watchers, in-process clients, and
-scheduled sends. Reactions, labels, and deletes don't.
+Every post and edit goes through `middleware`, in order, before it reaches the
+backend: the API (the CLI, the SDK, CI), messages synced in from Slack, GitHub,
+and WhatsApp (sync callbacks' writes included), watchers, in-process clients,
+and scheduled sends. Reactions, labels, and deletes don't. It's `board()`'s, so
+it runs the same on any backend: on a board on `http()`, here, before a write
+goes to the board it uses.
 
 - **`next()` passes the write on,** to the next middleware and, after the last,
   to the board. It resolves once the write has landed.
@@ -40,19 +45,22 @@ scheduled sends. Reactions, labels, and deletes don't.
   emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **A retry of a post that landed skips it.** The same `id` from the same
-  author, in the same channel or thread, returns the message on the board,
-  whatever the middleware would say now. An author that can't read the channel
-  gets it back as it landed, and only if it posted without reading too. Anyone
-  else's post with that `id` fails with `duplicate_id`. A write it dropped has
-  nothing on the board, so a retry goes through it again: keep side effects
-  like `respond` idempotent, or cheap to repeat.
+- **A retry of a post goes through it again.** It runs before the backend,
+  which is what knows whether a post with that `id` landed. One it passes
+  returns the message on the board, whatever it changed this time: the same
+  `id` from the same author, in the same channel or thread, is that message.
+  One it drops answers 422, though the first try is on the board. An author
+  that can't read the channel gets it back as it landed, and only if it posted
+  without reading too. Anyone else's post with that `id` fails with
+  `duplicate_id`. Keep side effects like `respond` idempotent, or cheap to
+  repeat. A platform event sync imports is the exception: sync finds it on the
+  board by its platform IDs first, so it goes through once.
 
 ## What it gets
 
 | | |
 | --- | --- |
-| `write` | `{ kind: 'post', channel, re, text, labels, attachments }` or `{ kind: 'edit', id, channel, re, text }` |
+| `write` | `{ kind: 'post', channel, re, text, labels, attachments }` or `{ kind: 'edit', id, channel, re, text }`. `re` is the thread's root, or null for a root; IDs are strings, as clients see them |
 | `author` | Who's writing: the actor, with `kind` (`person`, `agent`, `deployment`, `workflow`, `external`) |
 | `source` | Where it came from (below) |
 | `respond(text)` | Tells the author, where they wrote from |

@@ -141,7 +141,7 @@ method of the same name as the route.
 
 - **A backend is a plain object** (`Backend` in `src/server/backend.ts`): one
   async method per protocol method (`Protocol` in `src/api/protocol.ts`), each
-  `(caller, input, signal)`, plus `remote`, `sync`, `routes`, and `bind`.
+  `(caller, input, signal)`, plus `remote`, `routes`, and `bind`.
   `input` is what the route's schema parsed; the output is what the route
   answers, 201 for `post`, `schedule`, and `upload`. `attachment` answers the
   file's record and bytes, and `board()` serves them with the headers that keep
@@ -150,18 +150,31 @@ method of the same name as the route.
 - **A caller** is `{ identity, origin }`, a request `board()` verified (or a
   write a backend makes in-process for someone it trusts), or `{ self,
   origin }`, this deployment's own code: `client(name)` (`origin.via.kind` is
-  `client`) or a watcher (`watcher`). Every method honors
-  `identity.principal.access`. Each backend decides who `self` is on its
-  board.
+  `client`), a watcher (`watcher`), the middleware's client (`middleware`), or
+  sync (`engine`). Every method honors `identity.principal.access`. Each
+  backend decides who `self` is on its board. `origin` is in-process only:
+  board() also sets `config` (the targets a new root's channel syncs with) and
+  a2()'s schedules set `schedule` (the send), and no request carries either.
 - **`routes`** are a backend's own, beside the protocol, each with `auth`
   saying whether `board()` verifies the caller first. One at a protocol
   route's path takes its place.
 - **`bind(binding)`** is called once, when `board()` is created, before any
   request, and does no I/O. It's what background work needs from the board:
-  the project's watchers and `run(id, event, { trigger })`, `accessFor` (what a
-  stored principal may do now, under the rules as they are), `client(caller,
-  trigger)` (an in-process client as any caller, its posts' IDs derived from
-  the trigger), and `url()`, the board's own URL once it's known.
+  `subscriptions` (each watcher's tail, and sync's at `@sync`, which gets every
+  post, change, and thread sync) with `run(id, event, { trigger, attempt })`;
+  sync's inbound, `receive(key, event, { id, attempt })` for a backend that
+  delivers what sync pushed in-process, and `pull()` for one that queues it;
+  `accessFor` (what a stored principal may do now, under the rules as they
+  are); `client(caller, trigger)` (an in-process client as any caller, through
+  the middleware, its posts' IDs derived from the trigger); and `url()`, the
+  board's own URL once it's known.
+- **Middleware and sync run in `board()`,** on every backend (see
+  [Middleware](#middleware) and [Sync](#sync)). The middleware sees each post
+  and edit before `board()` calls the backend, and each import's post or edit
+  before sync does. Sync's adapters, webhooks (`/webhooks/:key`, no token),
+  `/sources/:key/read`, `/messages/:id/typing`, `/messages/:id/sync`, and
+  `/identity/link`, `/check`, `/unlink` are `board()`'s routes; sync reads and
+  writes only through the protocol, as its own caller.
 - **SSE is built from `events`,** the long-poll: `board()` loops it, sends each
   event with `id: <its cursor>`, and a bare `id:` when a page's cursor moved
   past its last event. It honors `Last-Event-ID` when `after` is absent, pings
@@ -169,18 +182,20 @@ method of the same name as the route.
 
 The backends vboard ships:
 
-- **`a2({ store, scheduler, blob, sync, middleware })`** keeps the board in
-  this deployment, on A2's log, and is the backend object itself. It builds its
-  A2 servers when `board()` binds it; a store connects when it's first used.
-  Everything else in this spec describes it. A request's `{ identity }` writes
-  as that identity; `{ self }` writes as `vboard:client:<name>` from a client
-  and `vboard:watch:<id>` from a watcher. Its extras are `scheduler` (the
-  scheduler's callback, for its own route: `export const { scheduler } =
-  backend`), `servers`, and, for tests and tools, `engine`, `session`, and
-  `store`. Its own routes are `/stuck`, `/stuck/redrive`, and, until sync moves
-  to `board()`, the sync ones: `/messages/:id/sync`, `/inbox/:key`,
-  `/sources/:key/read`, `/webhooks/:key` (no token), and `/identity/link`,
-  `/check`, `/unlink`.
+- **`a2({ store, scheduler, blob })`** keeps the board in this deployment, on
+  A2's log, and is the backend object itself. It builds its A2 servers when
+  `board()` binds it; a store connects when it's first used. Everything else
+  in this spec describes it. A request's `{ identity }` writes as that
+  identity; `{ self }` writes as `vboard:client:<name>` from a client,
+  `vboard:watch:<id>` from a watcher, `vboard:middleware` from the
+  middleware's client, and `vboard:sync` from sync. Its extras are `scheduler`
+  (the scheduler's callback, for its own route: `export const { scheduler } =
+  backend`), `servers`, and, for tests and tools, `session` and `store`. Its
+  own routes are `/stuck` and `/stuck/redrive`. It delivers sync's
+  subscription in-process, on the `vboard-sync` consumer's thread lanes, and
+  what sync pushes to its inbox on `vboard-inbox`'s platform-thread lanes, so
+  both keep A2's retries and dead letters. `sync` or `middleware` passed to it
+  is an error that says they're `board()`'s.
 - **`http(url, { fetch?, token?, init? })`** uses the board at `url`, which
   keeps the log: its methods call it with the SDK. A `{ self }` caller writes
   there as this deployment with `self` as its profile, and a post whose ID
@@ -193,7 +208,10 @@ The backends vboard ships:
   caller's call makes there (a token minted for it, say), and discovery then
   names no other board. Its own routes are `POST /wake` and `POST /watchers`
   (no token). Its watchers run here, on what the other board matches for them
-  (below).
+  (below), and so does its sync: it registers with `sync: true`, pulls what to
+  deliver as matches of watcher `@sync`, and pulls back what it pushed to its
+  inbox after each webhook and when it's woken. Sync's own calls go as the
+  deployment itself, which the other board must let `sync`.
 
 ### IDs, cursors, and versions
 
@@ -881,7 +899,11 @@ with an external target. It's the only way the log says so.
 - **Where it comes from:**
   - **At creation.** A root's targets, from the config mirror (`cause:
     'config'`) or from `--sync` (`cause: 'request'`), are appended as
-    `thread.synced` events in the same batch as the root's `message.posted`.
+    `thread.synced` events in the same batch as the root's `message.posted`,
+    when the root comes through the `board()` that syncs them. A root written
+    straight on a board that another one's sync uses gets its config targets
+    from that sync when its subscription delivers the root, as a `thread`
+    receipt.
   - **Later.** `vb sync <id> <target>`, `board.sync()`, or a watcher passing
     `sync:` appends one on its own, recording who did it.
 - **How the outbound consumer acts on it:**
@@ -1554,6 +1576,10 @@ import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 const backend = a2({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
   scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+export const { GET, POST } = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
@@ -1583,10 +1609,36 @@ const backend = a2({
     }),
   },
 })
-
-export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
+
+**Sync runs in `board()`, on any backend.** Its adapters, webhooks, and
+deliveries run where `board()` does, and it keeps its records on the backend
+through protocol routes every backend answers, each behind the `sync`
+permission in the channel concerned:
+
+| Method | Route | What it keeps |
+| --- | --- | --- |
+| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key: `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs, or `seen` (a platform user to know, for `@[email]`) |
+| `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
+| `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
+| `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, who an account is linked to and how, a person's accounts |
+| `syncCopies` | `GET /sync/copies` | messages' copies, by target |
+| `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
+| `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
+| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, and account links |
+
+Only these take provenance (an author, an origin) from a body, and only from a
+caller with `sync` where it lands: `sync` says this project may speak for
+platform users there. A caller that pushes to an inbox pulls it back:
+a2() delivers its own sync's in-process on `vboard-inbox` and queues anyone
+else's in their registrant session. Outbound, sync is one of the board's
+subscriptions, beside its watchers: a2() delivers it on `vboard-sync`'s thread
+lanes, and a board on `http()` registers it (`sync: true`) and pulls it as
+matches of watcher `@sync`. A root posted through `board()` lands with its
+channel's config targets in the same batch; one written straight on the board
+it uses gets them when sync sees it. Two syncers on one platform channel would
+each import and each deliver: that's config's to avoid.
 
 **Each mapping chooses a default mirror or an event callback:**
 
@@ -1753,8 +1805,9 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    case it goes to the mirror or to your function. Anything else is ignored,
    even in channels the bot belongs to.
 4. **Targets are resolved once, when a root is appended.** They're written as
-   `thread.synced` events in the same batch as the root. A deploy that changes
-   the mappings affects new threads only, and it can't reinterpret pending sync
+   `thread.synced` events in the same batch as the root, or, for a root that
+   reached the board another way, as sync sees it. A deploy that changes the
+   mappings affects new threads only, and it can't reinterpret pending sync
    work. A2 stores resolved lanes on events for the same reason.
 5. **Attaching an existing thread.** `sync <id> <target>` appends
    `thread.synced`. For a channel target, the outbound consumer then posts the
@@ -1771,15 +1824,20 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
 
 ### Inbound handling
 
-1. `POST /webhooks/:name` calls the provider's `receive`, which authenticates
-   the request and emits normalized events. The built-in providers use Chat SDK.
-2. The board appends `external.received` to the inbox session for that external
-   channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
-   answers 200 right away. That's well inside Slack's 3-second retry window, and
-   platform retries do nothing.
-3. The inbound consumer, `vboard-inbox`, runs the mirror or
-   your function on the external thread's lane. Its writes land in the board
-   log.
+1. `POST /webhooks/:name`, a `board()` route, calls the provider's `receive`,
+   which authenticates the request and emits normalized events. The built-in
+   providers use Chat SDK.
+2. Sync pushes each event to the backend's inbox (`inboxPush`), with the
+   platform's ID for it, which dedupes it. On a2(), its own sync's land as
+   `external.received` in the inbox session for that external channel
+   (`inbox:<key>:<channel>`). It answers 200 right away. That's well inside
+   Slack's 3-second retry window, and platform retries do nothing.
+3. On a2(), the inbound consumer, `vboard-inbox`, hands each event back to
+   `board()`'s sync on the external thread's lane, and sync runs the mirror or
+   your function. On a board on `http()`, the deployment that pushed them pulls
+   them back right after (`inboxNext`, then `inboxAck`), one platform thread at
+   a time and in order. Its writes are imports (`syncImport`) on the board
+   that keeps the log.
 
 The `board` a function receives is a vboard client, the same type
 `createClient` returns. Only its transport and defaults differ:
@@ -1791,6 +1849,9 @@ The `board` a function receives is a vboard client, the same type
   same way A2 names a consumer's own appends. A retried function doesn't post
   twice as long as it makes its writes in the same order. Writes made in
   parallel, e.g. with `Promise.all`, need explicit `id`s.
+- **On a board on `http()`, only `board.sync()` reaches the other board.** It's
+  an import. The client's other calls are the platform user's own, which
+  `http()` answers 404 `remote`, as it does any caller it doesn't forward.
 
 **Failure:** a function that keeps throwing dead-letters after 10 tries. That
 blocks only its thread's lane in that channel's inbox. Other threads, other
@@ -1829,9 +1890,12 @@ dead-letters and holds up its thread's lane.
 
 ### Outbound handling
 
-- **On each board write in a synced thread**, the outbound consumer calls the
-  provider's methods: post, react, edit, or delete. It then records
-  `message.synced`, so later edits and reactions can find the platform's copy.
+- **On each board write in a synced thread**, sync, which gets every post,
+  change, and thread sync as a subscription, calls the provider's methods:
+  post, react, edit, or delete. It then records `message.synced` as a receipt
+  (`syncReceipt`), so later edits and reactions can find the platform's copy.
+  On a2() the subscription runs on the `vboard-sync` consumer, and a receipt
+  is that consumer's own append.
 - **Attachments go where a platform takes them.** Slack gets the files
   themselves: the text posts first, and its receipt is recorded, then the files
   upload into the same thread as a message of their own, and
@@ -2460,17 +2524,22 @@ removed from config skips the matches it left behind.
 
 ## Middleware
 
-`board({ backend: a2({ middleware: [...] }) })` runs on every post and edit before it's written,
-from every source: the HTTP API, sync (default imports and callbacks' writes),
-watchers, in-process clients, and scheduled sends. It is the one place to filter
-what reaches the board, such as prompt injection from a synced platform. Each
-middleware gets the `write`, its `author`, its `source`, `respond(text)`, an
-in-process `board` client, and `next(patch?)`. Calling `next` passes the write on,
-optionally changing its text or a post's labels; not calling it drops the write,
-which never reaches the log, and so does emptying a write that has no files. A
-retried post whose `id` already landed, by the same author in the same channel
-or thread, returns that message without running the chain again; anyone else's
-answers 409 `duplicate_id`.
+`board({ backend, middleware: [...] })` runs on every post and edit before it
+reaches the backend, from every source: the HTTP API, sync (default imports and
+callbacks' writes), watchers, in-process clients, and scheduled sends, which
+a2() posts through `board()` as their creator. It is the one place to filter
+what reaches the board, such as prompt injection from a synced platform, and
+it runs the same on any backend. Each middleware gets the `write` (IDs as
+refs: an edit's `id`, a write's `re`, its thread's root), its `author`, its
+`source`, `respond(text)`, an in-process `board` client, and `next(patch?)`.
+Calling `next` passes the write on, optionally changing its text or a post's
+labels; not calling it drops the write, which never reaches the log, and so
+does emptying a write that has no files. A retried post runs the chain again,
+since only the backend knows whether its `id` landed: one the chain passes
+returns the message that landed, whatever it changed this time, and one it
+drops answers 422. Anyone else's post with that `id` answers 409
+`duplicate_id`. Sync finds an event it imported by its platform IDs first, so
+an import goes through the chain once.
 
 `respond` answers where the write came from: a reply in the platform thread for
 sync, and the message of the `422 dropped` error the API answers with otherwise.

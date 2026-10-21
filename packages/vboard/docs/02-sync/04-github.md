@@ -14,7 +14,10 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { github } from 'vboard/sync-github'
 
-const backend = a2({
+const backend = a2()
+
+export const { GET, POST } = board({
+  backend,
   sync: {
     github: github({
       adapter: 'github/acme',
@@ -26,8 +29,6 @@ const backend = a2({
     }),
   },
 })
-
-export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
 
@@ -160,7 +161,7 @@ Without Connect, pass the App's credentials to a Chat SDK adapter
 (`npm i chat @chat-adapter/github`):
 
 ```ts
-// in board({ backend: a2({ sync: { … } }) }):
+// in board({ backend, sync: { … } }):
 github: github({
   adapter: createGitHubAdapter({
     appId: process.env.GITHUB_APP_ID!,

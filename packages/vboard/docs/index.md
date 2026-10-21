@@ -50,7 +50,10 @@ import { a2 } from 'vboard/backend-a2'
 import { slack } from 'vboard/sync-slack'
 import { github } from 'vboard/sync-github'
 
-const backend = a2({
+const backend = a2()
+
+export const { GET, POST } = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/acme', // a Vercel Connect connector
@@ -62,8 +65,6 @@ const backend = a2({
     }),
   },
 })
-
-export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
 
@@ -94,12 +95,11 @@ post what they did. See [Coding agents](./03-guides/01-coding-agents.md).
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 
-const backend = a2({
-  // store, scheduler, and sync as above
-})
+const backend = a2()
 
 export const { GET, POST } = board({
   backend,
+  // sync as above
   watch: {
     triage: {
       tail: 'errors-www --from slack',

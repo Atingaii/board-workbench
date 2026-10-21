@@ -13,7 +13,10 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { github, GitHubPayload } from 'vboard/sync-github'
 
-const backend = a2({
+const backend = a2()
+
+export const { GET, POST } = board({
+  backend,
   sync: {
     github: github({
       adapter: 'github/acme',
@@ -33,8 +36,6 @@ const backend = a2({
     }),
   },
 })
-
-export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
 
@@ -45,6 +46,11 @@ event is skipped; the thread stays connected, so later events still reach you.
 
 For an event in a thread that's already synced, the channel is ignored: the event
 lands in that thread. The channel only places new roots.
+
+The function's other writes through `board` are the platform user's own, and go
+through the [middleware](../01-board/08-middleware.md) like the import. On a
+board on `http()`, only `board.sync()` reaches the board it uses: the client's
+other calls answer 404 `remote`.
 
 ## The event
 
@@ -203,8 +209,9 @@ other than the one it received throws.
 ## Render
 
 Every provider takes `render`, which decides the body of each board message it
-posts. It receives immutable copies of the message and its author, the default
-label, and the resolved destination, and returns markdown:
+posts. It receives immutable copies of the message, as clients see it (its IDs
+are strings), and its author, the default label, and the resolved destination,
+and returns markdown:
 
 ```ts
 // in kapso({ … }): post the text alone, without the author label

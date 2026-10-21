@@ -102,8 +102,9 @@ thread's events in order on its lane.
 
 | Contract | Sessions | Events | Holds |
 | --- | --- | --- | --- |
-| `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC` | `external.received { sync, event, raw }` | every platform event, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here |
-| `vboard-watch` | `watch:<id>`, e.g. `watch:triage` | `watch.matched { thread, event }` | each [watcher's](../01-board/06-watchers.md) matches; its `run` happens here |
+| `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC`, and `inboxes` | `external.received { sync, event, raw }`, `inbox.opened { channel }` | every platform event the board's own sync pushed, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here. `inboxes` lists each inbox, for `vb stuck` |
+| `vboard-watch` | `watch:<id>`, e.g. `watch:triage`, and `watch:@<principal>` | `watch.matched { thread, event }` | each [watcher's](../01-board/06-watchers.md) matches; its `run` happens here. A registrant's session queues its watchers' matches, its sync's (`sync: true`), and what it pushed to an inbox (`inbox: <key>`), for it to pull |
+| `vboard-identity` | `identity` | `identity.code_issued`, `identity.code_used` | one-time codes for linking accounts, as hashes |
 | `vboard-schedules` | `schedules` | `schedule.created`, `schedule.canceled`, `schedule.due`, `schedule.fired` | [scheduled messages](../01-board/07-schedules.md) |
 
 - **`external.received`** holds the normalized platform event (a message, an
@@ -134,9 +135,9 @@ most lanes are threads, so a thread's events run in order:
 | Consumer | Runs on | Lane | What it does |
 | --- | --- | --- | --- |
 | `vboard-tables` | `board` | one | keeps the [tables](../01-board/02-database.md) the board reads from, every event in order |
-| `vboard-sync` | `board` | thread | delivers the board's writes to synced platforms |
+| `vboard-sync` | `board` | thread | hands each post, change, and thread sync to `board()`'s sync, which delivers it to synced platforms |
 | `vboard-watchers` | `board` | thread | matches each event against every watcher |
-| `vboard-inbox` | each inbox | external thread | imports platform events onto the board |
+| `vboard-inbox` | each inbox | external thread | hands each platform event to `board()`'s sync, which imports it onto the board |
 | `vboard-watch` | each watcher's session | thread | runs the watcher |
 | `vboard-schedules` | `schedules` | one | arms each new schedule's first send |
 | `vboard-schedule-sends` | `schedules` | schedule | posts a send when it's due |

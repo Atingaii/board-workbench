@@ -40,11 +40,12 @@ import { githubActions, oidc, vercelProject } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
 
 const backend = a2({
-  // store, scheduler, and sync as in Mounting
+  // store and scheduler as in Mounting
 })
 
 export const { GET, POST } = board({
   backend,
+  // sync as in Sync
   access: [
     // front's feedback intake posts and never reads.
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
@@ -132,16 +133,20 @@ board({
 | `post` | start a thread; edit and delete your own messages; upload; schedule a root | |
 | `react` | add and remove reactions | `read` |
 | `label` | set and unset labels, including labels on a post | `read` |
-| `sync` | attach a thread to a Slack or GitHub thread, including `--sync` on a post | `read` |
-| `manage` | cancel anyone's schedule there; in every channel, the inbox, stuck events, redrive, and source reads | everything |
+| `sync` | attach a thread to a Slack or GitHub thread, including `--sync` on a post; speak for platform users there, through [sync's routes](../04-reference/03-http.md#syncs-routes); in every channel, the board's own inbox | `read` |
+| `manage` | cancel anyone's schedule there; in every channel, stuck events, redrive, and source reads | everything |
 
 - **A reply needs `post` and `read`** in its thread's channel. Addressing a
   thread you can't read would confirm it exists. So `['post']` alone starts
   threads and fixes what it wrote, which is what a feedback intake or a CI
   reporter does.
-- **The board's bookkeeping needs `manage` in every channel,** since raw
-  platform events and stuck events span all of them. `{ '*': 'all',
-  'security/': [] }` can't read the inbox.
+- **The board's bookkeeping needs `manage` in every channel,** since stuck
+  events span all of them, and its inbox needs `sync` in every channel for
+  the same reason. `{ '*': 'all', 'security/': [] }` can't read either.
+- **`sync` speaks for platform users.** A caller with it in a channel can write
+  there as any Slack, GitHub, or WhatsApp user it names, which is what a board
+  on `http()` that syncs needs on the board it uses. Give it only to the
+  deployment that runs the sync: see [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 - **`sync` attaches only a platform thread no other board thread has.** Taking
   one over would send its replies to a channel its readers may not be in, so
   it's a 409 with `already_synced`. A caller that reads the other thread's

@@ -324,9 +324,32 @@ inbox(key: string, opts?: { channel?: string; limit?: number }): Promise<InboxEn
 readSource(key: string, target: string, opts?: { limit?: number }): Promise<SourceRead>
 ```
 
-`inbox` returns the raw platform events a sync entry received, newest first.
+`inbox` returns the raw platform events a sync entry received, newest first:
+the board's own with `sync` in every channel, and what you pushed.
 `readSource` reads a platform channel, thread, or message permalink without
-syncing or storing it. Both need `manage` in every channel.
+syncing or storing it, and needs `manage` in every channel.
+
+### Sync's records
+
+```ts
+syncImport(body: SyncImportInput): Promise<{ message: string | null }>
+syncReceipt(body: SyncReceiptInput): Promise<{ ok: true; attached?: boolean }>
+syncThread(thread: string): Promise<SyncThreadView>
+syncFind(query: { thread?: string; message?: string; account?: string; person?: string }): Promise<SyncFindView>
+syncCopies(messages: string[]): Promise<Record<string, Record<string, ExternalCopy>>>
+syncRoots(by: string, since: Date | number): Promise<MessageView[]>
+inboxPush(key: string, events: { id: string; event: ExternalEvent; raw: unknown }[]): Promise<{ ok: true }>
+inboxNext(key: string, opts?: { limit?: number }): Promise<InboxItem[]>
+inboxAck(key: string, id: string, body: { lease: string; error?: string }): Promise<{ ok: true }>
+syncCode(sync: string, opts?: { person?: string }): Promise<{ code: string; expiresAt: string }>
+syncAccount(body: SyncAccountInput): Promise<{ person: string; link: LinkedAccount }>
+syncUnlink(account: string): Promise<{ ok: true }>
+```
+
+What a sync running somewhere else reads and writes on a board: the
+[sync routes](./03-http.md#syncs-routes), one method each. `board()`'s own sync
+uses them through its backend, so you need them only to sync a board yourself.
+Each needs [`sync`](./03-http.md#what-sync-grants) where it lands.
 
 ### stuck and redrive
 

@@ -26,7 +26,10 @@ const client = new WhatsAppClient({
   kapsoApiKey: process.env.KAPSO_API_KEY!,
 })
 
-const backend = a2({
+const backend = a2()
+
+export const { GET, POST } = board({
+  backend,
   sync: {
     kapso: kapso({
       adapter: createKapsoAdapter({ client }),
@@ -35,8 +38,6 @@ const backend = a2({
     }),
   },
 })
-
-export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
 

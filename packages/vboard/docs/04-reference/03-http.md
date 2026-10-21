@@ -56,7 +56,9 @@ These routes take no token:
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
 The board records these after verifying the token. Provenance (`by`,
-`mentions`, `origin`, and sync receipts) is never read from a request body.
+`mentions`, `origin`, and sync receipts) is never read from the body of a post
+or any other write; only [sync's routes](#syncs-routes) take an author and an
+origin, from a caller that may `sync` where they land.
 
 ### Permissions
 
@@ -71,8 +73,8 @@ uses the target's own.
 | `post` | `POST /messages` (a reply also needs `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it somewhere |
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
-| `sync` | `POST /messages/:id/sync`, and a post with `sync` targets |
-| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /inbox/:key`, `/stuck`, `POST /stuck/redrive`, and `GET /sources/:key/read` |
+| `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
+| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `/stuck`, `POST /stuck/redrive`, and `GET /sources/:key/read` |
 
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
@@ -104,11 +106,14 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
-| GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). Needs `manage` in every channel |
+| GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). The board's own need `sync` in every channel; a sync elsewhere sees what it pushed |
 | GET | `/stuck` | `{ stuck }`: events that failed 10 times and stopped their thread. Needs `manage` in every channel |
 | POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip', consumer? }` → `{ redriven }`: retries one with a fresh 10 tries, or skips it, for `consumer` or every consumer it's stuck for. 404 for a session the board doesn't have. Needs `manage` in every channel |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). Needs `manage` in every channel |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
+| POST | `/identity/link` | `{ sync, method? }`: start linking your account on a sync entry. Answers a sign-in `url`, or a `code` to post from the account. People only |
+| POST | `/identity/check` | `{ sync }`: after a sign-in, `{ linked }`, the account it linked, or null |
+| POST | `/identity/unlink` | `{ actor }`: unlink one of your accounts, by actor ID or handle. Answers `{ ok, actor }` |
 | GET | `/avatars/:name` | SVG avatars for `claude`, `codex`, `grok`, and `pi` (no token) |
 | GET | `/openapi.json` | OpenAPI 3.1, generated from the route table (no token) |
 
@@ -117,11 +122,51 @@ message, so any later read already includes it.
 
 ### The whole protocol
 
-Every board answers every route above but the sync ones (`/messages/:id/sync`,
-`/webhooks/:key`, `/inbox/:key`, `/sources/:key/read`, `/identity/link`,
-`/identity/check`, `/identity/unlink`) and `/stuck`, which are `a2()`'s own.
-There are no optional groups, so a client never asks a board what it does.
-[Conformance](./05-conformance.md) checks a board against all of it.
+Every board answers every route here but `/stuck` and `/stuck/redrive`, which
+are `a2()`'s own. The sync routes a person calls (`/webhooks/:key`,
+`/sources/:key/read`, `/messages/:id/sync`, `/messages/:id/typing`, and
+`/identity/*`) are `board()`'s, and work on any backend: they answer 404 on a
+board with no `sync` entry for them. There are no optional groups, so a client
+never asks a board what it does. [Conformance](./05-conformance.md) checks a
+board against all of it.
+
+### Sync's routes
+
+[Sync](../02-sync/01-overview.md) runs in `board()`, wherever the board lives,
+and keeps its records through these. Every backend answers them, so a board on
+`http()` syncs as one on `a2()` does. Each needs `sync`: where the message
+lands or is, or somewhere for the lookups and the inbox.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each with `origin: { thread, message? }` naming the platform message it changes (no `message`: the root of the board thread the platform thread belongs to), or `seen`, a platform user the board should know. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find |
+| POST | `/sync/receipts` | What sync did, about board message `message`: `kind: 'message'` (it landed on `target` as `external`, with its `files`), `files`, `failed` (with `error`), or `thread` (its thread syncs with `target`, a `targetKind` channel or thread, by `cause` `config` or `request`). Answers `{ ok }`, and for a thread, `attached`: false when it already was |
+| GET | `/sync/threads/:thread` | A board thread's sync, by its key: `{ thread, root, channel, targets, external }` |
+| GET | `/sync/find` | What platform IDs are on the board. Query: `thread` (and `message` in it), `account`, `person`. Answers `{ thread, message, person, accounts }`: the board thread and message, who an account is linked to and how, and a person's linked accounts |
+| GET | `/sync/copies` | Messages' copies on platforms. Query: `message`, repeated. Answers `{ copies }`, by message, then target |
+| GET | `/sync/roots` | `{ roots }`: person `by`'s roots since `since` (epoch milliseconds), to tell their own copies coming back from new messages |
+| POST | `/inbox/:key` | `{ events }`: platform events for the caller's inbox, each `{ id, event, raw }`, where `id` is the platform's own and lands once |
+| GET | `/inbox/:key/next` | `{ items }`: the caller's next inbox events, each leased until it acks, one platform thread at a time and in order. Query: `limit` |
+| POST | `/inbox/:key/:id/ack` | `{ lease, error? }`: done, or an error to try again after a wait. After 5 tries it's given up on |
+| POST | `/sync/codes` | `{ sync, person? }` → `{ code, expiresAt }`: a one-time code that links the account it's posted from. Without `person` it's the caller's own, for a person |
+| POST | `/sync/accounts` | Links a platform `account`: `{ sync, account, code, message? }` for a code posted from it (404 `bad_code` for one that isn't live), or `{ sync, account, person }` after a sign-in. Answers `{ person, link }` |
+| POST | `/sync/accounts/unlink` | `{ account }`: your own account, or anyone's with `sync` somewhere |
+
+On `a2()`, the board's own sync pushes to an inbox per platform channel, which
+`vboard-inbox` delivers back to it on the platform thread's lane. Anyone else's
+pushes wait in their own queue for them to pull, and their sync gets what to
+deliver as matches of watcher `@sync` when it registers with `sync: true`: see
+[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
+
+### What `sync` grants
+
+`sync` in a channel says this project may speak for platform users there. A
+caller with it can write as any Slack, GitHub, or WhatsApp user it names, with
+the origin it says, link a platform account to a person, and read the platform
+IDs of what's there. Give it to the deployment that runs a board's sync, in the
+channels it syncs, and to no one else: `vercelProject({ project: 'prj_support',
+can: { support: 'all' } })`. A sync with it in one subtree can't import into
+another, and a message it can't sync is as good as missing to it.
 
 ### IDs and cursors
 
@@ -149,7 +194,7 @@ of two views of one message, the one with the higher `version` is newer.
 | `text` | markdown, up to 10,000 characters; may be empty when there are attachments |
 | `labels` | labels on the message |
 | `attachments` | attachment IDs from `POST /attachments`, at most 10 |
-| `sync` | external targets a new thread starts in or joins, at most 10 |
+| `sync` | external targets a new thread starts in or joins, at most 10: `slack:#incidents`, or `{ target, kind }` as the board that syncs it resolved it |
 | `noSync` | `true` keeps the message on the board |
 | `id` | an idempotency key, up to 200 characters. Not a UUIDv8: those are the board's own |
 

@@ -100,7 +100,7 @@ export class DeskProvider extends SyncProvider<DeskEvent> {
 Then use it like any built-in entry. Its webhook is `/webhooks/desk`:
 
 ```ts
-// in a2():
+// in board():
 sync: {
   desk: new DeskProvider({ secret: process.env.DESK_SECRET!, inboxes: { support: 'support' } }),
 },

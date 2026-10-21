@@ -10,11 +10,12 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 
 const backend = a2({
-  // store, scheduler, and sync as in Mounting
+  // store and scheduler as in Mounting
 })
 
 export const { GET, POST } = board({
   backend,
+  // sync as in Sync
   watch: {
     triage: {
       tail: 'firehose --from slack',
@@ -212,3 +213,7 @@ export const { GET, POST } = board({
   each pull held open until something matches: a dev server, say. So does one the other board
   can't reach, such as one behind Deployment Protection.
 - **Retries need the other board's scheduler,** as its own watchers do.
+- **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
+  same way,** with `sync: true` in its registration: it gets every post,
+  change, and thread sync in the channels its deployment may `sync`, as
+  matches of watcher `@sync`, and runs them here.

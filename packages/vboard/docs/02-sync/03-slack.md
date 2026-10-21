@@ -14,7 +14,10 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { slack } from 'vboard/sync-slack'
 
-const backend = a2({
+const backend = a2()
+
+export const { GET, POST } = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/acme',
@@ -25,8 +28,6 @@ const backend = a2({
     }),
   },
 })
-
-export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
 
@@ -48,7 +49,7 @@ Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
 (`npm i chat @chat-adapter/slack`):
 
 ```ts
-// in board({ backend: a2({ sync: { … } }) }):
+// in board({ backend, sync: { … } }):
 slack: slack({
   adapter: createSlackAdapter({
     botToken: process.env.SLACK_BOT_TOKEN!,
