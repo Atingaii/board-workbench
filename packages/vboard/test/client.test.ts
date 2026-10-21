@@ -5,7 +5,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { BOARD_URL, personToken, testBoard } from './harness.ts'
+import { board as defaultBoard } from '../src/server/index.default.ts'
+import { http as defaultHttp } from '../src/backend-http/index.default.ts'
+import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 import { detectAgent } from '../src/client/node.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
@@ -97,6 +99,58 @@ describe('a handle on a board over http()', () => {
     await client.post('x', 'three')
     await reading
     expect(seen).toEqual(['one', 'two', 'three'])
+  })
+})
+
+describe("a post's id over http()", () => {
+  it('posts once for a retry, finds it again, and stays the handle\'s own', async () => {
+    const { team, client } = await setup()
+    const first = await client.post('dev', { text: 'a1b2c3 is live', id: 'deploy-a1b2c3' })
+    const again = await client.post('dev', { text: 'a1b2c3 is live', id: 'deploy-a1b2c3' })
+    expect(again.id).toBe(first.id)
+    expect((await client.posted('deploy-a1b2c3')).id).toBe(first.id)
+    // It goes as a key under the token's principal, which no one else may post with.
+    expect(first.thread).toMatch(/^key:vercel:user:u_julian:[0-9a-f]{32}$/)
+    // Someone else's post with the same id first doesn't take it.
+    const ada = caller(team.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    expect((await ada('POST', '/messages', { channel: 'dev', text: 'mine', id: 'deploy-d4e5f6' })).status).toBe(201)
+    expect((await client.post('dev', { text: 'd4e5f6 is live', id: 'deploy-d4e5f6' })).text).toBe('d4e5f6 is live')
+    // Another profile's post with the same id is another post.
+    expect((await client.as('claude').post('dev', { text: 'a1b2c3 is live', id: 'deploy-a1b2c3' })).id).not.toBe(first.id)
+  })
+})
+
+describe('board() with no backend', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  it('is http() to the board the environment points at, as the token holder with its profile', async () => {
+    const team = testBoard()
+    for (const key of Object.keys(process.env)) if (/^(VBOARD|VERCEL|ACTIONS_ID_TOKEN|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+    vi.stubEnv('VBOARD_URL', BOARD_URL)
+    vi.stubEnv('VBOARD_TOKEN', await personToken())
+    vi.stubEnv('VBOARD_AS', 'ci')
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init)))
+    const here = board()
+    expect(here.url).toBe(BOARD_URL)
+    expect(await here.source()).toBe('VBOARD_TOKEN')
+    expect((await here.post('dev', 'from CI')).by.actor).toBe('vercel:user:u_julian+ci')
+    expect((await here.as(null).me()).actor).toBe('vercel:user:u_julian')
+  })
+
+  it('outside Node, needs the URL and a token, and serves nothing', async () => {
+    const team = testBoard()
+    const fetch = ((input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init))) as typeof globalThis.fetch
+    expect(() => defaultBoard()).toThrow("http: pass the board's URL: outside Node there's no environment to find it in")
+    expect(() => defaultHttp(BOARD_URL)).toThrow("there's no environment to find a token in: pass `token`")
+    const page = defaultBoard({ backend: defaultHttp(BOARD_URL, { token: await personToken(), fetch }) })
+    expect((await page.as('page').post('dev', 'from a browser')).by.actor).toBe('vercel:user:u_julian+page')
+    expect((await page.fetch(new Request(BOARD_URL))).status).toBe(501)
+    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL, { token: 't' }), watch: { fix: { tail: 'dev', run: () => {} } } })).toThrow(
+      "board: this build of vboard can't serve, watch, sync, or run middleware",
+    )
   })
 })
 

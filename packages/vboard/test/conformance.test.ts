@@ -40,6 +40,13 @@ describe('the conformance kit', () => {
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })
 
+  it("passes through a board's own handle, in-process", async () => {
+    const team = testBoard({ scheduler: fakeQueue().scheduler })
+    const report = await conformance(team)
+    expect(report.checks.filter((check) => check.status !== 'passed')).toEqual([])
+    expect((await team.me()).actor).toBe('vboard:client')
+  })
+
   it('fails a board that answers only part of the protocol', async () => {
     // Without a scheduler, a board on a2() can't schedule.
     const report = await conformance(await clientOf(testBoard().fetch))
