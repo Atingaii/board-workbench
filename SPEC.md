@@ -62,7 +62,7 @@ vboard post errors-www "deploy failed on a1b2c3"
 
 ## Principles
 
-- **Access is per channel, and code says it.** `board({ backend: a2({ access }) })` says what
+- **Access is per channel, and code says it.** `board({ access })` says what
   each kind of principal may do in each channel: `read`, `post`, `react`,
   `label`, `sync`, or `manage`. Reads are gated, so a write-only caller is
   `['post']`, and what a caller can't read answers 404. Nothing is minted or
@@ -106,7 +106,7 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()`, the `Backend` type, watchers, and middleware | server |
+| `vboard` | `board()`, the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware | server |
 | `vboard/access` | Who may use a board: `vercelProject()`, `githubActions()`, `oidc()`, and the permission types | server |
 | `vboard/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
 | `vboard/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
@@ -130,25 +130,70 @@ conversations.
 
 ### Backends
 
-`board({ backend, watch, url, basePath })` mounts a board on a backend, which
-says where the board lives:
+`board({ backend, access, watch, project, url, basePath, streamMaxMs, auth })`
+mounts a board on a backend, which says where the board lives. `board()` owns
+the HTTP on every backend: it routes each request and validates it with the
+schemas in `src/api/routes.ts`, verifies its token (or calls a host's `access`
+function) and narrows it by `x-board-scope`, resolves the actor from the
+`x-board-*` headers, maps errors, and serves discovery, `/avatars/:name`,
+`/openapi.json`, SSE, and `client(name, { key })`. Then it calls the backend's
+method of the same name as the route.
 
-- **`a2({ store, scheduler, blob, sync, access, middleware, project, auth, streamMaxMs })`**
-  keeps the board in this deployment, on A2's log. Everything else in this
-  spec describes it.
-- **`http(url, { fetch?, token? })`** uses the board at `url`, which keeps the
-  log. This deployment reads and writes it as itself: discovery names it as
-  `remote`, every other route answers 404 with code `remote`, and the CLI
-  pointed here says `error: <url> keeps no log: use <remote>`.
-  `client(name, { key })` writes there with `name` as its profile, and keyed
-  posts get IDs `key:<principal>:<sha256 of the key and order>`. Any board
-  takes a `key:<principal>:` ID only from that principal, so the same key
-  never posts twice and no one can post with one first. Its watchers run
-  here, on what the other board matches for them (below).
+- **A backend is a plain object** (`Backend` in `src/server/backend.ts`): one
+  async method per protocol method (`Protocol` in `src/api/protocol.ts`), each
+  `(caller, input, signal)`, plus `remote`, `sync`, `routes`, and `bind`.
+  `input` is what the route's schema parsed; the output is what the route
+  answers, 201 for `post`, `schedule`, and `upload`. `attachment` answers the
+  file's record and bytes, and `board()` serves them with the headers that keep
+  a file from running as a page. A method throws `HttpError` for a status and
+  code of its own.
+- **A caller** is `{ identity, origin }`, a request `board()` verified (or a
+  write a backend makes in-process for someone it trusts), or `{ self,
+  origin }`, this deployment's own code: `client(name)` (`origin.via.kind` is
+  `client`) or a watcher (`watcher`). Every method honors
+  `identity.principal.access`. Each backend decides who `self` is on its
+  board.
+- **`routes`** are a backend's own, beside the protocol, each with `auth`
+  saying whether `board()` verifies the caller first. One at a protocol
+  route's path takes its place.
+- **`bind(binding)`** is called once, when `board()` is created, before any
+  request, and does no I/O. It's what background work needs from the board:
+  the project's watchers and `run(id, event, { trigger })`, `accessFor` (what a
+  stored principal may do now, under the rules as they are), `client(caller,
+  trigger)` (an in-process client as any caller, its posts' IDs derived from
+  the trigger), and `url()`, the board's own URL once it's known.
+- **SSE is built from `events`,** the long-poll: `board()` loops it, sends each
+  event with `id: <its cursor>`, and a bare `id:` when a page's cursor moved
+  past its last event. It honors `Last-Event-ID` when `after` is absent, pings
+  every 15 seconds, and closes at `streamMaxMs`.
 
-A backend is `{ kind, start(setup) }`: `start` gets the watchers, `url`, and
-`basePath`, and returns what `board()` mounts (`fetch`, `scheduler`,
-`client`, plus its own extras: `a2()`'s `servers`, `http()`'s `remote`).
+The backends vboard ships:
+
+- **`a2({ store, scheduler, blob, sync, middleware })`** keeps the board in
+  this deployment, on A2's log, and is the backend object itself. It builds its
+  A2 servers when `board()` binds it; a store connects when it's first used.
+  Everything else in this spec describes it. A request's `{ identity }` writes
+  as that identity; `{ self }` writes as `vboard:client:<name>` from a client
+  and `vboard:watch:<id>` from a watcher. Its extras are `scheduler` (the
+  scheduler's callback, for its own route: `export const { scheduler } =
+  backend`), `servers`, and, for tests and tools, `engine`, `session`, and
+  `store`. Its own routes are `/stuck`, `/stuck/redrive`, and, until sync moves
+  to `board()`, the sync ones: `/messages/:id/sync`, `/inbox/:key`,
+  `/sources/:key/read`, `/webhooks/:key` (no token), and `/identity/link`,
+  `/check`, `/unlink`.
+- **`http(url, { fetch?, token?, init? })`** uses the board at `url`, which
+  keeps the log: its methods call it with the SDK. A `{ self }` caller writes
+  there as this deployment with `self` as its profile, and a post whose ID
+  `board()` derived from a trigger gets `key:<principal>:<sha256 of that ID>`.
+  Any board takes a `key:<principal>:` ID only from that principal, so the
+  same key never posts twice and no one can post with one first. A request's
+  `{ identity }` answers 404 `remote` (`<url> keeps no log: use <remote>`) and
+  discovery names the other board as `remote`, unless `init` is given:
+  `init({ caller })` returns a `RequestInit` merged into each request the
+  caller's call makes there (a token minted for it, say), and discovery then
+  names no other board. Its own routes are `POST /wake` and `POST /watchers`
+  (no token). Its watchers run here, on what the other board matches for them
+  (below).
 
 ### IDs, cursors, and versions
 
@@ -171,21 +216,18 @@ The backend picks them; the protocol only says their shape:
   that changed the message. The log and the tables keep numbers; only views are
   strings. The CLI shows them as `#812` and `s12`.
 
-### Capabilities and conformance
+### The protocol and conformance
 
-- **The core is what every board answers:** discovery, `/me`, `/channels`,
+- **Every board answers the whole protocol:** discovery, `/me`, `/channels`,
   `/actors`, `/identity`, `/messages`, `/threads`, posting, editing, deleting,
-  reacting, labeling, typing, and `/events`.
-- **Discovery's `capabilities` lists the groups beyond it:** `schedules`,
-  `attachments`, `watchers`, `sync` (sync, webhooks, inbox, source reads, and
-  account linking), and `stuck`. `a2()` lists `schedules` with a scheduler,
-  `sync` with sync entries, and the rest always; a board on `http()` lists
-  none, since its remote answers for everything.
-- **`vboard/conformance` checks a board through the SDK,** the core and each
-  group it lists (`sync` only by declaration: it needs a platform). It writes
-  to one channel, every post kept on the board and labeled with the run, and
-  deletes what it posted. `vb conformance` runs it as the CLI's identity and
-  exits 1 when a check fails. vboard's own tests run it against `a2()`, and
+  reacting, labeling, typing, schedules, attachments, registered watchers, and
+  `/events`. There are no optional groups, and discovery lists none.
+- **`vboard/conformance` checks a board through the SDK,** all of it, a group
+  at a time in the report (`core`, `schedules`, `attachments`, `watchers`). It
+  writes to one channel, every post kept on the board and labeled with the
+  run, and deletes what it posted. `vb conformance` runs it as the CLI's
+  identity and exits 1 when a check fails. vboard's own tests run it against
+  `a2()`, against a board without a scheduler (which fails `schedules`), and
   against boards broken on purpose, so the kit and the backend can't drift
   apart unnoticed.
 
@@ -208,10 +250,12 @@ The board that keeps the log matches the tails; the board on `http()` runs
 
 - **Registrations** live in `vboard-registry`, session `registry`, one per
   principal with its token facts, so its access is worked out again at each
-  match under the rules as they are then. A board on `http()` registers when
-  it starts if it knows its URL, on `POST /watchers`, and on a wake-up with a
-  stale hash. Its URL is `url` from setup, or on Vercel its production domain
-  (a preview's own URL there): never a request's `Host`.
+  match under the rules as they are then. A board on `http()` registers on
+  its first use (a method call or one of its routes) if it knows its URL, on
+  `POST /watchers`, and on a wake-up with a stale hash; creating it does no
+  I/O. Its URL is `board()`'s `url()`: `url`, or on Vercel its production
+  domain (a preview's own URL there) under the mount path a request showed,
+  never a request's `Host`.
 - **Matching** is `vboard-watchers`, as for config watchers. A registered
   watcher sees what its registrant may read, as `/events` shows it, and its
   writes (`<principal>+<id>`) never wake it. One event's matches for one
@@ -239,8 +283,8 @@ The board that keeps the log matches the tails; the board on `http()` runs
   tries and leaves the wake-up to the next match or sweep, so the lane never
   dead-letters.
 - **A board that can't be woken** (no `https` URL, as on a dev server, or
-  behind Deployment Protection) registers with no `url` and pulls on its own,
-  each pull held open until something matches.
+  behind Deployment Protection) registers with no `url` and pulls on its own
+  from its first use, each pull held open until something matches.
 
 ### Install
 
@@ -369,7 +413,7 @@ talking to.
     (`https://oidc.vercel.com/<team>`).
   - `aud` must be the board's URL.
   - The board knows its own project: `project_id` is compared to
-    `VERCEL_PROJECT_ID`, or to `board({ backend: a2({ project }) })` in local development.
+    `VERCEL_PROJECT_ID`, or to `board({ project })` in local development.
   - A `development` token from it is a person and must carry `user_id`. Any
     other environment is the deployment itself. The one the board runs in
     (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
@@ -395,15 +439,13 @@ talking to.
 
 ```ts
 board({
-  backend: a2({
-    store: postgres(),
-    access: [
-      vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
-      oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
-      vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-    ],
-  }),
+  backend: a2({ store: postgres() }),
+  access: [
+    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
+    oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
+    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
+  ],
 })
 ```
 
@@ -414,7 +456,7 @@ board({
   named `marketing` on their own team and mint a token for the board's
   audience, so `vercelProject({ project })` without `team` matches only the board's own
   team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
-  knows its team from `board({ backend: a2({ project: { teamId } }) })`, `VERCEL_ORG_ID`, or
+  knows its team from `board({ project: { teamId } })`, `VERCEL_ORG_ID`, or
   `.vercel/project.json`, and on Vercel from the platform's
   `x-vercel-oidc-token`, verified and for its own `project_id`. When none of
   them says, a name without `team` matches nothing.
@@ -912,10 +954,11 @@ it records the external-to-board direction.
 Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
 `experimental-a2/scheduler-qstash`. A board without sync needs a store and
 nothing else.
-- **Pass the scheduler to `a2()`, and mount the `scheduler` `board()` returns in its
-  own route:** `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
+- **Pass the scheduler to `a2()`, and mount the backend's `scheduler` in its
+  own route:** `export const { scheduler } = backend` in the board's route, then
+  `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
   It serves the board server and the inbox server. To share one scheduler with
-  other A2 servers, `board()` also returns `servers` for `scheduler.handler(...)`.
+  other A2 servers, the backend also has `servers` for `scheduler.handler(...)`.
 - **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
   its function private, and the board's routes must stay public.
 
@@ -1053,7 +1096,7 @@ status.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, `sync` (each entry's `key` and `platform`), and `capabilities` |
+| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, `sync` (each entry's `key` and `platform`), and `remote` on a board that keeps nothing |
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |
@@ -1159,7 +1202,7 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
   idempotent: the same key and order never post twice.
 
   ```ts
-  export const { GET, POST, scheduler, client } = board({ … })
+  export const { GET, POST, client } = board({ … })
   // app/api/deploys/route.ts
   await client('deploys', { key: delivery.id }).post('deploys', `${sha} is live`)
   ```
@@ -1332,7 +1375,7 @@ computer who don't need it on the internet. No config file: it's flags only.
   any other board (remote, or its own `board()` dev server on localhost) keeps
   its link, and `serve` prints the `VBOARD_URL` to use instead.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
-  (`auth.local` in `a2()`), and signs one token for you, the OS user (or
+  (`auth.local` in `board()`), and signs one token for you, the OS user (or
   `--handle`), into `~/.config/vboard/local/<hash of url>.json`, mode 0600, removed
   on exit. The Node client uses that file for a loopback URL when there's no
   `VBOARD_TOKEN`. Everyone on the machine who can read it is
@@ -1508,40 +1551,41 @@ import { github } from 'vboard/sync-github'
 import { redisHttp } from 'vboard/backend-a2/store-redis-http'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
-    scheduler: vercelQueues({ topic: 'vboard' }),
-    sync: {
-      slack: slack({
-        adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
-        channels: {
-          '#errors-www': 'errors-www',
-          '#firehose-www': 'firehose-www',
-          '#prs': 'prs',
-          '#alerts': async ({ event, board }) => {
-            if (event.kind !== 'message') return
-            const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-            await board.sync(`alerts/${project}`, event)
-          },
+const backend = a2({
+  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+  sync: {
+    slack: slack({
+      adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
+      channels: {
+        '#errors-www': 'errors-www',
+        '#firehose-www': 'firehose-www',
+        '#prs': 'prs',
+        '#alerts': async ({ event, board }) => {
+          if (event.kind !== 'message') return
+          const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+          await board.sync(`alerts/${project}`, event)
         },
-      }),
-      acme: slack({                                         // a second Slack workspace
-        adapter: 'slack/acme',
-        channels: { '#support': 'acme-support' },
-      }),
-      github: github({
-        adapter: 'github/basehub',
-        repos: {
-          'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
-          'basehub-ai/docs': async ({ event, board }) => {
-            await board.sync('prs', event, { labels: { area: 'docs' } })
-          },
+      },
+    }),
+    acme: slack({                                         // a second Slack workspace
+      adapter: 'slack/acme',
+      channels: { '#support': 'acme-support' },
+    }),
+    github: github({
+      adapter: 'github/basehub',
+      repos: {
+        'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
+        'basehub-ai/docs': async ({ event, board }) => {
+          await board.sync('prs', event, { labels: { area: 'docs' } })
         },
-      }),
-    },
-  }),
+      },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 **Each mapping chooses a default mirror or an event callback:**
@@ -2334,10 +2378,12 @@ you'd type after `vb tail`; `run` gets each event that tail would print, durably
 with nothing kept open.
 
 ```ts
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    sync: { … },
-  }),
+const backend = a2({
+  sync: { … },
+})
+
+export const { GET, POST } = board({
+  backend,
   watch: {
     triage: {
       tail: 'firehose --from slack',
@@ -2355,6 +2401,7 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const { scheduler } = backend
 ```
 
 - **Try it in a terminal first.** `vb tail firehose --from slack --json` prints

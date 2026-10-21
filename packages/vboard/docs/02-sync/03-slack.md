@@ -14,19 +14,20 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { slack } from 'vboard/sync-slack'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    sync: {
-      slack: slack({
-        adapter: 'slack/acme',
-        channels: {
-          '#errors-www': 'errors-www',
-          C0C6MNT9LLC: 'dev',
-        },
-      }),
-    },
-  }),
+const backend = a2({
+  sync: {
+    slack: slack({
+      adapter: 'slack/acme',
+      channels: {
+        '#errors-www': 'errors-www',
+        C0C6MNT9LLC: 'dev',
+      },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 From the connector name, vboard builds the Chat SDK adapter, the Web API client it

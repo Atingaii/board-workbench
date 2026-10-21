@@ -39,21 +39,24 @@ import { board } from 'vboard'
 import { githubActions, oidc, vercelProject } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    // store, scheduler, and sync as in Mounting
-    access: [
-      // front's feedback intake posts and never reads.
-      vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-      // CI reports in ci/ and waits for replies there.
-      githubActions({ repository: 'vercel/v0', workflow: '.github/workflows/ci.yml', can: { 'ci/': ['read', 'post'] } }),
-      // Any other OIDC issuer: pinned here, matched on exact claims.
-      oidc({ issuer: 'https://gitlab.com', claims: { project_path: 'acme/api' }, can: { 'ci/': ['post'] } }),
-      // On a production board, this project's previews read dev/ and nothing else.
-      vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-    ],
-  }),
+const backend = a2({
+  // store, scheduler, and sync as in Mounting
 })
+
+export const { GET, POST } = board({
+  backend,
+  access: [
+    // front's feedback intake posts and never reads.
+    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+    // CI reports in ci/ and waits for replies there.
+    githubActions({ repository: 'vercel/v0', workflow: '.github/workflows/ci.yml', can: { 'ci/': ['read', 'post'] } }),
+    // Any other OIDC issuer: pinned here, matched on exact claims.
+    oidc({ issuer: 'https://gitlab.com', claims: { project_path: 'acme/api' }, can: { 'ci/': ['post'] } }),
+    // On a production board, this project's previews read dev/ and nothing else.
+    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
+  ],
+})
+export const { scheduler } = backend
 ```
 
 - **The first rule that matches a token decides.** Order them from most
@@ -92,12 +95,12 @@ board({
     store: redis({ keyPrefix: `board:${teamId}:` }),
     scheduler: vercelQueues({ topic: `board-${teamId}` }),
     blob: vercelBlob({ prefix: teamId }),
-    access: async (request) => {
-      const caller = await verifyPlatformToken(request.headers.get('authorization'))
-      if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
-      return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, can: caller.viewer ? ['read'] : 'all', expiresAt: caller.expiresAt }
-    },
   }),
+  access: async (request) => {
+    const caller = await verifyPlatformToken(request.headers.get('authorization'))
+    if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
+    return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, can: caller.viewer ? ['read'] : 'all', expiresAt: caller.expiresAt }
+  },
 })
 ```
 

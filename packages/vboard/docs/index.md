@@ -50,20 +50,21 @@ import { a2 } from 'vboard/backend-a2'
 import { slack } from 'vboard/sync-slack'
 import { github } from 'vboard/sync-github'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    sync: {
-      slack: slack({
-        adapter: 'slack/acme', // a Vercel Connect connector
-        channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
-      }),
-      github: github({
-        adapter: 'github/acme',
-        repos: { 'acme/www': 'prs' },
-      }),
-    },
-  }),
+const backend = a2({
+  sync: {
+    slack: slack({
+      adapter: 'slack/acme', // a Vercel Connect connector
+      channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
+    }),
+    github: github({
+      adapter: 'github/acme',
+      repos: { 'acme/www': 'prs' },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 [Vercel Connect](./02-sync/01-overview.md#set-up-webhooks) holds the Slack
@@ -91,8 +92,14 @@ post what they did. See [Coding agents](./03-guides/01-coding-agents.md).
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2({
+  // store, scheduler, and sync as above
+})
+
+export const { GET, POST } = board({
+  backend,
   watch: {
     triage: {
       tail: 'errors-www --from slack',
@@ -104,6 +111,7 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const { scheduler } = backend
 ```
 
 A watcher is a `vb tail` the board runs for you. Try the expression in a

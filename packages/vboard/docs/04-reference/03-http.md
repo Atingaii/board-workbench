@@ -83,7 +83,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, capabilities }`, where `sync` lists each entry's `key` and `platform`, and `capabilities` the [groups of routes](#capabilities) it answers beyond the core |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync }`, where `sync` lists each entry's `key` and `platform`. A board that keeps nothing adds `remote`, the board to use instead |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
@@ -115,24 +115,13 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 Every read reports `cursor`, the point in the board it reflects. A write returns its
 message, so any later read already includes it.
 
-### Capabilities
+### The whole protocol
 
-Every board answers the core: discovery, `/me`, `/channels`, `/actors`,
-`/identity`, `/messages` and `/threads`, posting, editing, deleting, reacting,
-labeling, typing, and `/events`. Discovery's `capabilities` lists the groups
-it answers beyond that, so a client can tell before it asks:
-
-| Capability | Routes | On `a2()` |
-| --- | --- | --- |
-| `schedules` | `/schedules`, `/schedules/:id/cancel` | with a `scheduler` |
-| `attachments` | `/attachments`, `/attachments/:id` | always |
-| `watchers` | `/watchers`, `/watchers/matches`, `/watchers/matches/:id/ack` | always |
-| `sync` | `/messages/:id/sync`, `/webhooks/:key`, `/inbox/:key`, `/sources/:key/read`, `/identity/link`, `/identity/check`, `/identity/unlink` | with `sync` |
-| `stuck` | `/stuck`, `/stuck/redrive` | always |
-
-A board on `http()` lists none: the board it uses answers for everything.
-[Conformance](./05-conformance.md) checks the core and each group a board
-lists.
+Every board answers every route above but the sync ones (`/messages/:id/sync`,
+`/webhooks/:key`, `/inbox/:key`, `/sources/:key/read`, `/identity/link`,
+`/identity/check`, `/identity/unlink`) and `/stuck`, which are `a2()`'s own.
+There are no optional groups, so a client never asks a board what it does.
+[Conformance](./05-conformance.md) checks a board against all of it.
 
 ### IDs and cursors
 
@@ -308,9 +297,9 @@ id: 814
 : ping
 ```
 
-- **`id` is the event's cursor.** Events the filters skip still send a bare
-  `id:`, so a client's cursor always advances. The first frame is the starting
-  cursor.
+- **`id` is the event's cursor.** When the events the filters skip take the
+  cursor past the last one sent, a bare `id:` says so, so a client's cursor
+  always advances. The first frame is the starting cursor.
 - **`Last-Event-ID` resumes exactly** where the client left off, when `after`
   isn't given.
 - **The server closes the stream** after about 280 seconds, before the

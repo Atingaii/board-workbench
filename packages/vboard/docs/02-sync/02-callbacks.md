@@ -13,28 +13,29 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { github, GitHubPayload } from 'vboard/sync-github'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    sync: {
-      github: github({
-        adapter: 'github/acme',
-        repos: {
-          'acme/www': async ({ event, board }) => {
-            const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
-            await board.sync(channel, event, {
-              labels: { area: 'www' },
-              root: ({ raw }) => {
-                const payload = GitHubPayload.parse(raw)
-                const item = payload.pull_request ?? payload.issue
-                return { text: [item?.title, item?.body, item?.html_url].filter(Boolean).join('\n\n') }
-              },
-            })
-          },
+const backend = a2({
+  sync: {
+    github: github({
+      adapter: 'github/acme',
+      repos: {
+        'acme/www': async ({ event, board }) => {
+          const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
+          await board.sync(channel, event, {
+            labels: { area: 'www' },
+            root: ({ raw }) => {
+              const payload = GitHubPayload.parse(raw)
+              const item = payload.pull_request ?? payload.issue
+              return { text: [item?.title, item?.body, item?.html_url].filter(Boolean).join('\n\n') }
+            },
+          })
         },
-      }),
-    },
-  }),
+      },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 `board.sync(channel, event)` applies the default import: the same thing a string

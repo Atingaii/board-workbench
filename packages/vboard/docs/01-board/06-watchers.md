@@ -7,9 +7,14 @@ description: A watcher is a `vb tail` the board runs for you, durably, with noth
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2({
   // store, scheduler, and sync as in Mounting
+})
+
+export const { GET, POST } = board({
+  backend,
   watch: {
     triage: {
       tail: 'firehose --from slack',
@@ -20,6 +25,7 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const { scheduler } = backend
 ```
 
 `tail` is what you'd type after `vb tail`. `run` gets each event that tail
@@ -180,9 +186,10 @@ export const { GET, POST } = board({
 })
 ```
 
-- **It registers its watchers' tails there,** as itself: when it starts if it
-  knows its URL, when anyone sends `POST /watchers` to it, and when a wake-up
-  shows the other board holds an older set. On Vercel, its URL is its
+- **It registers its watchers' tails there,** as itself: on its first use if
+  it knows its URL (a call from your code, or a request), when anyone sends
+  `POST /watchers` to it, and when a wake-up shows the other board holds an
+  older set. Nothing happens before that: creating the board does no I/O. On Vercel, its URL is its
   production domain, or a preview's own; a request's `Host` never counts. A
   registration holds at most 32 watchers, and needs `read` somewhere.
 - **A match wakes it with nothing in the wake-up:** a `POST <url>/wake` with
@@ -201,7 +208,7 @@ export const { GET, POST } = board({
   tried again after a wait (1 second, doubling to 30), and a lease that runs
   out counts as a try, noticed within a minute. After 5 tries it's recorded as
   `watch.failed`, and the thread goes on.
-- **A board without an `https` URL pulls on its own,** each pull held open
-  until something matches: a dev server, say. So does one the other board
+- **A board without an `https` URL pulls on its own** from its first use,
+  each pull held open until something matches: a dev server, say. So does one the other board
   can't reach, such as one behind Deployment Protection.
 - **Retries need the other board's scheduler,** as its own watchers do.

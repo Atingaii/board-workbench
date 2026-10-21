@@ -103,6 +103,23 @@ describe('board() and its backend', () => {
     await board({ backend: { ...mine, bind: () => {} } as Backend, url: BOARD_URL }).client('deploys').messages()
     expect(calls.at(-1)!.caller).toEqual({ self: 'deploys', origin: { via: { kind: 'client', name: 'deploys' } } })
   })
+
+  it('takes a backend made from another, with one method changed', async () => {
+    const kept = a2({ store: memory() })
+    const backend: Backend = {
+      ...kept,
+      async delete() {
+        throw new HttpError(403, 'forbidden', 'messages on this board stay')
+      },
+    }
+    const { fetch } = board({ backend, url: BOARD_URL, project: { id: PROJECT_ID, teamId: TEAM_ID }, auth: testAuth })
+    const julian = await julianOn(fetch)
+    const id = (await julian('POST', '/messages', { channel: 'dev', text: 'kept' })).body.message.id
+    expect(await julian('POST', `/messages/${id}/delete`, {})).toEqual({ status: 403, body: { error: { code: 'forbidden', message: 'messages on this board stay' } } })
+    expect((await julian('GET', `/messages/${id}`)).body.message.text).toBe('kept')
+    // What it spread was a2()'s methods, not what a2() builds once it's bound.
+    expect(kept.servers.length).toBeGreaterThan(0)
+  })
 })
 
 describe('a board on http()', () => {

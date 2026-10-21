@@ -26,17 +26,18 @@ const client = new WhatsAppClient({
   kapsoApiKey: process.env.KAPSO_API_KEY!,
 })
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    sync: {
-      kapso: kapso({
-        adapter: createKapsoAdapter({ client }),
-        markRead: (input) => client.messages.markRead(input),
-        numbers: { '16315558151': 'support' },
-      }),
-    },
-  }),
+const backend = a2({
+  sync: {
+    kapso: kapso({
+      adapter: createKapsoAdapter({ client }),
+      markRead: (input) => client.messages.markRead(input),
+      numbers: { '16315558151': 'support' },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 Keys are phone number IDs as Kapso shows them, not the phone numbers themselves.

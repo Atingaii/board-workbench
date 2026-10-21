@@ -726,6 +726,8 @@ export function a2(options: A2Options = {}) {
       return ready().store
     },
   }
+  // What tests and tools look at stays out of a spread, so `{ ...a2(), delete }` is a backend too.
+  for (const key of ['servers', 'engine', 'session', 'store']) Object.defineProperty(backend, key, { enumerable: false })
   return backend satisfies Backend
 }
 

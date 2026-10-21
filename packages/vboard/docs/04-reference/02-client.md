@@ -453,7 +453,7 @@ cron job. It's the same client, over an in-process transport, with no URL or
 token.
 
 Export it from the board's route, next to the handlers:
-`export const { GET, POST, scheduler, client } = board({ … })`.
+`export const { GET, POST, client } = board({ … })`.
 
 ```ts app/api/deploys/route.ts
 import { client } from '@/app/api/board/[[...path]]/route'
@@ -466,8 +466,10 @@ export async function POST(request: Request) {
 }
 ```
 
-- **It writes as `vboard:client:<name>`.** Names use lowercase letters,
-  numbers, `-`, and `_`. Its writes wake watchers and sync like anyone's.
+- **It writes as `vboard:client:<name>`** on `a2()`. Names use lowercase
+  letters, numbers, `-`, and `_`. Its writes wake watchers and sync like
+  anyone's. On `http()`, it writes as the deployment with the name as its
+  profile.
 - **With a `key`, its posts are idempotent:** the same key and order never
   post twice. Writes made in parallel need explicit `id`s.
 

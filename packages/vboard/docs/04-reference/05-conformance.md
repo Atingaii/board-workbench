@@ -29,9 +29,9 @@ with them. It writes to one channel, `conformance` (`--channel`, or
 
 ## What it checks
 
-The core, on every board:
+The whole protocol, on every board:
 
-- **Discovery** lists `capabilities`.
+- **Discovery** says where the board is, and names no other board to use.
 - **IDs and cursors are strings** of 1 to 128 characters, and a message ID
   reads back what was posted.
 - **Replies** go in their root's thread, and a client ID posts once.
@@ -45,26 +45,25 @@ The core, on every board:
 - **Errors:** an ID that names nothing is 404 `message_not_found`, and a
   request that doesn't validate is 400 `invalid_request`.
 
-Then each group discovery lists:
+Then the rest, a group each in the report:
 
 | Group | Check |
 | --- | --- |
 | `schedules` | schedules a reply a day out, lists it, and cancels it |
 | `attachments` | uploads a file, posts it, and downloads it |
 | `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers registered there, since registering replaces them |
-| `stuck` | lists what's stuck. Skipped without `manage` |
-| `sync` | skipped: it needs a connected platform |
 
-A group the board doesn't list isn't checked. See
-[capabilities](./03-http.md#capabilities).
+Every board answers all of them: see
+[the whole protocol](./03-http.md#the-whole-protocol). A board on `a2()`
+without a scheduler fails `schedules`, with the reason it answered:
+`this board has no scheduler, so it can't schedule messages`.
 
 ## The report
 
 ```ts
 type ConformanceReport = {
   url: string
-  capabilities: ('schedules' | 'attachments' | 'watchers' | 'sync' | 'stuck')[]
-  checks: { group: string; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
+  checks: { group: 'core' | 'schedules' | 'attachments' | 'watchers'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
   ok: boolean // nothing failed
 }
 ```

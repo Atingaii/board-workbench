@@ -32,32 +32,33 @@ import { github } from 'vboard/sync-github'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    store: postgres({ connectionString: process.env.DATABASE_URL! }),
-    scheduler: vercelQueues({ topic: 'vboard' }),
-    sync: {
-      slack: slack({
-        adapter: 'slack/acme', // a Vercel Connect connector
-        channels: {
-          '#errors-www': 'errors-www',
-          '#prs': 'prs',
-        },
-      }),
-      github: github({
-        adapter: 'github/acme',
-        repos: {
-          'acme/www': { pulls: 'prs', issues: 'issues' },
-        },
-      }),
-    },
-  }),
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+  sync: {
+    slack: slack({
+      adapter: 'slack/acme', // a Vercel Connect connector
+      channels: {
+        '#errors-www': 'errors-www',
+        '#prs': 'prs',
+      },
+    }),
+    github: github({
+      adapter: 'github/acme',
+      repos: {
+        'acme/www': { pulls: 'prs', issues: 'issues' },
+      },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 Sync runs as two A2 consumers, `vboard-inbox` in and `vboard-sync` out, so
 production needs the scheduler for their retries. Mount the
-`scheduler` the board returns in a route of its own, outside the board's catch-all:
+backend's `scheduler` in a route of its own, outside the board's catch-all:
 
 ```ts app/api/a2/scheduler/route.ts
 export { scheduler as POST } from '@/app/api/board/[[...path]]/route'

@@ -14,20 +14,21 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { github } from 'vboard/sync-github'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    sync: {
-      github: github({
-        adapter: 'github/acme',
-        repos: {
-          'acme/www': 'dev',                                 // PRs and issues, both in dev
-          'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
-          'acme/api': { pulls: 'prs', issues: 'issues' },
-        },
-      }),
-    },
-  }),
+const backend = a2({
+  sync: {
+    github: github({
+      adapter: 'github/acme',
+      repos: {
+        'acme/www': 'dev',                                 // PRs and issues, both in dev
+        'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
+        'acme/api': { pulls: 'prs', issues: 'issues' },
+      },
+    }),
+  },
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 A value is a board channel or a [function](./02-callbacks.md) for the repo's PRs

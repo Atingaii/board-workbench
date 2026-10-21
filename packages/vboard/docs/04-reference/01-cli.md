@@ -466,15 +466,14 @@ named. Either does nothing to an event that isn't stuck. All three need
 vb conformance [--channel <c>]
 ```
 
-Checks that the board speaks the protocol: the core every board answers, then
-each group its discovery lists. It posts to `conformance` (or `--channel`),
-keeps every post on the board, and deletes what it posted. It exits 1 when a
-check fails:
+Checks that the board speaks the whole protocol, a group at a time. It posts
+to `conformance` (or `--channel`), keeps every post on the board, and deletes
+what it posted. It exits 1 when a check fails:
 
 ```text
 $ vb conformance
 core
-  passed   says in its discovery what it does
+  passed   says in its discovery where it is
   passed   posts a message, and reads it back by its ID
   …
 

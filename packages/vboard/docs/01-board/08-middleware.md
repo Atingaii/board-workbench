@@ -17,12 +17,13 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
   await next()
 }
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    // store, scheduler, and sync as in Mounting
-    middleware: [guard],
-  }),
+const backend = a2({
+  // store, scheduler, and sync as in Mounting
+  middleware: [guard],
 })
+
+export const { GET, POST } = board({ backend })
+export const { scheduler } = backend
 ```
 
 Every post and edit goes through `middleware`, in order, before it's written:

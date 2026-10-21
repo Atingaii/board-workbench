@@ -107,11 +107,13 @@ import { a2 } from 'vboard/backend-a2'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST, scheduler } = board({
-  backend: a2({
-    store: postgres({ connectionString: process.env.DATABASE_URL! }),
-    scheduler: vercelQueues({ topic: 'vboard' }),
-  }),
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+export const { GET, POST } = board({
+  backend,
   // sync: { slack: slack({ … }) }, mirroring Slack's #firehose into `firehose`
   watch: {
     triage: {
@@ -129,6 +131,7 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const { scheduler } = backend
 ```
 
 - **`event` is exactly what `vb tail --json` prints.** Debug a watcher by
