@@ -18,7 +18,7 @@ import {
   type InboxEvent,
   type Link,
 } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type IdentityCode, type Message } from '../contract/reducers.ts'
+import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type ExternalCopy, type IdentityCode } from '../contract/reducers.ts'
 import { RemoteWatcherId, type Author } from '../contract/schemas.ts'
 import { RedriveBody, type InboxEntry, type LinkedAccount, type Me, type StuckEvent } from '../api/routes.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
@@ -814,11 +814,16 @@ function build(options: A2Options, binding: BoardBinding) {
       const { principal } = needSync(caller, 'look up a sync')
       await reads.ensure()
       const ids = [...new Set(query.message.map(indexOf).filter((id) => id !== null && id > 0))] as number[]
-      const [copies, messages] = await Promise.all([store.tables.copiesOf(ids), store.tables.messagesAt(ids, await store.tables.position())])
-      const out: Record<string, Record<string, import('../contract/reducers.ts').ExternalCopy>> = {}
+      // Only the messages the caller may sync, which for one that syncs everywhere is all of them.
+      const everywhere = principal.access.everywhere('sync')
+      const [copies, messages] = await Promise.all([
+        store.tables.copiesOf(ids),
+        everywhere ? null : store.tables.messagesAt(ids, await store.tables.position()),
+      ])
+      const out: Record<string, Record<string, ExternalCopy>> = {}
       for (const id of ids) {
-        const found = messages.get(id)
-        if (found && principal.access.can('sync', found.channel)) out[ref(id)] = { ...(copies.get(id) ?? {}) }
+        const found = messages?.get(id)
+        if (everywhere || (found && principal.access.can('sync', found.channel))) out[ref(id)] = { ...(copies.get(id) ?? {}) }
       }
       return { copies: out }
     },

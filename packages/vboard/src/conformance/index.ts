@@ -8,7 +8,7 @@ import { BoardError, type BoardClient } from '../client/client.ts'
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'schedules' | 'attachments' | 'watchers'
+export type CheckGroup = 'core' | 'schedules' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -288,6 +288,48 @@ const CHECKS: Check[] = [
         await rejects(ctx.board.ack(match.id, { lease: match.lease }), 404, 'no_match', 'acking a match twice')
       } finally {
         await ctx.board.register({ url: null, watch: {} })
+      }
+    },
+  },
+  {
+    group: 'sync',
+    name: "keeps sync's records: an import as a platform author, its lookups by platform ID, and a receipt",
+    run: async (ctx) => {
+      // A platform of its own, so nothing reaches a real one: `conformance:<run>`.
+      const key = 'conformance'
+      const thread = `${key}:${ctx.labels.conformance}:1`
+      const author = { id: `${key}:user:${ctx.labels.conformance}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
+      const origin = { thread, message: '1' }
+      let imported: { message: string | null }
+      try {
+        imported = await ctx.board.syncImport({
+          op: 'post', author, from: key, channel: ctx.channel, text: 'conformance: from a platform', labels: ctx.labels, noSync: true,
+          origin: { channel: `${key}:${ctx.labels.conformance}`, thread, subthread: null, message: '1', context: null },
+          id: `conformance-sync-${ctx.labels.conformance}`,
+        })
+      } catch (error) {
+        if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
+        throw error
+      }
+      const id = imported.message
+      isRef(id, "an import's message")
+      try {
+        const message = (await ctx.board.thread(id!)).message
+        same(message.by.actor, author.id, "the import's author")
+        same(message.from, key, "the import's from")
+        same(message.origin?.thread, thread, "the import's origin")
+        const found = await ctx.board.syncFind({ thread, message: '1' })
+        same(found.message, id, 'the message found by its platform IDs')
+        check(found.thread !== null, 'the thread found by its platform thread')
+        same((await ctx.board.syncThread(found.thread!)).root, id, "the synced thread's root")
+        const again = await ctx.board.syncImport({ op: 'post', author, from: key, channel: ctx.channel, text: 'conformance: from a platform', noSync: true, id: `conformance-sync-${ctx.labels.conformance}` })
+        same(again.message, id, 'the same import, sent again')
+        const external = { thread: `${key}:${ctx.labels.conformance}:2`, message: '2' }
+        await ctx.board.syncReceipt({ kind: 'message', message: id!, target: `${key}:${ctx.labels.conformance}:2`, external })
+        same(JSON.stringify((await ctx.board.syncCopies([id!]))[id!]?.[external.thread]), JSON.stringify(external), 'the copy its receipt recorded')
+      } finally {
+        // Its author is the platform user: only an import can take it down.
+        await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
       }
     },
   },

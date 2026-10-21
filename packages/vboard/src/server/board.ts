@@ -384,10 +384,15 @@ export function board(options: BoardOptions): Board {
    * board learns who they are; the rest stay plain text.
    */
   async function withEmails(text: string): Promise<string> {
-    const { text: resolved, found } = await withEmailMentions(text, engine?.findByEmail)
-    for (const actor of found)
-      await backend.syncImport(engine!.caller, { op: 'seen', author: { ...actor, isBot: false } }, new AbortController().signal)
-    return resolved
+    // Each one sync finds, the board must know before a post can mention them; one it can't learn stays an email.
+    const find = engine
+      ? async (email: string) => {
+          const actor = await engine.findByEmail(email)
+          if (actor) await backend.syncImport(engine.caller, { op: 'seen', author: { ...actor, isBot: false } }, new AbortController().signal)
+          return actor
+        }
+      : undefined
+    return (await withEmailMentions(text, find)).text
   }
 
   /**
@@ -396,15 +401,20 @@ export function board(options: BoardOptions): Board {
    */
   async function resolveTarget(target: string | SyncTarget): Promise<SyncTarget> {
     if (typeof target !== 'string') return target
-    const key = target.slice(0, Math.max(0, target.indexOf(':')))
-    if (engine && (entries[key] || !key)) return engine.normalizeTarget(target)
+    const at = target.indexOf(':')
+    if (at <= 0) throw badRequest(`sync targets look like <key>:<channel or thread>, got: ${target}`)
+    const key = target.slice(0, at)
+    if (engine && entries[key]) return engine.normalizeTarget(target)
     if (engine) throw badRequest(`no sync entry named ${key}`)
     return syncTarget(target)
   }
 
-  /** A message as `caller` may read it, or as the middleware may: what a write's middleware is told about. */
-  async function lookup(caller: Caller, id: string, signal: AbortSignal): Promise<MessageView | null> {
-    for (const reader of [middlewareCaller, caller])
+  /**
+   * A message as `caller` may read it, or with `blind`, as the middleware may: a caller that
+   * posts where it can't read still edits its own there. What a write's middleware is told about.
+   */
+  async function lookup(caller: Caller, id: string, signal: AbortSignal, blind = false): Promise<MessageView | null> {
+    for (const reader of blind ? [caller, middlewareCaller] : [caller])
       try {
         const { message, replies } = await backend.message(reader, { id }, signal)
         const found = [message, ...replies].find((candidate) => candidate.id === id)
@@ -455,7 +465,7 @@ export function board(options: BoardOptions): Board {
     const send = async (text: string) => backend.edit(caller, { id: input.id, text: await withEmails(text) }, signal)
     const source = sourceOf(caller)
     if (middleware.length === 0 || source === null) return send(input.text)
-    const [message, who] = await Promise.all([lookup(caller, input.id, signal), whoIs(caller)])
+    const [message, who] = await Promise.all([lookup(caller, input.id, signal, true), whoIs(caller)])
     // Not theirs, or gone: the backend says so.
     if (!message || message.deleted || message.by.principal !== who.principal) return send(input.text)
     return screen(
