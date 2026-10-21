@@ -5,6 +5,8 @@ import { http } from '../src/backend-http/index.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 import { LEASE_MS } from '../src/server/registered.ts'
+import { slack } from '../src/sync/slack.ts'
+import { fakePlatform } from './sync-fixtures.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
@@ -291,6 +293,29 @@ describe('pulling matches', () => {
     expect(await pull({ 'x-board-scope': 'other=read' })).toEqual([])
     expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.skipped')
     expect(await pull()).toEqual([])
+  })
+
+  it('shows what a match links to only as its puller may read it now', async () => {
+    // A Slack message in feedback links to one in security, which v0 could read when it matched.
+    const s = fakePlatform('slack')
+    const remote = testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })], sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'feedback', C2: 'security' } }) } })
+    const webhook = (body: unknown) =>
+      remote.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    const v0 = caller(remote.fetch, await v0Token())
+    expect((await v0('POST', '/watchers', { watch: { fix: { tail: 'feedback' } } })).status).toBe(200)
+    const secret = '1791322095.443859'
+    await webhook({ type: 'message', threadId: `slack:C2:${secret}`, id: secret, text: 'the key is hunter2', user: 'U_ADA', name: 'Ada' })
+    const ts = '1791322999.000001'
+    const permalink = `https://acme.slack.com/archives/C2/p${secret.replace('.', '')}`
+    await webhook({ type: 'message', threadId: `slack:C1:${ts}`, id: ts, text: `see ${permalink}`, user: 'U_JB', raw: { type: 'message', ts, text: `see <${permalink}>` } })
+    const queue = remote.servers.at(-1)!.session(`watch:@${V0}`)
+    await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
+    // Narrowed to feedback since, it still gets the match, but nothing of the message in security.
+    const narrowed = caller(remote.fetch, await v0Token(), { 'x-board-scope': 'feedback=read' })
+    const [match] = (await narrowed('GET', '/watchers/matches')).body.matches
+    expect(match.event.message.text).toContain(permalink)
+    expect(match.event.message.links).toEqual([{ url: permalink, message: null, snapshot: null, unavailable: 'not_readable' }])
+    expect(JSON.stringify(match)).not.toContain('hunter2')
   })
 
   it('needs a registration, and acks only its own', async () => {

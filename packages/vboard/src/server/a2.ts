@@ -44,7 +44,7 @@ import { actorSeen, resolveActor } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type CallerRequest, type ProtocolMethods } from './backend.ts'
 import { attachmentBody, attachmentNotFound, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, RejectedError, toErrorResponse, unauthorized } from './errors.ts'
-import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
+import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { defaultStore } from '../store/default.ts'
@@ -859,7 +859,12 @@ function build(options: A2Options, binding: BoardBinding) {
       const deadline = Date.now() + (query.wait ?? 0) * 1000
       for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
         const matches = await pull(queue, { ...pulling, now: Date.now() })
-        if (matches.length > 0 || Date.now() >= deadline || signal.aborted) return { matches }
+        if (matches.length > 0) {
+          // Each was made for what its registrant could read when it matched: its links show what it may read now.
+          const reader = await reads.readerOf(principal.access, matches.flatMap((match) => viewLinkedIds(match.event)))
+          return { matches: matches.map((match) => ({ ...match, event: viewedBy(match.event, reader) })) }
+        }
+        if (Date.now() >= deadline || signal.aborted) return { matches }
         await new Promise((resolve) => setTimeout(resolve, Math.min(pause, Math.max(0, deadline - Date.now()))))
       }
     },

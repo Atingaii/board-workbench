@@ -68,6 +68,32 @@ export function readableLinks(links: Link[], reader: Reader): LinkView[] {
   })
 }
 
+/** The links in an event view: its payload's, its message's, and the message before a label change. */
+const viewLinks = (view: BoardEventView): LinkView[][] => {
+  const { payload, message, before } = view as { payload?: { links?: LinkView[] }; message?: MessageView; before?: MessageView }
+  return [payload?.links, message?.links, before?.links].filter((links) => links !== undefined)
+}
+
+/** The board messages an event view's links point to, for a reader of them. */
+export const viewLinkedIds = (view: BoardEventView): number[] =>
+  viewLinks(view).flatMap((links) => links.flatMap((link) => (link.message === null ? [] : [indexOf(link.message) ?? 0])))
+
+/**
+ * An event view made for one reader, as `reader` sees it: a link to a message it can't read shows
+ * nothing of it. A watcher's match is made when its event lands and pulled later, by whatever its
+ * registrant may read then.
+ */
+export function viewedBy(view: BoardEventView, reader: Reader): BoardEventView {
+  if (reader.access.readsAll) return view
+  const shown = structuredClone(view) as BoardEventView & { payload?: { links?: LinkView[] }; message?: MessageView; before?: MessageView }
+  // A ref that names nothing here (0) has no channel, so it hides too.
+  const reread = (links: LinkView[]) => readableLinks(links.map((link) => ({ ...link, message: link.message === null ? null : (indexOf(link.message) ?? 0) })), reader)
+  if (shown.payload?.links) shown.payload.links = reread(shown.payload.links)
+  if (shown.message) shown.message.links = reread(shown.message.links)
+  if (shown.before) shown.before.links = reread(shown.before.links)
+  return shown
+}
+
 /** A message's or a cursor's ID as clients see it. On this board it's the log index, in decimal. */
 export const ref = (index: number): string => String(index)
 
