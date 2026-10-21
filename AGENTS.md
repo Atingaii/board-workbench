@@ -359,8 +359,9 @@ wake-ups and webhooks, so a repo links the team's board itself. Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
 handle. Nothing on the way to a handle over `http()` imports Node: credentials
 go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
-builds of `vboard` and `vboard/backend-http`, and sync loads from there when
-it's used (`test/browser.test.ts` checks).
+builds of `vboard` and `vboard/backend-http`. Watchers and sync run in either
+build: the engine loads when it's first used, and it and `SyncProvider` import
+nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
 
 ## invariants
 

@@ -24,6 +24,7 @@ export const GET = project.fetch, POST = project.fetch
 - A middleware's `respond` goes back with a write it drops: for sync, a reply in the platform thread, as before, and nothing for a write it lets through.
 - `Write`'s IDs are strings, as clients see them: an edit's `id`, and `re` on a post or an edit.
 - A provider's `render` gets the message as clients see it, with string IDs.
+- `ProviderFile.data` is a `Uint8Array`, which a Node `Buffer` is: a provider of your own gets a file's bytes as one, not as a `Buffer`.
 - `GET /inbox/:key` needs `sync` in every channel for the board's own inbox, not `manage`.
 - A sync callback's own writes through `board` (a reply, a label, a reaction, an edit or delete of the user's own message) are imports as its platform user, and its reads are sync's: on every backend, a board on `http()` included. A `schedule` or a `me()` from a callback is sync's now, not the platform user's.
 - A backend has no `sync` field: discovery lists `board()`'s sync entries. `BoardBinding` has `subscriptions` (each watcher's tail, and sync's at `@sync`) instead of `watch`, `run` takes an `attempt`, and `receive` and `pull` hand sync's inbound to it.

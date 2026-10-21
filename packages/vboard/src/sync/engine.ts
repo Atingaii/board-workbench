@@ -1,6 +1,6 @@
-import { idempotentId } from 'experimental-a2'
 import { canonicalEmoji } from '../contract/emoji.ts'
 import type { BoardClient } from '../client/client.ts'
+import { derivedId } from '../client/ids.ts'
 import { externalMessageKey, isThreadTarget, type Actor, type ExternalCopy } from '../contract/reducers.ts'
 import type { ExternalAuthor, ExternalEvent, ExternalFile, ExternalLink, Origin } from '../contract/contract.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
@@ -598,7 +598,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const threadKey = (await find({ thread: event.thread })).thread ?? undefined
     const synced = threadKey ? await syncOf(threadKey) : null
     const rootId = synced?.root
-    const writeId = (n: number) => idempotentId('vboard-inbound', meta.id, String(n))
+    // A2's `idempotentId`, byte for byte: logs already hold these IDs, and a retry must find its own.
+    const writeId = (n: number) => derivedId('vboard-inbound', meta.id, String(n))
     // The backend's middleware sees each post and edit, and what it responds to one it drops is said in the platform thread.
     const from = { key, channel: source.via.channel, thread: source.via.thread }
     const screened = async (answer: Protocol['syncImport']['output']) => {
@@ -927,7 +928,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     return Promise.all(message.attachments.map(async (a) => {
       const { data } = await call('attachment', { id: a.id })
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(await new Response(data).arrayBuffer())
-      return { data: Buffer.from(bytes), filename: a.name, mimeType: a.type }
+      return { data: bytes, filename: a.name, mimeType: a.type }
     }))
   }
 

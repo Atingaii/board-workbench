@@ -108,7 +108,7 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token, and serves (see [The handle](#the-handle)) | isomorphic |
+| `vboard` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
 | `vboard/access` | Who may use a board: `vercelProject()`, `githubActions()`, `oidc()`, and the permission types | server |
 | `vboard/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
 | `vboard/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
@@ -1306,11 +1306,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // 
 - **Nothing on the way to a handle over HTTP needs Node.** `board()`'s
   pipeline (routing, validation, serving) runs in a browser, IDs hash with
   WebCrypto, and finding the board and its credentials lives in the `node`
-  build. It verifies nothing, so no token verification is in it either. Sync
-  and its adapters load from the `node` build when they're first used, and the
-  default build can't run them, or watchers. A test bundles `board` and `http` for
-  a browser and finds no Node import, and the inspector's page is built that
-  way.
+  build. It verifies nothing, so no token verification is in it either.
+  Watchers and sync run in either build: the sync engine loads when a board
+  with sync entries first needs it, and it, `SyncProvider`, and the tail
+  parser import nothing from Node (the Chat SDK adapters do: Slack, GitHub,
+  and Kapso stay on servers). Its IDs are A2's `idempotentId`, byte for byte.
+  A board with no URL of its own can't be woken, so it pulls. A test bundles
+  `board` and `http` for a browser, with and without a `SyncProvider` of its
+  own, and finds no Node import, and the inspector's page is built that way.
 - **Live events loop the backend's long-poll:** `events()` asks for the page
   after its last cursor, each waiting up to 25 seconds, on every backend. SSE
   is for requests to a board.

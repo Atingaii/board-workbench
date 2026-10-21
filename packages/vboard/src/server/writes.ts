@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { idempotentId } from 'experimental-a2'
 import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
 import { actorsReducer, foldMessages, isThreadTarget, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
@@ -199,7 +198,7 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   let re: number | null = null
   let replyTo: number | null = null
   let thread: string
-  const id = input.id ?? (input.re === undefined ? randomUUID() : undefined)
+  const id = input.id ?? (input.re === undefined ? crypto.randomUUID() : undefined)
   if (input.re !== undefined) {
     // The message authorizePost looked up: a reply lands in its thread, never where the request said.
     const target = input.proofs.re

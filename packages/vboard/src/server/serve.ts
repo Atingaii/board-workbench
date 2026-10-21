@@ -198,7 +198,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   const { options, backend, runtime } = context
   const entries = options.sync ?? {}
   // The sync engine, and the adapters it drives, only for a board that syncs.
-  const engine = Object.keys(entries).length > 0 && runtime.sync ? (await runtime.sync()).createSyncEngine(entries) : null
+  const engine = Object.keys(entries).length > 0 ? (await runtime.sync()).createSyncEngine(entries) : null
   const streamMaxMs = options.streamMaxMs ?? 280_000
   const route = createRouter(backend.routes, options.basePath)
   const { state, ownUrl, clientAs, handleOf } = context

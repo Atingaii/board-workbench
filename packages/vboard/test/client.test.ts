@@ -150,10 +150,9 @@ describe('board() with no backend', () => {
     // It serves what its backend answers a request: http() answers only wake-ups and webhooks.
     const served = await page.fetch(new Request(`${BOARD_URL}/me`, { headers: { authorization: `Bearer ${await personToken()}` } }))
     expect([served.status, (await served.json()).error.code]).toEqual([404, 'not_found'])
-    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev', run: () => {} } } })).toThrow(
-      'watch fix: watchers run on a server: this build of vboard has none',
-    )
-    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), sync: { slack: {} as never } })).toThrow("board: this build of vboard can't sync")
+    // Watchers and sync run here as they do in Node: a tail is checked the same way.
+    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev --after 3', run: () => {} } } })).toThrow("watch fix: --after isn't a filter")
+    expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev', run: () => {} } }, sync: { slack: {} as never } })).not.toThrow()
   })
 })
 

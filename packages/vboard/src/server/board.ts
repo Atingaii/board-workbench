@@ -53,12 +53,12 @@ export type Board = BoardClient & {
   as(profile: ProfileOption): Board
 }
 
-/** What a build of vboard gives board(): Node's finds boards in the environment, and syncs. */
+/** What a build of vboard gives board(): Node's finds boards in the environment. */
 export type Runtime = {
   /** The backend for a board() given none: `http()`, to the board the environment points at. */
   http(): Backend
-  /** Loads the sync engine, for a board that syncs. Null where sync can't run. */
-  sync: (() => Promise<typeof import('../sync/engine.ts')>) | null
+  /** Loads the sync engine, only for a board that syncs. */
+  sync: () => Promise<typeof import('../sync/engine.ts')>
 }
 
 /** What the board's pipeline shares with its handle. */
@@ -75,8 +75,6 @@ export type BoardContext = {
   handleOf(caller: SelfCaller, trigger: string | null): Board
 }
 
-const NO_SYNC = "board: this build of vboard can't sync: import it where the `node` condition applies"
-
 /** How long a handle's live events wait for the next, in seconds, before asking again. */
 const EVENTS_WAIT_S = 25
 
@@ -90,7 +88,6 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   const backend = options.backend ?? runtime.http()
   const watch = options.watch ?? {}
   const entries = options.sync ?? {}
-  if (Object.keys(entries).length > 0 && !runtime.sync) throw new Error(NO_SYNC)
   const state: BoardContext['state'] = { learned: null }
   /** Under the configured mount, so the router accepts the paths an in-process client builds. */
   const inProcess = `http://in-process.board${(options.basePath ?? '').replace(/\/+$/, '')}`

@@ -11,7 +11,7 @@ const team = board()
 await team.as('deploys').post('deploys', { text: 'a1b2c3 is live', id: 'deploy-a1b2c3' })
 ```
 
-`vboard` and `vboard/backend-http` have a `node` build and a default one with nothing from Node, so a browser runs `board({ backend: http(url) })`, its `fetch` sending the page's own session for the board's `a2({ authenticate })`, as the inspector's page now does with its per-run token. Sync loads from the `node` build when it's first used. Live events loop the backend's long-poll on every handle.
+`vboard` and `vboard/backend-http` have a `node` build and a default one with nothing from Node, so a browser runs `board({ backend: http(url) })`, its `fetch` sending the page's own session for the board's `a2({ authenticate })`, as the inspector's page now does with its per-run token. Sync loads when it's first used. Live events loop the backend's long-poll on every handle.
 
 **Breaking:**
 

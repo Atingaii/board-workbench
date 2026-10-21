@@ -6,6 +6,7 @@ import type { Attachment } from '../contract/schemas.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { HttpError, json } from './errors.ts'
 import { METHODS } from './routing.ts'
+import { compileWatcher } from './watch-spec.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 
 export type HttpOptions = {
@@ -29,8 +30,6 @@ export type Environment = {
   fetch(url: string): typeof fetch
   /** The profile the environment picks (`VBOARD_AS`, or the coding agent it runs in), and that agent's session. */
   profile(): { profile: ProfileOption; session: string | null }
-  /** Checks a watcher's tail, throwing what's wrong with it. */
-  checkWatcher(id: string, spec: { tail: string; when?: 'matches' | 'enters' | undefined }): void
 }
 
 /** A watcher's or client's name is the profile its writes are by. */
@@ -350,7 +349,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     if (started) return started
     if (Object.keys(specs).length === 0 && sync.length === 0) return Promise.resolve()
     const here = wakeable(bound().url())
-    if (!here && process.env.VERCEL === '1') return Promise.resolve()
+    if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
     started = register(here).then(
       () => {},
       (error: unknown) => console.error(`[vboard] couldn't register with ${remote}:`, describe(error)),
@@ -399,8 +398,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
           continue
         }
         if (!PROFILE.test(id)) throw new Error(`watch ${id}: ${PROFILE_RULE}`)
-        if (!environment) throw new Error(`watch ${id}: watchers run on a server: this build of vboard has none`)
-        environment.checkWatcher(id, spec)
+        compileWatcher(id, spec)
         specs[id] = { tail: spec.tail, when: spec.when }
       }
       hash = null

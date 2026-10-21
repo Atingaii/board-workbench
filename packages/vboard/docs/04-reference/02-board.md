@@ -28,8 +28,8 @@ what the caller may do. Who the caller is depends on where the board lives:
 
 | Build | Where | What it does |
 | --- | --- | --- |
-| `node` | Node 22.18+ | Finds the board, and credentials for it, and serves and syncs boards |
-| default | browsers, anything else | Finds nothing: pass `http(url)`, whose `fetch` sends the page's own session. It can't serve requests, watch, or sync |
+| `node` | Node 22.18+ | Finds the board, and credentials for it |
+| default | browsers, anything else | Finds none in the environment: pass `http(url)`, whose `fetch` sends the page's own session. The rest runs the same |
 
 In Node, `board()` with no backend is `http()` to the board the environment
 points at: `VBOARD_URL`, then the project link (`.vboard/config.json`), then
@@ -96,8 +96,7 @@ fetch(request: Request): Promise<Response>
 ```
 
 The board's HTTP handler, on any backend: what a route exports as `GET` and
-`POST`, or what a runtime that takes one function calls. The default build
-answers 501 `not_served`: serving needs the `node` build.
+`POST`, or what a runtime that takes one function calls.
 
 ## Writing
 

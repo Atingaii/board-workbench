@@ -264,9 +264,9 @@ Its calls go through `board()` like any handle's: `board()` calls `http()`'s
 methods, and they call the other board, whose middleware sees its posts.
 
 `vboard` and `vboard/backend-http` have two builds each, picked by export
-condition: the `node` one finds boards and credentials as above, and runs
-watchers and sync, and the default one, for browsers, finds nothing and runs
-neither. There, `fetch` sends the page's own session to a board on the same
+condition: the `node` one finds boards and credentials as above, and the
+default one, for browsers, finds none in the environment; the rest runs the
+same. There, `fetch` sends the page's own session to a board on the same
 site:
 
 ```tsx app/board.tsx
