@@ -20,6 +20,7 @@ export const GET = project.fetch, POST = project.fetch
 - Codes go only to people, each for themselves, from the board that keeps the log: `POST /sync/codes` takes no `person`, and `POST /sync/accounts` links an account only by a code (`{ sync, account, code }`). A sign-in carries a code: on a board whose sync runs elsewhere, the person signs in at that sync's `/identity/sign-in`, and it redeems the code at `/identity/signed-in`. `UserTokens.authorize` takes a `callback`.
 - A registration's `sync` is its sync entries, `[{ key, platform, signIn }]`, not a flag. The board lists them in discovery and links accounts on them, so `vb identity link` on the team's board links a project's entries too.
 - `sync` is `board()`'s option, not `a2()`'s, and `middleware` is `a2()`'s: `board({ backend: a2({ middleware }), sync })`. TypeScript flags each where it doesn't belong.
+- A post's `id` can't start with `sync:` (400): an import from a sync elsewhere lands as `sync:<principal>:…`, which anyone could work out and take first.
 - `POST /sync/imports` takes `source: { key, channel, thread }` on a post or an edit, where on the platform it came from, for the middleware, and answers `dropped`, what the middleware responded, when it keeps one off the board.
 - A middleware's `respond` goes back with a write it drops: for sync, a reply in the platform thread, as before, and nothing for a write it lets through.
 - `Write`'s IDs are strings, as clients see them: an edit's `id`, and `re` on a post or an edit.

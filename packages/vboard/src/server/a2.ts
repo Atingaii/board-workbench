@@ -72,6 +72,7 @@ import {
   type WriteContext,
   type WriteOrigin,
 } from './writes.ts'
+import { isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR, runMiddleware, type Middleware, type Write, type WriteSource } from './middleware.ts'
 import { localScheduler } from '../scheduler/local.ts'
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
@@ -536,8 +537,11 @@ function build(options: A2Options, binding: BoardBinding) {
       throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
     // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
     // one else can post with one first and make its retry fail.
-    if (fromRequest(caller) && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
+    if (fromRequest(caller) && body.id?.startsWith('key:') && !isKeyIdOf(body.id, principal.id))
       throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
+    // Nor with one a sync's import lands with (`importId`), which anyone can work out.
+    if (fromRequest(caller) && body.id?.startsWith('sync:'))
+      throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
     const attachments = await attachmentsFor(principal, body.attachments)
     const { schedule, config } = caller.origin
     const { unknownMentions, ...message } = await writePost(writes, {

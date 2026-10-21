@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { connect } from '../src/client/node.ts'
 import { memory } from '../src/store/memory.ts'
 import { board, HttpError, type Backend, type Caller } from '../src/server/index.ts'
-import { vercelProject, verifyTokens } from '../src/access/index.ts'
+import { oidc, vercelProject, verifyTokens } from '../src/access/index.ts'
 import { a2 } from '../src/backend-a2/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { bearer, BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
@@ -197,11 +197,26 @@ describe('a board on http()', () => {
         },
       },
     })
-    expect((await marketing('POST', '/messages', { channel: 'deploys', text: 'fine', id: 'key:vercel:project:prj_marketing:production:abc' })).status).toBe(201)
+    const own = 'key:vercel:project:prj_marketing:production:0123456789abcdef0123456789abcdef'
+    expect((await marketing('POST', '/messages', { channel: 'deploys', text: 'fine', id: own })).status).toBe(201)
     // v0's own post still lands, its ID under its own principal.
     expect((await project.as('deploys').post('deploys', { text: 'a1b2c3 is live', id: 'd1' })).id).toEqual(expect.any(String))
     // Even one it names as someone else's key.
-    expect((await project.post('deploys', { text: 'still mine', id: `key:vercel:project:prj_marketing:production:abc` })).text).toBe('still mine')
+    expect((await project.post('deploys', { text: 'still mine', id: own })).text).toBe('still mine')
+  })
+
+  it("keeps a principal's keyed IDs from one whose ID is a colon-prefix of it", async () => {
+    // OIDC subjects carry colons, so one principal's ID can be the start of another's.
+    const remote = testBoard({ access: [oidc({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' })] })
+    const acme = caller(remote.fetch, await oidcToken({ sub: 'acme' }))
+    expect((await acme('GET', '/me')).body.principal).toBe('oidc:gitlab.test:acme')
+    const theirs = 'key:oidc:gitlab.test:acme:ci:0123456789abcdef0123456789abcdef'
+    expect(await acme('POST', '/messages', { channel: 'deploys', text: 'mine now', id: theirs })).toMatchObject({
+      status: 400,
+      body: { error: { message: "id: key:… IDs derive from a client's key, and this token's are key:oidc:gitlab.test:acme:…" } },
+    })
+    const ci = caller(remote.fetch, await oidcToken({ sub: 'acme:ci' }))
+    expect((await ci('POST', '/messages', { channel: 'deploys', text: 'mine', id: theirs })).status).toBe(201)
   })
 
   it('checks its watchers the way a2() does, and their IDs as profiles', () => {

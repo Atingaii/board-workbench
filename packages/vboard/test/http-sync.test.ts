@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { board, type Middleware } from '../src/server/index.ts'
 import { vercelProject } from '../src/access/index.ts'
@@ -287,6 +288,19 @@ describe('the sync permission', () => {
     expect(await read(julian, 'firehose')).toEqual([])
     expect((await as('slack:user:U_ADA')).status).toBe(200)
     expect((await read(julian, 'firehose')).map((m) => m.by.actor)).toEqual(['slack:user:U_ADA'])
+  })
+
+  it("keeps the IDs imports land with from anyone who posts, so no one can take one first", async () => {
+    const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })] })
+    const support = caller(team.fetch, await supportToken())
+    const julian = await julianOn(team.fetch)
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })).status).toBe(200)
+    // An import's ID is its sync's, under its principal: anyone can work it out.
+    const id = `sync:${SUPPORT}:${createHash('sha256').update('vboard-sync\u001fslack-100').digest('hex').slice(0, 32)}`
+    const taken = await julian('POST', '/messages', { channel: 'firehose', text: 'first', id })
+    expect([taken.status, taken.body.error?.message]).toEqual([400, "id: sync:… IDs are what sync imports, under the principal that imports them"])
+    expect((await support('POST', '/sync/imports', { op: 'post', author, from: 'slack', channel: 'firehose', text: 'from Slack', id: 'slack-100' })).status).toBe(200)
+    expect((await read(julian, 'firehose')).map((m) => [m.text, m.by.actor])).toEqual([['from Slack', 'slack:user:U_ADA']])
   })
 
   it("issues codes only to people, for themselves, and links an account only by one", async () => {

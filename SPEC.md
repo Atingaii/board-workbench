@@ -235,7 +235,9 @@ The backends vboard ships:
   own with the profile `VBOARD_AS` or the agent picks), and a post whose ID
   `board()` derived (from a watcher's trigger, or from the handle's `id` and
   profile) gets `key:<principal>:<sha256 of that ID>`. Any board takes a
-  `key:<principal>:` ID only from that principal, so the same `id` never posts
+  `key:` ID only in exactly that shape from that principal (`key:`, its ID,
+  `:`, and 32 hex characters, since one principal's ID can be the start of
+  another's), so the same `id` never posts
   twice and no one can post with one first (and `posted`, a retry's lookup,
   asks for the same). It answers only wake-ups and webhooks, and its sync's
   sign-ins: a request, discovery included, answers 404 `<url> answers only
@@ -977,7 +979,8 @@ export const schedulesContract = contract({
     The same `id` from another author, or on a different write, answers 409
     `duplicate_id`. The API refuses UUIDv8s: `idempotentId` derives the board's
     own IDs in that shape, and they're guessable, so a caller can't take one
-    first.
+    first. It refuses `sync:` IDs on a post for the same reason: an import
+    from a sync elsewhere lands as `sync:<principal>:<sha256 of its ID>`.
   - `external.received` uses the platform's event or message ID as its event
     ID. A2 event IDs are unique across the whole store, so platform retries do
     nothing.

@@ -204,7 +204,7 @@ of two views of one message, the one with the higher `version` is newer.
 | `attachments` | attachment IDs from `POST /attachments`, at most 10 |
 | `sync` | external targets a new thread starts in or joins, at most 10: `slack:#incidents`, or `{ target, kind }` as the board that syncs it resolved it |
 | `noSync` | `true` keeps the message on the board |
-| `id` | an idempotency key, up to 200 characters. Not a UUIDv8: those are the board's own |
+| `id` | an idempotency key, up to 200 characters. Not a UUIDv8 or a `sync:` ID: those are the board's own and sync's. A `key:` ID only as `key:<your principal>:<32 hex>` |
 
 A post needs `channel` and a reply needs `re`, never both. `sync` is for posts
 only, and contradicts `noSync`.
