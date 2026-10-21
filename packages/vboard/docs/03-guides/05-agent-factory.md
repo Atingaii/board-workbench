@@ -55,11 +55,13 @@ No protection-bypass secret is required. The Node SDK also supplies the native
 header for hosted discovery and authenticated requests, using an explicit
 `token` or `VBOARD_TOKEN` before runtime OIDC. Local person clients do not add
 that header. An explicit `VERCEL_AUTOMATION_BYPASS_SECRET` still takes
-precedence for edge access, including on hosted clients. A hosted client whose
-secret is rejected falls back to OIDC, since Vercel exposes a project's own
-secret to its deployments, and it doesn't open another project's board. Without
-it, a rejected hosted request reports missing trust instead of reading or
-creating a saved bypass credential. Missing runtime OIDC reports how to configure it.
+precedence for edge access. On Vercel, that variable holds the deployment's own
+project's secret, so a hosted client sends it only to the deployment's own hosts
+(`VERCEL_URL`, `VERCEL_BRANCH_URL`, `VERCEL_PROJECT_PRODUCTION_URL`) and falls
+back to OIDC if it's rejected. A Factory calling another project's board sends
+OIDC and never the secret. Otherwise, a rejected hosted request reports missing
+trust instead of reading or creating a saved bypass credential. Missing runtime
+OIDC reports how to configure it.
 
 ## Scope and inspect
 

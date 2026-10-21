@@ -213,13 +213,14 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   board URL as audience. Local person clients do not add the trusted-OIDC
   header. Configure Deployment Protection Trusted
   Sources for the calling project and environment separately from the board's
-  `access` rules. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence for
-  every client, including hosted callers, without requiring runtime OIDC for
-  discovery. A hosted caller whose secret is rejected falls back to OIDC: Vercel
-  exposes a project's own secret to its deployments, so it opens that project's
-  boards and not another's. Without it, hosted clients fail with setup guidance
-  when edge trust is missing and never read or create a saved bypass. Both OIDC headers
-  are stripped on cross-origin redirects.
+  `access` rules. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence, without
+  requiring runtime OIDC for discovery. On Vercel it's a system variable holding
+  the deployment's own project's secret, so a hosted client sends it only to the
+  deployment's own hosts (`VERCEL_URL`, `VERCEL_BRANCH_URL`,
+  `VERCEL_PROJECT_PRODUCTION_URL`) and falls back to OIDC when it's rejected.
+  Every other board gets OIDC and never sees the secret. Otherwise, hosted
+  clients fail with setup guidance when edge trust is missing and never read or
+  create a saved bypass. Both OIDC headers are stripped on cross-origin redirects.
   The Node client sends an explicit secret in `x-vercel-protection-bypass`.
   For local people without that variable, when a board
   answers with Vercel Authentication's wall, it does what `vercel curl` does:

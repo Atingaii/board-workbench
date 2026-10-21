@@ -372,21 +372,26 @@ async function hostedToken(url: string): Promise<string> {
   }
 }
 
+/** A host this deployment answers on, as Vercel's system variables name them (bare hosts). */
+const ownHost = (host: string) =>
+  [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
+    .some((own) => !!own && own.toLowerCase() === host.toLowerCase())
+
 /** Explicit bypass wins; otherwise hosted calls use OIDC and local people use their saved bypass. */
 function guarded(url: string, doFetch: typeof fetch, suppliedToken?: ClientOptions['token']): typeof fetch {
   const host = new URL(url).host
   let secret: Promise<string | null> | undefined
   let looked: Promise<{ secret: string; created: boolean }> | undefined
-  // On Vercel, a rejected VERCEL_AUTOMATION_BYPASS_SECRET is the caller's own project's, which
-  // Vercel exposes to its deployments: it opens that project's boards, not another's.
+  // On Vercel, a rejected VERCEL_AUTOMATION_BYPASS_SECRET isn't sent again: OIDC follows.
   let envRejected = false
   return async (input, init = {}) => {
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
     init = { ...init, headers }
-    // An explicit bypass secret still wins, hosted or not: it's what hosted callers
-    // and `vercel env pull` setups used before Trusted Sources.
+    // An explicit bypass secret still wins: it's what `vercel env pull` setups used before
+    // Trusted Sources. On Vercel it's a system variable, the deployment's own project's secret,
+    // so it never leaves its own hosts: another project's board gets OIDC, not a key to this one.
     const fromEnv = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
-    if (fromEnv && !envRejected) {
+    if (fromEnv && !envRejected && (process.env.VERCEL !== '1' || ownHost(host))) {
       try {
         return await through(doFetch, input, init, fromEnv)
       } catch (error) {
