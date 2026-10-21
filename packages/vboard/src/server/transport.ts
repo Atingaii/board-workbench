@@ -54,7 +54,7 @@ const NULL_BODY = new Set([204, 205, 304])
  * A wake-up's answer as a `Response`, whatever status the other end chose: one with no body has
  * none, and one a `Response` can't have (outside 200 to 599) is a 502.
  */
-function responseOf(status: number | undefined, body: Uint8Array): Response {
+function responseOf(status: number | undefined, body: Uint8Array<ArrayBuffer>): Response {
   if (status === undefined || !Number.isInteger(status) || status < 200 || status > 599) return new Response(null, { status: 502 })
   return new Response(NULL_BODY.has(status) ? null : body, { status })
 }
