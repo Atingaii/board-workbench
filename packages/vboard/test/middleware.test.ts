@@ -59,16 +59,32 @@ describe('middleware', () => {
     expect(body.message).toMatchObject({ text: 'hello', labels: { kind: 'bug', checked: 'yes' } })
   })
 
-  it('hands back what landed on a retry it lets through, whatever it changes the second time', async () => {
+  it("doesn't run again on a retry of a write that landed", async () => {
     let calls = 0
-    // A judge that doesn't answer the same twice: board() runs it before the backend, which keeps what landed.
-    const board = testBoard({ middleware: [async ({ next }) => next({ text: `pass ${++calls}` })] })
+    // Passes the first time and drops after: a judge that doesn't answer the same twice.
+    const board = testBoard({ middleware: [async ({ next }) => (calls++ === 0 ? next() : undefined)] })
     const julian = await person(board)
     const first = await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })
     const retry = await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })
     expect([first.status, retry.status]).toEqual([201, 201])
-    expect(retry.body.message).toMatchObject({ id: first.body.message.id, text: 'pass 1' })
-    expect(await texts(julian, 'dev')).toEqual(['pass 1'])
+    expect(retry.body.message.id).toBe(first.body.message.id)
+    expect(calls).toBe(1)
+    // Someone else's post with that ID isn't theirs to retry: it goes through, and the board refuses it.
+    const ada = caller(board.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
+    expect((await ada('POST', '/messages', { channel: 'dev', text: 'mine now', id: 'w1' })).body.error.code).toBe('dropped')
+    expect(calls).toBe(2)
+  })
+
+  it("doesn't run again on a retry from the board's own code: a keyed client's post", async () => {
+    let calls = 0
+    const board = testBoard({ middleware: [async ({ next }) => (calls++ === 0 ? next() : undefined)] })
+    const julian = await person(board)
+    const first = await board.client('deploys', { key: 'd1' }).post('dev', 'a1b2c3 is live')
+    // The same delivery again, as a redelivered webhook would send it: its post lands once.
+    const again = await board.client('deploys', { key: 'd1' }).post('dev', 'a1b2c3 is live')
+    expect(again.id).toBe(first.id)
+    expect(calls).toBe(1)
+    expect(await texts(julian, 'dev')).toEqual(['a1b2c3 is live'])
   })
 
   it("doesn't look for a retry when the post brings no ID: a new one can't have landed", async () => {
@@ -81,7 +97,8 @@ describe('middleware', () => {
     expect((await julian('POST', '/messages', { channel: 'dev', text: 'export is broken' })).status).toBe(201)
     expect(lookups).toEqual([])
     expect((await julian('POST', '/messages', { channel: 'dev', text: 'export is broken', id: 'w1' })).status).toBe(201)
-    expect(lookups).toEqual(['w1'])
+    // The board asks before the middleware runs, and the backend again as it posts: only for that ID.
+    expect(new Set(lookups)).toEqual(new Set(['w1']))
   })
 
   it('drops a write it empties', async () => {
@@ -139,6 +156,46 @@ describe('middleware', () => {
     // An edit on Slack goes through it too.
     await webhook({ type: 'edit', threadId: 'slack:C1:100', id: '100', text: 'the password is still hunter2', user: 'U_ADA' })
     await vi.waitFor(async () => expect(await texts(julian, 'firehose')).toEqual(['the password is still']))
+  })
+
+  it("doesn't run again on a sync callback's post when the callback is retried", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const s = fakePlatform('slack')
+    const acks: string[] = []
+    let runs = 0
+    const board = testBoard({
+      sync: {
+        slack: slack({
+          adapter: s.adapter,
+          channels: {
+            C1: {
+              channel: 'firehose',
+              run: async ({ event, board }) => {
+                const { root } = await board.sync('firehose', event)
+                await board.reply(root!, 'Thanks!')
+                if (runs++ === 0) throw new Error('interrupted after its reply')
+              },
+            },
+          },
+        }),
+      },
+      // Lets the reply through once, and would drop it after.
+      middleware: [async ({ write, next }) => (write.text !== 'Thanks!' ? next() : acks.push(write.text) === 1 ? next() : undefined)],
+    })
+    const julian = await person(board)
+    const webhook = (body: unknown) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    await webhook({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })
+    await vi.waitFor(() => expect(runs).toBe(1))
+    await vi.waitFor(async () => {
+      await board.skipHold(board.servers[1]!, 'inbox:slack:C1')
+      await board.servers[1]!.drain('inbox:slack:C1')
+      expect(runs).toBe(2)
+    })
+    const [root] = (await julian('GET', '/messages?channel=firehose')).body.messages
+    expect((await julian('GET', `/messages/${root.id}`)).body.replies.map((reply: { text: string }) => reply.text)).toEqual(['Thanks!'])
+    expect(acks).toEqual(['Thanks!'])
+    error.mockRestore()
   })
 
   it("covers watchers' writes, and its own board client skips it", async () => {

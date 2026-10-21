@@ -51,6 +51,7 @@ import {
   writePost,
   writeReaction,
   deploymentIdentity,
+  landedFor,
   type Identity,
   type WriteContext,
 } from './writes.ts'
@@ -559,6 +560,13 @@ function build(options: A2Options, binding: BoardBinding) {
         schedules: await schedules.forThread(root!.id),
       }
     },
+    async posted(caller, { id }, signal) {
+      const identity = identityOf(caller)
+      const landed = await reads.byEventId(id, signal)
+      const shown = landed ? await landedFor(writes, identity, landed) : null
+      if (!shown) throw notFound(`no post of yours has id ${id}`, 'post_not_found')
+      return { message: shown }
+    },
     async post(caller, parsed) {
       const identity = identityOf(caller)
       const { principal } = identity
@@ -720,8 +728,7 @@ function build(options: A2Options, binding: BoardBinding) {
         }
         if (!may(channel!)) throw forbidden(`this token can't sync in ${channel}, so it can't import there`)
         const proofs = await trusted.post(writes, { channel: body.channel, re, labels: body.labels })
-        // A sync elsewhere names its posts under its own principal, so it can't take an ID anyone else would use.
-        const id = body.id === undefined || ownSync(caller) ? body.id : `sync:${principal.id}:${createHash('sha256').update(`vboard-sync\u001f${body.id}`).digest('hex').slice(0, 32)}`
+        const id = body.id === undefined ? undefined : importId(caller, principal.id, body.id)
         const posted = await writePost(writes, {
           identity: author,
           proofs,
@@ -740,13 +747,17 @@ function build(options: A2Options, binding: BoardBinding) {
         })
         return { message: posted.id }
       }
-      // The message it changes, found from its platform IDs; one the caller can't sync is as good as missing.
-      const id = await locate(body.origin)
-      const found = id === null ? null : await reads.message(id)
+      // The message it changes: found from its platform IDs, or named by its board ID. One the caller
+      // can't sync is as good as missing.
+      if ((body.origin === undefined) === (body.message === undefined)) throw badRequest('a change names its message by `origin` or by `message`, one or the other')
+      const id = body.origin !== undefined ? await locate(body.origin) : indexOf(body.message!)
+      const found = id === null || id === 0 ? null : await reads.message(id)
       if (!found || !may(found.channel)) return { message: null }
       const authorized = <P extends Permission>(permission: P) => trusted.message(writes, permission, found.id)
-      if (body.op === 'edit') await writeEdit(writes, { identity: author, authorized: await authorized('post'), text: body.text, from: body.from, asAuthor: false })
-      else if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor: false })
+      // A platform's own edit or delete is what the platform did; one named by board ID is the author's, only of their own.
+      const asAuthor = body.origin === undefined
+      if (body.op === 'edit') await writeEdit(writes, { identity: author, authorized: await authorized('post'), text: body.text, from: body.from, asAuthor })
+      else if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor })
       else if (body.op === 'react')
         await writeReaction(writes, { identity: author, authorized: await authorized('react'), emoji: body.emoji, remove: body.remove ?? false, from: body.from })
       else if (body.op === 'labels') await writeLabels(writes, { identity: author, authorized: await authorized('label'), set: body.set, unset: body.unset })
@@ -785,6 +796,11 @@ function build(options: A2Options, binding: BoardBinding) {
       const { tables } = store
       let thread: string | null = null
       let message: string | null = null
+      if (query.post !== undefined) {
+        // An import the caller's sync made: a retry's, found before it goes through the middleware again.
+        const landed = await reads.byEventId(importId(caller, principal.id, query.post), signal)
+        if (landed && principal.access.can('sync', landed.channel)) message = ref(landed.id)
+      }
       if (query.thread !== undefined) {
         // A thread synced just now may not be in the tables yet: a miss waits for them.
         let key = query.message === undefined ? await tables.threadOf(query.thread) : null
@@ -955,6 +971,14 @@ function build(options: A2Options, binding: BoardBinding) {
       await session.append({ type: 'actor.unlinked', payload: { actor: account, by: author } })
       return { ok: true }
     },
+  }
+
+  /**
+   * An import's client ID as the board keeps it. A sync elsewhere names its posts under its own
+   * principal, so it can't take an ID anyone else would use.
+   */
+  function importId(caller: Caller, principal: string, id: string) {
+    return ownSync(caller) ? id : `sync:${principal}:${createHash('sha256').update(`vboard-sync\u001f${id}`).digest('hex').slice(0, 32)}`
   }
 
   /** The caller, when it may sync somewhere: what every sync route needs. */

@@ -37,6 +37,7 @@ import {
 import type { Method, Protocol } from '../api/protocol.ts'
 import { createBoardClient, type BoardClient } from '../client/client.ts'
 import type { Actor } from '../contract/reducers.ts'
+import type { ExternalAuthor } from '../contract/contract.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { createSyncEngine, type SyncEngine, type SyncEvent } from '../sync/engine.ts'
@@ -50,7 +51,7 @@ import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unau
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
 import { runMiddleware, type Middleware, type Write, type WriteSource } from './middleware.ts'
 import { createRouter, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
-import { syncTarget, withEmailMentions, type SyncTarget } from './writes.ts'
+import { syncTarget, withEmailMentions, type SyncTarget, type WriteOrigin } from './writes.ts'
 import type { Watcher } from './watch.ts'
 
 /** `board()`'s options: where the board lives, who may use it, and the watchers that run here. */
@@ -158,6 +159,7 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'watchers':
       return {}
     case 'message':
+    case 'posted':
     case 'delete':
     case 'cancelSchedule':
     case 'attachment':
@@ -229,6 +231,15 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return SyncUnlinkBody.parse(await body())
   }
 }
+
+/**
+ * A sync callback's caller: the platform user its event came from, on sync entry `key`. Its client's
+ * writes are imports as that user, and the rest it does as sync.
+ */
+type PlatformCaller = { platform: { author: ExternalAuthor; key: string }; origin: WriteOrigin }
+
+/** A platform user as the middleware is told who's writing. */
+const actorOf = (author: ExternalAuthor): Actor => ({ id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar })
 
 /** A write's caller, as the middleware is told: where it came from. Its own client and sync's lookups skip it. */
 const sourceOf = (caller: Caller): WriteSource | null => {
@@ -325,7 +336,7 @@ export function board(options: BoardOptions): Board {
   }
 
   /** An in-process client through the board, as `caller`: its posts are idempotent per trigger. */
-  function clientAs(caller: Caller, trigger: string | null): BoardClient {
+  function clientAs(caller: Caller | PlatformCaller, trigger: string | null): BoardClient {
     let writesMade = 0
     return createBoardClient({
       // Under the configured mount, so the router accepts the paths it builds.
@@ -434,6 +445,9 @@ export function board(options: BoardOptions): Board {
     const send = async (patched: typeof body) => backend.post(poster, { ...patched, text: await withEmails(patched.text) }, signal)
     const source = sourceOf(caller)
     if (middleware.length === 0 || source === null) return send(body)
+    // A retry of a post that landed: what's on the board stands, whatever the middleware would say now.
+    // Only the backend knows whether its ID did, so it's asked first, and it answers the retry.
+    if (body.id !== undefined && (await found(() => backend.posted(caller, { id: body.id! }, signal)))) return backend.post(poster, body, signal)
     // What it would put on the board: a reply lands in its root's channel.
     let channel = body.channel
     let re: string | null = null
@@ -470,6 +484,116 @@ export function board(options: BoardOptions): Board {
       { kind: 'edit', id: message.id, channel: message.channel, re: message.re, text: input.text },
       { author: who.actor, source, respond: caller.origin.respond },
       (write) => send(write.text),
+    )
+  }
+
+  /** Whether a lookup found what it looked for: a 404 says it didn't. */
+  async function found(lookup: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await lookup()
+      return true
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return false
+      throw error
+    }
+  }
+
+  /**
+   * What a sync callback's client does, on any backend. Its own writes are imports, as the platform
+   * user the event came from, through the middleware like any import; everything else, its reads
+   * included, it does as sync. A change it names by ID is an import that names it so.
+   */
+  async function asPlatform(name: Method, caller: PlatformCaller, input: unknown, signal: AbortSignal): Promise<unknown> {
+    const sync = engine!
+    const me = sync.caller
+    const { author } = caller.platform
+    const as = { author: actorOf(author), source: (caller.origin.via ?? { kind: 'api' }) as WriteSource, respond: caller.origin.respond }
+    const change = async (body: Protocol['syncImport']['input']) => {
+      const { message } = await backend.syncImport(me, body, signal)
+      if (message === null) throw notFound(`message not found: #${(body as { message?: string }).message}`, 'message_not_found')
+      return { ok: true as const }
+    }
+    switch (name) {
+      case 'post':
+        return importPost(caller, input as Protocol['post']['input'], signal)
+      case 'edit': {
+        const { id, text } = input as Protocol['edit']['input']
+        const message = await lookup(me, id, signal)
+        if (!message) throw notFound(`message not found: #${id}`, 'message_not_found')
+        // Only the author's own; the backend says so for the rest.
+        if (message.by.principal !== author.id || message.deleted) return change({ op: 'edit', author, from: null, message: id, text })
+        return screen({ kind: 'edit', id, channel: message.channel, re: message.re, text }, as, async (write) =>
+          change({ op: 'edit', author, from: null, message: id, text: await withEmails(write.text) }),
+        )
+      }
+      case 'delete':
+        return change({ op: 'delete', author, from: null, message: (input as Protocol['delete']['input']).id })
+      case 'react': {
+        const { id, emoji, remove } = input as Protocol['react']['input']
+        return change({ op: 'react', author, from: null, message: id, emoji, ...(remove !== undefined ? { remove } : {}) })
+      }
+      case 'label': {
+        const { id, set, unset } = input as Protocol['label']['input']
+        return change({ op: 'labels', author, from: null, message: id, ...(set ? { set } : {}), ...(unset ? { unset } : {}) })
+      }
+      default:
+        return invoke(name, me, input, signal)
+    }
+  }
+
+  /** A sync callback's post, as an import by its platform user: once per client ID, through the middleware. */
+  async function importPost(caller: PlatformCaller, input: Protocol['post']['input'], signal: AbortSignal): Promise<Protocol['post']['output']> {
+    const sync = engine!
+    const me = sync.caller
+    const { author } = caller.platform
+    const read = async (id: string) => {
+      const message = await lookup(me, id, signal)
+      if (!message) throw notFound(`message not found: #${id}`, 'message_not_found')
+      return message
+    }
+    // A retry of one that landed: it stands, and the middleware doesn't see it again.
+    if (input.id !== undefined) {
+      const landed = (await backend.syncFind(me, { post: input.id }, signal)).message
+      if (landed !== null) return { message: await read(landed) }
+    }
+    const targets = await Promise.all((input.sync ?? []).map(resolveTarget))
+    let channel = input.channel
+    let re: string | null = null
+    if (input.re !== undefined) {
+      const target = await read(input.re)
+      channel = target.channel
+      re = target.re ?? target.id
+    }
+    const attachments: Attachment[] = []
+    for (const id of input.attachments ?? []) {
+      const { attachment, data } = await backend.attachment(me, { id }, signal)
+      if (data instanceof ReadableStream) await data.cancel().catch(() => {})
+      attachments.push(attachment)
+    }
+    // A new root lands with the targets its channel syncs with, as any post through board() does.
+    const config = input.channel !== undefined && !input.noSync ? await sync.configTargets(input.channel) : []
+    const importer: Caller = config.length > 0 ? { ...me, origin: { ...me.origin, config } } : me
+    return screen(
+      { kind: 'post', channel: channel!, re, text: input.text, labels: input.labels ?? {}, attachments },
+      { author: actorOf(author), source: (caller.origin.via ?? { kind: 'api' }) as WriteSource, respond: caller.origin.respond },
+      async (write) => {
+        const { message } = await backend.syncImport(importer, {
+          op: 'post',
+          author,
+          from: null,
+          origin: null,
+          ...(input.channel !== undefined ? { channel: input.channel } : { re: input.re! }),
+          text: await withEmails(write.text),
+          labels: write.labels,
+          ...(input.noSync ? { noSync: true } : {}),
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          ...(input.id !== undefined ? { id: input.id } : {}),
+        }, signal)
+        // The targets it asked for, as sync records a thread's.
+        for (const target of targets)
+          await backend.syncReceipt(me, { kind: 'thread', message: message!, target: target.target, targetKind: target.kind, cause: 'request' }, signal)
+        return { message: await read(message!) }
+      },
     )
   }
 
@@ -598,7 +722,7 @@ export function board(options: BoardOptions): Board {
   engine?.bind({
     backend,
     screen: (write, context, commit) => screen(write, context, commit),
-    client: (caller, trigger) => clientAs(caller, trigger),
+    client: (platform, trigger) => clientAs({ platform: { author: platform.author, key: platform.key }, origin: platform.origin }, trigger),
   })
 
   /** Server-sent events, from the backend's long-poll: each event's `id` is its cursor, so `Last-Event-ID` resumes exactly. */
@@ -652,7 +776,7 @@ export function board(options: BoardOptions): Board {
     })
   }
 
-  async function dispatch(request: Request, injected: Caller | null): Promise<Response> {
+  async function dispatch(request: Request, injected: Caller | PlatformCaller | null): Promise<Response> {
     try {
       const url = new URL(request.url)
       const match = route(request.method, url.pathname)
@@ -666,8 +790,10 @@ export function board(options: BoardOptions): Board {
         if (!engine || !entries[match.params.key ?? '']) throw notFound(`no sync entry named ${match.params.key}`)
         return await engine.handleWebhook(match.params.key!, request)
       }
+      // A sync callback's client does everything but its own writes as sync.
+      const own = injected && 'platform' in injected ? engine!.caller : injected
       if (target.kind === 'board' && target.name !== 'avatar' && target.name !== 'openapi' && target.name !== 'discovery') {
-        const caller = injected ?? (await callerOf(request, boardUrl))
+        const caller = own ?? (await callerOf(request, boardUrl))
         return await serve(target.name, caller, request, url, match.params)
       }
 
@@ -694,16 +820,16 @@ export function board(options: BoardOptions): Board {
       }
 
       if (target.kind === 'backend') {
-        const caller = injected ?? (target.route.auth ? await callerOf(request, boardUrl) : null)
+        const caller = own ?? (target.route.auth ? await callerOf(request, boardUrl) : null)
         return await target.route.handle(request, { caller, param: match.param })
       }
 
       if (typeof (backend[target.name] as unknown) !== 'function') throw notFound(`no route: ${request.method} ${url.pathname}`)
-      const caller = injected ?? (await callerOf(request, boardUrl))
+      const caller = own ?? (await callerOf(request, boardUrl))
       const input = await inputOf(target.name, request, url, match.params)
       if (target.name === 'events' && (request.headers.get('accept') ?? '').includes('text/event-stream'))
         return await sse(caller, input as Protocol['events']['input'], request)
-      const output = await invoke(target.name, caller, input, request.signal)
+      const output = injected && 'platform' in injected ? await asPlatform(target.name, injected, input, request.signal) : await invoke(target.name, caller, input, request.signal)
       if (target.name === 'attachment') return attachmentResponse(output as Protocol['attachment']['output'])
       return json(output, CREATED.has(target.name) ? 201 : 200)
     } catch (error) {

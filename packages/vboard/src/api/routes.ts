@@ -229,8 +229,14 @@ const ImportOrigin = z.object({ thread: ExternalTarget, message: z.string().min(
 /** A link as an import carries it: a board message it names is a ref. */
 const ImportLink = LinkSchema.extend({ message: Ref.nullable() })
 
-/** Who wrote it on the platform, and the sync key it came through. */
-const Imported = { author: ExternalAuthor, from: SyncKey }
+/**
+ * Who wrote it on the platform, and the sync key it came through: null for a write a sync callback
+ * makes as that user, which syncs out to every platform like one written on the board.
+ */
+const Imported = { author: ExternalAuthor, from: SyncKey.nullable() }
+
+/** The message a change is about: by its platform IDs (`origin`), or by its board ID (`message`), one or the other. */
+const Changed = { origin: ImportOrigin.optional(), message: Ref.optional() }
 
 /**
  * A platform's write, as its platform author, with where it came from: only a caller with `sync` in
@@ -252,11 +258,11 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
   }),
-  z.object({ op: z.literal('edit'), ...Imported, origin: ImportOrigin, text: MessageText }),
-  z.object({ op: z.literal('delete'), ...Imported, origin: ImportOrigin }),
-  z.object({ op: z.literal('react'), ...Imported, origin: ImportOrigin, emoji: Emoji, remove: z.boolean().optional() }),
-  z.object({ op: z.literal('labels'), ...Imported, origin: ImportOrigin, set: Labels.optional(), unset: z.array(LabelKey).optional() }),
-  z.object({ op: z.literal('links'), ...Imported, origin: ImportOrigin, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
+  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText }),
+  z.object({ op: z.literal('delete'), ...Imported, ...Changed }),
+  z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
+  z.object({ op: z.literal('labels'), ...Imported, ...Changed, set: Labels.optional(), unset: z.array(LabelKey).optional() }),
+  z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
   /** A platform user the board should know, for a mention of them: `@[ada@vercel.com]` found on Slack. */
   z.object({ op: z.literal('seen'), author: ExternalAuthor }),
 ])
@@ -288,6 +294,8 @@ export const SyncReceiptBody = z.discriminatedUnion('kind', [
 
 /** What sync looks up by platform ID: a thread or message, who an account is, and a person's accounts. */
 export const SyncFindQuery = z.object({
+  /** The post the caller's sync imported with this client ID. */
+  post: z.string().min(1).max(200).optional(),
   thread: ExternalTarget.optional(),
   /** With `thread`: the platform message in it. */
   message: z.string().min(1).max(300).optional(),
@@ -627,6 +635,8 @@ export const routes = {
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
+  /** The caller's own post with the client ID it gave: what `POST /messages` answered, for telling a retry before posting. */
+  posted: { method: 'GET', path: '/posts/:id' },
   /** Raw platform events in a sync key's inbox, newest first: the caller's own, and the board's with `sync` everywhere. */
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
   /** Pushes platform events into the caller's inbox for a sync key, deduplicated by their platform IDs. */

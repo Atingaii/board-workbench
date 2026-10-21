@@ -33,8 +33,12 @@ export type SyncHost = {
    * Throws `DroppedError` when it drops the write.
    */
   screen<W extends Write, T>(write: W, context: { author: Actor; source: WriteSource; respond: (text: string) => Promise<void> }, commit: (write: W) => Promise<T>): Promise<T>
-  /** A client through board(), as `caller`, for a sync callback: its posts get IDs derived from `trigger`. */
-  client(caller: Caller, trigger: string): BoardClient
+  /**
+   * A client through board() for a sync callback, as the platform user `author` its event came from on
+   * entry `key`: its writes are imports as them, on any backend, and its reads are sync's. Its posts get
+   * IDs derived from `trigger`.
+   */
+  client(platform: { author: ExternalAuthor; key: string; origin: WriteOrigin }, trigger: string): BoardClient
 }
 
 /** The actors sync renders with: who each is, and the person a linked account belongs to. */
@@ -465,8 +469,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       const code = event.author.isBot ? undefined : CODE.exec(event.text)?.[1]
       if (code && (await claimCode(key, event, code))) return
     }
-    const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
-    const board = host().client({ identity: externalIdentity(author), origin: originOf(key, event) }, meta.id)
+    const author: ExternalAuthor = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
+    const board = host().client({ author, key, origin: originOf(key, event) }, meta.id)
     let applied: Promise<SyncResult> | undefined
     let active = true
     const context: SyncContext = {

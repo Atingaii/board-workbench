@@ -99,6 +99,11 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
   attachment: ({ secret }) => [{ method: 'GET', path: `/attachments/${secret.file}`, status: 404 }],
+  // Only your own post, by the client ID you gave it.
+  posted: () => [
+    { method: 'GET', path: '/posts/secret-one', status: 404 },
+    { method: 'GET', path: '/posts/nothing', status: 404 },
+  ],
   // Writes: a reply's channel is its root's, so an unreadable root is 404; a channel the request names is 403.
   post: ({ secret, open }) => [
     { method: 'POST', path: '/messages', body: { channel: 'secret', text: 'hi' }, status: 403 },
@@ -172,7 +177,7 @@ async function setup() {
     }),
   )
   const file = ((await upload.json()) as { attachment: { id: string } }).attachment.id
-  const root = (await keeper('POST', '/messages', { channel: 'secret', text: 'hush @keeper', labels: { private: 'yes' }, attachments: [file] })).body.message.id
+  const root = (await keeper('POST', '/messages', { channel: 'secret', text: 'hush @keeper', labels: { private: 'yes' }, attachments: [file], id: 'secret-one' })).body.message.id
   const reply = (await keeper('POST', '/messages', { re: root, text: 'still hush' })).body.message.id
   await keeper('POST', `/messages/${root}/reactions`, { emoji: 'eyes' })
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id

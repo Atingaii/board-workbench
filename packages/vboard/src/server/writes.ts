@@ -249,20 +249,30 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
     if (landed) {
       // Only the same author's post in the same place is a retry. Text and labels can't tell:
       // the middleware may have changed them, and edits may have since.
-      if (!sameAuthor(landed.by, identity.author) || landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo)
-        throw duplicateId()
-      const { access } = identity.principal
-      const { state: actors } = await ctx.session.state(actorsReducer)
-      if (access.readable(channel)) return shownTo(view(landed, actors, await readerFor(ctx, access, landed)), access, sent)
-      // A caller that can't read gets back what it sent, as it landed: never what others have added since.
-      // A post written by a caller that could read isn't its to replay, as `authorizeOwn` holds.
-      if (!landed.blind) throw duplicateId()
-      const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
-      const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
-      return shownTo(view(posted, actors, await readerFor(ctx, access, posted)), access, sent)
+      if (landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo) throw duplicateId()
+      const shown = await landedFor(ctx, identity, landed)
+      if (!shown) throw duplicateId()
+      return shownTo(shown, identity.principal.access, sent)
     }
   }
   return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id, sent })
+}
+
+/**
+ * A post that landed, as its author may have it back: only the same author's, and one in a
+ * channel it can't read only if it posted without reading too. A caller that can't read gets back
+ * what it sent, as it landed: never what others have added since. Null for anyone else.
+ */
+export async function landedFor(ctx: WriteContext, identity: Identity, landed: Message): Promise<MessageView | null> {
+  if (!sameAuthor(landed.by, identity.author)) return null
+  const { access } = identity.principal
+  const { state: actors } = await ctx.session.state(actorsReducer)
+  if (access.readable(landed.channel)) return view(landed, actors, await readerFor(ctx, access, landed))
+  // A post written by a caller that could read isn't its to replay, as `authorizeOwn` holds.
+  if (!landed.blind) return null
+  const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
+  const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
+  return { ...view(posted, actors, await readerFor(ctx, access, posted)), mentions: [] }
 }
 
 const sameAuthor = (a: Author, b: Author) =>

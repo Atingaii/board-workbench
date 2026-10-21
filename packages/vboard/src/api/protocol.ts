@@ -64,6 +64,8 @@ export type Protocol = {
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
   message: { input: Id; output: ThreadView }
   post: { input: Input<typeof PostBody>; output: { message: MessageView; unknownMentions?: string[] } }
+  /** The caller's own post with client ID `id`, as it landed: 404 `post_not_found` when there's none. */
+  posted: { input: Id; output: { message: MessageView } }
   edit: { input: Id & Input<typeof EditBody>; output: { ok: true; unknownMentions?: string[] } }
   delete: { input: Id; output: { ok: true } }
   react: { input: Id & Input<typeof ReactBody>; output: { ok: true } }

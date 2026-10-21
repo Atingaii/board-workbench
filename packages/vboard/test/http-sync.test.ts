@@ -19,7 +19,7 @@ type Read = { id: string; text: string; from: string | null; by: { actor: string
  * calling each other in-process: the team's board wakes the project's at `<SUPPORT_URL>/wake`, and the
  * project's pushes, pulls, and writes back over HTTP. The project may do everything in `can`.
  */
-function setup(options: { can?: Parameters<typeof vercelProject>[0]['can']; channels?: Record<string, string>; middleware?: Middleware[] } = {}) {
+function setup(options: { can?: Parameters<typeof vercelProject>[0]['can']; channels?: Parameters<typeof slack>[0]['channels']; middleware?: Middleware[] } = {}) {
   const queue = fakeQueue()
   const s = fakePlatform('slack')
   let project: ReturnType<typeof board>
@@ -125,6 +125,51 @@ describe('sync on a board on http()', () => {
     // The code was claimed, not imported, and Slack shows it worked.
     expect(await read(here, 'firehose')).toEqual([])
     expect(s.reactions).toEqual([{ threadId: 'slack:C1:100', messageId: '100', emoji: 'check', added: true }])
+  })
+
+  it("lands a callback's own writes on the board it uses, as the Slack user its event came from", async () => {
+    const seen: string[] = []
+    const { team, webhook, s } = setup({
+      channels: {
+        C1: {
+          channel: 'firehose',
+          run: async ({ event, board }) => {
+            if (event.kind !== 'message') return
+            const { root } = await board.sync('firehose', event)
+            // Its reads are sync's own, and its writes are Ada's.
+            seen.push((await board.thread(root!)).message.text)
+            const ack = await board.reply(root!, 'Thanks! Tracking it.')
+            await board.label(root!, { set: { triaged: 'yes' } })
+            await board.react(root!, 'eyes')
+            await board.edit(ack.id, 'Thanks! Tracking it now.')
+          },
+        },
+      },
+    })
+    const julian = await julianOn(team.fetch)
+    await webhook({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'export is broken', user: 'U_ADA' })
+    await vi.waitFor(async () => {
+      const [root] = await read(julian, 'firehose')
+      expect(root).toMatchObject({ labels: { triaged: 'yes' }, reactions: { eyes: ['slack:user:U_ADA'] } })
+      const { body } = await julian('GET', `/messages/${root!.id}`)
+      expect(body.replies.map((reply: Read) => [reply.text, reply.by.actor, reply.from])).toEqual([['Thanks! Tracking it now.', 'slack:user:U_ADA', null]])
+    })
+    expect(seen).toEqual(['export is broken'])
+    const labeled = ((await julian('GET', '/events?after=0')).body.events as { type: string; actor?: { id: string } }[]).find((event) => event.type === 'labels.changed')
+    expect(labeled?.actor?.id).toBe('slack:user:U_ADA')
+    // Written on the board as Ada, the reply goes back to her Slack thread, as one a person wrote would.
+    await vi.waitFor(() => expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([['slack:C1:100', JSON.stringify({ markdown: '**U_ADA**: Thanks! Tracking it.' })]]))
+  })
+
+  it('runs its middleware once on a retried post from its own code, however the middleware would answer again', async () => {
+    let calls = 0
+    const { team, project } = setup({ middleware: [async ({ next }) => (calls++ === 0 ? next() : undefined)] })
+    const julian = await julianOn(team.fetch)
+    const first = await project.client('deploys', { key: 'd1' }).post('firehose', 'a1b2c3 is live')
+    const again = await project.client('deploys', { key: 'd1' }).post('firehose', 'a1b2c3 is live')
+    expect(again.id).toBe(first.id)
+    expect(calls).toBe(1)
+    expect((await read(julian, 'firehose')).map((m) => [m.text, m.by.actor])).toEqual([['a1b2c3 is live', `${SUPPORT}+deploys`]])
   })
 
   it('runs its middleware on what Slack sends, before it reaches the board it uses', async () => {

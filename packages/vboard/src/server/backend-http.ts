@@ -193,8 +193,9 @@ export function http(url: string, options: HttpOptions = {}) {
       async (caller: Caller, input: Record<string, unknown>, signal: AbortSignal) => {
         start()
         const client = await clientOf(caller)
-        // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key.
-        if (method === 'post' && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
+        // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
+        // and a retry's lookup asks for the same.
+        if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
           input = { ...input, id: await keyId(input.id).catch(rethrow) }
         const response = await call(client, method, input, signal)
         return method === 'attachment' ? attachmentOf(String(input.id), response) : response.json()
