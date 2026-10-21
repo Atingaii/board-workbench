@@ -26,6 +26,7 @@ import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import {
   authenticates,
   createAuthority,
+  fromTokens,
   hostPrincipal,
   issuersOf,
   verifiesTokens,
@@ -41,7 +42,7 @@ import {
 import { actorSeen, resolveActor } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type CallerRequest, type ProtocolMethods } from './backend.ts'
 import { attachmentBody, attachmentNotFound, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
-import { badRequest, forbidden, HttpError, notFound, RejectedError, toErrorResponse } from './errors.ts'
+import { badRequest, forbidden, HttpError, notFound, RejectedError, toErrorResponse, unauthorized } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
@@ -290,11 +291,10 @@ function build(options: A2Options, binding: BoardBinding) {
       own = null
       throw error
     })
-  // What callers may do, under this board's rules: requests, and stored principals.
-  const authority = createAuthority({ access: options.access ?? [], project })
   const authenticate = options.authenticate ?? verifyTokens()
-  /** What a host's verifier returns is its own principals; the built-in one's are tokens'. */
-  const hosted = !verifiesTokens(authenticate)
+  // What callers may do, under this board's rules: requests, and stored principals. A board whose
+  // verifier is the built-in one alone takes no host's principals.
+  const authority = createAuthority({ access: options.access ?? [], project, hosts: !verifiesTokens(authenticate) })
   const context: AuthenticateContext = { project, issuers: typeof options.access === 'function' ? [] : issuersOf(options.access ?? []) }
   /** Verified principals by credential, until they expire, so a stream's polls don't verify from scratch. */
   const verified = new Map<string, { principal: Promise<Principal>; until: number }>()
@@ -322,7 +322,7 @@ function build(options: A2Options, binding: BoardBinding) {
       principal.then(
         (found) => {
           // A host's principals may lose access any time, so only a token's are kept: until it expires.
-          if (hosted || found.expiresAt === null) return
+          if (found.facts?.issuer === 'host' || found.expiresAt === null) return
           if (verified.size >= 1000) verified.delete(verified.keys().next().value!)
           verified.set(key, { principal, until: found.expiresAt.getTime() })
         },
@@ -332,17 +332,19 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   async function verify(request: CallerRequest): Promise<Principal> {
-    let result: Principal | HostPrincipal | Response
+    let result: Awaited<ReturnType<Authenticate>>
     try {
-      result = await authenticate(request, context)
+      result = await authenticate({ ...request, board: context })
     } catch (error) {
       // A thrown `Response` rejects like a returned one.
       if (error instanceof Response) throw new RejectedError(error)
       throw error
     }
     if (result instanceof Response) throw new RejectedError(result)
-    if (!hosted) return result as Principal
-    return hostPrincipal(result as HostPrincipal)
+    // Nothing it recognizes: no token, and no credential of a host's own.
+    if (result === null || result === undefined) throw unauthorized('missing bearer token')
+    // What the built-in verifier made stands as it is; anything else is a host's, checked.
+    return fromTokens(result) ? (result as Principal) : hostPrincipal(result as HostPrincipal)
   }
 
   /**

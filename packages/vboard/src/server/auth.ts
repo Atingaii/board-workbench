@@ -8,6 +8,7 @@ import {
 import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can, type Permission } from './access.ts'
 import type { CallerRequest } from './backend.ts'
 import { unauthorized, forbidden } from './errors.ts'
+import { ownProjectId, ownTeamId } from './identity.ts'
 
 /** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
 export type PrincipalKind = 'person' | 'deployment' | 'workflow' | 'external'
@@ -359,6 +360,8 @@ export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope'
  */
 export function createAuthority(options: {
   access: readonly AccessRule[] | AccessFunction
+  /** Whether a host's verifier makes this board's principals: false for one whose verifier is the built-in one alone. */
+  hosts: boolean
   /** The board's own Vercel project and team. */
   project: () => Promise<{ id: string | null; teamId: string | null }>
 }) {
@@ -403,26 +406,33 @@ export function createAuthority(options: {
   }
 
   /**
-   * What a principal may do now, narrowed by its scope: the board's own code, its people, and the
-   * platform users sync writes as everything, past a host's function; a token whatever the first rule
-   * matching its claims gives. A 401 or 403 when it may do nothing.
+   * What a principal may do now, narrowed by its scope: the board's own code and the platform users
+   * sync writes as everything; anyone else what a host's function says, or under the rules, a person
+   * everything and a token whatever the first rule matching its claims gives. A host's principal is
+   * what its kind is, until it expires. A 401 or 403 when it may do nothing.
    */
   async function grant(principal: Known): Promise<Access> {
     let access: Access = FULL_ACCESS
     if (principal.id.startsWith('vboard:') || principal.kind === 'external') access = FULL_ACCESS
-    else if (host) {
-      // A host's model sees only the principals its own `authenticate` made, until they expire.
-      if (principal.facts?.issuer !== 'host') throw forbidden("this token can't use this board: its board takes only its host's principals")
-      const { exp } = principal.facts.claims
-      if (typeof exp === 'number' && exp * 1000 <= Date.now()) throw unauthorized('token expired')
-      const can = await host(principal)
-      if (can === null || can === undefined) throw forbidden("this token can't use this board")
-      access = compileAccess(can)
-    } else if (principal.kind !== 'person') {
-      const facts = principal.facts ?? factsFromId(principal.id)
-      if (!facts) throw forbidden("this token can't use this board")
-      access = await byRules(facts)
-    } else if (principal.facts?.issuer === 'host') throw forbidden("this token can't use this board: its board no longer takes a host's principals")
+    else {
+      const hosted = principal.facts?.issuer === 'host'
+      if (hosted) {
+        // One a host's verifier made, on a board whose verifier is now the built-in one alone, is from before it switched.
+        if (!options.hosts) throw forbidden("this token can't use this board: its board no longer takes a host's principals")
+        const { exp } = principal.facts!.claims
+        if (typeof exp === 'number' && exp * 1000 <= Date.now()) throw unauthorized('token expired')
+      }
+      if (host) {
+        const can = await host(principal)
+        if (can === null || can === undefined) throw forbidden("this token can't use this board")
+        access = compileAccess(can)
+      } else if (principal.kind !== 'person') {
+        // A host's says nothing past its ID, as a principal stored before the board kept claims.
+        const facts = (hosted ? undefined : principal.facts) ?? factsFromId(principal.id)
+        if (!facts) throw forbidden("this token can't use this board")
+        access = await byRules(facts)
+      }
+    }
     return principal.scope === undefined ? access : access.narrow(parseScope(principal.scope))
   }
 
@@ -450,7 +460,7 @@ export function compileRules(
   rules: readonly AccessRule[],
   board: { project(): Promise<{ id: string | null; teamId: string | null }> },
 ): (principal: Known) => Promise<Access> {
-  return createAuthority({ access: rules, project: () => board.project() }).grant
+  return createAuthority({ access: rules, project: () => board.project(), hosts: true }).grant
 }
 
 /**
@@ -502,16 +512,20 @@ export type AuthenticateContext = {
   issuers: readonly string[]
 }
 
+/** What a verifier gets: what the request said, and what the board knows that verifying it needs. */
+export type AuthenticateRequest = CallerRequest & { board: AuthenticateContext }
+
 /**
  * Who a request is, in the board's ID scheme: `verifyTokens()` checks its bearer token for the
  * board's URL, and a host's own verifier recognizes its own credentials (a session cookie in
- * `request.headers`, say). To reject, return or throw a `Response`, or throw an `HttpError`;
- * anything else thrown is a 500. What a principal may do is the backend's: `a2({ access })`.
+ * `request.headers`, say). Null when the request carries nothing it recognizes, so verifiers
+ * compose: `(request) => (await staff(request)) ?? (await tokens(request))`. To reject a
+ * credential that fails, throw an `HttpError` (a 401), or return or throw a `Response`; anything
+ * else thrown is a 500. What a principal may do is the backend's: `a2({ access })`.
  */
 export type Authenticate = (
-  request: CallerRequest,
-  board: AuthenticateContext,
-) => Principal | HostPrincipal | Response | Promise<Principal | HostPrincipal | Response>
+  request: AuthenticateRequest,
+) => Principal | HostPrincipal | Response | null | undefined | Promise<Principal | HostPrincipal | Response | null | undefined>
 
 /** What a host's own verifier returns: a principal in the board's ID scheme. */
 export type HostPrincipal = {
@@ -523,19 +537,30 @@ export type HostPrincipal = {
 }
 
 const TOKENS = Symbol('vboard.verifyTokens')
+/** The principals `verifyTokens()` made: a backend takes them as they are, and checks the rest as a host's. */
+const verifiedTokens = new WeakSet<object>()
+
+/** The board's own project, for a verifier asked outside a backend that knows it: from the environment. */
+const environmentBoard: AuthenticateContext = {
+  project: async () => ({ id: await ownProjectId(), teamId: await ownTeamId() }),
+  issuers: [],
+}
 
 /**
  * The built-in verifier: a request's bearer token, from Vercel (people and deployments), GitHub
- * Actions, an `oidc()` rule's issuer, or `local`'s, verified for the board's URL. A request with
- * no token is a 401.
+ * Actions, an `oidc()` rule's issuer, or `local`'s, verified for the board's URL. Null for a request
+ * with no token, and a 401 for one whose token fails. Without `request.board`, the board's project
+ * is the environment's, and it trusts no issuer past Vercel's and GitHub's.
  */
-export function verifyTokens(options: VerifyTokensOptions = {}): Authenticate {
-  let made: { issuers: string; verify: ReturnType<typeof createVerifier>['verify'] } | null = null
-  const authenticate: Authenticate = async (request, board) => {
-    if (request.credential === null) throw unauthorized('missing bearer token')
+export function verifyTokens(options: VerifyTokensOptions = {}): (request: CallerRequest & { board?: AuthenticateContext }) => Promise<Principal | null> {
+  let made: { board: AuthenticateContext; issuers: string; verify: ReturnType<typeof createVerifier>['verify'] } | null = null
+  const authenticate = async (request: CallerRequest & { board?: AuthenticateContext }): Promise<Principal | null> => {
+    if (request.credential === null) return null
+    const board = request.board ?? environmentBoard
     const issuers = board.issuers.join('\n')
-    if (made?.issuers !== issuers)
+    if (made?.board !== board || made.issuers !== issuers)
       made = {
+        board,
         issuers,
         verify: createVerifier({
           projectId: async () => (await board.project()).id,
@@ -544,13 +569,18 @@ export function verifyTokens(options: VerifyTokensOptions = {}): Authenticate {
           auth: options,
         }).verify,
       }
-    return made.verify(request.credential, request.audience, request.headers.get('x-vercel-oidc-token') ?? undefined)
+    const principal = await made.verify(request.credential, request.audience, request.headers.get('x-vercel-oidc-token') ?? undefined)
+    verifiedTokens.add(principal)
+    return principal
   }
   return Object.assign(authenticate, { [TOKENS]: true })
 }
 
-/** Whether `authenticate` is `verifyTokens()`'s: what it returns are token principals, not a host's. */
+/** Whether `authenticate` is `verifyTokens()`'s alone: it makes no host's principals. */
 export const verifiesTokens = (authenticate: Authenticate) => TOKENS in authenticate
+
+/** Whether `verifyTokens()` made `principal`, as opposed to a host's own verifier. */
+export const fromTokens = (principal: object) => verifiedTokens.has(principal)
 
 const PRINCIPAL_ID = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[^\s+\]]{1,200}$/
 const KINDS: readonly PrincipalKind[] = ['person', 'deployment', 'workflow', 'external']

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import type { CallerRequest, Can, HostPrincipal } from '../src/access/index.ts'
+import { verifyTokens, type CallerRequest, type Can, type HostPrincipal } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
@@ -168,9 +168,34 @@ describe("a host's authenticate and access", () => {
     expect((await page('session=eve')).status).toBe(401)
   })
 
-  it("gives a host's principal nothing without an access function, and the built-in callers nothing with one", async () => {
+  it("gives a host's principals what their kind gets under the rules", async () => {
     const rules = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
-    expect((await caller(rules.fetch, 'pt_ada')('GET', '/me')).status).toBe(403)
+    // A person the host vouches for is a person: everything, as the board's own people.
+    expect((await caller(rules.fetch, 'pt_ada')('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
+    // A deployment it names gets what a rule gives its ID: none here.
+    expect((await caller(rules.fetch, 'pt_deploy')('GET', '/me')).body.error.message).toBe("this token can't use this board: add vercelProject({ project: 'prj_app', can }) to access")
+  })
+
+  it("composes with vb's tokens: a session cookie, or a bearer token, and nothing is a 401", async () => {
+    const tokens = verifyTokens(testAuth)
+    // The host's session: null when the request carries none, so the next verifier gets it.
+    const staff = (request: CallerRequest) =>
+      request.headers.get('cookie') === 'session=ada' ? ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } as const) : null
+    const tenant = board({
+      store: memory(),
+      url: BOARD_URL,
+      project: { id: PROJECT_ID, teamId: TEAM_ID },
+      authenticate: async (request) => (await staff(request)) ?? (await tokens(request)),
+    })
+    const me = async (headers: Record<string, string>) => {
+      const response = await tenant.fetch(new Request(`${BOARD_URL}/me`, { headers }))
+      return { status: response.status, body: await response.json() }
+    }
+    expect(await me({ cookie: 'session=ada' })).toMatchObject({ status: 200, body: { principal: 'vercel:user:u_ada' } })
+    expect(await me({ authorization: `Bearer ${await personToken()}` })).toMatchObject({ status: 200, body: { principal: 'vercel:user:u_julian' } })
+    // A token that fails is refused, not passed over.
+    expect(await me({ authorization: `Bearer ${await personToken('u_julian', 'https://elsewhere.test/api/board')}` })).toMatchObject({ status: 401 })
+    expect(await me({})).toMatchObject({ status: 401, body: { error: { code: 'unauthorized', message: 'missing bearer token' } } })
   })
 })
 
@@ -263,20 +288,20 @@ describe("a board that switches to a host's model", () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  it("revokes schedules the built-in verifier's callers made, instead of trusting them", async () => {
+  it("asks its function about schedules the built-in verifier's callers made, instead of trusting them", async () => {
     const store = memory()
     const queue = fakeQueue()
     const before = testBoard({ store, scheduler: queue.scheduler })
     const julian = caller(before.fetch, await personToken())
     expect((await julian('POST', '/schedules', { channel: 'dev', text: 'from before', in: '1h' })).status).toBe(201)
 
-    // The same log, now behind a host that only knows Ada.
+    // The same log, now behind a host that only knows Ada: its function decides for everyone.
     const after = board({
       store,
       url: BOARD_URL,
       scheduler: queue.scheduler,
       authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
-      access: () => 'all',
+      access: (principal) => (principal.id === 'vercel:user:u_ada' ? 'all' : null),
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
     vi.setSystemTime(T0 + HOUR)
