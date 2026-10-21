@@ -280,6 +280,8 @@ const CHECKS: Check[] = [
       // Registering replaces a principal's watchers: never on one that has some.
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, and checking would replace them'
+      // Nothing's woken while it checks, and an empty one gets back where it's woken after.
+      const url = registered?.url ?? null
       await ctx.board.register({ url: null, watch: { conformance: { tail: `${ctx.channel} --label conformance=${ctx.labels.conformance}` } } })
       try {
         const message = await post(ctx, 'conformance: for a watcher')
@@ -291,7 +293,7 @@ const CHECKS: Check[] = [
         await ctx.board.ack(match.id, { lease: match.lease })
         await rejects(ctx.board.ack(match.id, { lease: match.lease }), 404, 'no_match', 'acking a match twice')
       } finally {
-        await ctx.board.register({ url: null, watch: {} })
+        await ctx.board.register({ url, watch: {} })
       }
     },
   },
@@ -308,6 +310,7 @@ const CHECKS: Check[] = [
       const registered = (await ctx.board.watchers()).find((registration) => registration.owner === ctx.me.principal)
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, which registering would replace'
+      const url = registered?.url ?? null
       try {
         await ctx.board.register({ url: null, watch: {}, sync: [{ key, platform: key }] })
       } catch (error) {
@@ -322,7 +325,7 @@ const CHECKS: Check[] = [
           id: `conformance-sync-${ctx.labels.conformance}`,
         })
       } catch (error) {
-        await ctx.board.register({ url: null, watch: {} }).catch(() => {})
+        await ctx.board.register({ url, watch: {} }).catch(() => {})
         if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
         throw error
       }
@@ -345,7 +348,7 @@ const CHECKS: Check[] = [
       } finally {
         // Its author is the platform user: only an import can take it down.
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
-        await ctx.board.register({ url: null, watch: {} }).catch(() => {})
+        await ctx.board.register({ url, watch: {} }).catch(() => {})
       }
     },
   },
