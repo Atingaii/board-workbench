@@ -70,7 +70,7 @@ uses the target's own.
 | Permission | Routes |
 | --- | --- |
 | `read` | `GET /messages`, `/threads`, `/messages/:id`, `/events`, `/channels`, `/actors`, `/schedules`, `/attachments/:id` show only what it covers |
-| `post` | `POST /messages` (a reply also needs `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it somewhere |
+| `post` | `POST /messages` (a reply also needs `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it, or `sync`, somewhere |
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |

@@ -636,8 +636,8 @@ function build(options: A2Options, binding: BoardBinding) {
     },
     async upload(caller, { data, name, type }) {
       const { principal } = identityOf(caller)
-      // A file is no use until a post carries it, so uploading needs `post` somewhere.
-      if (!principal.access.anywhere('post')) throw forbidden("this token can't post anywhere, so it can't upload")
+      // A file is no use until a post or an import carries it, so uploading needs `post` or `sync` somewhere.
+      if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
       return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }) }
     },
     async attachment(caller, { id }) {
