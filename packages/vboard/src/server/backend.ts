@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import type { BoardClient } from '../client/client.ts'
+import type { BoardClient, ProfileOption } from '../client/client.ts'
 import type { ExternalEvent } from '../contract/contract.ts'
 import type { Actor } from '../contract/reducers.ts'
 import type { Author } from '../contract/schemas.ts'
@@ -21,11 +21,13 @@ export type Caller =
    */
   | { identity: CallerIdentity; origin: WriteOrigin }
   /**
-   * This deployment's own code, writing as `self`: `client(name)`, a watcher, the middleware's
-   * client (`via: middleware`), or sync (`via: engine`). Each backend decides who that is on its
-   * board: `vboard:client:<name>` on a2(), `<principal>+<name>` elsewhere.
+   * This deployment's own code, writing as `self`: a handle (`via: client`, with the profile from
+   * `as(profile)`, or null for the board's own), a watcher, the middleware's handle
+   * (`via: middleware`), or sync (`via: engine`). Each backend decides who that is on its board:
+   * `vboard:client` and `vboard:client:<profile>` on a2(), the token's holder with that profile
+   * elsewhere.
    */
-  | { self: string; origin: WriteOrigin }
+  | { self: string | null; origin: WriteOrigin }
 
 /** One method per protocol route: the caller, the parsed input, and the request's signal. */
 export type ProtocolMethods = {
@@ -108,4 +110,11 @@ export interface Backend extends ProtocolMethods {
    * from the board (its rules, its subscriptions, an in-process client). It does no I/O.
    */
   bind(board: BoardBinding): void
+  /**
+   * For a backend that keeps nothing here (`remote` is set): a client of the board it uses, as the
+   * token's holder, with `profile` (`undefined`: the one the environment picks). A handle on a
+   * board that runs no watchers, sync, or middleware is this client; without it, a handle calls
+   * through board() like any other.
+   */
+  client?(profile?: ProfileOption): BoardClient
 }

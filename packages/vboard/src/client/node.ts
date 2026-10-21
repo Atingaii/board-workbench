@@ -8,13 +8,7 @@ import { promisify } from 'node:util'
 import { decodeJwt } from 'jose'
 import { exchangeVercelOidcToken, getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import type { Discovery } from '../api/routes.ts'
-import {
-  BoardError,
-  createBoardClient,
-  type BoardClient,
-  type ClientOptions,
-  type ProfileOption,
-} from './client.ts'
+import { BoardError, type ClientOptions, type ProfileOption, type Resolvable, type Transport } from './client.ts'
 
 export const configDir = () =>
   join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'vboard')
@@ -240,18 +234,22 @@ async function githubActionsToken(audience: string): Promise<string> {
   return ((await response.json()) as { value: string }).value
 }
 
-export type NodeClientOptions = Partial<ClientOptions>
-
-/**
- * A client with Node defaults: the URL from `VBOARD_URL`, the project link,
- * or the saved board, and a token from `VBOARD_TOKEN`, a local board's token file
- * (`vb serve`), GitHub Actions, the Vercel runtime, or your Vercel CLI login, in that order.
- */
-export function createClient(options: NodeClientOptions = {}): BoardClient {
-  const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
+/** The board the environment points at: `VBOARD_URL`, the project's link (`vb link`, `vb serve`), or `vb use`'s. */
+export function boardUrl(): string {
+  const url = (process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
   if (!url)
     throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, run `vboard use <url>`, or `vboard serve` for a local one', 0)
+  return url
+}
 
+/**
+ * How a client reaches the board at `url` from Node: through Deployment Protection, with a token
+ * from `token`, `VBOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the Vercel
+ * runtime, or your Vercel CLI login, in that order. A token it mints follows a board's `remote` to
+ * the board that keeps the log.
+ */
+export function connect(url: string, options: { token?: Resolvable<string> | undefined; fetch?: typeof fetch | undefined } = {}): Transport {
+  url = url.replace(/\/+$/, '')
   /** A board this client talks to: its discovery, and a token minted for it. */
   type Reached = { url: string; fetch: typeof fetch; discover(): Promise<Discovery>; token(): Promise<string>; cached(): Cached | null; source(): string | null }
   const reached = new Map<string, Reached>()
@@ -353,16 +351,6 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
   let agent: DetectedAgent | null | undefined
   const detected = () => (agent === undefined ? (agent = detectAgent()) : agent)
 
-  const profile =
-    options.profile !== undefined
-      ? options.profile
-      : (): ProfileOption => {
-          const name = process.env.VBOARD_AS || detected()?.profile
-          if (!name) return null
-          const avatar = process.env.VBOARD_AVATAR
-          return avatar ? { name, avatar } : name
-        }
-
   /** Who this client is, from the token it minted for the board it talks to. */
   const minted = async () => {
     const board = await primary()
@@ -370,40 +358,34 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
     return board
   }
 
-  return createBoardClient({
-    url,
-    token: options.token ?? (async () => (await primary()).token()),
-    profile,
-    session: options.session !== undefined ? options.session : () => detected()?.session ?? null,
-    handle:
-      options.handle !== undefined
-        ? options.handle
-        : async () => {
-            if (process.env.VBOARD_HANDLE) return process.env.VBOARD_HANDLE
-            if (options.token !== undefined) return null
-            return (await minted()).cached()?.handle ?? null
-          },
-    person:
-      options.person !== undefined
-        ? options.person
-        : async () => {
-            if (options.token !== undefined) return null
-            const cached = (await minted()).cached()
-            return cached ? { name: cached.name ?? null, avatar: cached.avatar ?? null } : null
-          },
-    source:
-      options.source !== undefined
-        ? options.source
-        : async () => {
-            if (options.token !== undefined) return null
-            return (await minted()).source()
-          },
-    ...(options.headers !== undefined ? { headers: options.headers } : {}),
+  return {
     fetch: routed,
-  })
+    token: options.token ?? (async () => (await primary()).token()),
+    profile: (): ProfileOption => {
+      const name = process.env.VBOARD_AS || detected()?.profile
+      if (!name) return null
+      const avatar = process.env.VBOARD_AVATAR
+      return avatar ? { name, avatar } : name
+    },
+    session: () => detected()?.session ?? null,
+    async handle() {
+      if (process.env.VBOARD_HANDLE) return process.env.VBOARD_HANDLE
+      if (options.token !== undefined) return null
+      return (await minted()).cached()?.handle ?? null
+    },
+    async person() {
+      if (options.token !== undefined) return null
+      const cached = (await minted()).cached()
+      return cached ? { name: cached.name ?? null, avatar: cached.avatar ?? null } : null
+    },
+    async source() {
+      if (options.token !== undefined) return null
+      return (await minted()).source()
+    },
+  }
 }
 
-export { BoardError, type BoardClient, type ClientOptions, type ProfileOption } from './client.ts'
+
 
 const WHERE = 'Project → Settings → Deployment Protection → Protection Bypass for Automation'
 

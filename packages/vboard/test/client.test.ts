@@ -3,20 +3,21 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createClient } from '../src/client/index.ts'
+import { board } from '../src/server/index.ts'
+import { http } from '../src/backend-http/index.ts'
 import { BOARD_URL, personToken, testBoard } from './harness.ts'
-import { createClient as createNodeClient, detectAgent } from '../src/client/node.ts'
+import { detectAgent } from '../src/client/node.ts'
 
 async function setup(userId = 'u_julian', handle = 'julian', profile: string | null = null) {
-  const board = testBoard()
+  const team = testBoard()
   const token = await personToken(userId)
   const fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-    board.fetch(new Request(input, init))) as typeof globalThis.fetch
-  const client = createClient({ url: BOARD_URL, token, handle, profile, fetch })
-  return { board, client, fetch }
+    team.fetch(new Request(input, init))) as typeof globalThis.fetch
+  const client = board({ backend: http(BOARD_URL, { token, handle, fetch }) }).as(profile)
+  return { team, client, fetch }
 }
 
-describe('client', () => {
+describe('a handle on a board over http()', () => {
   it('posts, replies, and reads threads', async () => {
     const { client } = await setup()
     const root = await client.post('errors-www', { text: 'deploy failed', labels: { status: 'open' } })
@@ -74,11 +75,11 @@ describe('client', () => {
   })
 
   it('streams live events and resumes after the server closes the stream', async () => {
-    const board = testBoard({ streamMaxMs: 150 })
+    const team = testBoard({ streamMaxMs: 150 })
     const token = await personToken()
     const fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
-      board.fetch(new Request(input, init))) as typeof globalThis.fetch
-    const client = createClient({ url: BOARD_URL, token, fetch })
+      team.fetch(new Request(input, init))) as typeof globalThis.fetch
+    const client = board({ backend: http(BOARD_URL, { token, fetch }) })
     const controller = new AbortController()
     const seen: string[] = []
     const reading = (async () => {
@@ -110,7 +111,7 @@ describe('agent detection', () => {
   })
 })
 
-describe('the audience a Node client mints for', () => {
+describe('the audience a handle mints a token for, in Node', () => {
   const EVIL = 'https://evil.example/api/board'
   const VICTIM = 'https://victim.example/api/board'
   let config: string
@@ -127,7 +128,7 @@ describe('the audience a Node client mints for', () => {
   })
 
   // A board at EVIL whose discovery claims `audience`, recording every bearer it's sent.
-  function board(audience: string) {
+  function evil(audience: string) {
     const bearers: string[] = []
     const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
@@ -139,8 +140,7 @@ describe('the audience a Node client mints for', () => {
     }) as typeof globalThis.fetch
     return { fetch, bearers }
   }
-  const against = (fetch: typeof globalThis.fetch) =>
-    createNodeClient({ url: EVIL, fetch, handle: null, profile: null, session: null, person: null })
+  const against = (fetch: typeof globalThis.fetch) => board({ backend: http(EVIL, { fetch }) }).as(null)
 
   // GitHub Actions, minting a token for whatever audience it's asked for.
   function actions() {
@@ -157,7 +157,7 @@ describe('the audience a Node client mints for', () => {
 
   it('asks GitHub Actions for the URL it talks to', async () => {
     const asked = actions()
-    const { fetch, bearers } = board(EVIL)
+    const { fetch, bearers } = evil(EVIL)
     await against(fetch).channels()
     expect(asked).toEqual([EVIL])
     expect(bearers).toEqual([`Bearer token-for-${EVIL}`])
@@ -165,7 +165,7 @@ describe('the audience a Node client mints for', () => {
 
   it("refuses a board whose discovery claims another board's audience", async () => {
     const asked = actions()
-    const { fetch, bearers } = board(VICTIM)
+    const { fetch, bearers } = evil(VICTIM)
     await expect(against(fetch).channels()).rejects.toMatchObject({
       code: 'wrong_audience',
       message: `the board at ${EVIL} says its URL is ${VICTIM}: use that URL`,
@@ -182,7 +182,7 @@ describe('the audience a Node client mints for', () => {
       join(tokens, `${createHash('sha256').update(VICTIM).digest('hex').slice(0, 32)}.json`),
       JSON.stringify({ token: victimToken, expiresAt: Date.now() + 12 * 3600_000, handle: 'julian', name: 'Julian', avatar: null }),
     )
-    const { fetch, bearers } = board(VICTIM)
+    const { fetch, bearers } = evil(VICTIM)
     await expect(against(fetch).channels()).rejects.toMatchObject({ code: 'wrong_audience' })
     expect(bearers).toEqual([])
   })

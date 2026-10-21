@@ -120,6 +120,8 @@ type Redrivable = {
 
 /** Sync's own lookups and receipts, from board() in this deployment. */
 const SYNC_ACTOR = 'vboard:sync'
+/** The board's own code, through its handle: `team.post(…)`. With `as(profile)`, `vboard:client:<profile>`. */
+const CLIENT_ACTOR = 'vboard:client'
 
 /** A cursor or message ref in a request, as this board's log index: decimals, from 0. */
 function cursorAt(value: string): number {
@@ -159,17 +161,19 @@ const fromRequest = (caller: Caller) => 'identity' in caller && (caller.origin.v
 const ownSync = (caller: Caller) => 'self' in caller && caller.origin.via?.kind === 'engine'
 
 /**
- * Who a caller writes as. This deployment's own code writes as `vboard:client:<name>` from
- * `client(name)`, as `vboard:watch:<id>` from a watcher, which its own writes never wake, and as
- * `vboard:middleware` and `vboard:sync` from board()'s middleware and sync.
+ * Who a caller writes as. This deployment's own code writes as `vboard:client` from a handle,
+ * `vboard:client:<profile>` from `as(profile)`, as `vboard:watch:<id>` from a watcher, which its
+ * own writes never wake, and as `vboard:middleware` and `vboard:sync` from board()'s middleware
+ * and sync.
  */
-function selfIdentity(caller: Extract<Caller, { self: string }>): Identity {
+function selfIdentity(caller: Extract<Caller, { self: string | null }>): Identity {
   const { self, origin } = caller
-  if (origin.via?.kind === 'watcher') return deploymentIdentity(`vboard:watch:${self}`, self)
+  if (origin.via?.kind === 'watcher') return deploymentIdentity(`vboard:watch:${self}`, self ?? 'watch')
   if (origin.via?.kind === 'middleware') return deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
   if (origin.via?.kind === 'engine') return deploymentIdentity(SYNC_ACTOR, 'sync')
-  if (!ID.test(self)) throw badRequest(`client: names use lowercase letters, numbers, - and _, got: ${self}`)
-  return deploymentIdentity(`vboard:client:${self}`, self)
+  if (self === null) return deploymentIdentity(CLIENT_ACTOR, 'client')
+  if (!ID.test(self)) throw badRequest(`as: profiles use lowercase letters, numbers, - and _, got: ${self}`)
+  return deploymentIdentity(`${CLIENT_ACTOR}:${self}`, self)
 }
 
 /** A platform user, writing through sync: full access, and each write still proved against the channel it lands in. */

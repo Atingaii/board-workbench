@@ -173,7 +173,7 @@ describe('watchers on http()', () => {
     try {
       // Nothing happens until it's first used: here, a call from the project's own code.
       expect((await caller(t.remote.fetch, await v0Token())('GET', '/watchers')).body.watchers).toEqual([])
-      await local.client('deploys').me()
+      await local.as('deploys').me()
       await vi.waitFor(async () => {
         const { body } = await caller(t.remote.fetch, await v0Token())('GET', '/watchers')
         expect(body.watchers).toEqual([expect.objectContaining({ owner: V0, url: null })])

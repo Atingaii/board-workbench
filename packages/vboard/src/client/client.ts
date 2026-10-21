@@ -52,7 +52,7 @@ export class BoardError extends Error {
   }
 }
 
-type Resolvable<T> = T | (() => T | Promise<T>)
+export type Resolvable<T> = T | (() => T | Promise<T>)
 const resolve = async <T>(value: Resolvable<T>): Promise<T> =>
   typeof value === 'function' ? await (value as () => T | Promise<T>)() : value
 
@@ -76,6 +76,24 @@ export type ClientOptions = {
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
+}
+
+/**
+ * How a client reaches a board, and who the environment says it is. The Node build finds each from
+ * the environment, as `vb` does; a browser has only what it's given.
+ */
+export type Transport = {
+  /** Every request goes through it. */
+  fetch: typeof fetch
+  token: Resolvable<string>
+  /** The profile the environment picks: `VBOARD_AS`, or the coding agent it runs in. */
+  profile: () => ProfileOption
+  /** The agent session it runs in. */
+  session: () => string | null
+  handle: () => Promise<string | null>
+  person: () => Promise<{ name: string | null; avatar: string | null } | null>
+  /** Where the token comes from, in words. */
+  source: () => Promise<string | null>
 }
 
 export type PostOptions = {

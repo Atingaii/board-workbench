@@ -179,8 +179,8 @@ describe('sync on a board on http()', () => {
     let calls = 0
     const { team, project } = setup({ middleware: [async ({ next }) => (calls++ === 0 ? next() : undefined)] })
     const julian = await julianOn(team.fetch)
-    const first = await project.client('deploys', { key: 'd1' }).post('firehose', 'a1b2c3 is live')
-    const again = await project.client('deploys', { key: 'd1' }).post('firehose', 'a1b2c3 is live')
+    const first = await project.as('deploys').post('firehose', { text: 'a1b2c3 is live', id: 'd1' })
+    const again = await project.as('deploys').post('firehose', { text: 'a1b2c3 is live', id: 'd1' })
     expect(again.id).toBe(first.id)
     expect(calls).toBe(1)
     expect((await read(julian, 'firehose')).map((m) => [m.text, m.by.actor])).toEqual([['a1b2c3 is live', `${SUPPORT}+deploys`]])

@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { createClient } from '../src/client/index.ts'
+import { board } from '../src/server/index.ts'
+import { http } from '../src/backend-http/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { BOARD_URL, personToken, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
 type Fetch = (request: Request) => Promise<Response>
 
+/** A handle on the board behind `fetch`, as `vb conformance` checks it. */
 const clientOf = async (fetch: Fetch) =>
-  createClient({
-    url: BOARD_URL,
-    token: await personToken(),
-    handle: 'julian',
-    fetch: ((input: RequestInfo | URL, init?: RequestInit) => fetch(new Request(input, init))) as typeof globalThis.fetch,
-  })
+  board({
+    backend: http(BOARD_URL, {
+      token: await personToken(),
+      handle: 'julian',
+      fetch: ((input: RequestInfo | URL, init?: RequestInit) => fetch(new Request(input, init))) as typeof globalThis.fetch,
+    }),
+  }).as(null)
 
 /** A board in front of `fetch` that rewrites what it answers, or what it's asked. */
 function broken(fetch: Fetch, change: { request?: (url: URL) => void; body?: (text: string) => string }): Fetch {

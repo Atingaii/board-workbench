@@ -1,11 +1,13 @@
 import { useSyncExternalStore } from 'react'
 import type { BoardEventView, InboxEntry } from '../../api/routes.ts'
 import type { Attachment } from '../../contract/schemas.ts'
-import { createBoardClient } from '../../client/client.ts'
+import { http } from '../../backend-http/index.default.ts'
+import { board } from '../../server/index.default.ts'
 import * as store from './store.ts'
 
-// The page's connection to the board: the same SDK as every other client,
-// pointed at the inspector, which adds your credentials.
+// The page's connection to the board: a handle like any other, on the inspector's
+// proxy, which adds your credentials. A browser has no environment, so it's given
+// the proxy's URL and its token.
 
 const token = document.querySelector<HTMLMetaElement>('meta[name="inspect-token"]')?.content ?? ''
 
@@ -47,21 +49,22 @@ let profile: string | null | undefined = (() => {
 
 export const getProfile = () => profile
 
-const client = createBoardClient({
-  url: `${location.origin}/board`,
-  token: '',
-  headers: () => ({ 'x-inspect-token': token, ...(profile !== undefined ? { 'x-inspect-profile': profile ?? '' } : {}) }),
-  fetch: async (input, init) => {
-    const stream = String(input).includes('/board/events')
-    try {
-      const response = await fetch(input, init)
-      if (stream) set((s) => ({ ...s, live: response.ok ? 'live' : 'reconnecting' }))
-      return response
-    } catch (error) {
-      if (stream && !init?.signal?.aborted) set((s) => ({ ...s, live: 'reconnecting' }))
-      throw error
-    }
-  },
+const client = board({
+  backend: http(`${location.origin}/board`, {
+    token: '',
+    headers: () => ({ 'x-inspect-token': token, ...(profile !== undefined ? { 'x-inspect-profile': profile ?? '' } : {}) }),
+    fetch: async (input, init) => {
+      const stream = String(input).includes('/board/events')
+      try {
+        const response = await fetch(input, init)
+        if (stream) set((s) => ({ ...s, live: response.ok ? 'live' : 'reconnecting' }))
+        return response
+      } catch (error) {
+        if (stream && !init?.signal?.aborted) set((s) => ({ ...s, live: 'reconnecting' }))
+        throw error
+      }
+    },
+  }),
 })
 
 /** Switches who you post as, then learns the identity that is. */

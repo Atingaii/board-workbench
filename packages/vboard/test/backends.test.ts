@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createClient } from '../src/client/node.ts'
 import { memory } from '../src/store/memory.ts'
 import { board, HttpError, type Backend, type Caller } from '../src/server/index.ts'
 import { vercelProject } from '../src/access/index.ts'
@@ -111,7 +110,10 @@ describe('board() and its backend', () => {
     expect(calls).toHaveLength(3)
 
     // Your own code is `{ self }`: the backend decides who that is.
-    await board({ backend: { ...mine, bind: () => {} } as Backend, url: BOARD_URL }).client('deploys').messages()
+    const own = board({ backend: { ...mine, bind: () => {} } as Backend, url: BOARD_URL })
+    await own.messages()
+    expect(calls.at(-1)!.caller).toEqual({ self: null, origin: { via: { kind: 'client', name: null } } })
+    await own.as('deploys').messages()
     expect(calls.at(-1)!.caller).toEqual({ self: 'deploys', origin: { via: { kind: 'client', name: 'deploys' } } })
   })
 
@@ -149,7 +151,7 @@ describe('a board on http()', () => {
     vi.unstubAllEnvs()
   })
 
-  it('is followed by a client, which mints a token for the board it uses', async () => {
+  it('is followed by a handle on it, which mints a token for the board it uses', async () => {
     const { remote, project } = team()
     await signedIn([V0_URL, BOARD_URL])
     const seen: string[] = []
@@ -158,7 +160,7 @@ describe('a board on http()', () => {
       seen.push(`${request.method} ${request.url}`)
       return request.url.startsWith(V0_URL) ? project.fetch(request) : remote.fetch(request)
     }
-    const client = createClient({ url: V0_URL, fetch: route as typeof fetch, profile: null, session: null })
+    const client = board({ backend: http(V0_URL, { fetch: route as typeof fetch }) }).as(null)
     expect((await client.me()).principal).toBe('vercel:user:u_julian')
     expect((await client.post('dev', 'from the project')).text).toBe('from the project')
     expect(await client.discovery()).toMatchObject({ url: V0_URL, remote: BOARD_URL })
@@ -167,12 +169,14 @@ describe('a board on http()', () => {
     vi.unstubAllEnvs()
   })
 
-  it('writes from your own code as its deployment, idempotent by key', async () => {
+  it("writes from your own code as its deployment, idempotent by the post's id", async () => {
     const { remote, project } = team()
-    await project.client('deploys', { key: 'd1' }).post('deploys', 'a1b2c3 is live')
-    await project.client('deploys', { key: 'd1' }).post('deploys', 'a1b2c3 is live')
-    await project.client('deploys', { key: 'd2' }).post('deploys', 'd4e5f6 is live')
-    await expect(project.client('deploy_bot').post('deploys', 'x')).rejects.toThrow('client: deploy_bot: names start with a letter')
+    const deploys = project.as('deploys')
+    await deploys.post('deploys', { text: 'a1b2c3 is live', id: 'd1' })
+    await deploys.post('deploys', { text: 'a1b2c3 is live', id: 'd1' })
+    await project.as('deploys').post('deploys', { text: 'd4e5f6 is live', id: 'd2' })
+    expect((await deploys.posted('d2')).text).toBe('d4e5f6 is live')
+    await expect(project.as('deploy_bot').post('deploys', 'x')).rejects.toThrow('start with a letter and use up to 32 letters, numbers, and hyphens')
 
     const { body } = await (await julianOn(remote.fetch))('GET', '/messages?channel=deploys')
     expect(body.messages.map((message: { text: string; by: { actor: string } }) => [message.text, message.by.actor])).toEqual([
@@ -181,7 +185,7 @@ describe('a board on http()', () => {
     ])
   })
 
-  it("keeps a client's keyed post IDs its own, so no one can take one first", async () => {
+  it("keeps a handle's post IDs its own, so no one can take one first", async () => {
     const { remote, project } = team()
     const marketing = caller(remote.fetch, await deploymentToken('marketing', 'prj_marketing', 'production'))
     const taken = await marketing('POST', '/messages', { channel: 'deploys', text: 'mine now', id: `key:${V0}:0123456789abcdef0123456789abcdef` })
@@ -195,8 +199,10 @@ describe('a board on http()', () => {
       },
     })
     expect((await marketing('POST', '/messages', { channel: 'deploys', text: 'fine', id: 'key:vercel:project:prj_marketing:production:abc' })).status).toBe(201)
-    // v0's own keyed post still lands, under its own principal.
-    expect((await project.client('deploys', { key: 'd1' }).post('deploys', 'a1b2c3 is live')).id).toEqual(expect.any(String))
+    // v0's own post still lands, its ID under its own principal.
+    expect((await project.as('deploys').post('deploys', { text: 'a1b2c3 is live', id: 'd1' })).id).toEqual(expect.any(String))
+    // Even one it names as someone else's key.
+    expect((await project.post('deploys', { text: 'still mine', id: `key:vercel:project:prj_marketing:production:abc` })).text).toBe('still mine')
   })
 
   it('checks its watchers the way a2() does, and their IDs as profiles', () => {

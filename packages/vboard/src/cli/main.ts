@@ -8,7 +8,9 @@ import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { configDir, createClient, detectAgent, projectDir, projectUrl } from '../client/node.ts'
+import { configDir, detectAgent, projectDir, projectUrl } from '../client/node.ts'
+import { http } from '../backend-http/index.ts'
+import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
@@ -270,7 +272,8 @@ function filters(channel?: string): Filters & { after?: string } {
   }
 }
 
-function client() {
+/** The board this command talks to: `--url`'s, or the one the environment points at, as `--as` says. */
+function client(): Board {
   const profile: ProfileOption | undefined = flags.human
     ? null
     : flags.as
@@ -278,12 +281,8 @@ function client() {
         ? { name: flags.as, avatar: flags.avatar }
         : flags.as
       : undefined
-  return createClient({
-    ...(flags.url ? { url: flags.url } : {}),
-    ...(profile !== undefined ? { profile } : {}),
-    ...(flags.human ? { session: null } : {}),
-    ...(flags.handle ? { handle: flags.handle } : {}),
-  })
+  const board = boardAt({ backend: http(flags.url, flags.handle ? { handle: flags.handle } : {}) })
+  return profile !== undefined ? board.as(profile) : board
 }
 
 /**
@@ -531,8 +530,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'use': {
       const url = args[0]
       if (!url || args.length !== 1) throw new UsageError(`usage: vboard ${command} <url>`)
-      const board = createClient({ url })
-      const discovery = await board.discovery()
+      const discovery = await boardAt({ backend: http(url) }).discovery()
       const root = command === 'link' ? projectDir() : null
       await saveLink(root, discovery.url)
       out(root === null ? `using ${discovery.url}` : `linked ${root} to ${discovery.url}`)
@@ -1004,7 +1002,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
         if (!flags['no-inspect']) {
           // With this board's token, whatever VBOARD_TOKEN says.
-          const board = createClient({ url: local.url, token: local.token, handle: local.handle, profile: null, session: null, person: null })
+          const board = boardAt({ backend: http(local.url, { token: local.token, handle: local.handle }) }).as(null)
           inspector = await startInspector({ client: board })
           out(`inspector at ${inspector.url}`)
           if (!flags['no-open']) openBrowser(inspector.url)
