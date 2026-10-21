@@ -256,8 +256,9 @@ vb tail --from slack --all              # board events from Slack, delivery rece
 vb sources slack read '#general'        # read a channel the board doesn't sync
 ```
 
-`vb inbox` needs `sync` in every channel for the board's own inbox, since raw
-events span all of them, and shows a sync elsewhere only what it pushed.
+`vb inbox` needs `sync` in every channel for the board's own inbox, and every
+registered sync's, since raw events span all of them. It shows a sync elsewhere
+only what it pushed.
 `vb sources … read` needs `manage` in every channel: see [Access](../01-board/09-access.md).
 Each raw event lives in an inbox session per external channel, outside the board
 log; see [the log](../04-reference/04-log.md).

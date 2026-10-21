@@ -106,7 +106,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
-| GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). The board's own need `sync` in every channel; a sync elsewhere sees what it pushed |
+| GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). With `sync` in every channel, the board's own and every registered sync's; a sync elsewhere sees what it pushed |
 | GET | `/stuck` | `{ stuck }`: events that failed 10 times and stopped their thread. Needs `manage` in every channel |
 | POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip', consumer? }` → `{ redriven }`: retries one with a fresh 10 tries, or skips it, for `consumer` or every consumer it's stuck for. 404 for a session the board doesn't have. Needs `manage` in every channel |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). Needs `manage` in every channel |

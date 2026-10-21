@@ -432,8 +432,9 @@ vb inbox <key> [channel] [--limit N]
 ```
 
 Raw platform events a sync entry received, newest first: what Slack or GitHub
-actually sent. `--limit` is 50 by default, at most 500. The board's own need
-`sync` in every channel; a sync elsewhere sees what it pushed.
+actually sent. `--limit` is 50 by default, at most 500. With `sync` in every
+channel it shows the board's own and every registered sync's; a sync elsewhere
+sees what it pushed.
 
 ### stuck
 
