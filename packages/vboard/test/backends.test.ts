@@ -5,7 +5,7 @@ import { board, HttpError, type Backend, type Caller } from '../src/server/index
 import { vercelProject } from '../src/access/index.ts'
 import { a2 } from '../src/backend-a2/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
@@ -33,6 +33,14 @@ function team(options: Parameters<typeof http>[1] = {}) {
 
 const julianOn = async (fetch: (request: Request) => Promise<Response>, audience?: string) =>
   caller(fetch, await personToken('u_julian', audience), { 'x-board-handle': 'julian' })
+
+/** Julian, signed in to each board as `vercel login` leaves it, for a client in this process. */
+async function signedIn(audiences: string[]) {
+  vi.stubEnv('XDG_CONFIG_HOME', await signedInHome(audiences))
+  vi.stubEnv('VBOARD_TOKEN', '')
+  vi.stubEnv('VERCEL', '')
+  vi.stubEnv('ACTIONS_ID_TOKEN_REQUEST_URL', '')
+}
 
 describe('board() and its backend', () => {
   it("takes a URL, which TypeScript can't check", () => {
@@ -135,8 +143,24 @@ describe('a board on http()', () => {
       body: { error: { code: 'remote', message: `${V0_URL} keeps no log: use ${BOARD_URL}` } },
     })
 
-    const route = (input: RequestInfo | URL, init?: RequestInit) => project.fetch(new Request(input, init))
-    await expect(createClient({ url: V0_URL, fetch: route as typeof fetch }).me()).rejects.toThrow(`${V0_URL} keeps no log: use ${BOARD_URL}`)
+    vi.unstubAllEnvs()
+  })
+
+  it('is followed by a client, which mints a token for the board it uses', async () => {
+    const { remote, project } = team()
+    await signedIn([V0_URL, BOARD_URL])
+    const seen: string[] = []
+    const route = (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      seen.push(`${request.method} ${request.url}`)
+      return request.url.startsWith(V0_URL) ? project.fetch(request) : remote.fetch(request)
+    }
+    const client = createClient({ url: V0_URL, fetch: route as typeof fetch, profile: null, session: null })
+    expect((await client.me()).principal).toBe('vercel:user:u_julian')
+    expect((await client.post('dev', 'from the project')).text).toBe('from the project')
+    expect(await client.discovery()).toMatchObject({ url: V0_URL, remote: BOARD_URL })
+    // Its discovery, then the other board's, and everything else there.
+    expect(seen).toEqual([`GET ${V0_URL}`, `GET ${BOARD_URL}`, `GET ${BOARD_URL}/me`, `POST ${BOARD_URL}/messages`, `GET ${V0_URL}/`])
     vi.unstubAllEnvs()
   })
 

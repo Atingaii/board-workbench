@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
@@ -160,6 +164,21 @@ export const workflowToken = (claims: Record<string, unknown> = {}) =>
 /** A token from another OIDC issuer, GitLab's shape by default. */
 export const oidcToken = (claims: Record<string, unknown> = {}, issuer = OIDC_ISS) =>
   sign({ sub: 'project_path:acme/api:ref_type:branch:ref:main', project_path: 'acme/api', ref: 'main', ...claims }, issuer)
+
+/**
+ * A config home where Julian is signed in to each board in `audiences`, as `vercel login` leaves
+ * it: a token cached for each, so the Node client mints none. Pass it as `XDG_CONFIG_HOME`.
+ */
+export async function signedInHome(audiences: string[], userId = 'u_julian') {
+  const home = await mkdtemp(join(tmpdir(), 'vboard-tokens-'))
+  await mkdir(join(home, 'vboard', 'tokens'), { recursive: true })
+  for (const audience of audiences) {
+    const token = await personToken(userId, audience)
+    const file = join(home, 'vboard', 'tokens', `${createHash('sha256').update(audience).digest('hex').slice(0, 32)}.json`)
+    await writeFile(file, JSON.stringify({ token, expiresAt: Date.now() + 3_600_000, handle: 'julian', name: 'Julian', avatar: null }))
+  }
+  return home
+}
 
 /** Calls the board in-process, like a client would over HTTP. */
 export function caller(handler: (request: Request) => Promise<Response>, token: string, headers: Record<string, string> = {}) {

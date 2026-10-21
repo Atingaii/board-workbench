@@ -251,59 +251,121 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
   const url = (options.url ?? process.env.VBOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
   if (!url)
     throw new BoardError('no_board', 'no board URL: run `vboard link <url>`, set VBOARD_URL, run `vboard use <url>`, or `vboard serve` for a local one', 0)
-  const doFetch = guarded(url, options.fetch ?? globalThis.fetch, options.token)
 
-  // Every token is for `url`, the board it's sent to. A board whose discovery claims
-  // another audience gets none, so its answer can't get us to mint one it could replay.
-  let discovery: Promise<Discovery> | undefined
-  const discover = () =>
-    (discovery ??= doFetch(url).then(async (response) => {
-      if (!response.ok) throw new BoardError('no_board', `no board at ${url} (${response.status})`, response.status)
-      const found = (await response.json()) as Discovery
-      if (found.audience !== url)
-        throw new BoardError('wrong_audience', `the board at ${url} says its URL is ${found.audience}: use that URL`, 0)
-      if (found.remote) throw new BoardError('remote', `${url} keeps no log: use ${found.remote}`, 0)
-      return found
-    }))
+  /** A board this client talks to: its discovery, and a token minted for it. */
+  type Reached = { url: string; fetch: typeof fetch; discover(): Promise<Discovery>; token(): Promise<string>; cached(): Cached | null; source(): string | null }
+  const reached = new Map<string, Reached>()
+  /** The board at `at`. One a board's discovery sent this client to may not send it on again. */
+  function reach(at: string, sent: boolean): Reached {
+    const known = reached.get(at)
+    if (known) return known
+    const doFetch = guarded(at, options.fetch ?? globalThis.fetch, options.token)
+    // Every token is for `at`, the board it's sent to. A board whose discovery claims
+    // another audience gets none, so its answer can't get us to mint one it could replay.
+    let discovery: Promise<Discovery> | undefined
+    const discover = () =>
+      (discovery ??= doFetch(at).then(async (response) => {
+        if (!response.ok) throw new BoardError('no_board', `no board at ${at} (${response.status})`, response.status)
+        const found = (await response.json()) as Discovery
+        if (found.audience !== at)
+          throw new BoardError('wrong_audience', `the board at ${at} says its URL is ${found.audience}: use that URL`, 0)
+        if (found.remote && sent) throw new BoardError('remote', `${at} keeps no log either: its discovery names ${found.remote}`, 0)
+        return found
+      }))
 
-  let cached: Cached | null = null
-  let source: string | null = null
-  let person: Promise<Cached> | null = null
-  // `source` says which of these it picked, for `vb whoami`.
-  const mint = async (): Promise<Cached> => {
-    if (process.env.VBOARD_TOKEN) {
-      const token = process.env.VBOARD_TOKEN
-      source = 'VBOARD_TOKEN'
-      return { token, expiresAt: expiry(token) }
+    let cached: Cached | null = null
+    let source: string | null = null
+    let person: Promise<Cached> | null = null
+    // `source` says which of these it picked, for `vb whoami`.
+    const mint = async (): Promise<Cached> => {
+      if (process.env.VBOARD_TOKEN) {
+        const token = process.env.VBOARD_TOKEN
+        source = 'VBOARD_TOKEN'
+        return { token, expiresAt: expiry(token) }
+      }
+      const local = localToken(at)
+      if (local) {
+        source = 'vb serve'
+        return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
+      }
+      const discovered = await discover()
+      const audience = at
+      if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+        const token = await githubActionsToken(audience)
+        source = 'GitHub Actions OIDC'
+        return { token, expiresAt: expiry(token) }
+      }
+      if (process.env.VERCEL === '1') {
+        const token = await hostedToken(audience)
+        source = 'Vercel OIDC'
+        return { token, expiresAt: expiry(token) }
+      }
+      person ??= personToken(audience, discovered).finally(() => {
+        person = null
+      })
+      const minted = await person
+      source = 'vercel login'
+      return minted
     }
-    const local = localToken(url)
-    if (local) {
-      source = 'vb serve'
-      return { token: local.token, expiresAt: expiry(local.token), handle: local.handle, name: null, avatar: null }
+    const board: Reached = {
+      url: at,
+      fetch: doFetch,
+      discover,
+      async token() {
+        if (!cached || cached.expiresAt - 60_000 < Date.now()) cached = await mint()
+        return cached.token
+      },
+      cached: () => cached,
+      source: () => source,
     }
-    const discovered = await discover()
-    const audience = url
-    if (process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
-      const token = await githubActionsToken(audience)
-      source = 'GitHub Actions OIDC'
-      return { token, expiresAt: expiry(token) }
-    }
-    if (process.env.VERCEL === '1') {
-      const token = await hostedToken(audience)
-      source = 'Vercel OIDC'
-      return { token, expiresAt: expiry(token) }
-    }
-    person ??= personToken(audience, discovered).finally(() => {
-      person = null
-    })
-    const minted = await person
-    source = 'vercel login'
-    return minted
+    reached.set(at, board)
+    return board
   }
-  const token = async () => {
-    if (!cached || cached.expiresAt - 60_000 < Date.now()) cached = await mint()
-    return cached.token
+
+  const home = reach(url, false)
+  /**
+   * A token this client mints for each board it talks to follows a board's `remote` there: a board on
+   * `http()` keeps nothing. One it was handed (`token`, `VBOARD_TOKEN`, `vb serve`'s) is for this
+   * board alone, so it stays here.
+   */
+  const follows = () => options.token === undefined && !process.env.VBOARD_TOKEN && !localToken(url)
+  /**
+   * Where a request goes: the board its discovery sends this client to, except what this board does
+   * for its own sync entries (linking an account on one, reading a source through it), which only
+   * it can, and its discovery.
+   */
+  async function where(path: string, body: unknown): Promise<Reached> {
+    if (!follows()) return home
+    const found = await home.discover()
+    if (!found.remote) return home
+    const own = new Set(found.sync.map((entry) => entry.key))
+    const key =
+      path === '/identity/link' || path === '/identity/check'
+        ? (() => {
+            try {
+              return (JSON.parse(String(body)) as { sync?: string }).sync
+            } catch {
+              return undefined
+            }
+          })()
+        : path.match(/^\/sources\/([^/]+)\/read$/)?.[1]
+    if (path === '/' || (key !== undefined && own.has(decodeURIComponent(key)))) return home
+    return reach(found.remote, true)
   }
+  /** The board most requests go to, whose token says who this client is. */
+  const primary = () => where('/me', undefined)
+
+  /** Each request, to the board it goes to, with a token for that board. */
+  const routed = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const href = input instanceof Request ? input.url : String(input)
+    const path = (href.startsWith(url) ? href.slice(url.length) : new URL(href).pathname) || '/'
+    if (!follows()) return home.fetch(input, init)
+    const target = await where(path.split('?')[0]!, init.body)
+    // The token the request carries is the main board's: one to another goes with that board's own.
+    const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
+    if (headers.has('authorization')) headers.set('authorization', `Bearer ${await target.token()}`)
+    return target.fetch(target === home ? input : `${target.url}${path}`, { ...init, headers })
+  }) as typeof fetch
 
   let agent: DetectedAgent | null | undefined
   const detected = () => (agent === undefined ? (agent = detectAgent()) : agent)
@@ -318,9 +380,16 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
           return avatar ? { name, avatar } : name
         }
 
+  /** Who this client is, from the token it minted for the board it talks to. */
+  const minted = async () => {
+    const board = await primary()
+    await board.token()
+    return board
+  }
+
   return createBoardClient({
     url,
-    token: options.token ?? token,
+    token: options.token ?? (async () => (await primary()).token()),
     profile,
     session: options.session !== undefined ? options.session : () => detected()?.session ?? null,
     handle:
@@ -329,15 +398,14 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
         : async () => {
             if (process.env.VBOARD_HANDLE) return process.env.VBOARD_HANDLE
             if (options.token !== undefined) return null
-            await token()
-            return cached?.handle ?? null
+            return (await minted()).cached()?.handle ?? null
           },
     person:
       options.person !== undefined
         ? options.person
         : async () => {
             if (options.token !== undefined) return null
-            await token()
+            const cached = (await minted()).cached()
             return cached ? { name: cached.name ?? null, avatar: cached.avatar ?? null } : null
           },
     source:
@@ -345,11 +413,10 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
         ? options.source
         : async () => {
             if (options.token !== undefined) return null
-            await token()
-            return source
+            return (await minted()).source()
           },
     ...(options.headers !== undefined ? { headers: options.headers } : {}),
-    fetch: doFetch,
+    fetch: routed,
   })
 }
 
