@@ -611,6 +611,9 @@ const vercelCliApi: VercelApi = async (method, path) => {
   if (method === 'PATCH') args.push('--input', '-')
   try {
     const run = promisify(execFile)('vercel', args, { timeout: 30_000 })
+    // A `vercel` that exits before it reads its input closes the pipe: its exit is the answer, and the
+    // EPIPE, unhandled, would take the process down.
+    run.child.stdin?.on('error', () => {})
     run.child.stdin?.end(method === 'PATCH' ? '{}' : '')
     return JSON.parse((await run).stdout)
   } catch (error) {
