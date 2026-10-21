@@ -3,7 +3,7 @@ import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board } from '../src/server/index.ts'
 import { a2 } from '../src/backend-a2/index.ts'
-import type { A2Options, BoardSetup } from '../src/server/board.ts'
+import type { A2Options, BoardSetup } from '../src/server/a2.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
 export const PROJECT_ID = 'prj_board'

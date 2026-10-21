@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { localTokenFile } from '../client/node.ts'
 import { fsBlob } from '../server/blob.ts'
-import { a2Board } from '../server/board.ts'
+import { a2Board } from '../server/a2.ts'
 
 export const DEFAULT_SERVE_PORT = 4100
 const ISSUER = 'vboard:local'

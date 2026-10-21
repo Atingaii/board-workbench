@@ -15,7 +15,7 @@ import {
 } from '../contract/reducers.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
-import type { BoardSession } from './board.ts'
+import type { BoardSession } from './a2.ts'
 import type { BoardReads } from './reads.ts'
 
 export { concernedMessageId }

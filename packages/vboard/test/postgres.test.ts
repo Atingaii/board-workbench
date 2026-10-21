@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import pg from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 // The engine itself, as a2() starts it.
-import { a2Board as board } from '../src/server/board.ts'
+import { a2Board as board } from '../src/server/a2.ts'
 import { postgres } from '../src/store/postgres.ts'
 import type { BoardStore } from '../src/store/types.ts'
 import { BOARD_URL, caller, PROJECT_ID, personToken, TEAM_ID, testAuth } from './harness.ts'

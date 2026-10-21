@@ -3,7 +3,7 @@ import type { BoardEventView, Discovery, MatchView, RegistrationView } from '../
 import type { BoardClient } from '../client/client.ts'
 import { createClient } from '../client/node.ts'
 import { VERSION } from '../version.ts'
-import { a2Board, route, type A2Options, type BoardSetup } from './board.ts'
+import { a2Board, route, type A2Options, type BoardSetup } from './a2.ts'
 import { HttpError, json, notFound, toErrorResponse } from './errors.ts'
 import { discoveryIdentity } from './identity.ts'
 import { watchersHash, type WatcherSpec } from './registry.ts'

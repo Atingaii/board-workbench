@@ -37,7 +37,7 @@ import { afterRetry } from '../server/attempts.ts'
 import { readAttachmentData, writeUpload, type BlobStore } from '../server/blob.ts'
 import type { Principal } from '../server/auth.ts'
 import { FULL_ACCESS, type Permission } from '../server/access.ts'
-import type { BoardSession } from '../server/board.ts'
+import type { BoardSession } from '../server/a2.ts'
 import { badRequest, forbidden, HttpError, notFound } from '../server/errors.ts'
 import {
   trusted,

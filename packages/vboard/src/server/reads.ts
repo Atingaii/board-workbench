@@ -4,7 +4,7 @@ import type { Message } from '../contract/reducers.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { MessageFilter, MessageTables, Page } from '../store/types.ts'
 import type { Access } from './access.ts'
-import type { BoardSession } from './board.ts'
+import type { BoardSession } from './a2.ts'
 import { linkedIds, type Reader } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 

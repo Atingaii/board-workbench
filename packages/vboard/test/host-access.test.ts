@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import type { HostPrincipal } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
-import { a2Board as board, type A2Options, type BoardSetup } from '../src/server/board.ts'
+import { a2Board as board, type A2Options, type BoardSetup } from '../src/server/a2.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
 import { fakeQueue } from './queue.ts'
 import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, testAuth, testBoard } from './harness.ts'

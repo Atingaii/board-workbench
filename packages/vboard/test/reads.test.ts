@@ -3,7 +3,7 @@ import { memory as a2Memory } from 'experimental-a2/store-memory'
 import { describe, expect, it, vi } from 'vitest'
 import { BOARD_SESSION, boardContract } from '../src/contract/contract.ts'
 // The engine itself, as a2() starts it.
-import { a2Board as board } from '../src/server/board.ts'
+import { a2Board as board } from '../src/server/a2.ts'
 import { tablesConsumer } from '../src/server/reads.ts'
 import { waitUntil } from '../src/server/wait-until.ts'
 import { sqlTables } from '../src/store/sql.ts'
