@@ -16,6 +16,13 @@ export const MATCH_TRIES = 5
 export const LEASE_MS = 5 * 60_000
 /** After an error, a match waits 1 second, doubling to 30. */
 export const retryDelay = (attempts: number) => Math.min(30_000, 1000 * 2 ** (attempts - 1))
+/**
+ * Sweeps fall on the minute: a registrant has at most one timer a minute, however many matches it
+ * pulls. A sweep wakes it for leases that ran out, and for a wake-up that didn't arrive.
+ */
+export const SWEEP_MS = 60_000
+/** The sweep that covers `at`: the next minute at least a second after it, since a timer may land up to a second early. */
+export const sweepFor = (at: number) => Math.ceil((at + 1000) / SWEEP_MS) * SWEEP_MS
 
 type Pending = {
   id: string
@@ -33,6 +40,8 @@ export type QueueState = {
   /** `<watcher>\u001f<thread>` → match IDs, oldest first: only the first is ever handed out. */
   queues: Record<string, string[]>
   pending: Record<string, Pending>
+  /** The sweeps set and not yet run, by when they run. */
+  sweeps: number[]
 }
 
 const queueKey = (watcher: string, thread: string) => `${watcher}\u001f${thread}`
@@ -87,6 +96,14 @@ function foldQueue(state: QueueState, event: ContractEvent<WatchEvents>): QueueS
       if (found) found.retryAt = null
       return state
     }
+    case 'watch.armed':
+      if (!state.sweeps.includes(event.payload.at)) state.sweeps.push(event.payload.at)
+      return state
+    case 'watch.due': {
+      const { sweep } = event.payload
+      if (sweep !== undefined) state.sweeps = state.sweeps.filter((at) => at !== sweep)
+      return state
+    }
     case 'watch.failed':
     case 'watch.skipped':
       remove(state, event.payload.matched)
@@ -98,17 +115,18 @@ function foldQueue(state: QueueState, event: ContractEvent<WatchEvents>): QueueS
 
 export const queueReducer = reducer({
   contract: watchContract,
-  name: 'vboard.watch-queue.v1',
-  initialState: { queues: {}, pending: {} } as QueueState,
+  name: 'vboard.watch-queue.v2',
+  initialState: { queues: {}, pending: {}, sweeps: [] } as QueueState,
 }).fold(foldQueue)
 
+type WatchInput = { type: string; id?: string; payload: unknown }
+
 /** The parts of an A2 session of the watch contract that the queue uses. */
-type QueueSession = {
+export type QueueSession = {
   state(r: typeof queueReducer): Promise<{ state: QueueState }>
-  append(...events: Parameters<WatchAppend>): Promise<unknown>
-  schedule(name: string, timing: { at: Date }, ...events: Parameters<WatchAppend>): Promise<void>
+  append(...events: WatchInput[]): Promise<unknown>
+  schedule(name: string, timing: { at: Date }, ...events: WatchInput[]): Promise<void>
 }
-type WatchAppend = (event: { type: string; id?: string; payload: unknown }) => Promise<unknown>
 
 const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
 
@@ -118,56 +136,64 @@ function readable(access: Access, event: unknown) {
   return channel === undefined ? access.readsAll : access.readable(channel)
 }
 
+/** An append that holds an event ID already in the log: another pull's lease. */
+const taken = (error: unknown) => error instanceof A2Error && error.code === 'PARTIAL_DUPLICATE_BATCH'
+
+/** Whether a match is free to pull now: no one holds it, and its wait after an error is over. A lease or wait whose time has passed counts as over. */
+const free = (found: Pending, now: number) => !(found.lease && found.lease.until > now) && !(found.retryAt !== null && found.retryAt > now)
+
+/** Whether the registrant has anything to pull now. */
+export const hasWork = (state: QueueState, now: number) => Object.values(state.queues).some((ids) => free(state.pending[ids[0]!]!, now))
+
 /**
- * Hands out what the registrant may run now: each queue's oldest match, if no one holds it and
- * its wait after an error is over, leased to this pull. A lease or wait whose time has passed
- * counts as over even before its timer fires.
+ * Hands out what the registrant may run now: each queue's oldest match, if it's free, leased to
+ * this pull. What the pull changes goes in one append, and one read after tells which leases
+ * are this pull's: two pulls at once derive the same lease ID for a try, and only one lands.
  */
 export async function pull(
   session: QueueSession,
   options: { access: Access; limit: number; now: number; timers: boolean },
 ): Promise<MatchView[]> {
   const { state } = await session.state(queueReducer)
-  const handed: MatchView[] = []
+  const events: WatchInput[] = []
+  const offered: { head: Pending; lease: string; attempt: number }[] = []
   for (const ids of Object.values(state.queues)) {
-    if (handed.length >= options.limit) break
+    if (offered.length >= options.limit) break
     const head = state.pending[ids[0]!]!
-    if (head.lease && head.lease.until > options.now) continue
-    if (head.retryAt !== null && head.retryAt > options.now) continue
+    if (!free(head, options.now)) continue
     let attempts = head.attempts
     if (head.lease) {
-      // It ran out before its timer said so: a try that didn't finish.
-      await session.append({ type: 'watch.expired', payload: { matched: head.id, lease: head.lease.id } })
+      // It ran out before a sweep said so: a try that didn't finish.
+      events.push({ type: 'watch.expired', payload: { matched: head.id, lease: head.lease.id } })
       attempts += 1
       if (attempts >= MATCH_TRIES) {
-        await giveUp(session, head, `its lease ran out ${attempts} times`)
+        events.push(failure(head, `its lease ran out ${attempts} times`))
         continue
       }
     }
     if (!readable(options.access, head.event)) {
-      await session.append({ type: 'watch.skipped', payload: { matched: head.id, reason: "its registrant can't read it anymore" } })
+      events.push({ type: 'watch.skipped', payload: { matched: head.id, reason: "its registrant can't read it anymore" } })
       continue
     }
     const lease = randomBytes(16).toString('hex')
-    const until = options.now + LEASE_MS
-    try {
-      // Two pulls at once derive the same ID for this try, and only one lands.
-      await session.append({
-        type: 'watch.leased',
-        id: await idempotentId('vboard-lease', head.id, String(attempts)),
-        payload: { matched: head.id, lease, until },
-      })
-    } catch (error) {
-      if (error instanceof A2Error && error.code === 'PARTIAL_DUPLICATE_BATCH') continue
-      throw error
-    }
-    const { state: after } = await session.state(queueReducer)
-    if (after.pending[head.id]?.lease?.id !== lease) continue
-    if (options.timers)
-      await session.schedule(`lease:${lease}`, { at: new Date(until) }, { type: 'watch.due', payload: { matched: head.id, lease } })
-    handed.push({ id: head.id, watcher: head.watcher, thread: head.thread, lease, attempt: attempts, event: head.event as BoardEventView })
+    events.push({
+      type: 'watch.leased',
+      id: await idempotentId('vboard-lease', head.id, String(attempts)),
+      payload: { matched: head.id, lease, until: options.now + LEASE_MS },
+    })
+    offered.push({ head, lease, attempt: attempts })
   }
-  return handed
+  if (events.length === 0) return []
+  // Another pull leased one of these first: the rest land one at a time, and its lease stays.
+  await session.append(...events).catch(async (error: unknown) => {
+    if (!taken(error)) throw error
+    for (const event of events) await session.append(event).catch((one: unknown) => { if (!taken(one)) throw one })
+  })
+  if (offered.length === 0) return []
+  const { state: after } = await session.state(queueReducer)
+  const handed = offered.filter(({ head, lease }) => after.pending[head.id]?.lease?.id === lease)
+  if (handed.length > 0 && options.timers) await arm(session, after, options.now + LEASE_MS)
+  return handed.map(({ head, lease, attempt }) => ({ id: head.id, watcher: head.watcher, thread: head.thread, lease, attempt, event: head.event as BoardEventView }))
 }
 
 /** Records how a pulled match went: done, skipped, or an error that waits, then tries again. */
@@ -191,42 +217,44 @@ export async function ack(
   }
   const attempts = found.attempts + 1
   if (attempts >= MATCH_TRIES) {
-    await session.append({ type: 'watch.acked', payload: { matched: id, lease: body.lease, error: body.error } })
-    await giveUp(session, found, body.error)
+    await session.append({ type: 'watch.acked', payload: { matched: id, lease: body.lease, error: body.error } }, failure(found, body.error))
     return 'acked'
   }
   const retryAt = options.now + retryDelay(attempts)
   await session.append({ type: 'watch.acked', payload: { matched: id, lease: body.lease, error: body.error, retryAt } })
+  // Errors are rare, and their waits short: each gets its own timer.
   if (options.timers)
     await session.schedule(`retry:${id}:${attempts}`, { at: new Date(retryAt) }, { type: 'watch.due', payload: { matched: id, retry: true } })
   return 'acked'
 }
 
 /**
- * A timer came due: a lease ran out, or a match's wait is over. Returns whether the registrant
- * now has something to pull, so its board should be woken.
+ * Sets a sweep for `at`, unless one is set already. The sweep runs on the minute after it, so the
+ * leases of a minute share one timer. Its timer goes first: a sweep recorded without one would
+ * never run, and a timer set twice under one name lands once.
  */
-export async function due(session: QueueSession, payload: { matched: string; lease?: string | undefined; retry?: boolean | undefined }): Promise<boolean> {
-  const { state } = await session.state(queueReducer)
-  const found = state.pending[payload.matched]
-  if (!found) return false
-  if (payload.lease !== undefined) {
-    if (found.lease?.id !== payload.lease) return false
-    await session.append({ type: 'watch.expired', payload: { matched: found.id, lease: payload.lease } })
-    if (found.attempts + 1 >= MATCH_TRIES) {
-      await giveUp(session, found, `its lease ran out ${found.attempts + 1} times`)
-      return false
-    }
-    return true
-  }
-  if (payload.retry && found.retryAt !== null) {
-    await session.append({ type: 'watch.retry', payload: { matched: found.id } })
-    return true
-  }
-  return false
+export async function arm(session: QueueSession, state: QueueState, at: number) {
+  const sweep = sweepFor(at)
+  if (state.sweeps.includes(sweep)) return
+  await session.schedule(`sweep:${sweep}`, { at: new Date(sweep) }, { type: 'watch.due', payload: { sweep } })
+  await session.append({ type: 'watch.armed', id: await idempotentId('vboard-sweep', String(sweep)), payload: { at: sweep } })
 }
 
-async function giveUp(session: QueueSession, found: Pending, error: string) {
+/**
+ * A timer came due: an error's wait is over, or a sweep. Returns the queue after it, for its
+ * consumer to tell whether the registrant has something to pull.
+ */
+export async function due(session: QueueSession, payload: { matched?: string | undefined; retry?: boolean | undefined }): Promise<QueueState> {
+  const { state } = await session.state(queueReducer)
+  const found = payload.matched === undefined ? undefined : state.pending[payload.matched]
+  if (!payload.retry || !found || found.retryAt === null) return state
+  // The timer may land a moment before `retryAt`: this ends the wait whatever the clock says.
+  await session.append({ type: 'watch.retry', payload: { matched: found.id } })
+  return (await session.state(queueReducer)).state
+}
+
+/** Gives up on a match: `watch.failed`, said in the logs too. */
+function failure(found: Pending, error: string): WatchInput {
   console.error(`[vboard] a registered watcher ${found.watcher} gave up on a match after ${MATCH_TRIES} tries:`, error)
-  await session.append({ type: 'watch.failed', payload: { matched: found.id, thread: found.thread, error: describe(error) } })
+  return { type: 'watch.failed', payload: { matched: found.id, thread: found.thread, error: describe(error) } }
 }

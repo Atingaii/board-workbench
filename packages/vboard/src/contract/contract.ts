@@ -337,8 +337,10 @@ export const watchContract = contract({
     'watch.retry': z.object({ matched: MatchId }),
     /** A match its registrant can't have anymore: it may not read it, or the watcher is gone. */
     'watch.skipped': z.object({ matched: MatchId, reason: z.string().min(1).max(200) }),
-    /** A timer: a lease's end, or an error's wait. Its consumer decides what it still means. */
-    'watch.due': z.object({ matched: MatchId, lease: LeaseId.optional(), retry: z.boolean().optional() }),
+    /** A sweep is set for `at`: one timer for every lease that runs out before it, or a wake-up to try again. */
+    'watch.armed': z.object({ at: z.number().int().nonnegative() }),
+    /** A timer: an error's wait is over (`matched`), or a sweep (`sweep`). Its consumer decides what it still means. */
+    'watch.due': z.object({ matched: MatchId.optional(), retry: z.boolean().optional(), sweep: z.number().int().nonnegative().optional() }),
   },
 })
 

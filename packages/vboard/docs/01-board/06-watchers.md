@@ -186,7 +186,9 @@ export const { GET, POST } = board({
   registration holds at most 32 watchers, and needs `read` somewhere.
 - **A match wakes it with nothing in the wake-up:** a `POST <url>/wake` with
   no event and no token. It then pulls what matched with its own credentials,
-  runs it, and acks it. A forged wake-up costs it one pull that finds nothing.
+  runs it, and acks it, until nothing's left, so a burst of matches wakes it
+  once. A wake-up that doesn't get there is tried again a minute or so on. A
+  forged wake-up costs it one pull that finds nothing.
 - **It sees what its deployment may read** on the other board, checked when an
   event matches and again when it's pulled.
 - **Its writes are by the deployment, with the watcher's ID as its profile:**
@@ -196,8 +198,8 @@ export const { GET, POST } = board({
 - **A thread's matches come one at a time, in order,** and threads run in
   parallel. A pulled match is leased for 5 minutes. A `run` that throws is
   tried again after a wait (1 second, doubling to 30), and a lease that runs
-  out counts as a try. After 5 tries it's recorded as `watch.failed`, and the
-  thread goes on.
+  out counts as a try, noticed within a minute. After 5 tries it's recorded as
+  `watch.failed`, and the thread goes on.
 - **A board without an `https` URL pulls on its own,** each pull held open
   until something matches: a dev server, say. So does one the other board
   can't reach, such as one behind Deployment Protection.

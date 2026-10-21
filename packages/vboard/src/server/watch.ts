@@ -8,7 +8,7 @@ import { actorsReducer, type Message, type MessagesState } from '../contract/red
 import { FULL_ACCESS, type Access } from './access.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, loadBefore, OWN_CODE, type ParsedFilters } from './feed.ts'
 import type { BoardReads } from './reads.ts'
-import { due } from './registered.ts'
+import { arm, due, hasWork, queueReducer, SWEEP_MS, type QueueSession } from './registered.ts'
 import type { Registration, RegistryState, StoredPrincipal } from './registry.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 import { A2_TRIES, afterRetry } from './attempts.ts'
@@ -70,6 +70,9 @@ const RUN_ATTEMPTS = 5
  * means runs keep dying, and the 10th records the failure without running.
  */
 const KILLED_ATTEMPTS = A2_TRIES
+
+/** Tries at a wake-up before it's left to the next match or sweep, well short of A2's dead letter. */
+const WAKE_TRIES = 3
 
 const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
 
@@ -148,8 +151,8 @@ export function createWatchers(options: {
     state: () => Promise<RegistryState>
     /** What a registrant may do now, under the rules as they are: null once it may do nothing. */
     accessNow: (principal: StoredPrincipal) => Promise<Access | null>
-    /** Tells a registrant's board it has something to pull. Never throws. */
-    wake: (registration: Registration) => Promise<void>
+    /** Tells a registrant's board it has something to pull, and says whether that got there. Never throws. */
+    wake: (registration: Registration) => Promise<boolean>
   }
 }) {
   const watchers = Object.entries(options.watch).map(([id, watcher]) => {
@@ -184,23 +187,38 @@ export function createWatchers(options: {
   })
 
   /**
-   * Wakes a registrant's board when it has something to pull: a new match, a lease that ran out,
-   * or a wait after an error that's over. Each match is its own lane, so none waits on another.
+   * Wakes a registrant's board when it has something to pull: a new match, a wait after an error
+   * that's over, or a sweep that finds a lease ran out. A registrant's wake-ups go one at a time,
+   * and only when there's something to pull: its board pulls until nothing's left, so a burst of
+   * matches wakes it once.
    */
   const waker = consumer({
     contract: watchContract,
     name: 'vboard-wake',
     types: ['watch.matched', 'watch.due'],
-    lane: ({ event }) => `match:${'matched' in event.payload ? event.payload.matched : event.id}`,
+    // A config watcher's match runs here, in its own session: nothing to wake.
+    lane: ({ event }) => ('thread' in event.payload && event.payload.watcher === undefined ? null : 'wake'),
   }).run(async (ctx) => {
     const key = ctx.session.id.slice('watch:'.length)
     const registered = options.registered
     if (!key.startsWith('@') || !registered) return
-    // Its queue's own appends: a consumer's session names each one, which these don't need.
-    if (ctx.event.type === 'watch.due' && !(await due(server.session(ctx.session.id) as never, ctx.event.payload))) return
     if (ctx.event.type === 'watch.matched' && ctx.event.payload.watcher === undefined) return
-    const registration = (await registered.state()).byOwner[key.slice(1)]
-    if (registration) await registered.wake(registration)
+    // Its queue's own appends and timers: a consumer's session names each one, which these don't need.
+    const queue = server.session(ctx.session.id) as unknown as QueueSession
+    try {
+      const state = ctx.event.type === 'watch.due' ? await due(queue, ctx.event.payload) : (await queue.state(queueReducer)).state
+      if (!hasWork(state, Date.now())) return
+      const registration = (await registered.state()).byOwner[key.slice(1)]
+      // One without a URL pulls on its own.
+      if (!registration || registration.url === null) return
+      // One that didn't get it hears again from a sweep, a minute or so on.
+      if (!(await registered.wake(registration)) && options.scheduler) await arm(queue, state, Date.now() + SWEEP_MS)
+    } catch (error) {
+      // Ten failures would dead-letter this lane, and the registrant would never be woken again.
+      // The queue keeps every match, so the next match or sweep wakes it for this one too.
+      if (ctx.attempt < WAKE_TRIES) throw error
+      console.error(`[vboard] couldn't wake the board of ${key.slice(1)}:`, (error as Error).message)
+    }
   })
 
   const server = createServer({

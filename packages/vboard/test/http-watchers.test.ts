@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { board, http, vercelProject, type Watcher, type WatcherContext } from '../src/server/index.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
+import { LEASE_MS } from '../src/server/registered.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
@@ -15,6 +16,7 @@ const v0Token = () => deploymentToken('v0', 'prj_v0', 'production')
 function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercelProject>[0]['can'] = 'all') {
   const queue = fakeQueue()
   const woken: string[] = []
+  let down = false
   let project: ReturnType<typeof v0Board>
   const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
@@ -28,6 +30,7 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
     transport: {
       post: (url, init) => {
         woken.push(url)
+        if (down) return Promise.resolve(new Response('deploying', { status: 503 }))
         return route(url, { method: 'POST', headers: init.headers, body: init.body })
       },
     },
@@ -43,6 +46,10 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
       return project
     },
     deploy: (next: Record<string, Watcher>) => (project = v0Board(next)),
+    /** While it's down, v0's board answers wake-ups with a 503. */
+    set down(value: boolean) {
+      down = value
+    },
     /** Fires every timer now: leases run out, and waits after an error end. */
     fireTimers: async () => {
       for (const timer of queue.timers) timer.dueAt = 0
@@ -59,6 +66,9 @@ function recorder(tail: string, then?: Watcher['run']) {
 
 const julianOn = async (fetch: (request: Request) => Promise<Response>) => caller(fetch, await personToken(), { 'x-board-handle': 'julian' })
 
+/** A sweep's timer, as opposed to an error's wait. */
+const isSweep = (task: { events: readonly { payload: unknown }[] }) => (task.events[0]?.payload as { sweep?: number }).sweep !== undefined
+
 describe('watchers on http()', () => {
   it("run on what the same tail prints, woken with nothing in the wake-up, writing as the deployment's profile", async () => {
     const fix = recorder('feedback', async ({ event, board }) => {
@@ -74,6 +84,38 @@ describe('watchers on http()', () => {
     })
     expect(fix.seen.map((event) => [event.type, event.message?.text])).toEqual([['message.posted', 'export is broken']])
     expect(t.woken[0]).toBe(`${V0_URL}/wake`)
+  })
+
+  it('wake their board once for a burst of matches, since it pulls until nothing is left', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const fix = recorder('feedback', () => held)
+    const t = team({ fix: fix.watcher })
+    await t.project.register()
+    const julian = await julianOn(t.remote.fetch)
+    for (const n of [1, 2, 3, 4, 5]) await julian('POST', '/messages', { channel: 'feedback', text: `report ${n}` })
+    // The first wake-up is still running when the rest match.
+    const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
+    await vi.waitFor(async () => expect((await queue.history()).filter((event: { type: string }) => event.type === 'watch.matched')).toHaveLength(5))
+    release()
+    await vi.waitFor(() => expect(fix.seen).toHaveLength(5))
+    await t.remote.servers.at(-1)!.drain(`watch:@${V0}`)
+    expect(t.woken).toEqual([`${V0_URL}/wake`])
+  })
+
+  it("try a wake-up that didn't get there again, from a sweep a minute or so on", async () => {
+    const fix = recorder('feedback')
+    const t = team({ fix: fix.watcher })
+    await t.project.register()
+    t.down = true
+    const julian = await julianOn(t.remote.fetch)
+    await julian('POST', '/messages', { channel: 'feedback', text: 'while it deploys' })
+    await vi.waitFor(() => expect(t.queue.timers.filter(isSweep)).toHaveLength(1))
+    expect(fix.seen).toEqual([])
+    t.down = false
+    await t.fireTimers()
+    await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toEqual(['while it deploys']))
+    expect(t.woken).toHaveLength(2)
   })
 
   it("never runs on what its registrant can't read", async () => {
@@ -205,11 +247,34 @@ describe('pulling matches', () => {
     let first: Awaited<ReturnType<typeof pull>>[number] | undefined
     await vi.waitFor(async () => expect((first = (await pull())[0])).toBeDefined())
     expect(await pull()).toEqual([])
-    await t.fireTimers()
-    const again = (await pull())[0]!
-    expect([again.id, again.attempt]).toEqual([first!.id, 1])
-    expect(await ack(first!)).toEqual({ status: 409, body: { error: { code: 'stale_lease', message: 'that lease ran out, and the match was pulled again' } } })
-    expect((await ack(again)).status).toBe(200)
+    // Its puller never acks, and five minutes go by.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + LEASE_MS + 1000)
+      await t.fireTimers()
+      const again = (await pull())[0]!
+      expect([again.id, again.attempt]).toEqual([first!.id, 1])
+      expect(await ack(first!)).toEqual({ status: 409, body: { error: { code: 'stale_lease', message: 'that lease ran out, and the match was pulled again' } } })
+      expect((await ack(again)).status).toBe(200)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sets one sweep a minute for its leases, however many it pulls', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:10.000Z'))
+    try {
+      const { t, julian, pull } = await queued()
+      for (const n of [1, 2, 3]) {
+        await julian('POST', '/messages', { channel: 'feedback', text: `report ${n}` })
+        await vi.waitFor(async () => expect(await pull()).toHaveLength(1))
+      }
+      // Three pulls, leases until 12:05:10, one sweep on the minute after.
+      expect(t.queue.timers.filter(isSweep).map((task) => new Date(task.dueAt).toISOString())).toEqual(['2026-10-20T12:06:00.000Z'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("drops a match its registrant can't read anymore", async () => {

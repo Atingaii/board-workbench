@@ -194,15 +194,24 @@ The board that keeps the log matches the tails; the board on `http()` runs
   thread, of which only the oldest is handed out, so a thread's matches run in
   order. Pulling leases it (`watch.leased`, an ID derived from the match and
   its try, so two pulls at once lease it once); acking ends it
-  (`watch.acked`). An error waits 1 second, doubling to 30, and a lease that
-  runs out (`watch.expired`) counts as a try; both come back by A2 timer
-  (`watch.due`), or as soon as a pull finds their time has passed. After 5
-  tries it's `watch.failed`, and the thread goes on. A pull drops what the
-  registrant can't read anymore (`watch.skipped`).
-- **Wake-ups** go to `<url>/wake` from `vboard-wake`, on each match and each
-  timer that makes something pullable: `https` to a public address only,
-  checked as it connects, with no redirects and no token. The board woken
-  trusts nothing in it.
+  (`watch.acked`). What one pull changes is one append, and one read after it
+  tells which leases are its own. An error waits 1 second, doubling to 30, by
+  its own A2 timer (`watch.due`). A lease that runs out (`watch.expired`)
+  counts as a try. After 5 tries it's `watch.failed`, and the thread goes on.
+  A pull drops what the registrant can't read anymore (`watch.skipped`).
+- **Sweeps** stand in for a timer per lease: a registrant has at most one A2
+  timer a minute (`watch.armed`, then `watch.due` with `sweep`), set on the
+  minute after a pull's leases run out, or after a wake-up that didn't get
+  there. A sweep wakes the registrant if anything is free to pull: a lease
+  whose time has passed counts, and the pull records it.
+- **Wake-ups** go to `<url>/wake` from `vboard-wake`, one at a time per
+  registrant (its lane is `wake` in the registrant's session), and only when
+  something is free to pull. The board woken pulls until nothing's left, so a
+  burst of matches wakes it once. `https` to a public address only, checked as
+  it connects, with no redirects and no token; the board woken trusts nothing
+  in it. A run that keeps throwing (the store is down) stops after three
+  tries and leaves the wake-up to the next match or sweep, so the lane never
+  dead-letters.
 - **A board that can't be woken** (no `https` URL, as on a dev server, or
   behind Deployment Protection) registers with no `url` and pulls on its own,
   each pull held open until something matches.

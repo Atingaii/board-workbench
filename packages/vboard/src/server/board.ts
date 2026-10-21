@@ -546,17 +546,23 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
    * Tells a registrant's board it has matches to pull, with no event and no token in it: its
    * board pulls them with its own credentials. The hash says whether its registration is stale.
    */
-  async function wake(registration: Registration) {
-    if (registration.url === null) return
+  /** Whether the wake-up got there: an answer, or still pulling when the wait ran out. */
+  async function wake(registration: Registration): Promise<boolean> {
+    if (registration.url === null) return true
     try {
-      await post(`${registration.url}/wake`, {
+      const response = await post(`${registration.url}/wake`, {
         headers: { 'content-type': 'application/json', 'x-board-watchers': registration.hash },
         body: '{}',
         // Its board runs what it pulls before it answers; the wake-up only has to arrive.
         signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
       })
+      if (response.ok) return true
+      console.error(`[vboard] couldn't wake ${registration.url}: ${response.status}`)
+      return false
     } catch (error) {
-      if ((error as Error).name !== 'TimeoutError') console.error(`[vboard] couldn't wake ${registration.url}:`, (error as Error).message)
+      if ((error as Error).name === 'TimeoutError') return true
+      console.error(`[vboard] couldn't wake ${registration.url}:`, (error as Error).message)
+      return false
     }
   }
   /** A registrant's queue, in the watch contract. */
