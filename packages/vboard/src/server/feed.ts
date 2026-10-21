@@ -154,6 +154,8 @@ export function compileFilter(
   const channel = filters.channel
   const subtree = channel?.endsWith('/') ? channel.slice(0, -1) : null
   const by = filters.by === undefined ? null : whoIs(filters.by, context.actors)
+  // A ref that names nothing on this board matches nothing, as in the tables.
+  const re = filters.re === undefined ? undefined : (indexOf(filters.re) ?? -1)
   // `me` is the caller's own actor, and the platform accounts linked to it.
   const mentions =
     filters.mentions === undefined
@@ -168,8 +170,7 @@ export function compileFilter(
         if (message.channel !== subtree && !message.channel.startsWith(`${subtree}/`)) return false
       } else if (message.channel !== channel) return false
     }
-    if (filters.re !== undefined && ref(message.id) !== filters.re && (message.re === null || ref(message.re) !== filters.re))
-      return false
+    if (re !== undefined && message.id !== re && message.re !== re) return false
     if (by !== null && !covers(by, message.by.actor, message.by.principal)) return false
     if (mentions !== null && !message.mentions.some((id) => mentions.has(id))) return false
     if (filters.from !== undefined && (message.from ?? 'board') !== filters.from) return false
