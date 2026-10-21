@@ -303,6 +303,20 @@ describe('the sync permission', () => {
     expect((await read(julian, 'firehose')).map((m) => [m.text, m.by.actor])).toEqual([['from Slack', 'slack:user:U_ADA']])
   })
 
+  it("delivers what a sync elsewhere imports to this board's own platforms, under a key this board doesn't have", async () => {
+    const s = fakePlatform('slack')
+    const team = testBoard({
+      access: [vercelProject({ project: 'prj_support', can: 'all' })],
+      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
+    })
+    const support = caller(team.fetch, await supportToken())
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
+    const imported = await support('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'firehose', text: 'export is broken' })
+    expect(imported.status).toBe(200)
+    // The team's Slack gets it, named for the platform it came from.
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '**Ada (slack)**: export is broken' })]))
+  })
+
   it("issues codes only to people, for themselves, and links an account only by one", async () => {
     const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })] })
     const support = caller(team.fetch, await supportToken())

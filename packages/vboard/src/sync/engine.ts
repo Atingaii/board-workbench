@@ -834,7 +834,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
-    if (message.from) name = `${name} (${platformOf(message.from).platform})`
+    // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
+    if (message.from) name = `${name} (${entries[message.from]?.platform ?? message.by.actor.slice(0, message.by.actor.indexOf(':'))})`
     const platform = platformOf(key)
     const body = platform.render(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
