@@ -7,6 +7,7 @@ export {
   verifyTokens,
   type AccessRule,
   type AccessFunction,
+  type RuleFunction,
   type Authenticate,
   type AuthenticateContext,
   type HostPrincipal,

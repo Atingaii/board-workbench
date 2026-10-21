@@ -33,6 +33,7 @@ import {
   verifyTokens,
   type AccessFunction,
   type AccessRule,
+  type RuleFunction,
   type Authenticate,
   type AuthenticateContext,
   type Granted,
@@ -114,14 +115,16 @@ export type A2Options = {
   /**
    * Who besides the board's people and its own deployments in the environment it runs in may use
    * it, and what they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from
-   * `vboard/access`. The first rule that matches a token decides. A production board's previews
-   * need a rule, as `vercelProject({ project: 'self', environments: ['preview'], can })`.
+   * `vboard/access`, and functions of your own, `(principal) => can`, for principals your
+   * `authenticate` returns. The first rule that matches decides; a function's undefined leaves it
+   * to the next. A production board's previews need a rule, as
+   * `vercelProject({ project: 'self', environments: ['preview'], can })`.
    *
-   * Or a host's own model: a function of the principal its `authenticate` returned, giving what it
+   * Or a host's own model: one function of the principal its `authenticate` returned, giving what it
    * may do in each channel (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), or null for nothing.
    * Nothing else is trusted then, not the board's own people or deployments.
    */
-  access?: readonly AccessRule[] | AccessFunction
+  access?: readonly (AccessRule | RuleFunction)[] | AccessFunction
   /**
    * Runs on every post and edit before it lands, whatever it came from: requests (a board on
    * `http()` using this one included), watchers, schedules, the handle, and sync's imports. Each

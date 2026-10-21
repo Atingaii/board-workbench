@@ -60,8 +60,8 @@ export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
-- **The first rule that matches a token decides.** Order them from most
-  specific to least.
+- **The first rule that matches decides.** Order them from most specific to
+  least.
 - **`vercelProject({ project, team?, environments?, can })`** matches a
   project's deployments by name or ID. `project: 'self'` is the board's own
   project. A rule for the board's own environment replaces its default of
@@ -83,6 +83,14 @@ export const { scheduler } = backend
   differ only by a trailing slash, the host's case, or a default port would
   name the same principals, so the board throws when it starts. `a2()`
   verifies these issuers' tokens because its rules name them.
+- **A function is a rule of your own:** `(principal) => can` gives what a
+  rule's `can` takes (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), null for
+  nothing, or undefined to leave the principal to the next rule. The token
+  rules match only tokens, so a function is how principals your own verifier
+  returns get anything (see [below](#a-hosts-own-verifier)). It's asked again
+  whenever a principal acts, a schedule's send included. The defaults come
+  first: it's never asked about a person, or the board's own deployments in
+  its environment.
 - **A board on `http()` has no `access`.** The board that keeps the log decides
   what its callers may do there.
 
@@ -92,26 +100,34 @@ export const { scheduler } = backend
 from `vboard/access` by default, and composing verifiers is plain code. Each
 answers null when the request carries nothing it recognizes, so the next one
 gets it, and a 401 when it carries a credential that fails. A board on an app's
-own site can take the app's session cookie, from its pages, and `vb`'s tokens,
-from people, agents, and deployments:
+own site can take the app's session cookie, from its staff and its customers,
+and `vb`'s tokens, from people, agents, and deployments:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { verifyTokens, type CallerRequest } from 'vboard/access'
+import { vercelProject, verifyTokens, type CallerRequest } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
 
 const tokens = verifyTokens()
 
-/** The app's own session: whoever its cookie names, or null for a request without one. */
-async function staff(request: CallerRequest) {
-  // const session = await readSession(request.headers.get('cookie'))   // yours
-  const session = null as { userId: string; username: string } | null
-  return session && ({ id: `vercel:user:${session.userId}`, kind: 'person', handle: session.username } as const)
+/** Whoever the app's session cookie names, or null for a request without one. */
+async function session(request: CallerRequest) {
+  // const user = await readSession(request.headers.get('cookie'))   // yours
+  const user = null as { id: string; username: string; staff: boolean } | null
+  if (!user) return null
+  return user.staff
+    ? ({ id: `vercel:user:${user.id}`, kind: 'person', handle: user.username } as const)
+    : ({ id: `support:customer:${user.id}`, kind: 'external', handle: user.username } as const)
 }
 
 const backend = a2({
   // store and scheduler as in Mounting
-  authenticate: async (request) => (await staff(request)) ?? (await tokens(request)),
+  authenticate: async (request) => (await session(request)) ?? (await tokens(request)),
+  access: [
+    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+    // Customers read and write in support/, and nowhere else.
+    (principal) => (principal.id.startsWith('support:customer:') ? { 'support/': ['read', 'post'] } : undefined),
+  ],
 })
 
 export const team = board({ backend })
@@ -137,10 +153,13 @@ write.
   (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
   optionally `expiresAt`. The handle, name, profile, and `x-board-scope` the
   caller sends still apply on top of it.
-- **What its principals may do goes by their kind,** as for anyone: under the
-  rules, a person may do everything, and anyone else what a rule gives its ID.
-  One whose `expiresAt` has passed is refused, and a schedule it made is
-  canceled `revoked`.
+- **`kind: 'person'` is a full member of the board:** it may do everything,
+  as the board's own people do, whatever the rules say. So your verifier
+  decides who counts as one. Staff are people here; customers are `external`.
+- **Anyone else gets what the first rule that matches gives,** and only a
+  function matches a host's IDs, like `support:customer:99`. One that no rule
+  matches is refused with 403. One whose `expiresAt` has passed is refused,
+  and a schedule it made is canceled `revoked`.
 - **To reject, throw an `HttpError` or return or throw a `Response`.** The
   board sends that response as is. Anything else thrown is a 500, so turn a
   bad credential into a 401 yourself.
@@ -171,10 +190,11 @@ board({
 })
 ```
 
-- **A function as `access` decides for everyone** it's asked about, as a
-  rule's `can` (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), or null for
-  nothing. It's asked again whenever a principal acts, a schedule's send
-  included, so what it says now is what holds.
+- **A function as `access` decides for everyone** it's asked about, people
+  and the board's own deployments too, as a rule's `can` (`'all'`, `['read']`,
+  `{ 'dev/': ['post'] }`), or null for nothing. It's asked again whenever a
+  principal acts, a schedule's send included, so what it says now is what
+  holds.
 - **Nothing else is trusted.** Without `verifyTokens()` in its verifier, no
   people, own-project deployments, audience check, or platform token header
   count. A board whose verifier is `verifyTokens()` alone takes no host's

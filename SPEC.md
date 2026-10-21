@@ -517,7 +517,10 @@ talking to.
   takes an app's session cookie and `vb`'s tokens. What `verifyTokens()` made
   stands as it is; anything else is a host's principal, checked for shape
   (`hostPrincipal()`), with its `expiresAt` kept. A host's principals get what
-  their kind does, under the rules or the host's function as `access`; a board
+  their kind does, under the rules or the host's function as `access`: a
+  `person` is a full member (everything), so the verifier decides who counts
+  as one, and anyone else, `external` included, gets what a function among
+  the rules gives it, since no token rule matches a host's IDs; a board
   whose verifier is `verifyTokens()` alone takes none, so schedules a host's
   principals made before it switched are revoked. A verifier gets the request
   with `board`, what the board knows that verifying needs (its project, and
@@ -611,7 +614,11 @@ board({
 
 **Authorization in v1:**
 
-- The first `access` rule matching a token decides. `can` is `'all'`, a list
+- The first `access` rule that matches decides: a token's rule by its
+  claims, or a function of the principal, which answers a `can`, null for
+  nothing, or undefined for the next rule. A function is never asked about a
+  person or the board's own deployments in its environment, so it can't take
+  the defaults away; one function as `access` decides for everyone. `can` is `'all'`, a list
   (`['post']` means `{ '*': ['post'] }`), or a map from channel pattern to
   permissions. A pattern is `*`, a channel (`feedback`), or a channel and its
   subtree (`feedback/`); any other `*` is a config error that says what to

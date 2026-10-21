@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { verifyTokens, type CallerRequest, type Can, type HostPrincipal } from '../src/access/index.ts'
+import { vercelProject, verifyTokens, type CallerRequest, type Can, type HostPrincipal, type RuleFunction } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
@@ -196,6 +196,125 @@ describe("a host's authenticate and access", () => {
     // A token that fails is refused, not passed over.
     expect(await me({ authorization: `Bearer ${await personToken('u_julian', 'https://elsewhere.test/api/board')}` })).toMatchObject({ status: 401 })
     expect(await me({})).toMatchObject({ status: 401, body: { error: { code: 'unauthorized', message: 'missing bearer token' } } })
+  })
+})
+
+/** An app's own site: its session cookie names staff (people) and customers (external), and `vb`'s tokens still work. */
+function supportBoard(rules: (customers: RuleFunction) => MountOptions['access'], customers: RuleFunction) {
+  const tokens = verifyTokens(testAuth)
+  const session = (request: CallerRequest): HostPrincipal | null => {
+    const cookie = request.headers.get('cookie') ?? ''
+    if (cookie === 'session=staff-ada') return { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }
+    const customer = /^session=customer-(\d+)$/.exec(cookie)?.[1]
+    return customer ? { id: `support:customer:${customer}`, kind: 'external', handle: `customer-${customer}` } : null
+  }
+  return board({
+    store: memory(),
+    url: BOARD_URL,
+    project: { id: PROJECT_ID, teamId: TEAM_ID },
+    authenticate: async (request) => session(request) ?? (await tokens(request)),
+    access: rules(customers),
+  })
+}
+
+const asCookie = (tenant: { fetch(request: Request): Promise<Response> }, cookie: string) => async (method: string, path: string, body?: unknown) => {
+  const response = await tenant.fetch(
+    new Request(`${BOARD_URL}${path}`, { method, headers: { cookie, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+  )
+  return { status: response.status, body: await response.json() }
+}
+
+describe('a function among the access rules', () => {
+  const customers: RuleFunction = (principal) => (principal.id.startsWith('support:customer:') ? { 'support/': ['read', 'post'] } : undefined)
+
+  it("gives a host's external principal what it returns, and nothing past it", async () => {
+    const tenant = supportBoard((fn) => [vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }), fn], customers)
+    const customer = asCookie(tenant, 'session=customer-99')
+    expect((await customer('GET', '/me')).body).toMatchObject({ principal: 'support:customer:99', can: { 'support/': ['read', 'post'] } })
+    expect((await customer('POST', '/messages', { channel: 'support/billing', text: 'my invoice is wrong' })).status).toBe(201)
+    expect((await customer('POST', '/messages', { channel: 'dev', text: 'hello?' })).status).toBe(403)
+    // The token rules still decide for tokens.
+    expect((await caller(tenant.fetch, await deploymentToken('front', 'prj_front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
+    // Without it, the rules give the customer nothing: `external` gets everything only as a platform user sync writes as.
+    const without = supportBoard(() => [vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } })], customers)
+    expect((await asCookie(without, 'session=customer-99')('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
+  })
+
+  it('leaves a principal to the next rule when it returns undefined', async () => {
+    const asked: string[] = []
+    const passes: RuleFunction = (principal) => void asked.push(principal.id)
+    const tenant = supportBoard((fn) => [passes, vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }), fn], customers)
+    expect((await caller(tenant.fetch, await deploymentToken('front', 'prj_front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
+    expect((await asCookie(tenant, 'session=customer-7')('GET', '/me')).body.can).toEqual({ 'support/': ['read', 'post'] })
+    expect(asked).toEqual(['vercel:project:prj_front:production', 'support:customer:7'])
+    // Past the last rule, a token still hears which rule would let it in.
+    expect((await caller(tenant.fetch, await deploymentToken())('GET', '/me')).body.error.message).toBe(
+      "this token can't use this board: add vercelProject({ project: 'marketing', can }) to access",
+    )
+  })
+
+  it('stops at null: the rules after it are never asked', async () => {
+    const tenant = supportBoard((fn) => [() => null, vercelProject({ project: 'prj_front', can: 'all' }), fn], customers)
+    for (const call of [caller(tenant.fetch, await deploymentToken('front', 'prj_front')), asCookie(tenant, 'session=customer-99')])
+      expect((await call('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
+  })
+
+  it("can't take the defaults away: a person, and the board's own deployments where it runs, still get everything", async () => {
+    vi.stubEnv('VERCEL_TARGET_ENV', '')
+    vi.stubEnv('VERCEL_ENV', 'production')
+    try {
+      const asked: string[] = []
+      const tenant = supportBoard(() => [(principal) => (asked.push(principal.id), null)], customers)
+      const everything = { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] }
+      expect((await asCookie(tenant, 'session=staff-ada')('GET', '/me')).body).toMatchObject({ principal: 'vercel:user:u_ada', can: everything })
+      expect((await caller(tenant.fetch, await personToken())('GET', '/me')).body.can).toEqual(everything)
+      expect((await caller(tenant.fetch, await deploymentToken('board', PROJECT_ID))('GET', '/me')).body.can).toEqual(everything)
+      expect(asked).toEqual([])
+      // Its previews aren't a default: the function decides for them.
+      expect((await caller(tenant.fetch, await deploymentToken('board', PROJECT_ID, 'preview'))('GET', '/me')).status).toBe(403)
+      expect(asked).toEqual([`vercel:project:${PROJECT_ID}:preview`])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+})
+
+describe("a function rule's schedules", () => {
+  const T0 = Date.parse('2026-10-07T12:00:00.000Z')
+  const HOUR = 3_600_000
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('ask it again at each send, and are revoked once it gives nothing', async () => {
+    const queue = fakeQueue()
+    const open = { support: true }
+    const tenant = board({
+      store: memory(),
+      url: BOARD_URL,
+      scheduler: queue.scheduler,
+      authenticate: (request) => (request.headers.get('cookie') === 'session=customer-99' ? { id: 'support:customer:99', kind: 'external', handle: 'customer-99' } : null),
+      access: [(principal) => (principal.id === 'support:customer:99' ? (open.support ? { 'support/': ['read', 'post'] } : null) : undefined)],
+    })
+    const customer = asCookie(tenant, 'session=customer-99')
+    const advance = async (ms: number) => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      vi.setSystemTime(Date.now() + ms)
+      await queue.fire()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const created = await customer('POST', '/schedules', { channel: 'support', text: 'still waiting', every: '1h' })
+    expect(created.status).toBe(201)
+    await advance(HOUR)
+    expect((await customer('GET', '/messages?channel=support')).body.messages).toMatchObject([{ text: 'still waiting' }])
+    // The app closes the customer's support access: the next send asks, and gets nothing.
+    open.support = false
+    await advance(HOUR)
+    open.support = true
+    expect((await customer('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ id: created.body.schedule.id, sent: 1, state: 'canceled', canceled: { reason: 'revoked' } }])
+    expect((await customer('GET', '/messages?channel=support')).body.messages).toHaveLength(1)
   })
 })
 
