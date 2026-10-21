@@ -121,8 +121,6 @@ const WALK: Record<RouteName, Walk> = {
   upload: () => [{ method: 'POST', path: '/attachments', status: 403 }],
   // The board's own bookkeeping spans every channel.
   inbox: () => [{ method: 'GET', path: '/inbox/slack', status: 403 }],
-  stuck: () => [{ method: 'GET', path: '/stuck', status: 403 }],
-  redrive: () => [{ method: 'POST', path: '/stuck/redrive', body: { session: 'board', index: 1, action: 'skip' }, status: 403 }],
   sourceRead: () => [{ method: 'GET', path: '/sources/slack/read?target=C0123', status: 403 }],
   // Sync's records: a caller speaks for platform users only where it may sync.
   syncImport: () => [

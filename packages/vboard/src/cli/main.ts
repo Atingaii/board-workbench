@@ -16,7 +16,7 @@ import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatThreadSummaries, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -74,9 +74,6 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            Slack shows the status, if given, instead of "Typing…"
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
-  stuck                                    events that failed 10 times and stopped their thread (full access only)
-  stuck retry|skip <event> [consumer]      retry one with a fresh 10 tries, or skip it so its thread goes on,
-                                           for one consumer or all it's stuck for, e.g. stuck retry board#55
   sources                                  the board's sources (its sync entries: slack, github, …)
   sources <key> read <channel|thread|link> [--limit N]
                                            read a source's channel, thread, or message link without syncing it,
@@ -165,6 +162,7 @@ function markAttachmentId(args: string[]): string[] {
 /** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
 const REMOVED: Record<string, string> = {
   update: "`vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)",
+  stuck: '`vb stuck` is gone: a board on a2() keeps its dead letters in A2, on the backend\'s `servers`',
 }
 
 /** The command word: the first argument that isn't a flag or a string flag's value. */
@@ -911,27 +909,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const detail = event.text ?? event.type ?? event.emoji ?? ''
         out(`${entry.createdAt}  ${entry.channel}  ${event.kind}  ${event.author?.handle ?? ''}  ${detail.split('\n')[0]}`)
       }
-      return 0
-    }
-
-    case 'stuck': {
-      const [action, ref] = args
-      if (action === undefined) {
-        const list = await client().stuck()
-        if (flags.json) return list.forEach(printJson), 0
-        if (list.length === 0) return out('nothing is stuck'), 0
-        out(list.map((event) => formatStuck(event)).join('\n'))
-        return 0
-      }
-      const consumer = args[2]
-      const at = ref?.lastIndexOf('#') ?? -1
-      const index = ref === undefined ? NaN : Number(ref.slice(at + 1))
-      if ((action !== 'retry' && action !== 'skip') || at <= 0 || !Number.isInteger(index) || index < 1 || args.length > 3)
-        throw new UsageError('usage: vboard stuck [retry|skip <session>#<index> [consumer]], e.g. stuck retry board#812')
-      const { redriven } = await client().redrive(ref!.slice(0, at), index, action, consumer)
-      const what = consumer === undefined ? ref : `${ref} for ${consumer}`
-      if (flags.json) printJson({ redriven })
-      else out(redriven ? `${action === 'retry' ? 'retrying' : 'skipped'} ${what}` : `${what} isn't stuck`)
       return 0
     }
 

@@ -20,23 +20,22 @@ import {
 } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type ExternalCopy, type IdentityCode } from '../contract/reducers.ts'
 import { RemoteWatcherId, type Author } from '../contract/schemas.ts'
-import { RedriveBody, type InboxEntry, type LinkedAccount, type Me, type StuckEvent } from '../api/routes.ts'
+import type { InboxEntry, LinkedAccount, Me } from '../api/routes.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, createAuthority, issuersOf, type AccessFunction, type AccessRule, type Granted } from './auth.ts'
 import { actorSeen } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { attachmentBody, attachmentNotFound, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
-import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
+import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { defaultStore } from '../store/default.ts'
-import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull, pullInbox, type QueueSession } from './registered.ts'
 import { createRegistry, storedPrincipal, type Registration, type SyncEntrySpec } from './registry.ts'
-import { readJson, METHODS } from './routing.ts'
+import { METHODS } from './routing.ts'
 import { publicPost, type Post } from './transport.ts'
 import {
   authorizeMessage,
@@ -100,23 +99,6 @@ const boardServer = (options: A2Options) =>
   })
 
 export type BoardSession = ReturnType<ReturnType<typeof boardServer>['session']>
-
-/** What `vb stuck` needs of an A2 session, whatever its contract. */
-type Redrivable = {
-  deadLetters(): Promise<
-    {
-      consumer: string
-      index: number
-      type: string
-      lane: string | null
-      attemptCount: number
-      failureCount: number
-      lastError: string | null
-      failedAt: Date
-    }[]
-  >
-  redrive(target: { consumer: string; index: number }, options: { action: 'retry' | 'skip' }): Promise<{ redriven: boolean }>
-}
 
 /** Sync's own lookups and receipts, from board() in this deployment. */
 const SYNC_ACTOR = 'vboard:sync'
@@ -201,7 +183,7 @@ const hashCode = (code: string) => createHash('sha256').update(code.toUpperCase(
 /** The board events sync delivers: what a platform shows, and a thread's new targets. */
 const DELIVERED = ['thread.synced', 'message.posted', 'message.edited', 'message.deleted', 'reaction.added', 'reaction.removed', 'labels.changed'] as const
 
-/** The inboxes that have had an event, so `vb stuck` finds each one's dead letters. */
+/** The inboxes that have had an event, so a sync key's inbox lists every channel's. */
 const inboxesReducer = reducer({
   contract: inboxContract,
   name: 'vboard.inboxes.v1',
@@ -337,78 +319,6 @@ function build(options: A2Options, binding: BoardBinding) {
   // through the board, as its creator, so the board's middleware sees it.
   schedules.bind({ writes, accessNow: authority.accessNow, clientAs: (identity, origin) => binding.client({ identity, origin }, null) })
   watchers.bind({ reads })
-
-  /** The sessions whose consumers run on lanes, so a dead letter there stops the rest of its lane. */
-  async function lanedSessions(): Promise<{ id: string; session: Redrivable }[]> {
-    const channels = Object.keys((await inboxes.state(inboxesReducer)).state)
-    const ids: [string, { session(id: string): Redrivable }][] = [
-      [BOARD_SESSION, server],
-      [SCHEDULES_SESSION, schedules.server],
-      ...(await watchers.sessions()).map((id): [string, typeof watchers.server] => [id, watchers.server]),
-      ...channels.map((channel): [string, typeof inboxServer] => [inboxSession(channel), inboxServer]),
-    ]
-    return ids.map(([id, owner]) => ({ id, session: owner.session(id) }))
-  }
-
-  async function stuck(): Promise<StuckEvent[]> {
-    const found = (await Promise.all((await lanedSessions()).map(async ({ id, session }) => (await session.deadLetters()).map((dead) => ({ id, dead }))))).flat()
-    if (found.length === 0) return []
-    // The tables first: reads and writes wait on them, so they're what to retry first.
-    found.sort((a, b) => Number(b.dead.consumer === TABLES_CONSUMER) - Number(a.dead.consumer === TABLES_CONSUMER))
-    // A thread's key is its root's post's event ID.
-    const roots = new Map<string, string | null>()
-    const rootOf = async (thread: string) => {
-      if (!roots.has(thread)) {
-        const root = await store.tables.byEventId(thread)
-        roots.set(thread, root ? ref(root.id) : null)
-      }
-      return roots.get(thread)!
-    }
-    return Promise.all(found.map(async ({ id, dead }) => {
-      const laneThread = dead.lane?.startsWith('thread:') ? dead.lane.slice('thread:'.length) : null
-      // An inbox's lanes are platform threads; everywhere else they're the board's.
-      const inbox = id.startsWith('inbox:')
-      const thread = inbox ? (laneThread && (await store.tables.threadOf(laneThread))) : laneThread
-      return {
-        session: id,
-        index: dead.index,
-        consumer: dead.consumer,
-        type: dead.type,
-        lane: dead.lane,
-        thread,
-        root: thread === null ? null : await rootOf(thread),
-        external: inbox ? laneThread : null,
-        attempts: dead.attemptCount,
-        failures: dead.failureCount,
-        error: dead.lastError,
-        failedAt: dead.failedAt.toISOString(),
-      }
-    }))
-  }
-
-  async function redrive(body: z.infer<typeof RedriveBody>, by: string) {
-    const target = (await lanedSessions()).find(({ id }) => id === body.session)
-    if (!target) throw notFound(`no session ${body.session} on this board`)
-    // Without a consumer, every consumer the event is stuck for.
-    const consumers =
-      body.consumer !== undefined
-        ? [body.consumer]
-        : (await target.session.deadLetters()).filter((dead) => dead.index === body.index).map((dead) => dead.consumer)
-    const done: string[] = []
-    for (const consumer of consumers) {
-      const { redriven } = await target.session.redrive({ consumer, index: body.index }, { action: body.action })
-      if (redriven) done.push(consumer)
-    }
-    if (done.length > 0)
-      console.info(`[vboard] ${by} ${body.action === 'retry' ? 'retried' : 'skipped'} stuck event ${body.session}#${body.index} for ${done.join(', ')}`)
-    return { redriven: done.length > 0 }
-  }
-
-  /** The board's own bookkeeping spans every channel, so it needs `manage` in all of them. */
-  const requireManage = (principal: Granted, what: string) => {
-    if (!principal.access.everywhere('manage'))
-      throw forbidden(`this token can't ${what}: it needs manage in every channel`)
-  }
 
   /**
    * Whether `principal` may have a file: one it uploaded, or one a message it
@@ -1098,26 +1008,11 @@ function build(options: A2Options, binding: BoardBinding) {
     return { actor: account.id, handle: account.handle, name: account.name, method, at: new Date().toISOString() }
   }
 
-  /** a2()'s routes beside the protocol, by name. */
-  const handlers = {
-    async stuck(caller: Caller) {
-      // What failed, with its errors, like the inbox.
-      requireManage((await identityOf(caller)).principal, 'read stuck events')
-      return json({ stuck: await stuck() })
-    },
-    async redrive(caller: Caller, request: Request) {
-      const { principal, actor } = (await identityOf(caller))
-      requireManage(principal, 'retry or skip stuck events')
-      return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
-    },
-  }
-
   // The inbox's second and the watchers' last, where tests and tools look for them. The identity
   // session has no consumers or timers.
   const servers = [server, inboxServer, schedules.server, registry.server, watchers.server]
   return {
     methods,
-    handlers,
     schedules,
     /** The scheduler's callback, for every A2 server behind the board. */
     scheduler: options.scheduler
@@ -1148,23 +1043,13 @@ export function a2(given: A2Options = {}) {
   const methods = Object.fromEntries(
     METHODS.map((name) => [name, (caller: Caller, input: never, signal: AbortSignal) => (ready().methods[name] as (...args: unknown[]) => unknown)(caller, input, signal)]),
   ) as unknown as ProtocolMethods
-  /** A route that needs a verified caller. */
-  const authed = (method: 'GET' | 'POST', path: string, handle: (caller: Caller, request: Request, param: string) => Promise<Response>): BackendRoute => ({
-    method,
-    path,
-    auth: true,
-    handle: (request, { caller, param }) => handle(caller!, request, param ?? ''),
-  })
-  const routes: BackendRoute[] = [
-    authed('GET', '/stuck', (caller) => ready().handlers.stuck(caller)),
-    authed('POST', '/stuck/redrive', (caller, request) => ready().handlers.redrive(caller, request)),
-  ]
   const backend = {
     ...methods,
     remote: null,
     // The issuers its `oidc()` rules name: board() verifies their tokens for it.
     issuers: typeof options.access === 'function' ? [] : issuersOf(options.access ?? []),
-    routes,
+    // Everything it answers is the protocol's.
+    routes: [] as BackendRoute[],
     bind(binding: BoardBinding) {
       if (built) throw new Error('a2: this backend already serves a board: create one a2() per board()')
       // Missing a piece, it builds nothing: A2 refuses a server without a store in production,

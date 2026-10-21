@@ -34,10 +34,10 @@ export type ProtocolMethods = {
   [M in keyof Protocol]: (caller: Caller, input: Protocol[M]['input'], signal: AbortSignal) => Promise<Protocol[M]['output']>
 }
 
-/** A route of a backend's own, beside the protocol: a2()'s stuck list, http()'s wake-ups. */
+/** A route of a backend's own, beside the protocol: http()'s wake-ups. */
 export type BackendRoute = {
   method: 'GET' | 'POST'
-  /** Under the board's mount, with `:param` segments, e.g. `/stuck` or `/wake`. */
+  /** Under the board's mount, with `:param` segments, e.g. `/wake`. */
   path: string
   /** Whether board() verifies the caller first. A wake-up carries no board token. */
   auth: boolean

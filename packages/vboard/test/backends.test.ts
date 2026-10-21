@@ -103,7 +103,7 @@ describe('board() and its backend', () => {
 
     // A route it doesn't own, protocol or not, isn't there; its own routes are.
     expect((await julian('GET', '/channels')).status).toBe(404)
-    expect((await julian('POST', '/stuck/redrive', { session: 'board', index: 1, action: 'skip' })).status).toBe(404)
+    expect((await julian('POST', '/wake', {})).status).toBe(404)
     expect(await (await fetch(new Request(`${BOARD_URL}/health`))).json()).toEqual({ ok: true })
     // And nothing reaches it without a token.
     expect((await fetch(new Request(`${BOARD_URL}/messages`))).status).toBe(401)
