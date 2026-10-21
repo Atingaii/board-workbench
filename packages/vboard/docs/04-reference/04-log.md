@@ -103,7 +103,7 @@ thread's events in order on its lane.
 | Contract | Sessions | Events | Holds |
 | --- | --- | --- | --- |
 | `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC`, and `inboxes` | `external.received { sync, event, raw }`, `inbox.opened { channel }` | every platform event the board's own sync pushed, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here. `inboxes` lists each inbox, for `vb stuck` |
-| `vboard-watch` | `watch:<id>`, e.g. `watch:triage`, and `watch:@<principal>` | `watch.matched { thread, event }` | each [watcher's](../01-board/06-watchers.md) matches; its `run` happens here. A registrant's session queues its watchers' matches, its sync's (`sync: true`), and what it pushed to an inbox (`inbox: <key>`), for it to pull |
+| `vboard-watch` | `watch:<id>`, e.g. `watch:triage`, and `watch:@<principal>` | `watch.matched { thread, event }` | each [watcher's](../01-board/06-watchers.md) matches; its `run` happens here. A registrant's session queues its watchers' matches, its sync's (when it registers sync entries), and what it pushed to an inbox (`inbox: <key>`), for it to pull |
 | `vboard-identity` | `identity` | `identity.code_issued`, `identity.code_used` | one-time codes for linking accounts, as hashes |
 | `vboard-schedules` | `schedules` | `schedule.created`, `schedule.canceled`, `schedule.due`, `schedule.fired` | [scheduled messages](../01-board/07-schedules.md) |
 

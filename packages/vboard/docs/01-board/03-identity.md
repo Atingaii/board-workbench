@@ -136,11 +136,12 @@ import { githubActions, vercelProject } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
 
 export const { GET, POST } = board({
-  backend: a2(),
-  access: [
-    vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
-  ],
+  backend: a2({
+    access: [
+      vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
+      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
+    ],
+  }),
 })
 ```
 

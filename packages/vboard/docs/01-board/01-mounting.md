@@ -51,12 +51,11 @@ export const { GET, POST, client } = board({ backend: http('https://board.exampl
 
 A board on `http()` keeps nothing:
 
-- **Its discovery names the other board,** and a request to it answers 404
-  with code `remote` once its token checks out. The CLI and the Node client
-  pointed at it follow it there: they mint a token for the other board and
-  send their requests to it. What this board does for its own sync entries,
-  linking an account on one and reading a source through it, they send here.
-  A client handed a token for this board (`token`, `VBOARD_TOKEN`) stays here.
+- **It answers wake-ups, webhooks, and discovery,** which names the other
+  board as `remote`. A request to it answers 404 with code `remote` once its
+  token checks out. The CLI and the Node client pointed at it follow it there:
+  they mint a token for the other board and send their requests to it. A
+  client handed a token for this board (`token`, `VBOARD_TOKEN`) stays here.
 - **`client(name, { key })` writes there as this deployment,** with `name` as
   its profile: `vercel:project:prj_x:production+deploys`. Names start with a
   letter and use up to 32 letters, numbers, and hyphens. With a `key`, its
@@ -68,34 +67,13 @@ A board on `http()` keeps nothing:
 - **Its sync and middleware run here too.** Webhooks land on this board, and
   what it imports, it writes there. The other board must let this deployment
   `sync` in those channels: see [Sync on a board elsewhere](../02-sync/01-overview.md#on-a-board-elsewhere).
-- **`store`, `scheduler`, and `blob` belong to the other board,** so `http()`
-  takes none of them.
+- **`store`, `scheduler`, `blob`, and `access` belong to the other board,** so
+  `http()` takes none of them: what a caller may do is the board that keeps
+  the log's to say.
 
-### Forwarding requests
-
-With `init`, a board on `http()` takes requests too, and makes each caller's
-call on the other board. `init({ caller })` returns what to merge into every
-request that call makes there: a token you mint for the caller, say. A call
-whose `init` sets no `authorization` goes as this deployment. Its discovery
-names no other board then, so clients stay here.
-
-```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
-
-export const { GET, POST } = board({
-  backend: http('https://board.example.com/api/board', {
-    init: async ({ caller }) => {
-      // here's where you'd decide who the caller is there, and mint its token
-      // const token = await tokenFor(caller)
-      return { headers: { /* authorization: `Bearer ${token}` */ } }
-    },
-  }),
-})
-```
-
-A request's caller is `{ identity }`: the principal `board()` verified, the
-actor it writes as, and what it may do (`identity.principal.access`).
+A request's caller is `{ identity }`: the principal `board()` verified and the
+actor it writes as. What it may do is the backend's to say: `a2()` works it out
+from its [`access`](./09-access.md).
 
 ## Options
 
@@ -104,9 +82,9 @@ actor it writes as, and what it may do (`identity.principal.access`).
 | Option | What it does |
 | --- | --- |
 | `backend` | `a2({ … })`, `http(url)`, or your own. Required |
-| `access` | Who besides the board's people and its own environment's deployments may call it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `vboard/access`. Or a function that verifies callers itself: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
+| `authenticate` | A host's own verifier, `(request) => ({ id, kind, handle })`, in place of the built-in one: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
-| `project` | `{ id, teamId? }`: the board's Vercel project. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercelProject()` rules named without one |
+| `project` | `{ id, teamId? }`: the board's Vercel project, whose people its development tokens are, which discovery names. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercelProject()` rules named without one |
 | `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack({…}) }`. See [Sync](../02-sync/01-overview.md) |
@@ -121,6 +99,7 @@ actor it writes as, and what it may do (`identity.principal.access`).
 | `store` | Where the board keeps its log and the tables it reads: `postgres()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`. Omitted: SQLite in development, memory in tests. See [Database](./02-database.md) |
 | `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`, with an optional `prefix` to share one store between boards. Omitted: files in `.a2/attachments` in development, memory in tests |
 | `scheduler` | What runs sync, watchers, retries, and scheduled messages: `vercelQueues()` from `vboard/backend-a2/scheduler-vercel`, or `qstash()` from `vboard/backend-a2/scheduler-qstash`. Omitted: one in this process in development, its tasks in memory, and none in tests |
+| `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `vboard/access`. Or a host's own function of the principal: see [Access](./09-access.md) |
 
 In production, `store`, `scheduler`, and `blob` are required, so every board on `a2()` answers the whole protocol. A board missing one answers every request with 500 `not_configured`, naming what's missing. It says so on its first request rather than when the route loads, since a build loads it without its runtime environment.
 
@@ -129,7 +108,6 @@ In production, `store`, `scheduler`, and `blob` are required, so every board on 
 | Option | What it does |
 | --- | --- |
 | `token` | A function returning a token whose audience is the other board's URL. Defaults to what the SDK finds: on Vercel, the deployment's OIDC token |
-| `init` | Forwards requests here to the other board: see [Forwarding requests](#forwarding-requests) |
 | `fetch` | How requests reach it. Defaults to `fetch` |
 
 Set `url` when the board sits behind a proxy or rewrite that changes the
@@ -284,15 +262,17 @@ What a backend has:
 | --- | --- |
 | `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `vboard` says what each takes and answers |
 | `remote` | A board's URL when this one keeps nothing, for discovery to send clients there. Otherwise `null` |
+| `issuers` | OIDC issuers past Vercel's and GitHub's whose tokens `board()` verifies for it: `a2()` names its `oidc()` rules'. Otherwise `[]` |
 | `routes` | Routes of its own beside the protocol: `{ method, path, auth, handle(request, { caller, param }) }`. One at a protocol route's path takes its place |
 | `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O |
 
 - **A caller is who's calling.** `{ identity, origin }` is a request `board()`
-  verified: the principal, the actor it writes as, and what it may do in each
-  channel (`identity.principal.access`), which every method honors. `{ self,
-  origin }` is this deployment's own code: `client(name)`, a watcher, the
-  middleware's client, or sync (its `origin.via.kind` says which). Who that is
-  on your board is yours to decide.
+  verified: the principal (its `scope` from `x-board-scope` included, which
+  only narrows) and the actor it writes as. What it may do is yours to decide
+  from `identity.principal`, and every method honors it. `{ self, origin }` is
+  this deployment's own code: `client(name)`, a watcher, the middleware's
+  client, or sync (its `origin.via.kind` says which). Who that is on your board
+  is yours to decide too.
 - **`events` long-polls.** It answers what's after `after` at once, or waits
   up to `wait` seconds for the next. `board()` serves SSE from it.
 - **Sync's methods keep its records** (`syncImport`, `syncReceipt`, the
@@ -302,10 +282,10 @@ What a backend has:
   its events (`subscriptions`: each watcher's tail, and sync's at `@sync`, with
   `run(id, event, { trigger, attempt })` to run one), sync's inbound
   (`receive(key, event, { id, attempt })` for a backend that delivers what
-  sync pushed in-process, `pull()` for one that queues it), what a stored
-  principal may do now (`accessFor`), an in-process client as any caller
-  (`client(caller, trigger)`, whose writes go through what a request's do, the
-  middleware included), and its own URL (`url()`).
+  sync pushed in-process, `pull()` for one that queues it), its sync entries
+  (`sync`), its own Vercel project and team (`project()`), an in-process
+  client as any caller (`client(caller, trigger)`, whose writes go through
+  what a request's do, the middleware included), and its own URL (`url()`).
 - **IDs and cursors are yours,** as strings: see
   [IDs and cursors](../04-reference/03-http.md#ids-and-cursors).
 

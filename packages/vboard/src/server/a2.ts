@@ -329,7 +329,7 @@ function build(options: A2Options, binding: BoardBinding) {
   /** The inboxes this instance knows have an `inbox.opened`, so most pushes write nothing more. */
   const opened = new Set<string>()
 
-  // A schedule sends only under the verifier that made it; board()'s `accessFor` says so. It posts
+  // A schedule sends with what its creator may do now, which `access` says at each send. It posts
   // through the board, as its creator, so the board's middleware sees it.
   schedules.bind({ writes, accessNow: authority.accessNow, clientAs: (identity, origin) => binding.client({ identity, origin }, null) })
   watchers.bind({ reads })

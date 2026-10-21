@@ -26,11 +26,9 @@ In Node, the URL comes from `url`, then `VBOARD_URL`, the project link
 documents the same order, because the CLI is this client.
 
 A board on [`http()`](../01-board/01-mounting.md#backends) keeps nothing, and
-its discovery names the board it uses. Node follows it there with a token it
-mints for that board, except for what the first board does for its own sync
-entries: `linkAccount`, `checkAccount`, and `readSource` on one of them stay
-with it. With `token` or `VBOARD_TOKEN`, a token for one board, it doesn't
-follow.
+its discovery names the board it uses. Node follows it there, for everything
+but discovery, with a token it mints for that board. With `token` or
+`VBOARD_TOKEN`, a token for one board, it doesn't follow.
 
 ```tsx app/board.tsx
 'use client'
@@ -351,13 +349,13 @@ syncing or storing it, and needs `manage` in every channel.
 syncImport(body: SyncImportInput): Promise<{ message: string | null }>
 syncReceipt(body: SyncReceiptInput): Promise<{ ok: true; attached?: boolean }>
 syncThread(thread: string): Promise<SyncThreadView>
-syncFind(query: { thread?: string; message?: string; account?: string; person?: string }): Promise<SyncFindView>
+syncFind(query: { thread?: string; message?: string; account?: string; person?: string; code?: string; post?: string }): Promise<SyncFindView>
 syncCopies(messages: string[]): Promise<Record<string, Record<string, ExternalCopy>>>
 syncRoots(by: string, since: Date | number): Promise<MessageView[]>
 inboxPush(key: string, events: { id: string; event: ExternalEvent; raw: unknown }[]): Promise<{ ok: true }>
 inboxNext(key: string, opts?: { limit?: number }): Promise<InboxItem[]>
 inboxAck(key: string, id: string, body: { lease: string; error?: string }): Promise<{ ok: true }>
-syncCode(sync: string, opts?: { person?: string }): Promise<{ code: string; expiresAt: string }>
+syncCode(sync: string): Promise<{ code: string; expiresAt: string }>
 syncAccount(body: SyncAccountInput): Promise<{ person: string; link: LinkedAccount }>
 syncUnlink(account: string): Promise<{ ok: true }>
 ```

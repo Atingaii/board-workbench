@@ -5,8 +5,10 @@ description: "The board's code says what each caller may do in each channel: rea
 
 ## Who gets what
 
-Every caller is an OIDC principal (see [Identity](./03-identity.md)). Some get
-everything without asking; the rest get what `access` gives them:
+Every caller is an OIDC principal, which `board()` verifies (see
+[Identity](./03-identity.md)). What it may do is up to the board that keeps the
+log: `a2({ access })`. Some get everything without asking; the rest get what
+`access` gives them:
 
 | Caller | Default |
 | --- | --- |
@@ -41,11 +43,6 @@ import { a2 } from 'vboard/backend-a2'
 
 const backend = a2({
   // store and scheduler as in Mounting
-})
-
-export const { GET, POST } = board({
-  backend,
-  // sync as in Sync
   access: [
     // front's feedback intake posts and never reads.
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
@@ -57,6 +54,8 @@ export const { GET, POST } = board({
     vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
   ],
 })
+
+export const { GET, POST } = board({ backend })
 export const { scheduler } = backend
 ```
 
@@ -81,43 +80,51 @@ export const { scheduler } = backend
   `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
   percent-encoded (`oidc:ci.test%3A8443:<sub>`). Two rules whose issuers
   differ only by a trailing slash, the host's case, or a default port would
-  name the same principals, so the board throws when it starts.
+  name the same principals, so the board throws when it starts. `board()`
+  verifies these issuers' tokens because `a2()` names them (its `issuers`).
+- **A board on `http()` has no `access`.** The board that keeps the log decides
+  what its callers may do there.
 
 ## A host's own verifier
 
 A host that serves many teams' boards from one deployment can't use the
 built-in verifier: its callers can't access the host's project, and every
-team's board would trust the host's own deployments. Pass a function as
-`access` to verify callers with your own credentials instead:
+team's board would trust the host's own deployments. Pass `authenticate` to
+`board()` to say who a request is with your own credentials, and a function as
+`a2({ access })` to say what they may do:
 
 ```ts
+// const teamId = …, and verifyPlatformToken and canOf are yours
 board({
   backend: a2({
     store: redis({ keyPrefix: `board:${teamId}:` }),
     scheduler: vercelQueues({ topic: `board-${teamId}` }),
     blob: vercelBlob({ prefix: teamId }),
+    access: async (principal) => canOf(teamId, principal.id),
   }),
-  access: async (request) => {
+  authenticate: async (request) => {
     const caller = await verifyPlatformToken(request.headers.get('authorization'))
     if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
-    return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, can: caller.viewer ? ['read'] : 'all', expiresAt: caller.expiresAt }
+    return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, expiresAt: caller.expiresAt }
   },
 })
 ```
 
-- **It returns the principal:** `id` in the board's scheme (`vercel:user:<id>`,
-  `vercel:project:<id>:<env>`, …), `kind`, `handle`, `can` as a rule's, and
+- **`authenticate` returns the principal:** `id` in the board's scheme
+  (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
   optionally `expiresAt`. The handle, name, profile, and `x-board-scope` the
   caller sends still apply on top of it.
 - **To reject, return or throw a `Response`.** The board sends that response
   as is. Anything else thrown is a 500, so turn a bad token into a 401 yourself.
-- **Nothing else is trusted.** No people, no own-project deployments, no
-  audience check, no platform token header: only what the function grants.
-- **A schedule sends with the access it was granted** when it was made, since
-  there's no request to ask the function again. It's canceled `revoked` once
-  that grant's `expiresAt` passes, so set `expiresAt` to when the caller's
-  credential ends: without it, a schedule keeps its grant for as long as it
-  repeats. Schedules made before a board switched to or from a function are
+- **`access` gives each principal what it may do,** as a rule's `can`
+  (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), or null for nothing. It's
+  asked again whenever a principal acts, a schedule's send included, so what it
+  says now is what holds. A schedule whose creator's `expiresAt` has passed is
+  canceled `revoked`.
+- **Nothing else is trusted.** With `authenticate`, no people, own-project
+  deployments, audience check, or platform token header count, and with a
+  function as `access`, only the principals `authenticate` returned get
+  anything. Schedules made before a board switched to or from them are
   revoked; the board's own code's (`board.client()`, watchers) keep sending.
 - **One board per team.** Create a `board()` for each team and cache them.
   Give each its own store prefix, scheduler topic, and attachments prefix, so

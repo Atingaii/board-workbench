@@ -179,12 +179,14 @@ export const { GET, POST } = board({
   Receipts land on the other board.
 - **The other board must let this deployment `sync`** in the channels it syncs,
   and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
-  in its `access`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
+  in its `a2({ access })`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 
 A [callback](./02-callbacks.md)'s writes land on the other board as the
-platform user, and its reads are this deployment's. The CLI pointed at this
-board follows it to the other one, and sends `vb identity link` for this
-board's entries here, where sync runs: the link lands on the other board. Two
+platform user, and its reads are this deployment's. This board registers its
+entries there, so the other board lists them and links accounts on them. The
+CLI pointed at this board follows it to the other one, so `vb identity link
+slack` gets its code there; this board's sync redeems it when it comes in from
+Slack, and a consent entry signs the person in here. Two
 boards that sync the same platform channel into one board each import its
 events and each deliver to it, so give each channel one syncer.
 

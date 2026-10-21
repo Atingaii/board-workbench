@@ -62,7 +62,7 @@ vboard post errors-www "deploy failed on a1b2c3"
 
 ## Principles
 
-- **Access is per channel, and code says it.** `board({ access })` says what
+- **Access is per channel, and code says it.** `a2({ access })` says what
   each kind of principal may do in each channel: `read`, `post`, `react`,
   `label`, `sync`, or `manage`. Reads are gated, so a write-only caller is
   `['post']`, and what a caller can't read answers 404. Nothing is minted or
@@ -130,10 +130,10 @@ conversations.
 
 ### Backends
 
-`board({ backend, access, watch, project, url, basePath, streamMaxMs, auth })`
+`board({ backend, authenticate, watch, sync, middleware, project, url, basePath, streamMaxMs, auth })`
 mounts a board on a backend, which says where the board lives. `board()` owns
 the HTTP on every backend: it routes each request and validates it with the
-schemas in `src/api/routes.ts`, verifies its token (or calls a host's `access`
+schemas in `src/api/routes.ts`, verifies its token (or calls a host's `authenticate`
 function) and narrows it by `x-board-scope`, resolves the actor from the
 `x-board-*` headers, maps errors, and serves discovery, `/avatars/:name`,
 `/openapi.json`, SSE, and `client(name, { key })`. Then it calls the backend's
@@ -151,8 +151,11 @@ method of the same name as the route.
   write a backend makes in-process for someone it trusts), or `{ self,
   origin }`, this deployment's own code: `client(name)` (`origin.via.kind` is
   `client`), a watcher (`watcher`), the middleware's client (`middleware`), or
-  sync (`engine`). Every method honors `identity.principal.access`. Each
-  backend decides who `self` is on its board. `origin` is in-process only:
+  sync (`engine`). The principal carries who it is, its token's facts, and its
+  `scope`, never what it may do: each backend decides that, and who `self` is
+  on its board, and every method honors it. `board()` asks the backend's
+  `me(caller).can` where it needs a permission itself (`manage` to read a
+  source, `sync` to attach a thread, `post` to show typing). `origin` is in-process only:
   board() also sets `config` (the targets a new root's channel syncs with) and
   a2()'s schedules set `schedule` (the send), and no request carries either.
 - **`routes`** are a backend's own, beside the protocol, each with `auth`
@@ -164,8 +167,8 @@ method of the same name as the route.
   post, change, and thread sync) with `run(id, event, { trigger, attempt })`;
   sync's inbound, `receive(key, event, { id, attempt })` for a backend that
   delivers what sync pushed in-process, and `pull()` for one that queues it;
-  `accessFor` (what a stored principal may do now, under the rules as they
-  are); `client(caller, trigger)` (an in-process client as any caller, through
+  `sync` (board()'s sync entries) and `project()` (its own Vercel project and
+  team, which a backend's `self` rules and defaults name); `client(caller, trigger)` (an in-process client as any caller, through
   the middleware, its posts' IDs derived from the trigger); and `url()`, the
   board's own URL once it's known.
 - **Middleware and sync run in `board()`,** on every backend (see
@@ -196,28 +199,28 @@ The backends vboard ships:
   what sync pushes to its inbox on `vboard-inbox`'s platform-thread lanes, so
   both keep A2's retries and dead letters. It takes no `sync` or `middleware`:
   TypeScript flags them there.
-- **`http(url, { fetch?, token?, init? })`** uses the board at `url`, which
+- **`http(url, { fetch?, token? })`** uses the board at `url`, which
   keeps the log: its methods call it with the SDK. A `{ self }` caller writes
   there as this deployment with `self` as its profile, and a post whose ID
   `board()` derived from a trigger gets `key:<principal>:<sha256 of that ID>`.
   Any board takes a `key:<principal>:` ID only from that principal, so the
   same key never posts twice and no one can post with one first (and `posted`,
-  a retry's lookup, asks for the same). A request's `{ identity }` answers 404
-  `remote` (`<url> keeps no log: use <remote>`) and discovery names the other
-  board as `remote`, unless `init` is given:
-  `init({ caller })` returns a `RequestInit` merged into each request the
-  caller's call makes there (a token minted for it, say), and discovery then
-  names no other board. Its own routes are `POST /wake` and `POST /watchers`
+  a retry's lookup, asks for the same). It answers only wake-ups, webhooks,
+  and discovery, which names the other board as `remote`: a request's
+  `{ identity }` answers 404 `remote` (`<url> keeps no log: use <remote>`). It
+  has no `access`: what a caller may do is the other board's to say. Its own
+  routes are `POST /wake` and `POST /watchers`
   (no token). Its watchers run here, on what the other board matches for them
-  (below), and so does its sync: it registers with `sync: true`, pulls what to
-  deliver as matches of watcher `@sync`, and pulls back what it pushed to its
-  inbox after each webhook and when it's woken. Sync's own calls go as the
-  deployment itself, which the other board must let `sync`. The Node client
-  pointed at such a board follows `remote`: it mints a token for the other
-  board and sends its requests there, except `/identity/link`,
-  `/identity/check`, and `/sources/:key/read` for the sync keys this board's
-  discovery lists, which only it can answer. A client handed a token for this
-  board (`token`, `VBOARD_TOKEN`, `vb serve`'s) doesn't follow.
+  (below), and so does its sync: it registers its sync entries (`sync: [{ key,
+  platform, signIn }]`), pulls what to deliver as matches of watcher `@sync`,
+  and pulls back what it pushed to its inbox after each webhook and when it's
+  woken. Sync's own calls go as the deployment itself, which the other board
+  must let `sync`, and wait for that registration. The other board lists the
+  registered entries in its discovery and links accounts on them. The Node
+  client pointed at such a board follows `remote` for every route but
+  discovery: it mints a token for the other board and sends its requests
+  there. A client handed a token for this board (`token`, `VBOARD_TOKEN`,
+  `vb serve`'s) doesn't follow.
 
 ### IDs, cursors, and versions
 
@@ -449,27 +452,37 @@ talking to.
   A GitHub token is accepted only if it matches an `access` rule.
 - **Tokens from other Vercel projects** are accepted only if they match an
   `access` rule.
+- **Who verifies, who decides.** `board()` verifies tokens and says who the
+  caller is; the backend decides what it may do. `a2({ access })` holds the
+  rules below, past its defaults (people, its own deployments in its
+  environment, and its own code get everything), and works access out for each
+  request and for each stored principal (a schedule's creator, a registrant,
+  sync's own caller) under the rules as they are then. A request's principal
+  carries its token's claims and its `x-board-scope`, never what it may do.
 - **Any other issuer** is trusted only when an `oidc()` rule names it, pinned
-  in code as an https URL. The board fetches keys only for issuers a rule
+  in code as an https URL: a2() lists its rules' issuers as `issuers`, which
+  `board()` verifies. The board fetches keys only for issuers a rule
   names, and a rule matches exact claims, at least one. Its principal is
   `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
   percent-encoded (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at
   the first `:`. Two rules whose issuers would name the same principals
   (`https://ci.test/a` and `https://ci.test/a/`) are an error at boot.
-- **Tests** pass `board({ issuers })` in code, which points verification at a
+- **Tests** pass `board({ auth })` in code, which points verification at a
   local test issuer. Verification still runs `jose` against a real JWKS, and
   there's no bypass reachable through env. Local development needs no bypass
   either, because development tokens are real.
 
 ```ts
 board({
-  backend: a2({ store: postgres() }),
-  access: [
-    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
-    oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
-    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-  ],
+  backend: a2({
+    store: postgres(),
+    access: [
+      vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
+      oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
+      vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
+    ],
+  }),
 })
 ```
 
@@ -597,7 +610,8 @@ board({
   its replies to a thread its readers may not be able to read.
 - Sync callbacks are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
-  [Inbound handling](#inbound-handling)).
+  [Inbound handling](#inbound-handling)). An import's author is always a
+  platform user: never an ID the board authenticates.
 
 ### Linked accounts
 
@@ -627,7 +641,17 @@ only their own accounts.
      should open it: whoever completes it binds *their* account to you. Once
      you approve, the board asks for your token, asks the platform whose it is
      (Slack's `auth.test`, GitHub's `GET /user`), and links that account
-     (`method: 'consent'`).
+     (`method: 'consent'`) by a code of your own it issues then.
+- **Codes, only for people, each for themselves, from the board that keeps the
+  log.** `POST /sync/codes` issues one to the person asking, and nothing names
+  someone else: a sync can only redeem `{ account, code }` with a code a person
+  handed it, by posting it or by carrying it through a sign-in. On a board
+  whose sync runs elsewhere (a project on `http()`), the board that keeps the
+  log knows the entry from the project's registration, issues the code, and
+  for a sign-in sends the person to the project's `/identity/sign-in?sync&code`.
+  The project looks up whose code it is (`syncFind`'s `code`), sends them to the
+  platform as them, and at `/identity/signed-in` redeems the code with the
+  account they approved.
 - **What follows the link:**
   - **`--by <person>`** matches everyone they are: their own actor, their
     agents (`julian/claude`, by `by.principal`), and every linked account. A
@@ -1148,8 +1172,10 @@ status.
 | GET | `/cursors` | The caller's cursors, for this session |
 | POST | `/cursors` | `{ scope, cursor }`: acknowledge reading up to `cursor` |
 | GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
-| POST | `/identity/link` | `{ sync, method?: 'code' \| 'consent' }`: start linking your account on that sync entry. Answers `{ method: 'consent', url }` when it can sign you in, otherwise `{ method: 'code', code, expiresAt }`. People only |
-| POST | `/identity/check` | `{ sync }`: after a sign-in, link the account it authorized. Answers `{ linked }`, null until you've approved |
+| POST | `/identity/link` | `{ sync, method?: 'code' \| 'consent' }`: start linking your account on that sync entry, the board's own or one a registration names. Answers `{ method: 'consent', url }` when it can sign you in (on a registrant's entry, at its `/identity/sign-in`), otherwise `{ method: 'code', code, expiresAt }`. People only |
+| POST | `/identity/check` | `{ sync }`: after a sign-in, link the account it authorized. Answers `{ linked }`, null until you've approved, and always null for a registrant's entry, whose sign-in links it there |
+| GET | `/identity/sign-in` | `?sync&code`: sends a person to the platform's sign-in for that entry, carrying a code the board that keeps the log issued. Takes no board token |
+| GET | `/identity/signed-in` | `?sync&code`: where that sign-in comes back; links the account it authorized to whoever the code was issued to. Takes no board token |
 | POST | `/identity/unlink` | `{ actor }`: an actor ID or handle among your linked accounts |
 | POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
 | GET | `/openapi.json` | Generated from the route table |
@@ -1632,15 +1658,18 @@ permission in the channel concerned:
 | `syncCopies` | `GET /sync/copies` | messages' copies, by target |
 | `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
 | `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
-| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, and account links |
+| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, only for people, each for themselves; account links, only by a code |
 
 Only these take provenance (an author, an origin) from a body, and only from a
 caller with `sync` where it lands: `sync` says this project may speak for
-platform users there. A caller that pushes to an inbox pulls it back:
+platform users there. An author, or an account it links, is a user of a
+platform the caller syncs (its own sync's entries, or those it registered),
+never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`,
+`local:`, `vboard:`). A caller that pushes to an inbox pulls it back:
 a2() delivers its own sync's in-process on `vboard-inbox` and queues anyone
 else's in their registrant session. Outbound, sync is one of the board's
 subscriptions, beside its watchers: a2() delivers it on `vboard-sync`'s thread
-lanes, and a board on `http()` registers it (`sync: true`) and pulls it as
+lanes, and a board on `http()` registers it (its sync entries) and pulls it as
 matches of watcher `@sync`. A root posted through `board()` lands with its
 channel's config targets in the same batch; one written straight on the board
 it uses gets them when sync sees it. Two syncers on one platform channel would
@@ -1937,7 +1966,7 @@ their own platform token, which they grant by signing in (`vb identity link
 
 ```ts
 type UserTokens = {
-  authorize(principal: string): Promise<string>       // a sign-in URL binding whoever completes it to `principal`
+  authorize(principal: string, options?: { callback?: string }): Promise<string> // a sign-in URL binding whoever completes it to `principal`, back to `callback`
   token(principal: string): Promise<string | null>    // their token, or null when they haven't signed in
 }
 ```

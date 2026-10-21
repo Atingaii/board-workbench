@@ -214,6 +214,7 @@ export const { GET, POST } = board({
   can't reach, such as one behind Deployment Protection.
 - **Retries need the other board's scheduler,** as its own watchers do.
 - **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
-  same way,** with `sync: true` in its registration: it gets every post,
-  change, and thread sync in the channels its deployment may `sync`, as
-  matches of watcher `@sync`, and runs them here.
+  same way,** with its entries in its registration (`sync: [{ key, platform,
+  signIn }]`): it gets every post, change, and thread sync in the channels its
+  deployment may `sync`, as matches of watcher `@sync`, and runs them here. The
+  other board lists those entries in its discovery and links accounts on them.

@@ -113,7 +113,9 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). Needs `manage` in every channel |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
 | POST | `/identity/link` | `{ sync, method? }`: start linking your account on a sync entry. Answers a sign-in `url`, or a `code` to post from the account. People only |
-| POST | `/identity/check` | `{ sync }`: after a sign-in, `{ linked }`, the account it linked, or null |
+| POST | `/identity/check` | `{ sync }`: after a sign-in this board ran, `{ linked }`, the account it linked, or null |
+| GET | `/identity/sign-in` | `?sync&code` (no token): where a sign-in that carries a code starts, on the board whose sync runs the entry. Sends the person to the platform as whoever the code is for |
+| GET | `/identity/signed-in` | `?sync&code` (no token): where the platform sends them back. Links the account they approved, by the code |
 | POST | `/identity/unlink` | `{ actor }`: unlink one of your accounts, by actor ID or handle. Answers `{ ok, actor }` |
 | GET | `/avatars/:name` | SVG avatars for `claude`, `codex`, `grok`, and `pi` (no token) |
 | GET | `/openapi.json` | OpenAPI 3.1, generated from the route table (no token) |
@@ -140,32 +142,34 @@ lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find |
+| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. The author is a user of a platform the caller syncs (the entry's, with `from`), never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`, `local:`, `vboard:`): 403 otherwise. `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find |
 | POST | `/sync/receipts` | What sync did, about board message `message`: `kind: 'message'` (it landed on `target` as `external`, with its `files`), `files`, `failed` (with `error`), or `thread` (its thread syncs with `target`, a `targetKind` channel or thread, by `cause` `config` or `request`). Answers `{ ok }`, and for a thread, `attached`: false when it already was |
 | GET | `/sync/threads/:thread` | A board thread's sync, by its key: `{ thread, root, channel, targets, external }` |
-| GET | `/sync/find` | What platform IDs are on the board. Query: `post` (an import's client ID), `thread` (and `message` in it), `account`, `person`. Answers `{ thread, message, person, accounts }`: the board thread and message, who an account is linked to and how, and a person's linked accounts |
+| GET | `/sync/find` | What platform IDs are on the board. Query: `code` (a live code for an entry the caller syncs), `post` (an import's client ID), `thread` (and `message` in it), `account`, `person`. Answers `{ thread, message, person, accounts, holder }`: the board thread and message, who an account is linked to and how, a person's linked accounts, and who a code was issued to |
 | GET | `/sync/copies` | Messages' copies on platforms. Query: `message`, repeated. Answers `{ copies }`, by message, then target |
 | GET | `/sync/roots` | `{ roots }`: person `by`'s roots since `since` (epoch milliseconds), to tell their own copies coming back from new messages |
 | POST | `/inbox/:key` | `{ events }`: platform events for the caller's inbox, each `{ id, event, raw }`, where `id` is the platform's own and lands once |
 | GET | `/inbox/:key/next` | `{ items }`: the caller's next inbox events, each leased until it acks, one platform thread at a time and in order. Query: `limit` |
 | POST | `/inbox/:key/:id/ack` | `{ lease, error? }`: done, or an error to try again after a wait. After 5 tries it's given up on |
-| POST | `/sync/codes` | `{ sync, person? }` → `{ code, expiresAt }`: a one-time code that links the account it's posted from. Without `person` it's the caller's own, for a person |
-| POST | `/sync/accounts` | Links a platform `account`: `{ sync, account, code, message? }` for a code posted from it (404 `bad_code` for one that isn't live), or `{ sync, account, person }` after a sign-in. Answers `{ person, link }` |
+| POST | `/sync/codes` | `{ sync }` → `{ code, expiresAt }`: a one-time code for an entry the board or a sync registered with it has, which links the account it's posted from, or carries a sign-in. People only, each for themselves |
+| POST | `/sync/accounts` | `{ sync, account, code, message?, method? }`: links a platform `account` of that entry to whoever the code was issued to, for a code posted from it (`message`), or carried through its sign-in (`method: 'consent'`). 404 `bad_code` for one that isn't live. Answers `{ person, link }`. There's no linking an account without a code |
 | POST | `/sync/accounts/unlink` | `{ account }`: your own account, or anyone's with `sync` somewhere |
 
 On `a2()`, the board's own sync pushes to an inbox per platform channel, which
 `vboard-inbox` delivers back to it on the platform thread's lane. Anyone else's
 pushes wait in their own queue for them to pull, and their sync gets what to
-deliver as matches of watcher `@sync` when it registers with `sync: true`: see
+deliver as matches of watcher `@sync` when it registers its sync entries: see
 [Watchers](../01-board/06-watchers.md#on-a-board-on-http).
 
 ### What `sync` grants
 
 `sync` in a channel says this project may speak for platform users there. A
-caller with it can write as any Slack, GitHub, or WhatsApp user it names, with
-the origin it says, link a platform account to a person, and read the platform
-IDs of what's there. Give it to the deployment that runs a board's sync, in the
-channels it syncs, and to no one else: `vercelProject({ project: 'prj_support',
+caller with it can write as any user of a platform it syncs, with the origin
+it says, redeem a code a person handed it to link that person's account, and
+read the platform IDs of what's there. It names the platforms it syncs when it
+registers (`POST /watchers` with `sync`), and it can't write as anyone the
+board signs in, or get a code for anyone. Give it to the deployment that runs
+a board's sync, in the channels it syncs, and to no one else: `vercelProject({ project: 'prj_support',
 can: { support: 'all' } })`. A sync with it in one subtree can't import into
 another, and a message it can't sync is as good as missing to it.
 
