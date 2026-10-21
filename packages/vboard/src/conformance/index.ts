@@ -1,14 +1,17 @@
-import type { Capability, MessageView } from '../api/routes.ts'
+import type { MessageView } from '../api/routes.ts'
 import { BoardError, type BoardClient } from '../client/client.ts'
 
 /**
- * Checks that a board speaks the protocol, through the SDK, as `vb` and agents use it: the core
- * every board answers, then each optional group its discovery declares. It writes to one channel
- * (`conformance` by default), keeps every post on the board, and deletes what it posted.
+ * Checks that a board speaks the protocol, through the SDK, as `vb` and agents use it: every
+ * board answers all of it. It writes to one channel (`conformance` by default), keeps every
+ * post on the board, and deletes what it posted.
  */
 
+/** What a check is about, for the report's headings. */
+export type CheckGroup = 'core' | 'schedules' | 'attachments' | 'watchers'
+
 export type CheckResult = {
-  group: 'core' | Capability
+  group: CheckGroup
   name: string
   status: 'passed' | 'failed' | 'skipped'
   /** Why it failed, or why it was skipped. */
@@ -17,8 +20,6 @@ export type CheckResult = {
 
 export type ConformanceReport = {
   url: string
-  /** What the board's discovery declares, beyond the core. */
-  capabilities: Capability[]
   checks: CheckResult[]
   /** Every check passed or was skipped. */
   ok: boolean
@@ -290,37 +291,25 @@ const CHECKS: Check[] = [
       }
     },
   },
-  {
-    group: 'stuck',
-    name: "lists what's stuck",
-    run: async (ctx) => {
-      try {
-        const stuck = await ctx.board.stuck()
-        check(Array.isArray(stuck), `the stuck events should be a list, got ${show(stuck)}`)
-      } catch (error) {
-        if (error instanceof BoardError && error.status === 403) return 'needs manage on the board to check'
-        throw error
-      }
-    },
-  },
 ]
-
-/** Groups a board may declare that this can't check by itself. */
-const UNCHECKED: Partial<Record<Capability, string>> = {
-  sync: 'needs a connected platform to check',
-}
 
 /** Runs the checks against `board`, in order, and reports each. It never throws for what the board answers. */
 export async function conformance(board: BoardClient, options: ConformanceOptions = {}): Promise<ConformanceReport> {
   const checks: CheckResult[] = []
   const discovery = await board.discovery().catch((error: unknown) => error as Error)
-  if (discovery instanceof Error || !Array.isArray(discovery.capabilities)) {
-    const detail = discovery instanceof Error ? discovery.message : `capabilities should be a list, got ${show(discovery.capabilities)}`
-    checks.push({ group: 'core', name: 'says in its discovery what it does', status: 'failed', detail })
-    return { url: board.url, capabilities: [], checks, ok: false }
+  const wrong =
+    discovery instanceof Error
+      ? discovery.message
+      : typeof discovery.audience !== 'string' || !Array.isArray(discovery.sync)
+        ? `discovery should have audience and sync, got ${show(discovery)}`
+        : discovery.remote
+          ? `it keeps no log: its discovery names ${discovery.remote}, so check that board`
+          : null
+  if (wrong !== null) {
+    checks.push({ group: 'core', name: 'says in its discovery where it is', status: 'failed', detail: wrong })
+    return { url: board.url, checks, ok: false }
   }
-  checks.push({ group: 'core', name: 'says in its discovery what it does', status: 'passed' })
-  const capabilities = discovery.capabilities
+  checks.push({ group: 'core', name: 'says in its discovery where it is', status: 'passed' })
   const me = await board.me()
   const channel = options.channel ?? 'conformance'
   const ctx: Context = {
@@ -333,7 +322,6 @@ export async function conformance(board: BoardClient, options: ConformanceOption
   }
   try {
     for (const { group, name, run } of CHECKS) {
-      if (group !== 'core' && !capabilities.includes(group)) continue
       try {
         const skipped = await run(ctx)
         checks.push(skipped ? { group, name, status: 'skipped', detail: skipped } : { group, name, status: 'passed' })
@@ -341,13 +329,9 @@ export async function conformance(board: BoardClient, options: ConformanceOption
         checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
-    for (const group of capabilities) {
-      const why = UNCHECKED[group]
-      if (why) checks.push({ group, name: 'declared', status: 'skipped', detail: why })
-    }
   } finally {
     // What it posted goes, replies first. A failure here leaves a tombstone short, not a wrong report.
     for (const id of [...ctx.posted].reverse()) await board.delete(id).catch(() => {})
   }
-  return { url: board.url, capabilities, checks, ok: checks.every((c) => c.status !== 'failed') }
+  return { url: board.url, checks, ok: checks.every((c) => c.status !== 'failed') }
 }

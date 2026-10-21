@@ -1,5 +1,7 @@
-export { board, type Backend, type Board, type BoardOptions, type BoardRuntime } from './backends.ts'
-export type { BoardSetup } from './a2.ts'
+export { board, type Board, type BoardOptions } from './board.ts'
+export type { Backend, BackendRoute, BoardBinding, Caller, ProtocolMethods } from './backend.ts'
+export type { Method, Protocol } from '../api/protocol.ts'
+export { HttpError } from './errors.ts'
 export { type Watcher, type WatcherContext } from './watch.ts'
 export {
   DroppedError,

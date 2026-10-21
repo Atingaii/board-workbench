@@ -10,7 +10,6 @@ import { compileFilter, eventView, foldEvent, hasCriteria, loadBefore, OWN_CODE,
 import type { BoardReads } from './reads.ts'
 import { arm, due, hasWork, queueReducer, SWEEP_MS, type QueueSession } from './registered.ts'
 import type { Registration, RegistryState, StoredPrincipal } from './registry.ts'
-import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 import { A2_TRIES, afterRetry } from './attempts.ts'
 
 /** What a watcher's `run` gets. */
@@ -83,10 +82,9 @@ type Match = { id: string; payload: { thread: string; event: unknown } }
  * given up on (recorded as `watch.failed`) so the thread's next event runs.
  */
 export async function runMatch(input: {
-  watcher: { id: string; run: Watcher['run'] }
+  watcher: { id: string; run: (event: BoardEventView) => unknown }
   match: Match
   attempt: number
-  board: () => BoardClient
   record: (failure: { matched: string; thread: string; error: string }) => Promise<unknown>
 }) {
   const { watcher, match, attempt } = input
@@ -98,15 +96,15 @@ export async function runMatch(input: {
   const early = !afterRetry(attempt)
   if (early && attempt >= KILLED_ATTEMPTS) return giveUp(`its run was cut short ${attempt - 1} times (a timeout, or out of memory)`)
   try {
-    await watcher.run({ event, board: input.board() })
+    await watcher.run(event)
   } catch (error) {
     if (!early || attempt < RUN_ATTEMPTS) throw error
     await giveUp(describe(error))
   }
 }
 
-/** A watcher writes as itself, and its own writes never wake it. */
-const identityOf = (id: string): Identity => deploymentIdentity(`vboard:watch:${id}`, id)
+/** A watcher writes as `vboard:watch:<id>`, and its own writes never wake it. */
+const actorOf = (id: string) => `vboard:watch:${id}`
 
 type Compiled = { filters: ParsedFilters; criteria: boolean; enters: boolean; all: boolean }
 
@@ -143,7 +141,10 @@ export const registrantSession = (owner: string) => watchSession(`@${owner}`)
  * watcher's session, where `run` happens on the thread's lane.
  */
 export function createWatchers(options: {
-  watch: Record<string, Watcher>
+  /** This project's watchers, by ID. */
+  watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
+  /** Runs one on an event it matched; posts it makes get IDs derived from `trigger`. A throw is retried. */
+  run: (id: string, event: BoardEventView, trigger: string) => Promise<void>
   store?: A2Store | undefined
   scheduler?: A2Scheduler | undefined
   /** Watchers that boards on `http()` registered here, and how to tell one it has matches. */
@@ -157,11 +158,10 @@ export function createWatchers(options: {
 }) {
   const watchers = Object.entries(options.watch).map(([id, watcher]) => {
     if (!ID.test(id)) throw new Error(`watch: ids use lowercase letters, numbers, - and _, got: ${id}`)
-    return { id, ...compileWatcher(id, watcher), identity: identityOf(id), run: watcher.run }
+    return { id, ...compileWatcher(id, watcher) }
   })
   const byId = new Map(watchers.map((watcher) => [watcher.id, watcher]))
 
-  let clientAs: ((identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient) | null = null
   let reads: BoardReads | null = null
 
   /** Runs a watcher on a board event it matched, one thread at a time. */
@@ -175,13 +175,10 @@ export function createWatchers(options: {
     // since it matched has nothing left to run.
     const watcher = byId.get(ctx.session.id.slice('watch:'.length))
     if (!watcher) return
-    const bound = clientAs
-    if (!bound) throw new Error('watchers used before the board bound them')
     await runMatch({
-      watcher,
+      watcher: { id: watcher.id, run: (event) => options.run(watcher.id, event, ctx.event.id) },
       match: ctx.event,
       attempt: ctx.attempt,
-      board: () => bound(watcher.identity, ctx.event.id, { via: { kind: 'watcher', id: watcher.id } }),
       record: (payload) => ctx.session.append(`failed:${ctx.event.id}`, { type: 'watch.failed', payload }),
     })
   })
@@ -228,7 +225,7 @@ export function createWatchers(options: {
     consumers: [runner, waker],
   })
 
-  const configured: Candidate[] = watchers.map((watcher) => ({ ...watcher, actor: watcher.identity.actor.id }))
+  const configured: Candidate[] = watchers.map((watcher) => ({ ...watcher, actor: actorOf(watcher.id) }))
   // Each registration's tails, parsed once per hash and principal.
   const compiled = new Map<string, { version: string; candidates: Candidate[] }>()
   function compiledFor(registration: Registration): Candidate[] {
@@ -350,8 +347,7 @@ export function createWatchers(options: {
       ...watchers.map((watcher) => watchSession(watcher.id)),
       ...(await registrations()).map((registration) => registrantSession(registration.owner)),
     ],
-    bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient; reads: BoardReads }) => {
-      clientAs = binding.clientAs
+    bind: (binding: { reads: BoardReads }) => {
       reads = binding.reads
     },
   }

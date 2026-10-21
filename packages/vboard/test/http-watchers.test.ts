@@ -37,8 +37,11 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
       },
     },
   })
-  const v0Board = (next: Record<string, Watcher>) =>
-    board({ backend: http(BOARD_URL, { fetch: route as typeof fetch, token: v0Token }), url: V0_URL, watch: next })
+  const v0Board = (next: Record<string, Watcher>) => {
+    const backend = http(BOARD_URL, { fetch: route as typeof fetch, token: v0Token })
+    // The backend's own `register`, as `POST /watchers` does.
+    return Object.assign(board({ backend, url: V0_URL, watch: next }), { register: backend.register })
+  }
   project = v0Board(watch)
   return {
     remote,
@@ -165,12 +168,12 @@ describe('watchers on http()', () => {
   it("pulls on its own when it can't be woken", async () => {
     const fix = recorder('feedback')
     const t = team()
-    const local = board({
-      backend: http(BOARD_URL, { fetch: ((input: RequestInfo | URL, init?: RequestInit) => t.remote.fetch(new Request(input, init))) as typeof fetch, token: v0Token }),
-      url: 'http://localhost:3000/api/board',
-      watch: { fix: fix.watcher },
-    })
+    const backend = http(BOARD_URL, { fetch: ((input: RequestInfo | URL, init?: RequestInit) => t.remote.fetch(new Request(input, init))) as typeof fetch, token: v0Token })
+    const local = board({ backend, url: 'http://localhost:3000/api/board', watch: { fix: fix.watcher } })
     try {
+      // Nothing happens until it's first used: here, a call from the project's own code.
+      expect((await caller(t.remote.fetch, await v0Token())('GET', '/watchers')).body.watchers).toEqual([])
+      await local.client('deploys').me()
       await vi.waitFor(async () => {
         const { body } = await caller(t.remote.fetch, await v0Token())('GET', '/watchers')
         expect(body.watchers).toEqual([expect.objectContaining({ owner: V0, url: null })])
@@ -178,7 +181,7 @@ describe('watchers on http()', () => {
       await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
       await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toEqual(['export is broken']))
     } finally {
-      local.close()
+      backend.close()
     }
   })
 })

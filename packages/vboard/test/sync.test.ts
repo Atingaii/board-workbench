@@ -10,7 +10,7 @@ import { consumer, createServer } from 'experimental-a2/server'
 import { memory } from 'experimental-a2/store-memory'
 import { boardContract } from '../src/contract/contract.ts'
 import { github } from '../src/sync/github.ts'
-import type { A2Options, BoardSetup } from '../src/server/a2.ts'
+import type { MountOptions } from './harness.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 import { memory as boardMemory } from '../src/store/memory.ts'
 import type { MessageTables } from '../src/store/types.ts'
@@ -27,9 +27,9 @@ function setup(
     asyncToken?: boolean
     githubClient?: unknown
     repos?: Parameters<typeof github>[0]['repos']
-    watch?: BoardSetup['watch']
+    watch?: MountOptions['watch']
     basePath?: string
-    store?: A2Options['store']
+    store?: MountOptions['store']
   } = {},
 ) {
   const s = fakePlatform('slack', options.slackClient ? withSlackClient(options.slackClient, !!options.asyncToken) : undefined)

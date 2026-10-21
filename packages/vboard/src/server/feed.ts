@@ -418,27 +418,6 @@ async function start(options: FeedOptions): Promise<number> {
   return options.after === undefined || options.after >= head ? head : options.after
 }
 
-/** Every event after the start, live, until the signal aborts. */
-export async function* liveFeed(
-  options: FeedOptions,
-  signal: AbortSignal,
-): AsyncGenerator<FeedItem> {
-  const index = await start(options)
-  const feed = new FeedProjection(options)
-  const iterator = options.session.stream({ startAfter: index })[Symbol.asyncIterator]()
-  try {
-    // The starting cursor, so a client that sees nothing yet can still resume exactly.
-    yield { index, view: null }
-    while (true) {
-      const next = await nextOrAbort(iterator, signal)
-      if (next === null || next.done) return
-      yield await feed.step(next.value as BoardEvent, signal)
-    }
-  } finally {
-    void iterator.return?.()
-  }
-}
-
 const PAGE = 200
 
 /**

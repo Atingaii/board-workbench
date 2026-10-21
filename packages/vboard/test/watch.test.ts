@@ -297,8 +297,8 @@ describe('the in-process client', () => {
     expect(unkeyed[0]!.id).not.toBe(unkeyed[1]!.id)
   })
 
-  it('rejects a name a watcher id would reject', () => {
-    expect(() => testBoard().client('V0 Hook')).toThrow('client: names use lowercase letters')
+  it('rejects a name a watcher id would reject', async () => {
+    await expect(testBoard().client('V0 Hook').me()).rejects.toThrow('client: names use lowercase letters')
   })
 })
 

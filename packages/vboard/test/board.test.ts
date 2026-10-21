@@ -25,19 +25,19 @@ describe('discovery', () => {
 })
 
 describe('scheduler', () => {
-  it("is the scheduler's callback for every server behind the board", () => {
-    const callback = async () => new Response(null, { status: 204 })
+  it("is the scheduler's callback for every server behind the board", async () => {
+    const answer = new Response(null, { status: 204 })
     let mounted: readonly unknown[] = []
     const board = testBoard({
       scheduler: {
         schedule: async () => {},
         handler: (...servers) => {
           mounted = servers
-          return callback
+          return async () => answer
         },
       },
     })
-    expect(board.scheduler).toBe(callback)
+    expect(await board.scheduler(new Request(`${BOARD_URL}/a2/scheduler`, { method: 'POST' }))).toBe(answer)
     expect(mounted).toEqual(board.servers)
   })
 
@@ -360,6 +360,32 @@ describe('events', () => {
     expect(text).toMatch(/id: \d+\nevent: board\ndata: /)
     controller.abort()
     await reader.cancel()
+  })
+
+  it('resumes a stream where Last-Event-ID says, and answers a bad cursor before streaming', async () => {
+    const { fetch } = testBoard()
+    const token = await personToken()
+    const julian = caller(fetch, token)
+    const one = (await julian('POST', '/messages', { channel: 'x', text: 'one' })).body.message
+    await julian('POST', '/messages', { channel: 'x', text: 'two' })
+    const controller = new AbortController()
+    const response = await fetch(
+      new Request(`${BOARD_URL}/events`, {
+        headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'last-event-id': one.id },
+        signal: controller.signal,
+      }),
+    )
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    let text = ''
+    while (!text.includes('"text":"two"')) text += decoder.decode((await reader.read()).value)
+    expect(text).not.toContain('"text":"one"')
+    controller.abort()
+    await reader.cancel()
+
+    const bad = await fetch(new Request(`${BOARD_URL}/events?after=nope`, { headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream' } }))
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toMatchObject({ error: { code: 'invalid_cursor' } })
   })
 })
 

@@ -1,59 +1,37 @@
-import { z } from 'zod'
-import { idempotentId } from 'experimental-a2'
+import type { z } from 'zod'
 import { createServer, type A2Scheduler } from 'experimental-a2/server'
-import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, type BoardEvents } from '../contract/contract.ts'
+import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, linkedTo } from '../contract/reducers.ts'
-import { ATTACHMENT_BYTES_MAX, RemoteWatcherId } from '../contract/schemas.ts'
+import { RemoteWatcherId } from '../contract/schemas.ts'
 import {
-  AckBody,
-  EditBody,
-  EventsQuery,
   IdentityCheckBody,
   IdentityLinkBody,
   IdentityUnlinkBody,
   InboxQuery,
-  SourceReadQuery,
-  LabelBody,
-  MatchesQuery,
-  MessagesQuery,
-  ThreadsQuery,
-  PostBody,
-  ReactBody,
   RedriveBody,
-  RegisterBody,
-  routes,
-  CAPABILITIES,
-  ScheduleBody,
-  SchedulesQuery,
+  SourceReadQuery,
   SyncBody,
-  TypingBody,
-  type Discovery,
   type IdentityView,
-  type StuckEvent,
-  type TypingResult,
   type Me,
-  type RouteName,
+  type StuckEvent,
 } from '../api/routes.ts'
-import { createBoardClient, type BoardClient } from '../client/client.ts'
 import { createSyncEngine } from '../sync/engine.ts'
 import type { SyncProvider } from '../sync/provider.ts'
-import { VERSION } from '../version.ts'
-import { createVerifier, hostPrincipal, type AccessRule, type AuthOptions, type HostAccess, type Principal } from './auth.ts'
-import { parseScope, type Access } from './access.ts'
-import { KNOWN_AGENTS, resolveActor } from './actors.ts'
-import { avatarSvg } from './avatars.ts'
-import { attachmentNotFound, attachmentResponse, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
-import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
-import { indexOf, liveFeed, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
-import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
+import type { Access } from './access.ts'
+import type { Principal } from './auth.ts'
+import type { Backend, BackendRoute, BoardBinding, Caller, ProtocolMethods } from './backend.ts'
+import { attachmentBody, attachmentNotFound, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
+import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
+import { indexOf, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { defaultStore } from '../store/default.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
-import { compileWatcher, createWatchers, ID, registrantSession, type Watcher } from './watch.ts'
+import { compileWatcher, createWatchers, ID, registrantSession } from './watch.ts'
 import { ack, pull } from './registered.ts'
 import { createRegistry, storedPrincipal, type Registration } from './registry.ts'
+import { queryObject, readJson, METHODS } from './routing.ts'
 import { publicPost, type Post } from './transport.ts'
 import {
   authorizeMessage,
@@ -68,7 +46,6 @@ import {
   deploymentIdentity,
   type Identity,
   type WriteContext,
-  type WriteOrigin,
 } from './writes.ts'
 import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
 
@@ -79,20 +56,8 @@ export type A2Options = {
    * `vboard/backend-a2/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
    */
   store?: BoardStore
-  /** Required for sync in production, and for scheduled messages. Mount the board's `scheduler` as `POST` in its own route. */
+  /** Required for sync in production, and for scheduled messages. Mount the backend's `scheduler` as `POST` in its own route. */
   scheduler?: A2Scheduler
-  /**
-   * Who may call the board besides its people and its own deployments in the
-   * environment it runs in (a production board's previews need a rule), and what
-   * they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`.
-   * The first rule that matches a token decides.
-   *
-   * Or a function, `(request) => ({ id, kind, handle, can })`, that replaces the built-in
-   * verifier: a host's own credentials, for a host serving many teams' boards. Nothing
-   * else is trusted then, not the board's own project nor any token's audience. To reject,
-   * return or throw a `Response`.
-   */
-  access?: readonly AccessRule[] | HostAccess
   /** Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. */
   sync?: Record<string, SyncProvider>
   /**
@@ -100,12 +65,6 @@ export type A2Options = {
    * watchers, schedules. Each calls `next()` to pass the write on; one that doesn't drops it.
    */
   middleware?: readonly Middleware[]
-  /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */
-  project?: { id: string; teamId?: string }
-  /** Test issuers. Production uses Vercel's and GitHub's. */
-  auth?: AuthOptions
-  /** SSE streams close after this long, before the platform's limit; clients reconnect. */
-  streamMaxMs?: number
   /**
    * Where attachments live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`. Omitted: memory
    * in tests, `.a2/attachments` in development, and no uploads in production.
@@ -113,16 +72,6 @@ export type A2Options = {
   blob?: BlobStore
   /** For tests: how the board POSTs wake-ups to boards on `http()`. Defaults to https to public addresses only. */
   transport?: { post?: Post }
-}
-
-/** What every backend is given: the watchers that run in this project, and where the board is mounted. */
-export type BoardSetup = {
-  /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
-  watch?: Record<string, Watcher>
-  /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
-  url?: string
-  /** The mount path, e.g. `/api/board`. Inferred from requests otherwise. */
-  basePath?: string
 }
 
 const boardServer = (options: A2Options) =>
@@ -133,47 +82,6 @@ const boardServer = (options: A2Options) =>
   })
 
 export type BoardSession = ReturnType<ReturnType<typeof boardServer>['session']>
-
-type Match = { name: RouteName; base: string; id?: number; param?: string }
-
-// Most specific first; each route is matched as a suffix of the request path.
-const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
-  { method: 'POST', name: 'identityLink', pattern: /\/identity\/link$/ },
-  { method: 'POST', name: 'identityCheck', pattern: /\/identity\/check$/ },
-  { method: 'POST', name: 'identityUnlink', pattern: /\/identity\/unlink$/ },
-  { method: 'GET', name: 'identity', pattern: /\/identity$/ },
-  { method: 'POST', name: 'ack', pattern: /\/watchers\/matches\/([A-Za-z0-9_-]+)\/ack$/ },
-  { method: 'GET', name: 'matches', pattern: /\/watchers\/matches$/ },
-  { method: 'GET', name: 'watchers', pattern: /\/watchers$/ },
-  { method: 'POST', name: 'register', pattern: /\/watchers$/ },
-  { method: 'POST', name: 'wake', pattern: /\/wake$/ },
-  { method: 'POST', name: 'edit', pattern: /\/messages\/([^/]+)\/edit$/ },
-  { method: 'POST', name: 'delete', pattern: /\/messages\/([^/]+)\/delete$/ },
-  { method: 'POST', name: 'react', pattern: /\/messages\/([^/]+)\/reactions$/ },
-  { method: 'POST', name: 'label', pattern: /\/messages\/([^/]+)\/labels$/ },
-  { method: 'POST', name: 'sync', pattern: /\/messages\/([^/]+)\/sync$/ },
-  { method: 'POST', name: 'typing', pattern: /\/messages\/([^/]+)\/typing$/ },
-  { method: 'GET', name: 'message', pattern: /\/messages\/([^/]+)$/ },
-  { method: 'GET', name: 'messages', pattern: /\/messages$/ },
-  { method: 'POST', name: 'post', pattern: /\/messages$/ },
-  { method: 'GET', name: 'threads', pattern: /\/threads$/ },
-  { method: 'POST', name: 'cancelSchedule', pattern: /\/schedules\/s?([^/]+)\/cancel$/ },
-  { method: 'GET', name: 'schedules', pattern: /\/schedules$/ },
-  { method: 'POST', name: 'schedule', pattern: /\/schedules$/ },
-  { method: 'GET', name: 'channels', pattern: /\/channels$/ },
-  { method: 'GET', name: 'actors', pattern: /\/actors$/ },
-  { method: 'GET', name: 'events', pattern: /\/events$/ },
-  { method: 'GET', name: 'me', pattern: /\/me$/ },
-  { method: 'GET', name: 'inbox', pattern: /\/inbox\/([A-Za-z0-9_-]+)$/ },
-  { method: 'POST', name: 'redrive', pattern: /\/stuck\/redrive$/ },
-  { method: 'GET', name: 'stuck', pattern: /\/stuck$/ },
-  { method: 'GET', name: 'sourceRead', pattern: /\/sources\/([A-Za-z0-9_-]+)\/read$/ },
-  { method: 'POST', name: 'webhook', pattern: /\/webhooks\/([A-Za-z0-9_-]+)$/ },
-  { method: 'GET', name: 'avatar', pattern: /\/avatars\/([a-z0-9-]+)$/ },
-  { method: 'GET', name: 'openapi', pattern: /\/openapi\.json$/ },
-  { method: 'POST', name: 'upload', pattern: /\/attachments$/ },
-  { method: 'GET', name: 'attachment', pattern: /\/attachments\/([A-Za-z0-9_-]+)$/ },
-]
 
 /** What `vb stuck` needs of an A2 session, whatever its contract. */
 type Redrivable = {
@@ -208,6 +116,14 @@ function messageAt(value: string): number {
   return index
 }
 
+/** A schedule's ID, `12` or as the CLI shows it, `s12`, as its index in session `schedules`. */
+function scheduleAt(value: string): number {
+  const bare = value.replace(/^s/, '')
+  const index = indexOf(bare)
+  if (index === null || index === 0) throw notFound(`schedule not found: s${bare}`, 'schedule_not_found')
+  return index
+}
+
 /** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
 const WAKE_TIMEOUT_MS = 5000
 
@@ -217,92 +133,23 @@ const WAKE_TIMEOUT_MS = 5000
  */
 const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
+/** A request to the board, as opposed to a write the board's own code makes in-process. */
+const fromRequest = (caller: Caller) => 'identity' in caller && (caller.origin.via?.kind ?? 'api') === 'api'
 
-export function route(method: string, pathname: string, basePath?: string): Match | null {
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
-  if (basePath !== undefined) {
-    const base = basePath.replace(/\/+$/, '')
-    if (path !== base && !path.startsWith(`${base}/`)) return null
-    const rest = path.slice(base.length) || '/'
-    if (rest === '/') return method === 'GET' ? { name: 'discovery', base } : null
-    for (const candidate of PATTERNS) {
-      const found = rest.match(new RegExp(`^${candidate.pattern.source}`))
-      if (candidate.method === method && found) return withParam(candidate.name, base, found[1])
-    }
-    return null
-  }
-  for (const candidate of PATTERNS) {
-    if (candidate.method !== method) continue
-    const found = path.match(candidate.pattern)
-    if (found) return withParam(candidate.name, path.slice(0, found.index), found[1])
-  }
-  return method === 'GET' ? { name: 'discovery', base: path === '/' ? '' : path } : null
+/**
+ * Who a caller writes as. This deployment's own code writes as `vboard:client:<name>` from
+ * `client(name)`, and as `vboard:watch:<id>` from a watcher, which its own writes never wake.
+ */
+function identityOf(caller: Caller): Identity {
+  if ('identity' in caller) return caller.identity
+  const { self, origin } = caller
+  if (origin.via?.kind === 'watcher') return deploymentIdentity(`vboard:watch:${self}`, self)
+  if (!ID.test(self)) throw badRequest(`client: names use lowercase letters, numbers, - and _, got: ${self}`)
+  return deploymentIdentity(`vboard:client:${self}`, self)
 }
 
-function withParam(name: RouteName, base: string, param: string | undefined): Match {
-  if (param === undefined) return { name, base }
-  if (!NUMERIC.has(name)) return { name, base, param }
-  const ref = decodeURIComponent(param)
-  // A ref that names nothing here is 0, which no message or schedule is: a 404, as one that's gone.
-  return { name, base, id: indexOf(ref) ?? 0, param: ref }
-}
-
-function queryObject(url: URL): Record<string, string | string[]> {
-  const out: Record<string, string | string[]> = {}
-  for (const key of new Set(url.searchParams.keys())) {
-    const values = url.searchParams.getAll(key)
-    out[key] = values.length > 1 ? values : values[0]!
-  }
-  return out
-}
-
-async function readJson(request: Request): Promise<unknown> {
-  const text = await request.text()
-  if (text.trim() === '') return undefined
-  try {
-    return JSON.parse(text)
-  } catch {
-    throw badRequest('request body is not valid JSON')
-  }
-}
-
-const tooLarge = () => new HttpError(413, 'too_large', `attachments are at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`)
-
-/** The body, refused as soon as it's past `max`: with or without a `content-length`, it never reads more. */
-async function readCapped(request: Request, max: number): Promise<Uint8Array> {
-  if (Number(request.headers.get('content-length') ?? 0) > max) throw tooLarge()
-  const chunks: Uint8Array[] = []
-  let size = 0
-  for await (const chunk of request.body ?? []) {
-    size += chunk.byteLength
-    if (size > max) throw tooLarge()
-    chunks.push(chunk)
-  }
-  const body = new Uint8Array(size)
-  let at = 0
-  for (const chunk of chunks) {
-    body.set(chunk, at)
-    at += chunk.byteLength
-  }
-  return body
-}
-
-/** A host's `access` function rejected the request with this response. */
-class Rejected {
-  readonly response: Response
-  constructor(response: Response) {
-    this.response = response
-  }
-}
-
-/** Mounts a board: one log in one route. Create it once, at module scope, or one per tenant for a host. */
-/** The board in this deployment, on A2's log: what `a2()` starts. */
-export function a2Board(options: A2Options & BoardSetup = {}) {
-  if ((options as { trustedSources?: unknown }).trustedSources !== undefined)
-    throw new Error('a2: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can')
-  const host = typeof options.access === 'function' ? options.access : null
-  if (host && options.auth) throw new Error('a2: an access function replaces the built-in verifier, so drop `auth`')
+/** Everything behind a board on `a2()`, built once board() binds it. Nothing in it connects until it's used. */
+function build(options: A2Options, binding: BoardBinding) {
   const blob = options.blob ?? defaultBlob()
   const store = options.store ?? defaultStore()
   // The same A2 store object for every server: A2 recognizes its own stores by identity.
@@ -315,10 +162,11 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
   const post = options.transport?.post ?? publicPost
   // Always, since boards on http() may register watchers here at any time.
   const watchers = createWatchers({
-    watch: options.watch ?? {},
+    watch: binding.watch,
+    run: (id, event, trigger) => binding.run(id, event, { trigger }),
     store: log,
     scheduler: options.scheduler,
-    registered: { state: registry.state, accessNow: (principal) => accessThen(principal), wake },
+    registered: { state: registry.state, accessNow: (principal) => binding.accessFor(principal), wake },
   })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
@@ -343,46 +191,12 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           throw badRequest('this board has no sync configured')
         },
     middleware: options.middleware ?? [],
-    middlewareClient: () => clientAs(MIDDLEWARE_IDENTITY, null, { via: { kind: 'middleware' } }),
+    middlewareClient: () => binding.client({ identity: MIDDLEWARE_IDENTITY, origin: { via: { kind: 'middleware' } } }, null),
   }
-  const { verify, accessNow } = createVerifier({
-    projectId: () => ownProjectId(options.project),
-    teamId: () => ownTeamId(options.project),
-    access: typeof options.access === 'function' ? [] : (options.access ?? []),
-    ...(options.auth ? { auth: options.auth } : {}),
-  })
-  const streamMaxMs = options.streamMaxMs ?? 280_000
-
-  async function verified(request: Request, boardUrl: string): Promise<Principal> {
-    if (host) {
-      let result: Awaited<ReturnType<HostAccess>>
-      try {
-        result = await host(request)
-      } catch (error) {
-        // A thrown `Response` rejects like a returned one.
-        if (error instanceof Response) throw new Rejected(error)
-        throw error
-      }
-      if (result instanceof Response) throw new Rejected(result)
-      return hostPrincipal(result)
-    }
-    const header = request.headers.get('authorization') ?? ''
-    const token = header.match(/^Bearer\s+(.+)$/i)?.[1]
-    if (!token) throw unauthorized('missing bearer token')
-    return verify(token, boardUrl, request.headers.get('x-vercel-oidc-token') ?? undefined)
-  }
-
-  async function authenticate(request: Request, boardUrl: string): Promise<Principal> {
-    const principal = await verified(request, boardUrl)
-    // Set by a proxy that holds the credential (Pi's sandbox); it only narrows.
-    const scope = request.headers.get('x-board-scope')
-    if (scope === null) return principal
-    try {
-      return { ...principal, access: principal.access.narrow(parseScope(scope)), scope }
-    } catch (error) {
-      throw badRequest((error as Error).message, 'invalid_scope')
-    }
-  }
+  engine?.bind({ session, writes, clientAs: (identity, trigger, origin) => binding.client({ identity, origin }, trigger) })
+  // A schedule sends only under the verifier that made it; board()'s `accessFor` says so.
+  schedules.bind({ writes, accessNow: binding.accessFor })
+  watchers.bind({ reads })
 
   /** The sessions whose consumers run on lanes, so a dead letter there stops the rest of its lane. */
   async function lanedSessions(): Promise<{ id: string; session: Redrivable }[]> {
@@ -504,50 +318,10 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
     )
 
   /**
-   * A client for inbound functions: in-process, writing as `identity`, its posts idempotent
-   * per trigger. Its posts and edits reach the middleware from `origin`.
-   */
-  function clientAs(identity: Identity, trigger: string | null, origin: WriteOrigin): BoardClient {
-    let writesMade = 0
-    return createBoardClient({
-      // Under the configured mount, so `route()` accepts the paths it builds.
-      url: `http://in-process.board${(options.basePath ?? '').replace(/\/+$/, '')}`,
-      token: 'in-process',
-      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-        let request = new Request(input, init)
-        if (trigger !== null && request.method === 'POST' && new URL(request.url).pathname.endsWith('/messages')) {
-          const body = ((await request.json()) ?? {}) as Record<string, unknown>
-          body.id ??= await idempotentId('vboard-inbound', trigger, 'client', String(writesMade++))
-          request = new Request(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(body) })
-        }
-        return dispatch(request, identity, origin)
-      }) as typeof fetch,
-    })
-  }
-
-  engine?.bind({ session, writes, clientAs })
-  // A schedule sends only under the verifier that made it: one from before the board
-  // switched to or from a host's function is revoked rather than trusted. The board's
-  // own code (`vboard:`, which a host's function can't return) sends under either.
-  /**
-   * What a stored principal (a schedule's creator, a watcher's registrant) may do now, under
-   * the rules as they are. Only under the verifier that made it: one from before the board
-   * switched to or from a host's function is revoked rather than trusted. The board's own
-   * code (`vboard:`, which a host's function can't return) works under either.
-   */
-  function accessThen(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null> {
-    return principal.id.startsWith('vboard:') || (principal.facts?.issuer === 'host') === (host !== null)
-      ? accessNow(principal)
-      : Promise.resolve(null)
-  }
-  schedules.bind({ writes, accessNow: accessThen })
-  watchers.bind({ clientAs, reads })
-
-  /**
    * Tells a registrant's board it has matches to pull, with no event and no token in it: its
    * board pulls them with its own credentials. The hash says whether its registration is stale.
+   * Says whether the wake-up got there: an answer, or still pulling when the wait ran out.
    */
-  /** Whether the wake-up got there: an answer, or still pulling when the wait ran out. */
   async function wake(registration: Registration): Promise<boolean> {
     if (registration.url === null) return true
     try {
@@ -569,456 +343,390 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
   /** A registrant's queue, in the watch contract. */
   const queueOf = (owner: string) => watchers.server.session(registrantSession(owner)) as never
 
-  async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
-    try {
-      const url = new URL(request.url)
-      const match = route(request.method, url.pathname, options.basePath)
-      if (!match) throw notFound(`no route: ${request.method} ${url.pathname}`)
-      if (match.id === 0)
-        throw match.name === 'cancelSchedule'
-          ? notFound(`schedule not found: s${match.param}`, 'schedule_not_found')
-          : notFound(`message not found: #${match.param}`, 'message_not_found')
-      const boardUrl = (options.url ?? `${url.origin}${match.base}`).replace(/\/+$/, '')
-
-      switch (match.name) {
-        case 'discovery': {
-          const identity = await discoveryIdentity(request, options.project)
-          const body: Discovery = {
-            version: VERSION,
-            url: boardUrl,
-            audience: boardUrl,
-            team_id: identity.teamId,
-            project_id: identity.projectId,
-            sync: Object.entries(options.sync ?? {}).map(([key, entry]) => ({ key, platform: entry.platform })),
-            capabilities: CAPABILITIES.filter((group) => (group === 'schedules' ? !!options.scheduler : group === 'sync' ? !!engine : true)),
-          }
-          return json(body)
-        }
-        case 'avatar': {
-          const name = match.param ?? ''
-          if (!(KNOWN_AGENTS as readonly string[]).includes(name)) throw notFound(`no avatar: ${name}`)
-          return new Response(avatarSvg(name), {
-            headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=86400' },
-          })
-        }
-        case 'openapi':
-          return json(openapi())
-        case 'webhook':
-          // Platforms can't send a board token: the adapter verifies the request.
-          if (!engine) throw notFound('this board has no sync configured')
-          return await engine.handleWebhook(match.param!, request)
+  const methods: ProtocolMethods = {
+    async me(caller) {
+      const { principal, author, actor } = identityOf(caller)
+      const body: Me = {
+        actor: actor.id,
+        principal: principal.id,
+        kind: actor.kind,
+        handle: actor.handle,
+        name: actor.name,
+        avatar: actor.avatar,
+        profile: author.profile,
+        session: author.session,
+        expiresAt: principal.expiresAt?.toISOString() ?? null,
+        can: principal.access.summary(),
       }
-
-      const principal = injected?.principal ?? (await authenticate(request, boardUrl))
-      const { author, actor } = injected ?? resolveActor(principal, request.headers, boardUrl)
-      const identity: Identity = { principal, author, actor }
-
-      switch (match.name) {
-        case 'me': {
-          const body: Me = {
-            actor: actor.id,
-            principal: principal.id,
-            kind: actor.kind,
-            handle: actor.handle,
-            name: actor.name,
-            avatar: actor.avatar,
-            profile: author.profile,
-            session: author.session,
-            expiresAt: principal.expiresAt?.toISOString() ?? null,
-            can: principal.access.summary(),
-          }
-          return json(body)
-        }
-        case 'channels': {
-          const { state, index } = await session.state(channelsReducer)
-          const channels = Object.values(state)
-            .filter((channel) => principal.access.readable(channel.path))
-            .sort((a, b) => a.path.localeCompare(b.path))
-          return json({ channels, cursor: ref(index) })
-        }
-        case 'actors': {
-          const { state, index } = await session.state(actorsReducer)
-          // A reader of every channel sees everyone; anyone else, who wrote, was mentioned, or reacted where they read, and themselves.
-          let seen: ((id: string) => boolean) | null = null
-          if (!principal.access.readsAll) {
-            const ids = await actorsIn(principal.access)
-            ids.add(actor.id)
-            seen = (id) => ids.has(id)
-          }
-          const actors = Object.values(state.byId)
-            .filter((a) => seen === null || seen(a.id))
-            .sort((a, b) => a.handle.localeCompare(b.handle))
-            .map((a) => {
-              const person = personView(state, a.id)
-              return person ? { ...a, person } : a
-            })
-          return json({ actors, cursor: ref(index) })
-        }
-        case 'identity': {
-          const { state, index } = await session.state(actorsReducer)
-          const links = linkedTo(state, principal.id).map((id) => ({
-            actor: id,
-            handle: state.byId[id]?.handle ?? null,
-            name: state.byId[id]?.name ?? null,
-            method: state.links[id]!.method,
-            at: state.links[id]!.at,
-          }))
-          const unlinked = Object.entries(options.sync ?? {})
-            .filter(([, entry]) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`)))
-            .map(([key]) => key)
-          const body: IdentityView = { principal: principal.id, links, unlinked, cursor: ref(index) }
-          return json(body)
-        }
-        case 'identityLink': {
-          if (!engine) throw notFound('this board has no sync configured')
-          const body = IdentityLinkBody.parse(await readJson(request))
-          return json(await engine.startLink(identity, body.sync, body.method))
-        }
-        case 'identityCheck': {
-          if (!engine) throw notFound('this board has no sync configured')
-          const body = IdentityCheckBody.parse(await readJson(request))
-          return json({ linked: await engine.checkLink(identity, body.sync) })
-        }
-        case 'identityUnlink': {
-          if (principal.kind !== 'person') throw forbidden('only people link platform accounts')
-          const body = IdentityUnlinkBody.parse(await readJson(request))
-          const { state } = await session.state(actorsReducer)
-          const mine = linkedTo(state, principal.id)
-          const wanted = body.actor.replace(/^@/, '').toLowerCase()
-          const found = mine.filter((id) => id === body.actor || state.byId[id]?.handle.toLowerCase() === wanted)
-          if (found.length === 0) throw notFound(`${body.actor} isn't linked to you`, 'not_linked')
-          if (found.length > 1) throw badRequest(`${body.actor} names several of your accounts: use ${found.join(' or ')}`, 'ambiguous_actor')
-          await session.append({ type: 'actor.unlinked', payload: { actor: found[0]!, by: author } })
-          return json({ ok: true, actor: found[0]! })
-        }
-        case 'messages': {
-          const query = MessagesQuery.parse(queryObject(url))
-          const { state: actors } = await session.state(actorsReducer)
-          const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
-          const { messages, position } = await reads.messages(filter, {
-            ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
-            ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
-            limit: query.limit ?? 50,
-          })
-          const reader = await reads.reader(principal.access, messages)
-          return json({ messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(position, through)) })
-        }
-        case 'threads': {
-          const query = ThreadsQuery.parse(queryObject(url))
-          const { state: actors } = await session.state(actorsReducer)
-          const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
-          const { threads, position } = await reads.threads(filter, {
-            ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
-            limit: query.limit ?? 50,
-          })
-          const reader = await reads.reader(principal.access, threads.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
-          return json({
-            threads: threads.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
-            cursor: ref(Math.min(position, through)),
-          })
-        }
-        case 'message': {
-          const message = await reads.message(match.id!, request.signal)
-          if (!message || !principal.access.readable(message.channel))
-            throw notFound(`message not found: #${match.id}`, 'message_not_found')
-          const [{ messages, cursor }, { state: actors }] = await Promise.all([
-            reads.thread(message.re ?? message.id, request.signal),
-            session.state(actorsReducer),
-          ])
-          const [root, ...replies] = messages
-          const reader = await reads.reader(principal.access, messages)
-          return json({
-            message: view(root!, actors, reader),
-            replies: replies.map((reply) => view(reply, actors, reader)),
-            cursor: ref(cursor),
-            schedules: await schedules.forThread(root!.id),
-          })
-        }
-        case 'post': {
-          const parsed = PostBody.parse(await readJson(request))
-          const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
-          const proofs = await authorizePost(writes, principal.access, body)
-          if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
-            throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
-          // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
-          // one else can post with one first and make its retry fail.
-          if (!injected && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
-            throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
-          const attachments = await attachmentsFor(principal, body.attachments)
-          const { unknownMentions, ...message } = await writePost(writes, {
-            attachments,
-            identity,
-            proofs,
-            channel: body.channel,
-            re: body.re,
-            text: body.text,
-            labels: body.labels,
-            noSync: body.noSync,
-            id: body.id,
-            sync: body.sync,
-            ...origin,
-          })
-          return json({ message, ...(unknownMentions ? { unknownMentions } : {}) }, 201)
-        }
-        case 'schedule': {
-          const parsed = ScheduleBody.parse(await readJson(request))
-          const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
-          // Checked now, where the caller sees it, and again at every send.
-          await authorizePost(writes, principal.access, body)
-          const attachments = await attachmentsFor(principal, body.attachments)
-          return json(await schedules.create(identity, body, attachments), 201)
-        }
-        case 'schedules': {
-          const query = SchedulesQuery.parse(queryObject(url))
-          let root: number | undefined
-          if (query.re !== undefined) {
-            const at = messageAt(query.re)
-            root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
-          }
-          const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
-          return json({ schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) })
-        }
-        case 'cancelSchedule':
-          return json(await schedules.cancel(identity, match.id!))
-        case 'edit': {
-          const authorized = await authorizeOwn(writes, principal, match.id!, 'edit')
-          const body = EditBody.parse(await readJson(request))
-          const { unknownMentions } = await writeEdit(writes, { identity, authorized, text: body.text, ...origin })
-          return json({ ok: true, ...(unknownMentions ? { unknownMentions } : {}) })
-        }
-        case 'delete': {
-          const authorized = await authorizeOwn(writes, principal, match.id!, 'delete')
-          await writeDelete(writes, { identity, authorized })
-          return json({ ok: true })
-        }
-        case 'react': {
-          const authorized = await authorizeMessage(writes, principal.access, 'react', match.id!)
-          const body = ReactBody.parse(await readJson(request))
-          await writeReaction(writes, { identity, authorized, emoji: body.emoji, remove: body.remove })
-          return json({ ok: true })
-        }
-        case 'label': {
-          const authorized = await authorizeMessage(writes, principal.access, 'label', match.id!)
-          const body = LabelBody.parse(await readJson(request))
-          await writeLabels(writes, { identity, authorized, set: body.set, unset: body.unset })
-          return json({ ok: true })
-        }
-        case 'upload': {
-          // A file is no use until a post carries it, so uploading needs `post` somewhere.
-          if (!principal.access.anywhere('post')) throw forbidden("this token can't post anywhere, so it can't upload")
-          const name = request.headers.get('x-board-filename')
-          let decoded: string | null = null
-          try {
-            decoded = name === null ? null : decodeURIComponent(name)
-          } catch {
-            throw badRequest('`x-board-filename` is not URI-encoded')
-          }
-          const attachment = await writeUpload(blob, {
-            data: await readCapped(request, ATTACHMENT_BYTES_MAX),
-            name: decoded,
-            type: request.headers.get('content-type'),
-            uploadedBy: principal.id,
-          })
-          return json({ attachment }, 201)
-        }
-        case 'attachment': {
-          const { attachment, uploadedBy } = await readUpload(blob, match.param!)
-          if (!(await attachmentReadable(principal, attachment.id, uploadedBy))) throw attachmentNotFound(attachment.id)
-          return await attachmentResponse(blob, attachment)
-        }
-        case 'sync': {
-          const authorized = await authorizeMessage(writes, principal.access, 'sync', match.id!)
-          const body = SyncBody.parse(await readJson(request))
-          return json(await writeAttach(writes, { identity, authorized, target: body.target }))
-        }
-        case 'typing': {
-          // Typing is a reply about to come: `post` and `read` where the thread is.
-          const { message } = await authorizeMessage(writes, principal.access, 'post', match.id!)
-          if (message.deleted) throw notFound(`message not found: #${match.id}`, 'message_not_found')
-          const { status } = TypingBody.parse(await readJson(request)) ?? {}
-          const body: TypingResult = { targets: engine ? await engine.typing(message.thread, status) : [] }
-          return json(body)
-        }
-        case 'inbox': {
-          // Raw platform payloads, from every channel.
-          requireManage(principal, 'read the inbox')
-          if (!engine) throw notFound('this board has no sync configured')
-          const query = InboxQuery.parse(queryObject(url))
-          return json({ events: await engine.readInbox(match.param!, query.channel, query.limit ?? 50) })
-        }
-        case 'stuck': {
-          // What failed, with its errors, like the inbox.
-          requireManage(principal, 'read stuck events')
-          return json({ stuck: await stuck() })
-        }
-        case 'redrive': {
-          requireManage(principal, 'retry or skip stuck events')
-          return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
-        }
-        case 'sourceRead': {
-          // The app's token reads what the app can, not what the caller can.
-          requireManage(principal, 'read a source')
-          if (!engine) throw notFound('this board has no sync configured')
-          const query = SourceReadQuery.parse(queryObject(url))
-          return json(await engine.readSource(match.param!, query.target, query.limit ?? 50))
-        }
-        case 'watchers': {
-          // Each names a board's URL and tails: all of them only for `manage` in every channel, the caller's own for anyone.
-          const all = await registry.list()
-          return json({ watchers: principal.access.everywhere('manage') ? all : all.filter((found) => found.owner === principal.id) })
-        }
-        case 'register': {
-          // A registered watcher sees only what its registrant may read.
-          if (!principal.access.anywhere('read'))
-            throw forbidden("this token can't read anywhere, so a watcher it registers would see nothing")
-          const body = RegisterBody.parse(await readJson(request))
-          for (const [id, spec] of Object.entries(body.watch)) {
-            const name = RemoteWatcherId.safeParse(id)
-            if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
-            try {
-              compileWatcher(id, spec)
-            } catch (error) {
-              throw badRequest((error as Error).message, 'bad_watcher')
-            }
-          }
-          return json(await registry.register(storedPrincipal(principal), { url: body.url ?? null, watch: body.watch }))
-        }
-        case 'matches': {
-          if (!(await registry.state()).byOwner[principal.id]) throw notFound('this token has no watchers registered here', 'no_registration')
-          const query = MatchesQuery.parse(queryObject(url))
-          const queue = queueOf(principal.id)
-          const pulling = { access: principal.access, limit: query.limit ?? 10, timers: options.scheduler !== undefined }
-          const deadline = Date.now() + (query.wait ?? 0) * 1000
-          for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
-            const matches = await pull(queue, { ...pulling, now: Date.now() })
-            if (matches.length > 0 || Date.now() >= deadline || request.signal.aborted) return json({ matches })
-            await new Promise((resolve) => setTimeout(resolve, Math.min(pause, Math.max(0, deadline - Date.now()))))
-          }
-        }
-        case 'ack': {
-          const body = AckBody.parse(await readJson(request))
-          const result = await ack(queueOf(principal.id), match.param!, body, { now: Date.now(), timers: options.scheduler !== undefined })
-          if (result === 'gone') throw notFound(`no match ${match.param} is waiting for this token`, 'no_match')
-          if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the match was pulled again')
-          return json({ ok: true })
-        }
-        case 'wake':
-          throw notFound('this board keeps its own log: wake-ups go to a board on http()')
-        case 'events': {
-          const query = EventsQuery.parse(queryObject(url))
-          // SSE's own resume header, when the client reconnects by itself.
-          const lastEventId = indexOf(request.headers.get('last-event-id') ?? '')
-          const after = query.after !== undefined ? cursorAt(query.after) : lastEventId !== null && lastEventId > 0 ? lastEventId : undefined
-          const { state: actors } = await session.state(actorsReducer)
-          const feedOptions = { session, reads, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
-          if ((request.headers.get('accept') ?? '').includes('text/event-stream'))
-            return sse(feedOptions, request.signal, streamMaxMs)
-          const { events, cursor } = await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal)
-          return json({ events, cursor: ref(cursor) })
+      return body
+    },
+    async channels(caller) {
+      const { principal } = identityOf(caller)
+      const { state, index } = await session.state(channelsReducer)
+      const channels = Object.values(state)
+        .filter((channel) => principal.access.readable(channel.path))
+        .sort((a, b) => a.path.localeCompare(b.path))
+      return { channels, cursor: ref(index) }
+    },
+    async actors(caller) {
+      const { principal, actor } = identityOf(caller)
+      const { state, index } = await session.state(actorsReducer)
+      // A reader of every channel sees everyone; anyone else, who wrote, was mentioned, or reacted where they read, and themselves.
+      let seen: ((id: string) => boolean) | null = null
+      if (!principal.access.readsAll) {
+        const ids = await actorsIn(principal.access)
+        ids.add(actor.id)
+        seen = (id) => ids.has(id)
+      }
+      const actors = Object.values(state.byId)
+        .filter((a) => seen === null || seen(a.id))
+        .sort((a, b) => a.handle.localeCompare(b.handle))
+        .map((a) => {
+          const person = personView(state, a.id)
+          return person ? { ...a, person } : a
+        })
+      return { actors, cursor: ref(index) }
+    },
+    async identity(caller) {
+      const { principal } = identityOf(caller)
+      const { state, index } = await session.state(actorsReducer)
+      const links = linkedTo(state, principal.id).map((id) => ({
+        actor: id,
+        handle: state.byId[id]?.handle ?? null,
+        name: state.byId[id]?.name ?? null,
+        method: state.links[id]!.method,
+        at: state.links[id]!.at,
+      }))
+      const unlinked = Object.entries(options.sync ?? {})
+        .filter(([, entry]) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`)))
+        .map(([key]) => key)
+      const body: IdentityView = { principal: principal.id, links, unlinked, cursor: ref(index) }
+      return body
+    },
+    async messages(caller, query) {
+      const { principal, actor } = identityOf(caller)
+      const { state: actors } = await session.state(actorsReducer)
+      const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+      const { messages, position } = await reads.messages(filter, {
+        ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
+        ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
+        limit: query.limit ?? 50,
+      })
+      const reader = await reads.reader(principal.access, messages)
+      return { messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(position, through)) }
+    },
+    async threads(caller, query) {
+      const { principal, actor } = identityOf(caller)
+      const { state: actors } = await session.state(actorsReducer)
+      const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
+      const { threads, position } = await reads.threads(filter, {
+        ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
+        limit: query.limit ?? 50,
+      })
+      const reader = await reads.reader(principal.access, threads.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
+      return {
+        threads: threads.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
+        cursor: ref(Math.min(position, through)),
+      }
+    },
+    async message(caller, { id }, signal) {
+      const { principal } = identityOf(caller)
+      const at = messageAt(id)
+      const message = await reads.message(at, signal)
+      if (!message || !principal.access.readable(message.channel)) throw notFound(`message not found: #${at}`, 'message_not_found')
+      const [{ messages, cursor }, { state: actors }] = await Promise.all([reads.thread(message.re ?? message.id, signal), session.state(actorsReducer)])
+      const [root, ...replies] = messages
+      const reader = await reads.reader(principal.access, messages)
+      return {
+        message: view(root!, actors, reader),
+        replies: replies.map((reply) => view(reply, actors, reader)),
+        cursor: ref(cursor),
+        schedules: await schedules.forThread(root!.id),
+      }
+    },
+    async post(caller, parsed) {
+      const identity = identityOf(caller)
+      const { principal } = identity
+      const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
+      const proofs = await authorizePost(writes, principal.access, body)
+      if (fromRequest(caller) && body.id !== undefined && DERIVED_ID.test(body.id))
+        throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
+      // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
+      // one else can post with one first and make its retry fail.
+      if (fromRequest(caller) && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
+        throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
+      const attachments = await attachmentsFor(principal, body.attachments)
+      const { unknownMentions, ...message } = await writePost(writes, {
+        attachments,
+        identity,
+        proofs,
+        channel: body.channel,
+        re: body.re,
+        text: body.text,
+        labels: body.labels,
+        noSync: body.noSync,
+        id: body.id,
+        sync: body.sync,
+        ...caller.origin,
+      })
+      return { message, ...(unknownMentions ? { unknownMentions } : {}) }
+    },
+    async edit(caller, { id, text }) {
+      const identity = identityOf(caller)
+      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
+      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, ...caller.origin })
+      return { ok: true, ...(unknownMentions ? { unknownMentions } : {}) }
+    },
+    async delete(caller, { id }) {
+      const identity = identityOf(caller)
+      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'delete')
+      await writeDelete(writes, { identity, authorized })
+      return { ok: true }
+    },
+    async react(caller, { id, emoji, remove }) {
+      const identity = identityOf(caller)
+      const authorized = await authorizeMessage(writes, identity.principal.access, 'react', messageAt(id))
+      await writeReaction(writes, { identity, authorized, emoji, remove })
+      return { ok: true }
+    },
+    async label(caller, { id, set, unset }) {
+      const identity = identityOf(caller)
+      const authorized = await authorizeMessage(writes, identity.principal.access, 'label', messageAt(id))
+      await writeLabels(writes, { identity, authorized, set, unset })
+      return { ok: true }
+    },
+    async typing(caller, { id, status }) {
+      const { principal } = identityOf(caller)
+      // Typing is a reply about to come: `post` and `read` where the thread is.
+      const at = messageAt(id)
+      const { message } = await authorizeMessage(writes, principal.access, 'post', at)
+      if (message.deleted) throw notFound(`message not found: #${at}`, 'message_not_found')
+      return { targets: engine ? await engine.typing(message.thread, status) : [] }
+    },
+    async schedule(caller, parsed) {
+      const identity = identityOf(caller)
+      const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
+      // Checked now, where the caller sees it, and again at every send.
+      await authorizePost(writes, identity.principal.access, body)
+      const attachments = await attachmentsFor(identity.principal, body.attachments)
+      return schedules.create(identity, body, attachments)
+    },
+    async schedules(caller, query) {
+      const { principal } = identityOf(caller)
+      let root: number | undefined
+      if (query.re !== undefined) {
+        const at = messageAt(query.re)
+        root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
+      }
+      const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
+      return { schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) }
+    },
+    async cancelSchedule(caller, { id }) {
+      return schedules.cancel(identityOf(caller), scheduleAt(id))
+    },
+    async upload(caller, { data, name, type }) {
+      const { principal } = identityOf(caller)
+      // A file is no use until a post carries it, so uploading needs `post` somewhere.
+      if (!principal.access.anywhere('post')) throw forbidden("this token can't post anywhere, so it can't upload")
+      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }) }
+    },
+    async attachment(caller, { id }) {
+      const { principal } = identityOf(caller)
+      const { attachment, uploadedBy } = await readUpload(blob, id)
+      if (!(await attachmentReadable(principal, attachment.id, uploadedBy))) throw attachmentNotFound(attachment.id)
+      return { attachment, data: await attachmentBody(blob, attachment.id) }
+    },
+    async watchers(caller) {
+      const { principal } = identityOf(caller)
+      // Each names a board's URL and tails: all of them only for `manage` in every channel, the caller's own for anyone.
+      const all = await registry.list()
+      return { watchers: principal.access.everywhere('manage') ? all : all.filter((found) => found.owner === principal.id) }
+    },
+    async register(caller, body) {
+      const { principal } = identityOf(caller)
+      // A registered watcher sees only what its registrant may read.
+      if (!principal.access.anywhere('read'))
+        throw forbidden("this token can't read anywhere, so a watcher it registers would see nothing")
+      for (const [id, spec] of Object.entries(body.watch)) {
+        const name = RemoteWatcherId.safeParse(id)
+        if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
+        try {
+          compileWatcher(id, spec)
+        } catch (error) {
+          throw badRequest((error as Error).message, 'bad_watcher')
         }
       }
-      throw notFound(`no route: ${request.method} ${url.pathname}`)
-    } catch (error) {
-      if (error instanceof Rejected) return error.response
-      return toErrorResponse(error)
-    }
+      return registry.register(storedPrincipal(principal), { url: body.url ?? null, watch: body.watch })
+    },
+    async matches(caller, query, signal) {
+      const { principal } = identityOf(caller)
+      if (!(await registry.state()).byOwner[principal.id]) throw notFound('this token has no watchers registered here', 'no_registration')
+      const queue = queueOf(principal.id)
+      const pulling = { access: principal.access, limit: query.limit ?? 10, timers: options.scheduler !== undefined }
+      const deadline = Date.now() + (query.wait ?? 0) * 1000
+      for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
+        const matches = await pull(queue, { ...pulling, now: Date.now() })
+        if (matches.length > 0 || Date.now() >= deadline || signal.aborted) return { matches }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(pause, Math.max(0, deadline - Date.now()))))
+      }
+    },
+    async ack(caller, { id, ...body }) {
+      const { principal } = identityOf(caller)
+      const result = await ack(queueOf(principal.id), id, body, { now: Date.now(), timers: options.scheduler !== undefined })
+      if (result === 'gone') throw notFound(`no match ${id} is waiting for this token`, 'no_match')
+      if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the match was pulled again')
+      return { ok: true }
+    },
+    async events(caller, query, signal) {
+      const { principal, actor } = identityOf(caller)
+      const after = query.after !== undefined ? cursorAt(query.after) : undefined
+      const { state: actors } = await session.state(actorsReducer)
+      const feed = { session, reads, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
+      const { events, cursor } = await pollFeed(feed, (query.wait ?? 0) * 1000, signal)
+      return { events, cursor: ref(cursor) }
+    },
   }
 
-  const handle = (request: Request) => {
-    schedules.catchUp()
-    return dispatch(request, null)
+  const needSync = () => {
+    if (!engine) throw notFound('this board has no sync configured')
+    return engine
   }
-  const servers = [
-    server,
-    ...(engine ? [engine.inboxServer] : []),
-    schedules.server,
-    registry.server,
-    watchers.server,
-  ]
+
+  /** a2()'s routes beside the protocol, by name. The sync ones move to board() with sync. */
+  const handlers = {
+    async stuck(caller: Caller) {
+      // What failed, with its errors, like the inbox.
+      requireManage(identityOf(caller).principal, 'read stuck events')
+      return json({ stuck: await stuck() })
+    },
+    async redrive(caller: Caller, request: Request) {
+      const { principal, actor } = identityOf(caller)
+      requireManage(principal, 'retry or skip stuck events')
+      return json(await redrive(RedriveBody.parse(await readJson(request)), actor.id))
+    },
+    async sync(caller: Caller, request: Request, param: string) {
+      const identity = identityOf(caller)
+      const authorized = await authorizeMessage(writes, identity.principal.access, 'sync', messageAt(param))
+      const body = SyncBody.parse(await readJson(request))
+      return json(await writeAttach(writes, { identity, authorized, target: body.target }))
+    },
+    async inbox(caller: Caller, request: Request, param: string) {
+      // Raw platform payloads, from every channel.
+      requireManage(identityOf(caller).principal, 'read the inbox')
+      const query = InboxQuery.parse(queryObject(new URL(request.url)))
+      return json({ events: await needSync().readInbox(param, query.channel, query.limit ?? 50) })
+    },
+    async sourceRead(caller: Caller, request: Request, param: string) {
+      // The app's token reads what the app can, not what the caller can.
+      requireManage(identityOf(caller).principal, 'read a source')
+      const sync = needSync()
+      const query = SourceReadQuery.parse(queryObject(new URL(request.url)))
+      return json(await sync.readSource(param, query.target, query.limit ?? 50))
+    },
+    // Platforms can't send a board token: the adapter verifies the request.
+    webhook: (request: Request, param: string) => needSync().handleWebhook(param, request),
+    async identityLink(caller: Caller, request: Request) {
+      const sync = needSync()
+      const body = IdentityLinkBody.parse(await readJson(request))
+      return json(await sync.startLink(identityOf(caller), body.sync, body.method))
+    },
+    async identityCheck(caller: Caller, request: Request) {
+      const sync = needSync()
+      const body = IdentityCheckBody.parse(await readJson(request))
+      return json({ linked: await sync.checkLink(identityOf(caller), body.sync) })
+    },
+    async identityUnlink(caller: Caller, request: Request) {
+      const { principal, author } = identityOf(caller)
+      if (principal.kind !== 'person') throw forbidden('only people link platform accounts')
+      const body = IdentityUnlinkBody.parse(await readJson(request))
+      const { state } = await session.state(actorsReducer)
+      const mine = linkedTo(state, principal.id)
+      const wanted = body.actor.replace(/^@/, '').toLowerCase()
+      const found = mine.filter((id) => id === body.actor || state.byId[id]?.handle.toLowerCase() === wanted)
+      if (found.length === 0) throw notFound(`${body.actor} isn't linked to you`, 'not_linked')
+      if (found.length > 1) throw badRequest(`${body.actor} names several of your accounts: use ${found.join(' or ')}`, 'ambiguous_actor')
+      await session.append({ type: 'actor.unlinked', payload: { actor: found[0]!, by: author } })
+      return json({ ok: true, actor: found[0]! })
+    },
+  }
+
+  const servers = [server, ...(engine ? [engine.inboxServer] : []), schedules.server, registry.server, watchers.server]
   return {
-    GET: handle,
-    POST: handle,
-    fetch: handle,
-    /** The scheduler's callback: `export { scheduler as POST }` from a route of its own. */
+    methods,
+    handlers,
+    schedules,
+    /** The scheduler's callback, for every A2 server behind the board. */
     scheduler: options.scheduler
       ? options.scheduler.handler(...servers)
-      : async () => toErrorResponse(notFound('this board has no scheduler')),
-    /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
+      : async (_request: Request) => toErrorResponse(notFound('this board has no scheduler')),
     servers,
-    /**
-     * An in-process client for your own server code, writing as `vboard:client:<name>`. With a
-     * `key` (a webhook delivery's ID, say), its posts are idempotent: the same key and order
-     * never post twice. Its writes wake watchers and sync like any other.
-     */
-    client(name: string, clientOptions: { key?: string } = {}): BoardClient {
-      if (!ID.test(name)) throw new Error(`client: names use lowercase letters, numbers, - and _, got: ${name}`)
-      const key = clientOptions.key === undefined ? null : `client:${name}:${clientOptions.key}`
-      return clientAs(deploymentIdentity(`vboard:client:${name}`, name), key, { via: { kind: 'client', name } })
-    },
-    /** For tests and tools. */
     engine,
     session,
     store,
   }
 }
 
-/** Server-sent events: `id` is the log index, so `Last-Event-ID` resumes exactly. */
-function sse(options: Parameters<typeof liveFeed>[0], requestSignal: AbortSignal, maxMs: number): Response {
-  const encoder = new TextEncoder()
-  const controller = new AbortController()
-  const signal = AbortSignal.any([requestSignal, controller.signal, AbortSignal.timeout(maxMs)])
-  const body = new ReadableStream<Uint8Array>({
-    async start(stream) {
-      const ping = setInterval(() => {
-        try {
-          stream.enqueue(encoder.encode(': ping\n\n'))
-        } catch {}
-      }, 15_000)
-      try {
-        stream.enqueue(encoder.encode(': connected\n\n'))
-        // Filtered-out events still advance the client's cursor with a bare `id:`.
-        for await (const item of liveFeed(options, signal)) {
-          stream.enqueue(
-            encoder.encode(
-              item.view
-                ? `id: ${item.index}\nevent: board\ndata: ${JSON.stringify(item.view)}\n\n`
-                : `id: ${item.index}\n\n`,
-            ),
-          )
-        }
-      } catch (error) {
-        console.error('[vboard] feed failed', error)
-      } finally {
-        clearInterval(ping)
-        try {
-          stream.close()
-        } catch {}
-      }
-    },
-    cancel() {
-      controller.abort()
-    },
+/**
+ * The board in this deployment, on A2's log: its store, scheduler, sync, middleware, and
+ * attachments. It's the backend itself: pass it to `board({ backend })`, and mount its
+ * `scheduler` in a route of its own. Nothing is built or connected until board() binds it.
+ */
+export function a2(options: A2Options = {}) {
+  let built: ReturnType<typeof build> | null = null
+  const ready = () => {
+    if (!built) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
+    // The first call on an instance starts the schedules catching up, and doesn't wait.
+    built.schedules.catchUp()
+    return built
+  }
+  const methods = Object.fromEntries(
+    METHODS.map((name) => [name, (caller: Caller, input: never, signal: AbortSignal) => (ready().methods[name] as (...args: unknown[]) => unknown)(caller, input, signal)]),
+  ) as unknown as ProtocolMethods
+  /** A route that needs a verified caller. */
+  const authed = (method: 'GET' | 'POST', path: string, handle: (caller: Caller, request: Request, param: string) => Promise<Response>): BackendRoute => ({
+    method,
+    path,
+    auth: true,
+    handle: (request, { caller, param }) => handle(caller!, request, param ?? ''),
   })
-  return new Response(body, {
-    headers: {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
+  const routes: BackendRoute[] = [
+    authed('GET', '/stuck', (caller) => ready().handlers.stuck(caller)),
+    authed('POST', '/stuck/redrive', (caller, request) => ready().handlers.redrive(caller, request)),
+    authed('POST', '/messages/:id/sync', (caller, request, param) => ready().handlers.sync(caller, request, param)),
+    authed('GET', '/inbox/:key', (caller, request, param) => ready().handlers.inbox(caller, request, param)),
+    authed('GET', '/sources/:key/read', (caller, request, param) => ready().handlers.sourceRead(caller, request, param)),
+    { method: 'POST', path: '/webhooks/:key', auth: false, handle: (request, { param }) => ready().handlers.webhook(request, param ?? '') },
+    authed('POST', '/identity/link', (caller, request) => ready().handlers.identityLink(caller, request)),
+    authed('POST', '/identity/check', (caller, request) => ready().handlers.identityCheck(caller, request)),
+    authed('POST', '/identity/unlink', (caller, request) => ready().handlers.identityUnlink(caller, request)),
+  ]
+  const backend = {
+    ...methods,
+    remote: null,
+    sync: Object.entries(options.sync ?? {}).map(([key, entry]) => ({ key, platform: entry.platform })),
+    routes,
+    bind(binding: BoardBinding) {
+      if (built) throw new Error('a2: this backend already serves a board: create one a2() per board()')
+      built = build(options, binding)
     },
-  })
+    /** The scheduler's callback: `export { scheduler as POST }` from a route of its own. A board without a scheduler answers 404. */
+    scheduler: (request: Request): Promise<Response> => ready().scheduler(request),
+    /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
+    get servers() {
+      return ready().servers
+    },
+    /** For tests and tools. */
+    get engine() {
+      return ready().engine
+    },
+    get session() {
+      return ready().session
+    },
+    get store() {
+      return ready().store
+    },
+  }
+  return backend satisfies Backend
 }
 
-function openapi() {
-  const paths: Record<string, Record<string, unknown>> = {}
-  for (const [name, definition] of Object.entries(routes)) {
-    const path = definition.path.replace(/:(\w+)/g, '{$1}')
-    const operation: Record<string, unknown> = { operationId: name }
-    if ('query' in definition) operation['x-query-schema'] = z.toJSONSchema(definition.query, { io: 'input' })
-    if ('body' in definition)
-      operation.requestBody = {
-        content: { 'application/json': { schema: z.toJSONSchema(definition.body, { io: 'input' }) } },
-      }
-    ;(paths[path] ??= {})[definition.method.toLowerCase()] = operation
-  }
-  return { openapi: '3.1.0', info: { title: 'vboard', version: VERSION }, paths }
-}
+export type A2Backend = ReturnType<typeof a2>

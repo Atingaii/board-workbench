@@ -313,13 +313,6 @@ export type BoardEventView = BoardEvent extends infer E
     : never
   : never
 
-/**
- * What a board does beyond the core every board answers (discovery, `me`, channels, actors,
- * messages, threads, posting and changing messages, and events). Each names a group of routes.
- */
-export const CAPABILITIES = ['schedules', 'attachments', 'watchers', 'sync', 'stuck'] as const
-export type Capability = (typeof CAPABILITIES)[number]
-
 export type Discovery = {
   version: string
   url: string
@@ -328,8 +321,6 @@ export type Discovery = {
   project_id: string | null
   /** The board's sync entries: `key` names its webhook and inbox, `platform` is e.g. `slack`. */
   sync: { key: string; platform: string }[]
-  /** The groups of routes it answers beyond the core, in `CAPABILITIES` order. */
-  capabilities: Capability[]
   /** A board on another backend keeps nothing here: clients read and write this board instead. */
   remote?: string
 }

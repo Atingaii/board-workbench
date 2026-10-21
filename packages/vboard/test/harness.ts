@@ -1,9 +1,8 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { board } from '../src/server/index.ts'
-import { a2 } from '../src/backend-a2/index.ts'
-import type { A2Options, BoardSetup } from '../src/server/a2.ts'
+import { board, type BoardOptions } from '../src/server/index.ts'
+import { a2, type A2Options } from '../src/backend-a2/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
 export const PROJECT_ID = 'prj_board'
@@ -38,17 +37,38 @@ export function testClock() {
   }
 }
 
+/** board()'s options and a2()'s, side by side, as tests write them. */
+export type MountOptions = A2Options & Omit<BoardOptions, 'backend'>
+
+/** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
+export function mount(options: MountOptions) {
+  const { watch, url, basePath, access, project, auth, streamMaxMs, ...rest } = options
+  const backend = a2(rest)
+  const created = board({
+    backend,
+    ...(watch ? { watch } : {}),
+    ...('url' in options ? { url } : {}),
+    ...(basePath !== undefined ? { basePath } : {}),
+    ...(access ? { access } : {}),
+    ...(project ? { project } : {}),
+    ...(auth ? { auth } : {}),
+    ...(streamMaxMs !== undefined ? { streamMaxMs } : {}),
+  })
+  const { scheduler, servers, engine, session, store } = backend
+  return Object.assign(created, { backend, scheduler, servers, engine, session, store })
+}
+
 /** A board on a memory store whose tokens come from a local test issuer. */
-export function testBoard(options: A2Options & BoardSetup = {}) {
+export function testBoard(options: MountOptions = {}) {
   const clock = testClock()
   const store = memory({ clock })
-  const { watch, url, basePath, ...engine } = options
-  const created = board({
-    backend: a2({ store, project: { id: PROJECT_ID, teamId: TEAM_ID }, auth: testAuth, ...engine }),
+  const created = mount({
+    store,
+    project: { id: PROJECT_ID, teamId: TEAM_ID },
+    auth: testAuth,
+    ...options,
     // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
-    url: 'url' in options ? url : BOARD_URL,
-    ...(watch ? { watch } : {}),
-    ...(basePath ? { basePath } : {}),
+    url: 'url' in options ? options.url : BOARD_URL,
   })
   /**
    * Lets a failed event's next attempt run now, once no attempt is running on

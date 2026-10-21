@@ -6,6 +6,7 @@ import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
 import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
+import { fakeQueue } from './queue.ts'
 
 useBoard()
 
@@ -505,12 +506,25 @@ describe('cli', () => {
   })
 
   it('checks that the board speaks the protocol, a group at a time', async () => {
-    const run = await vb(['conformance'])
-    expect(run).toMatchObject({ code: 0, stderr: '' })
-    expect(run.stdout).toMatch(/^core\n  passed   says in its discovery what it does\n  passed   posts a message, and reads it back by its ID\n/)
-    expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
-    expect(run.stdout).toMatch(/\n\n\d+ passed\n$/)
-    expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'])).stdout)).toMatchObject({ ok: true, capabilities: expect.arrayContaining(['watchers']) })
+    // The whole protocol, schedules included, so a board with a scheduler.
+    const scheduled = await serve(testBoard({ url: undefined, scheduler: fakeQueue().scheduler }).fetch)
+    const board = `${scheduled.origin}/api/board`
+    const as = { VBOARD_URL: board, VBOARD_TOKEN: await personToken('u_julian', board) }
+    try {
+      const run = await vb(['conformance'], as)
+      expect(run).toMatchObject({ code: 0, stderr: '' })
+      expect(run.stdout).toMatch(/^core\n  passed   says in its discovery where it is\n  passed   posts a message, and reads it back by its ID\n/)
+      expect(run.stdout).toContain('\n\nschedules\n  passed   schedules a reply')
+      expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
+      expect(run.stdout).toMatch(/\n\n\d+ passed\n$/)
+      expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'], as)).stdout)).toMatchObject({ ok: true })
+    } finally {
+      await scheduled.close()
+    }
+    // Without one, the board answers only part of it, and says which.
+    const partial = await vb(['conformance'])
+    expect(partial.code).toBe(1)
+    expect(partial.stdout).toContain("\n\nschedules\n  failed   schedules a reply, lists it, and cancels it\n           this board has no scheduler, so it can't schedule messages\n")
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: 'error: usage: vboard conformance [--channel <c>]\n' })
   })
 

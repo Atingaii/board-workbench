@@ -72,7 +72,9 @@ describe('a write-only source', () => {
   })
 
   it('streams bare cursors and nothing else', async () => {
-    const { board, julian } = await setup()
+    // A stream's cursor moves past what its caller can't see when a page of events ends: here, as it closes.
+    const board = testBoard({ access: [intake], streamMaxMs: 1000 })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const controller = new AbortController()
     const response = await board.fetch(
       new Request(`${BOARD_URL}/events?after=0`, {
@@ -501,9 +503,9 @@ describe('schedules', () => {
       const store = memory()
       const queue = fakeQueue()
       const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { backend: a2({ store, project: { id: PROJECT_ID }, auth: testAuth, access, scheduler: queue.scheduler }), url: BOARD_URL }
-      const route = mount(options)
-      mount(options)
+      const options = { project: { id: PROJECT_ID }, auth: testAuth, access, url: BOARD_URL }
+      const route = mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
+      mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
       const platform = await deploymentToken('board', PROJECT_ID)
       const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
       expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)

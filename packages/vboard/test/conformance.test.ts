@@ -26,27 +26,28 @@ function broken(fetch: Fetch, change: { request?: (url: URL) => void; body?: (te
 }
 
 describe('the conformance kit', () => {
-  it('passes a board on a2(), checking each group it declares, and deletes what it posted', async () => {
+  it('passes a board on a2(), checking the whole protocol, and deletes what it posted', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const client = await clientOf(board.fetch)
     const report = await conformance(client)
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
-    expect(report).toMatchObject({ ok: true, url: BOARD_URL, capabilities: ['schedules', 'attachments', 'watchers', 'stuck'] })
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'attachments', 'watchers', 'stuck'])
-    expect(report.checks.find((check) => check.group === 'stuck')).toMatchObject({ name: "lists what's stuck", status: 'passed' })
+    expect(report).toMatchObject({ ok: true, url: BOARD_URL })
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'attachments', 'watchers'])
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })
 
-  it("leaves out a group the board doesn't declare", async () => {
+  it('fails a board that answers only part of the protocol', async () => {
+    // Without a scheduler, a board on a2() can't schedule.
     const report = await conformance(await clientOf(testBoard().fetch))
-    expect(report.capabilities).not.toContain('schedules')
-    expect(report.checks.some((check) => check.group === 'schedules')).toBe(false)
-    expect(report.ok).toBe(true)
+    expect(report.ok).toBe(false)
+    expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
+      ['schedules a reply, lists it, and cancels it', "this board has no scheduler, so it can't schedule messages"],
+    ])
   })
 
   it('fails a board that shows its IDs as numbers', async () => {
-    const board = testBoard()
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
     const numeric = broken(board.fetch, { body: (text) => text.replace(/"(id|re)":"(\d+)"/g, '"$1":$2') })
     const report = await conformance(await clientOf(numeric))
     expect(report.ok).toBe(false)
@@ -57,7 +58,7 @@ describe('the conformance kit', () => {
   })
 
   it("fails a board whose reads ignore where they're asked to start", async () => {
-    const board = testBoard()
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
     const ignoring = broken(board.fetch, { request: (url) => url.pathname.endsWith('/messages') && url.searchParams.delete('after') })
     const report = await conformance(await clientOf(ignoring))
     expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
@@ -65,10 +66,13 @@ describe('the conformance kit', () => {
     ])
   })
 
-  it('reports a board whose discovery says nothing of what it does', async () => {
+  it('reports a board whose discovery sends clients to another board', async () => {
     const board = testBoard()
-    const old = broken(board.fetch, { body: (text) => text.replace(/,"capabilities":\[[^\]]*\]/, '') })
-    const report = await conformance(await clientOf(old))
-    expect(report).toMatchObject({ ok: false, checks: [{ name: 'says in its discovery what it does', status: 'failed', detail: 'capabilities should be a list, got undefined' }] })
+    const remote = broken(board.fetch, { body: (text) => (text.includes('"audience"') ? text.replace(/}$/, ',"remote":"https://elsewhere.test/api/board"}') : text) })
+    const report = await conformance(await clientOf(remote))
+    expect(report).toMatchObject({
+      ok: false,
+      checks: [{ name: 'says in its discovery where it is', status: 'failed', detail: 'it keeps no log: its discovery names https://elsewhere.test/api/board, so check that board' }],
+    })
   })
 })
