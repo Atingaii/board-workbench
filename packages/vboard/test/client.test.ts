@@ -139,7 +139,7 @@ describe('board() with no backend', () => {
     expect((await here.as(null).me()).actor).toBe('vercel:user:u_julian')
   })
 
-  it('outside Node, needs the URL, sends what its fetch sends, and serves nothing', async () => {
+  it('outside Node, needs the URL, sends what its fetch sends, and serves only what its backend answers', async () => {
     const team = testBoard()
     // A page's own session, as the board recognizes it: here, a token its fetch adds.
     const fetch = bearer((input, init) => team.fetch(new Request(input, init)), await personToken())
@@ -147,8 +147,9 @@ describe('board() with no backend', () => {
     const page = defaultBoard({ backend: defaultHttp(BOARD_URL, { fetch }) })
     expect((await page.as('page').post('dev', 'from a browser')).by.actor).toBe('vercel:user:u_julian+page')
     expect((await page.discovery()).url).toBe(BOARD_URL)
+    // It serves what its backend answers a request: http() answers only wake-ups and webhooks.
     const served = await page.fetch(new Request(`${BOARD_URL}/me`, { headers: { authorization: `Bearer ${await personToken()}` } }))
-    expect([served.status, (await served.json()).error.code]).toEqual([501, 'not_served'])
+    expect([served.status, (await served.json()).error.code]).toEqual([404, 'not_found'])
     expect(() => defaultBoard({ backend: defaultHttp(BOARD_URL), watch: { fix: { tail: 'dev', run: () => {} } } })).toThrow(
       'watch fix: watchers run on a server: this build of vboard has none',
     )

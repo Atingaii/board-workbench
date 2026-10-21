@@ -44,7 +44,7 @@ test("lets clean messages through, and doesn't judge the team's own API writes",
   assert.deepEqual(judged, ["hi"]);
 });
 
-test("sees what Slack sends before it lands on the board, as board()'s middleware", async () => {
+test("sees what Slack sends before it lands on the board, as a2()'s middleware", async () => {
   const { testBoard, caller, personToken } = await import("../../../packages/vboard/test/harness.ts");
   const { fakePlatform } = await import("../../../packages/vboard/test/sync-fixtures.ts");
   const { slack } = await import("../../../packages/vboard/src/sync/slack.ts");

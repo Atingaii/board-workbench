@@ -7,6 +7,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { localTokenFile } from '../client/node.ts'
 import { fsBlob } from '../server/blob.ts'
 import { a2 } from '../server/a2.ts'
+import { verifyTokens } from '../server/auth.ts'
 import { board } from '../server/index.ts'
 
 export const DEFAULT_SERVE_PORT = 4100
@@ -78,10 +79,9 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   }
   const url = `http://127.0.0.1:${port}/api/board`
   const mounted = board({
-    backend: a2({ store, blob: fsBlob(join(dir, 'attachments')) }),
+    backend: a2({ store, blob: fsBlob(join(dir, 'attachments')), authenticate: verifyTokens({ local: { issuer: ISSUER, jwks } }) }),
     url,
     basePath: '/api/board',
-    auth: { local: { issuer: ISSUER, jwks } },
   })
   handler = mounted.fetch
 

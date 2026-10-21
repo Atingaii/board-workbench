@@ -6,14 +6,15 @@ import {
   type JWTVerifyGetKey,
 } from 'jose'
 import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can, type Permission } from './access.ts'
+import type { CallerRequest } from './backend.ts'
 import { unauthorized, forbidden } from './errors.ts'
 
 /** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
 export type PrincipalKind = 'person' | 'deployment' | 'workflow' | 'external'
 
 /**
- * Who's calling, as board() verified it: an ID in the board's scheme and what its token said. What
- * it may do is the backend's to work out: a2() from its `access`.
+ * Who's calling, as a backend verified it: an ID in the board's scheme and what its token said.
+ * What it may do is the backend's to work out: a2() from its `access`.
  */
 export type Principal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`, `oidc:<issuer>:<sub>`. */
@@ -41,7 +42,7 @@ type Claims = JWTPayload & Record<string, unknown>
 
 /** What a verified token said: its issuer and its claims, never the token itself. */
 export type TokenFacts = {
-  /** `host`: a host's own `access` function verified the caller; its claims are the access it granted. */
+  /** `host`: a host's own verifier recognized the caller; its claims are when that runs out. */
   issuer: 'vercel' | 'github' | 'oidc' | 'host'
   iss: string
   claims: Readonly<Record<string, string | number | boolean>>
@@ -195,8 +196,8 @@ export type IssuerConfig = {
   jwks?: JWTVerifyGetKey
 }
 
-/** Tests point these at a local issuer; production uses the defaults. */
-export type AuthOptions = {
+/** `verifyTokens()`'s options: tests point these at a local issuer; production uses the defaults. */
+export type VerifyTokensOptions = {
   vercel?: IssuerConfig
   github?: IssuerConfig
   /** Keys for `oidc()` issuers, by issuer URL, instead of their published JWKS. It trusts no issuer by itself. */
@@ -240,14 +241,14 @@ const issuerName = (iss: string) => {
   return `${url.host}${url.pathname.replace(/\/+$/, '')}`.replace(/[%:]/g, (char) => (char === '%' ? '%25' : '%3A'))
 }
 
-/** What board() verifies tokens with: the platform's issuers, OIDC issuers a backend's rules name, and test issuers. */
-export function createVerifier(options: {
+/** What tokens are verified with: the platform's issuers, OIDC issuers a backend's rules name, and test issuers. */
+function createVerifier(options: {
   projectId: () => Promise<string | null>
   /** The board's team from config or the environment; the platform's token is the fallback. */
   teamId: () => Promise<string | null>
-  /** OIDC issuers past Vercel's and GitHub's whose tokens are verified: the backend's `issuers`. */
+  /** OIDC issuers past Vercel's and GitHub's whose tokens are verified: the ones the backend's rules name. */
   issuers: readonly string[]
-  auth?: AuthOptions
+  auth?: VerifyTokensOptions | undefined
 }) {
   const vercelIssuer = options.auth?.vercel ?? { issuer: VERCEL_ISSUER }
   const githubIssuer = options.auth?.github ?? { issuer: GITHUB_ISSUER }
@@ -339,12 +340,12 @@ function trustedIssuers(issuers: readonly string[]): Set<string> {
   return new Set(issuers)
 }
 
-/** The OIDC issuers rules name: the ones whose tokens board() verifies for them. */
+/** The OIDC issuers rules name: the only ones whose tokens are verified for them. */
 export const issuersOf = (rules: readonly AccessRule[]) => [...new Set(rules.flatMap((rule) => (rule.issuer === 'oidc' ? [rule.url!] : [])))]
 
 /**
  * What a host's own model gives a principal: what it may do, or null for nothing. It sees only the
- * principals the board's `authenticate` returned.
+ * principals its own `authenticate` returned.
  */
 export type AccessFunction = (principal: Known) => Can | null | undefined | Promise<Can | null | undefined>
 
@@ -358,7 +359,7 @@ export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope'
  */
 export function createAuthority(options: {
   access: readonly AccessRule[] | AccessFunction
-  /** The board's own Vercel project and team, as board() knows them. */
+  /** The board's own Vercel project and team. */
   project: () => Promise<{ id: string | null; teamId: string | null }>
 }) {
   const rules = typeof options.access === 'function' ? null : options.access
@@ -440,6 +441,19 @@ export function createAuthority(options: {
 }
 
 /**
+ * What a principal may do under `rules` (`vercelProject()`, `githubActions()`, `oidc()`), the first
+ * that matches its token deciding, past the defaults: people, and the board's own deployments in the
+ * environment it runs in, may do everything. Its scope narrows what it gets. A 401 or 403 that names
+ * the rule that would let it in, when it may do nothing.
+ */
+export function compileRules(
+  rules: readonly AccessRule[],
+  board: { project(): Promise<{ id: string | null; teamId: string | null }> },
+): (principal: Known) => Promise<Access> {
+  return createAuthority({ access: rules, project: () => board.project() }).grant
+}
+
+/**
  * The Vercel environment the board runs in: `production`, `preview`, or a
  * custom environment's name. `VERCEL_TARGET_ENV` names custom environments,
  * where `VERCEL_ENV` says `preview`. Null outside Vercel, where only people
@@ -460,7 +474,7 @@ function factsFromId(id: string): TokenFacts | null {
 
 const LOCAL_SUB = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/
 
-async function localPerson(token: string, local: NonNullable<AuthOptions['local']>, audience: string): Promise<Principal> {
+async function localPerson(token: string, local: NonNullable<VerifyTokensOptions['local']>, audience: string): Promise<Principal> {
   let claims: Claims
   try {
     ;({ payload: claims } = (await jwtVerify(token, local.jwks, { issuer: local.issuer, audience })) as { payload: Claims })
@@ -480,14 +494,26 @@ const deployment = (facts: TokenFacts, project: string, environment: string, exp
   facts,
 })
 
-/**
- * A host's own verifier, as `board({ authenticate })`: who the request is, in the board's ID scheme.
- * What they may do is the backend's, `a2({ access })`'s function. To reject, return or throw a
- * `Response`; anything else thrown is a 500.
- */
-export type Authenticate = (request: Request) => HostPrincipal | Response | Promise<HostPrincipal | Response>
+/** What a backend knows that verifying a request needs: its own Vercel project, and the OIDC issuers its rules trust. */
+export type AuthenticateContext = {
+  /** The board's own Vercel project and team: its people's development tokens are for it. */
+  project(): Promise<{ id: string | null; teamId: string | null }>
+  /** OIDC issuers past Vercel's and GitHub's whose tokens may be trusted: the ones `oidc()` rules name. */
+  issuers: readonly string[]
+}
 
-/** What a host's `authenticate` returns: a principal in the board's ID scheme. */
+/**
+ * Who a request is, in the board's ID scheme: `verifyTokens()` checks its bearer token for the
+ * board's URL, and a host's own verifier recognizes its own credentials (a session cookie in
+ * `request.headers`, say). To reject, return or throw a `Response`, or throw an `HttpError`;
+ * anything else thrown is a 500. What a principal may do is the backend's: `a2({ access })`.
+ */
+export type Authenticate = (
+  request: CallerRequest,
+  board: AuthenticateContext,
+) => Principal | HostPrincipal | Response | Promise<Principal | HostPrincipal | Response>
+
+/** What a host's own verifier returns: a principal in the board's ID scheme. */
 export type HostPrincipal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, …: records keep their shape. */
   id: string
@@ -496,11 +522,41 @@ export type HostPrincipal = {
   expiresAt?: Date | null
 }
 
+const TOKENS = Symbol('vboard.verifyTokens')
+
+/**
+ * The built-in verifier: a request's bearer token, from Vercel (people and deployments), GitHub
+ * Actions, an `oidc()` rule's issuer, or `local`'s, verified for the board's URL. A request with
+ * no token is a 401.
+ */
+export function verifyTokens(options: VerifyTokensOptions = {}): Authenticate {
+  let made: { issuers: string; verify: ReturnType<typeof createVerifier>['verify'] } | null = null
+  const authenticate: Authenticate = async (request, board) => {
+    if (request.credential === null) throw unauthorized('missing bearer token')
+    const issuers = board.issuers.join('\n')
+    if (made?.issuers !== issuers)
+      made = {
+        issuers,
+        verify: createVerifier({
+          projectId: async () => (await board.project()).id,
+          teamId: async () => (await board.project()).teamId,
+          issuers: board.issuers,
+          auth: options,
+        }).verify,
+      }
+    return made.verify(request.credential, request.audience, request.headers.get('x-vercel-oidc-token') ?? undefined)
+  }
+  return Object.assign(authenticate, { [TOKENS]: true })
+}
+
+/** Whether `authenticate` is `verifyTokens()`'s: what it returns are token principals, not a host's. */
+export const verifiesTokens = (authenticate: Authenticate) => TOKENS in authenticate
+
 const PRINCIPAL_ID = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[^\s+\]]{1,200}$/
 const KINDS: readonly PrincipalKind[] = ['person', 'deployment', 'workflow', 'external']
 
 /**
- * Checks what a host's `authenticate` returned. A malformed principal is the host's bug, so it
+ * Checks what a host's own verifier returned. A malformed principal is the host's bug, so it
  * fails the request rather than letting a half-identity write.
  */
 export function hostPrincipal(value: HostPrincipal): Principal {

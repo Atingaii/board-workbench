@@ -18,15 +18,30 @@ import {
   type InboxEvent,
   type Link,
 } from '../contract/contract.ts'
-import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type ExternalCopy, type IdentityCode } from '../contract/reducers.ts'
-import { RemoteWatcherId, type Author } from '../contract/schemas.ts'
-import type { InboxEntry, LinkedAccount, Me } from '../api/routes.ts'
+import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/reducers.ts'
+import { RemoteWatcherId, type Author, type Labels } from '../contract/schemas.ts'
+import type { Discovery, InboxEntry, LinkedAccount, Me } from '../api/routes.ts'
+import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
-import { authenticates, createAuthority, issuersOf, type AccessFunction, type AccessRule, type Granted } from './auth.ts'
-import { actorSeen } from './actors.ts'
-import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
+import {
+  authenticates,
+  createAuthority,
+  hostPrincipal,
+  issuersOf,
+  verifiesTokens,
+  verifyTokens,
+  type AccessFunction,
+  type AccessRule,
+  type Authenticate,
+  type AuthenticateContext,
+  type Granted,
+  type HostPrincipal,
+  type Principal,
+} from './auth.ts'
+import { actorSeen, resolveActor } from './actors.ts'
+import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type CallerRequest, type ProtocolMethods } from './backend.ts'
 import { attachmentBody, attachmentNotFound, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
-import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
+import { badRequest, forbidden, HttpError, notFound, RejectedError, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
@@ -53,9 +68,12 @@ import {
   landedFor,
   type Identity,
   type WriteContext,
+  type WriteOrigin,
 } from './writes.ts'
-import { MIDDLEWARE_ACTOR } from './middleware.ts'
+import { DroppedError, MIDDLEWARE_ACTOR, runMiddleware, type Middleware, type Write, type WriteSource } from './middleware.ts'
 import { localScheduler } from '../scheduler/local.ts'
+import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
+import { VERSION } from '../version.ts'
 
 /** `a2()`'s options: the board in this deployment, on A2's log, and everything that runs beside it. */
 export type A2Options = {
@@ -77,16 +95,38 @@ export type A2Options = {
    */
   blob?: BlobStore
   /**
+   * The board's Vercel project: `self` in the rules, whose people's development tokens it takes,
+   * and what discovery names for clients to mint them. Defaults to `VERCEL_PROJECT_ID` or
+   * `.vercel/project.json`.
+   */
+  project?: { id: string; teamId?: string }
+  /**
+   * Who a request is: `verifyTokens()` from `vboard/access` by default, which checks its bearer
+   * token for the board's URL (pass it `local` for `vb serve`'s, or test issuers). Or a host's own
+   * verifier, for a host serving many teams' boards: `(request) => ({ id, kind, handle })`, who
+   * the request is in the board's ID scheme, from its credential or its headers (a session
+   * cookie). It replaces the built-in one, so no token's audience or the board's own project
+   * counts then. To reject, return or throw a `Response`. What its principals may do is
+   * `access`'s function.
+   */
+  authenticate?: Authenticate
+  /**
    * Who besides the board's people and its own deployments in the environment it runs in may use
    * it, and what they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from
    * `vboard/access`. The first rule that matches a token decides. A production board's previews
    * need a rule, as `vercelProject({ project: 'self', environments: ['preview'], can })`.
    *
-   * Or a host's own model: a function of the principal its `board({ authenticate })` returned, giving
-   * what it may do in each channel (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), or null for nothing.
+   * Or a host's own model: a function of the principal its `authenticate` returned, giving what it
+   * may do in each channel (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), or null for nothing.
    * Nothing else is trusted then, not the board's own people or deployments.
    */
   access?: readonly AccessRule[] | AccessFunction
+  /**
+   * Runs on every post and edit before it lands, whatever it came from: requests (a board on
+   * `http()` using this one included), watchers, schedules, the handle, and sync's imports. Each
+   * calls `next()` to pass the write on; one that doesn't drops it.
+   */
+  middleware?: readonly Middleware[]
   /** For tests: how the board POSTs wake-ups to boards on `http()`. Defaults to https to public addresses only. */
   transport?: { post?: Post }
 }
@@ -127,6 +167,9 @@ function scheduleAt(value: string): number {
   return index
 }
 
+/** A signal that never aborts, for what the board does by itself. */
+const NEVER = new AbortController().signal
+
 /** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
 const WAKE_TIMEOUT_MS = 5000
 
@@ -136,11 +179,21 @@ const WAKE_TIMEOUT_MS = 5000
  */
 const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
+/** A caller as a2 calls its own methods: one through board(), or its own verified form, a schedule's send as its creator. */
+type Inner = Caller | { verified: Identity; origin: WriteOrigin }
+
 /** A request to the board, as opposed to a write the board's own code makes in-process. */
-const fromRequest = (caller: Caller) => 'identity' in caller && (caller.origin.via?.kind ?? 'api') === 'api'
+const fromRequest = (caller: Inner) => 'request' in caller
 
 /** Sync in board() in this deployment, as opposed to a sync elsewhere that uses this board. */
-const ownSync = (caller: Caller) => 'self' in caller && caller.origin.via?.kind === 'engine'
+const ownSync = (caller: Inner) => 'self' in caller && caller.origin.via?.kind === 'engine'
+
+/** A write's caller, as the middleware is told: where it came from. The middleware's own handle and sync's lookups skip it. */
+function sourceOf(caller: Inner): WriteSource | null {
+  const via = caller.origin.via
+  if (via?.kind === 'middleware' || via?.kind === 'engine') return null
+  return via ?? { kind: 'api' }
+}
 
 /**
  * Who a caller writes as. This deployment's own code writes as `vboard:client` from a handle,
@@ -230,13 +283,80 @@ function build(options: A2Options, binding: BoardBinding) {
   // The same A2 store object for every server: A2 recognizes its own stores by identity.
   const log = store.log
   const registry = createRegistry({ store: log, scheduler: options.scheduler })
+  /** The board's own Vercel project and team, from `project` or the environment, asked once. */
+  let own: Promise<{ id: string | null; teamId: string | null }> | null = null
+  const project = () =>
+    (own ??= Promise.all([ownProjectId(options.project), ownTeamId(options.project)]).then(([id, teamId]) => ({ id, teamId }))).catch((error: unknown) => {
+      own = null
+      throw error
+    })
   // What callers may do, under this board's rules: requests, and stored principals.
-  const authority = createAuthority({ access: options.access ?? [], project: binding.project })
-  /** Who a caller is, and what it may do now: a request under the rules, this deployment's own code everything. */
-  const identityOf = async (caller: Caller): Promise<Identity> => {
-    if (!('identity' in caller)) return selfIdentity(caller)
-    const { principal } = caller.identity
-    return { ...caller.identity, principal: { ...principal, access: await authority.grant(principal) } }
+  const authority = createAuthority({ access: options.access ?? [], project })
+  const authenticate = options.authenticate ?? verifyTokens()
+  /** What a host's verifier returns is its own principals; the built-in one's are tokens'. */
+  const hosted = !verifiesTokens(authenticate)
+  const context: AuthenticateContext = { project, issuers: typeof options.access === 'function' ? [] : issuersOf(options.access ?? []) }
+  /** Verified principals by credential, until they expire, so a stream's polls don't verify from scratch. */
+  const verified = new Map<string, { principal: Promise<Principal>; until: number }>()
+  /** And by request, for one with no credential (a session cookie), for as long as it's served. */
+  const perRequest = new WeakMap<CallerRequest, Promise<Principal>>()
+
+  /** Who a request's credential is: a 401 or the host's own rejection when it's no one. */
+  async function principalOf(request: CallerRequest): Promise<Principal> {
+    const live = (principal: Principal) => principal.expiresAt === null || principal.expiresAt.getTime() > Date.now()
+    const known = perRequest.get(request)
+    if (known) {
+      const principal = await known
+      if (live(principal)) return principal
+    }
+    // What Vercel sends with the request can tell a deployment's token which team the board is on.
+    const key = request.credential === null ? null : [request.audience, request.credential, request.headers.get('x-vercel-oidc-token') ?? ''].join('\u001f')
+    const cached = key === null ? undefined : verified.get(key)
+    if (cached && cached.until > Date.now()) {
+      perRequest.set(request, cached.principal)
+      return cached.principal
+    }
+    const principal = verify(request)
+    perRequest.set(request, principal)
+    if (key !== null)
+      principal.then(
+        (found) => {
+          // A host's principals may lose access any time, so only a token's are kept: until it expires.
+          if (hosted || found.expiresAt === null) return
+          if (verified.size >= 1000) verified.delete(verified.keys().next().value!)
+          verified.set(key, { principal, until: found.expiresAt.getTime() })
+        },
+        () => perRequest.delete(request),
+      )
+    return principal
+  }
+
+  async function verify(request: CallerRequest): Promise<Principal> {
+    let result: Principal | HostPrincipal | Response
+    try {
+      result = await authenticate(request, context)
+    } catch (error) {
+      // A thrown `Response` rejects like a returned one.
+      if (error instanceof Response) throw new RejectedError(error)
+      throw error
+    }
+    if (result instanceof Response) throw new RejectedError(result)
+    if (!hosted) return result as Principal
+    return hostPrincipal(result as HostPrincipal)
+  }
+
+  /**
+   * Who a caller is, and what it may do now: a request verified and under the rules, with the
+   * profile it claims; this deployment's own code everything; a schedule's send its creator.
+   */
+  async function identityOf(caller: Inner): Promise<Identity> {
+    if ('verified' in caller) return caller.verified
+    if ('self' in caller) return selfIdentity(caller)
+    const { request } = caller
+    const found = await principalOf(request)
+    const principal = request.claims.scope === null ? found : { ...found, scope: request.claims.scope }
+    const { author, actor } = resolveActor(principal, request.claims, request.audience)
+    return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
   }
   const post = options.transport?.post ?? publicPost
   const tails = Object.fromEntries(
@@ -316,8 +436,8 @@ function build(options: A2Options, binding: BoardBinding) {
   const opened = new Set<string>()
 
   // A schedule sends with what its creator may do now, which `access` says at each send. It posts
-  // through the board, as its creator, so the board's middleware sees it.
-  schedules.bind({ writes, accessNow: authority.accessNow, clientAs: (identity, origin) => binding.client({ identity, origin }, null) })
+  // as its creator, through the middleware.
+  schedules.bind({ writes, accessNow: authority.accessNow, send: async (identity, origin, input) => (await postAs({ verified: identity, origin }, input, NEVER)).message })
   watchers.bind({ reads })
 
   /**
@@ -394,7 +514,152 @@ function build(options: A2Options, binding: BoardBinding) {
   /** A registrant's queue, in the watch contract: its watchers' and sync's matches, and its inbox. */
   const queueOf = (owner: string) => watchers.server.session(registrantSession(owner))
 
+  const middleware = options.middleware ?? []
+  let middlewareBoard: ReturnType<BoardBinding['handle']> | null = null
+  /** The middleware's own handle, through board(): its writes skip the middleware. */
+  const middlewareHandle = () => (middlewareBoard ??= binding.handle({ self: 'middleware', origin: { via: { kind: 'middleware' } } }))
+  /** Runs the middleware on a write, then `commit`s what it passed on: a `DroppedError` when it drops it. */
+  const screen = <W extends Write, T>(write: W, author: Actor, source: WriteSource, commit: (write: W) => Promise<T>): Promise<T> =>
+    runMiddleware(middleware, { write, author, source, board: middlewareHandle }, commit)
+
+  /** A post as it lands: what the caller may post, with the files it may have. */
+  async function postNow(caller: Inner, identity: Identity, parsed: Protocol['post']['input']): Promise<Protocol['post']['output']> {
+    const { principal } = identity
+    const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
+    const proofs = await authorizePost(writes, principal.access, body)
+    if (fromRequest(caller) && body.id !== undefined && DERIVED_ID.test(body.id))
+      throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
+    // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
+    // one else can post with one first and make its retry fail.
+    if (fromRequest(caller) && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
+      throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
+    const attachments = await attachmentsFor(principal, body.attachments)
+    const { schedule, config } = caller.origin
+    const { unknownMentions, ...message } = await writePost(writes, {
+      attachments,
+      identity,
+      proofs,
+      channel: body.channel,
+      re: body.re,
+      text: body.text,
+      labels: body.labels,
+      noSync: body.noSync,
+      id: body.id,
+      sync: body.sync,
+      config,
+      // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
+      ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
+    })
+    return { message, ...(unknownMentions ? { unknownMentions } : {}) }
+  }
+
+  /** A post through the middleware, once per client ID: only one the caller may make reaches it. */
+  async function postAs(caller: Inner, parsed: Protocol['post']['input'], signal: AbortSignal): Promise<Protocol['post']['output']> {
+    const identity = await identityOf(caller)
+    const source = sourceOf(caller)
+    if (middleware.length === 0 || source === null) return postNow(caller, identity, parsed)
+    // A retry of a post that landed: what's on the board stands, whatever the middleware would say now.
+    if (parsed.id !== undefined) {
+      const landed = await reads.byEventId(parsed.id, signal)
+      if (landed && (await landedFor(writes, identity, landed))) return postNow(caller, identity, parsed)
+    }
+    // What it would put on the board: a reply lands in its root's channel.
+    const re = parsed.re === undefined ? undefined : messageAt(parsed.re)
+    const proofs = await authorizePost(writes, identity.principal.access, { ...parsed, re })
+    const attachments = await attachmentsFor(identity.principal, parsed.attachments)
+    const root = proofs.re ? (proofs.re.re ?? proofs.re.id) : null
+    return screen(
+      { kind: 'post', channel: proofs.re?.channel ?? parsed.channel!, re: root === null ? null : ref(root), text: parsed.text, labels: parsed.labels ?? {}, attachments },
+      identity.actor,
+      source,
+      (write) => postNow(caller, identity, { ...parsed, text: write.text, labels: write.labels }),
+    )
+  }
+
+  /** An edit through the middleware: only the author's own, of a message that's still there, reaches it. */
+  async function editAs(caller: Inner, { id, text }: Protocol['edit']['input']): Promise<Protocol['edit']['output']> {
+    const identity = await identityOf(caller)
+    const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
+    const commit = async (text: string) => {
+      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text })
+      return { ok: true as const, ...(unknownMentions ? { unknownMentions } : {}) }
+    }
+    const source = sourceOf(caller)
+    if (middleware.length === 0 || source === null) return commit(text)
+    const { message } = authorized
+    return screen(
+      { kind: 'edit', id: ref(message.id), channel: message.channel, re: message.re === null ? null : ref(message.re), text },
+      identity.actor,
+      source,
+      (write) => commit(write.text),
+    )
+  }
+
+  /**
+   * An import through the middleware: what it passed on, or what it responded when it dropped
+   * it, for sync to tell the author on the platform.
+   */
+  async function screenImport<W extends Write>(
+    write: W,
+    author: ExternalAuthor,
+    source: WriteSource | null,
+    commit: (write: W) => Promise<string | null>,
+  ): Promise<Protocol['syncImport']['output']> {
+    if (middleware.length === 0 || source === null) return { message: await commit(write) }
+    try {
+      return { message: await screen(write, externalIdentity(author).actor, source, commit) }
+    } catch (error) {
+      if (!(error instanceof DroppedError)) throw error
+      return { message: null, dropped: [...error.responses] }
+    }
+  }
+
+  /**
+   * Where an import came from, as the middleware is told: the platform event sync says it's from,
+   * or what its entry and origin say. The middleware's own handle skips it.
+   */
+  async function importSource(
+    caller: Inner,
+    principal: string,
+    body: {
+      author: ExternalAuthor
+      from: string | null
+      source?: { key: string; channel: string; thread: string } | undefined
+      origin?: { channel?: string; thread: string; subthread?: string | null } | null | undefined
+    },
+    found?: Message,
+  ): Promise<WriteSource | null> {
+    if ('self' in caller && caller.origin.via?.kind === 'middleware') return null
+    const key = body.source?.key ?? body.from
+    const entry = (await entriesOf(caller, principal)).find((candidate) => candidate.key === key)
+    if (body.source && !entry) throw forbidden(`this token doesn't sync ${body.source.key} here: its board registers its sync entries`)
+    const origin = body.origin ?? found?.origin ?? null
+    return {
+      kind: 'sync',
+      key: key ?? '',
+      platform: entry?.platform ?? body.author.id.slice(0, Math.max(0, body.author.id.indexOf(':'))),
+      channel: body.source?.channel ?? found?.origin?.channel ?? origin?.channel ?? '',
+      thread: body.source?.thread ?? (origin ? (origin.subthread ?? origin.thread) : ''),
+    }
+  }
+
   const methods: ProtocolMethods = {
+    async discovery(caller) {
+      // Its URL as the request reached it, or for its own code, as board() knows it.
+      const url = 'request' in caller ? caller.request.audience : binding.url()
+      if (url === null) throw notFound("this board doesn't know its URL yet: pass board({ url })", 'no_url')
+      const { projectId, teamId } = await discoveryIdentity('request' in caller ? caller.request.headers : null, options.project)
+      const body: Discovery = {
+        version: VERSION,
+        url,
+        audience: url,
+        team_id: teamId,
+        project_id: projectId,
+        // Its own sync's entries, and those of the syncs registered here, which link accounts here too.
+        sync: (await linkable()).map(({ key, platform }) => ({ key, platform })),
+      }
+      return body
+    },
     async me(caller) {
       const { principal, author, actor } = (await identityOf(caller))
       const body: Me = {
@@ -502,42 +767,8 @@ function build(options: A2Options, binding: BoardBinding) {
       if (!shown) throw notFound(`no post of yours has id ${id}`, 'post_not_found')
       return { message: shown }
     },
-    async post(caller, parsed) {
-      const identity = (await identityOf(caller))
-      const { principal } = identity
-      const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
-      const proofs = await authorizePost(writes, principal.access, body)
-      if (fromRequest(caller) && body.id !== undefined && DERIVED_ID.test(body.id))
-        throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
-      // A client elsewhere derives its posts' IDs from its key, under its own principal, so no
-      // one else can post with one first and make its retry fail.
-      if (fromRequest(caller) && body.id?.startsWith('key:') && !body.id.startsWith(`key:${principal.id}:`))
-        throw badRequest(`id: key:… IDs derive from a client's key, and this token's are key:${principal.id}:…`)
-      const attachments = await attachmentsFor(principal, body.attachments)
-      const { schedule, config } = caller.origin
-      const { unknownMentions, ...message } = await writePost(writes, {
-        attachments,
-        identity,
-        proofs,
-        channel: body.channel,
-        re: body.re,
-        text: body.text,
-        labels: body.labels,
-        noSync: body.noSync,
-        id: body.id,
-        sync: body.sync,
-        config,
-        // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
-        ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
-      })
-      return { message, ...(unknownMentions ? { unknownMentions } : {}) }
-    },
-    async edit(caller, { id, text }) {
-      const identity = (await identityOf(caller))
-      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
-      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text })
-      return { ok: true, ...(unknownMentions ? { unknownMentions } : {}) }
-    },
+    post: (caller, parsed, signal) => postAs(caller, parsed, signal),
+    edit: (caller, input) => editAs(caller, input),
     async delete(caller, { id }) {
       const identity = (await identityOf(caller))
       const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'delete')
@@ -639,9 +870,27 @@ function build(options: A2Options, binding: BoardBinding) {
       return { events, cursor: ref(cursor) }
     },
 
+    async typing(caller, { id, status }, signal) {
+      // Typing is a reply about to come: `post` where the thread is, and the sync that runs here shows it.
+      const { principal } = await identityOf(caller)
+      const found = await reads.message(messageAt(id), signal)
+      if (!found || found.deleted || !principal.access.readable(found.channel)) throw notFound(`message not found: #${id}`, 'message_not_found')
+      if (!principal.access.can('post', found.channel)) throw forbidden(`this token can't post in ${found.channel}`)
+      const { message, replies } = await methods.message(caller, { id }, signal)
+      return { targets: await binding.typing([message, ...replies], status) }
+    },
+    async readSource(caller, { key, target, limit }) {
+      // Only the board that runs a sync entry has its platform's app to read with.
+      if (!binding.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: read it where its sync runs`, 'not_synced_here')
+      // The app's token reads what the app can, not what the caller can.
+      const { principal } = await identityOf(caller)
+      if (!principal.access.everywhere('manage')) throw forbidden("this token can't read a source: it needs manage in every channel")
+      return binding.readSource(key, target, limit ?? 50)
+    },
+
     // Sync's records. A caller with `sync` in a channel speaks for platform users there.
 
-    async syncImport(caller, body) {
+    async syncImport(caller, body, signal) {
       const { principal } = (await needSync(caller, 'import'))
       // Only a platform user it syncs, never anyone this board signs in.
       await speaksFor(caller, principal.id, body.author, body.op === 'seen' ? null : body.from)
@@ -656,33 +905,48 @@ function build(options: A2Options, binding: BoardBinding) {
       if (body.op === 'post') {
         if ((body.channel === undefined) === (body.re === undefined)) throw badRequest('an import needs `channel`; a reply needs `re`')
         let re: number | undefined
+        let root: Message | null = null
         let channel = body.channel
         if (body.re !== undefined) {
           re = messageAt(body.re)
-          const root = await reads.message(re)
+          root = await reads.message(re)
           if (!root || !principal.access.readable(root.channel)) throw notFound(`message not found: #${body.re}`, 'message_not_found')
           channel = root.channel
         }
         if (!may(channel!)) throw forbidden(`this token can't sync in ${channel}, so it can't import there`)
-        const proofs = await trusted.post(writes, { channel: body.channel, re, labels: body.labels })
         const id = body.id === undefined ? undefined : importId(caller, principal.id, body.id)
-        const posted = await writePost(writes, {
-          identity: author,
-          proofs,
-          channel: body.channel,
-          re,
+        const attachments = await attachmentsFor(principal, body.attachments)
+        const commit = async ({ text, labels }: { text: string; labels: Labels }) => {
+          const proofs = await trusted.post(writes, { channel: body.channel, re, labels })
+          const posted = await writePost(writes, {
+            identity: author,
+            proofs,
+            channel: body.channel,
+            re,
+            text,
+            labels,
+            noSync: body.noSync,
+            id,
+            origin: body.origin,
+            from: body.from,
+            lenientMentions: true,
+            attachments,
+            links: linksOf(body.links),
+            config: caller.origin.config,
+          })
+          return posted.id
+        }
+        const write = {
+          kind: 'post' as const,
+          channel: channel!,
+          re: root === null ? null : ref(root.re ?? root.id),
           text: body.text,
-          labels: body.labels,
-          noSync: body.noSync,
-          id,
-          origin: body.origin,
-          from: body.from,
-          lenientMentions: true,
-          attachments: await attachmentsFor(principal, body.attachments),
-          links: linksOf(body.links),
-          config: caller.origin.config,
-        })
-        return { message: posted.id }
+          labels: body.labels ?? {},
+          attachments,
+        }
+        // A retry of one that landed: it stands, and the middleware doesn't see it again.
+        if (id !== undefined && (await reads.byEventId(id, signal))) return { message: await commit(write) }
+        return screenImport(write, body.author, await importSource(caller, principal.id, { ...body, origin: body.origin ?? undefined }), commit)
       }
       // The message it changes: found from its platform IDs, or named by its board ID. One the caller
       // can't sync is as good as missing.
@@ -693,8 +957,18 @@ function build(options: A2Options, binding: BoardBinding) {
       const authorized = <P extends Permission>(permission: P) => trusted.message(writes, permission, found.id)
       // A platform's own edit or delete is what the platform did; one named by board ID is the author's, only of their own.
       const asAuthor = body.origin === undefined
-      if (body.op === 'edit') await writeEdit(writes, { identity: author, authorized: await authorized('post'), text: body.text, from: body.from, asAuthor })
-      else if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor })
+      if (body.op === 'edit') {
+        const proof = await authorized('post')
+        const commit = async ({ text }: { text: string }) => {
+          await writeEdit(writes, { identity: author, authorized: proof, text, from: body.from, asAuthor })
+          return ref(found.id)
+        }
+        const write = { kind: 'edit' as const, id: ref(found.id), channel: found.channel, re: found.re === null ? null : ref(found.re), text: body.text }
+        // Only an edit that would land reaches the middleware: the author's own, when it's named by board ID.
+        if (found.deleted || (asAuthor && found.by.principal !== body.author.id)) return { message: await commit(write) }
+        return screenImport(write, body.author, await importSource(caller, principal.id, body, found), commit)
+      }
+      if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor })
       else if (body.op === 'react')
         await writeReaction(writes, { identity: author, authorized: await authorized('react'), emoji: body.emoji, remove: body.remove ?? false, from: body.from })
       else if (body.op === 'labels') await writeLabels(writes, { identity: author, authorized: await authorized('label'), set: body.set, unset: body.unset })
@@ -924,12 +1198,12 @@ function build(options: A2Options, binding: BoardBinding) {
    * An import's client ID as the board keeps it. A sync elsewhere names its posts under its own
    * principal, so it can't take an ID anyone else would use.
    */
-  function importId(caller: Caller, principal: string, id: string) {
+  function importId(caller: Inner, principal: string, id: string) {
     return ownSync(caller) ? id : `sync:${principal}:${createHash('sha256').update(`vboard-sync\u001f${id}`).digest('hex').slice(0, 32)}`
   }
 
   /** The sync entries a caller imports through: this board's own sync's, or what a sync elsewhere registered. */
-  async function entriesOf(caller: Caller, principal: string): Promise<readonly SyncEntrySpec[]> {
+  async function entriesOf(caller: Inner, principal: string): Promise<readonly SyncEntrySpec[]> {
     if (ownSync(caller)) return binding.sync
     return (await registry.state()).byOwner[principal]?.sync ?? []
   }
@@ -950,7 +1224,7 @@ function build(options: A2Options, binding: BoardBinding) {
    * Whether a caller may write as, or link, `author`: a platform user, never anyone this board
    * signs in, on a platform it syncs: the one of entry `from`, when it names one.
    */
-  async function speaksFor(caller: Caller, principal: string, author: { id: string }, from: string | null) {
+  async function speaksFor(caller: Inner, principal: string, author: { id: string }, from: string | null) {
     if (authenticates(author.id)) throw forbidden(`${author.id} is someone this board signs in, not a platform user: sync can't write as them`)
     const entries = await entriesOf(caller, principal)
     const platforms = (from === null ? entries : entries.filter((entry) => entry.key === from)).map((entry) => entry.platform)
@@ -960,7 +1234,7 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   /** The caller, when it may sync somewhere: what every sync route needs. */
-  async function needSync(caller: Caller, what: string): Promise<Identity> {
+  async function needSync(caller: Inner, what: string): Promise<Identity> {
     const identity = await identityOf(caller)
     if (!identity.principal.access.anywhere('sync')) throw forbidden(`this token can't ${what}: it needs sync`)
     return identity
@@ -983,7 +1257,7 @@ function build(options: A2Options, binding: BoardBinding) {
    * `key`: a retry after a crash lands it once, and an attempt that was taken over can't. Anyone
    * else's lands once by `key`.
    */
-  async function receipt(caller: Caller, key: string, events: { type: 'message.synced' | 'message.files_synced' | 'message.sync_failed'; payload: unknown }[]) {
+  async function receipt(caller: Inner, key: string, events: { type: 'message.synced' | 'message.files_synced' | 'message.sync_failed'; payload: unknown }[]) {
     const ctx = delivering.getStore()
     if (ctx && ownSync(caller)) {
       await ctx.session.append(key, ...(events as never[]))
@@ -1057,8 +1331,6 @@ export function a2(given: A2Options = {}) {
   ) as unknown as ProtocolMethods
   const backend = {
     ...methods,
-    // The issuers its `oidc()` rules name: board() verifies their tokens for it.
-    issuers: typeof options.access === 'function' ? [] : issuersOf(options.access ?? []),
     // Everything it answers is the protocol's.
     routes: [] as BackendRoute[],
     bind(binding: BoardBinding) {

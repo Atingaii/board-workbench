@@ -11,7 +11,8 @@ import { memory } from 'experimental-a2/store-memory'
 import { boardContract } from '../src/contract/contract.ts'
 import { github } from '../src/sync/github.ts'
 import type { MountOptions } from './harness.ts'
-import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
+import { vercelProject } from '../src/access/index.ts'
 import { memory as boardMemory } from '../src/store/memory.ts'
 import type { MessageTables } from '../src/store/types.ts'
 import { VERCEL_BUILDING } from './vercel-fixtures.ts'
@@ -1099,6 +1100,25 @@ describe('sync', () => {
     expect(s.posts[0]!.text).toContain('db restored')
     const again = await julian('POST', `/messages/${body.message.id}/sync`, { target: 'slack:C9' })
     expect(again.body.attached).toBe(false)
+  })
+
+  it('asks the backend whether a caller may sync a thread before it looks a target up on Slack', async () => {
+    const list = vi.fn(async () => ({ channels: [{ id: 'C9', name: 'leak', is_member: true }] }))
+    const slackClient = { conversations: { list, info: async () => ({}), join: async () => ({}) }, users: { info: async () => ({}) } }
+    const s = fakePlatform('slack', withSlackClient(slackClient, false))
+    const board = testBoard({
+      access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['read', 'post'] } })],
+      sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never, channels: { C1: 'firehose' } }) },
+    })
+    const front = caller(board.fetch, await deploymentToken())
+    const { body } = await front('POST', '/messages', { channel: 'feedback', text: 'checkout is slow' })
+    const denied = await front('POST', `/messages/${body.message.id}/sync`, { target: 'slack:#leak' })
+    expect(denied).toMatchObject({ status: 403, body: { error: { message: "this token can't sync in feedback" } } })
+    expect(list).not.toHaveBeenCalled()
+    // Julian may, so his target goes to Slack to resolve.
+    const julian = caller(board.fetch, await personToken())
+    expect((await julian('POST', `/messages/${body.message.id}/sync`, { target: 'slack:#leak' })).body).toEqual({ target: 'slack:C9', attached: true })
+    expect(list).toHaveBeenCalled()
   })
 
   it('skips a Slack channel name that does not resolve, and syncs the rest', async () => {

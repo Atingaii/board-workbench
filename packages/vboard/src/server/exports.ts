@@ -1,6 +1,6 @@
 // What `vboard` exports beside board(), the same in every build.
 export type { Board, BoardOptions } from './board.ts'
-export type { Backend, BackendRoute, BoardBinding, Caller, InboxDelivery, ProtocolMethods, Subscription } from './backend.ts'
+export type { Backend, BackendRoute, BoardBinding, Caller, CallerRequest, Claims, InboxDelivery, ProtocolMethods, SelfCaller, Subscription } from './backend.ts'
 export type { Method, Protocol } from '../api/protocol.ts'
 export { HttpError } from './errors.ts'
 export { type Watcher, type WatcherContext } from './watch.ts'

@@ -34,6 +34,9 @@ const backend = a2({
   scheduler: queues,
   // Factories elsewhere that may use this board, by project and team.
   access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
+  // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
+  // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
+  middleware: [guard({ mode: "shadow" })],
 });
 
 const factory = board({
@@ -68,9 +71,6 @@ const factory = board({
       },
     }),
   },
-  // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
-  // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
-  middleware: [guard({ mode: "shadow" })],
   watch: {
     shipit: shipit({ tellPi }),
     // Shadow mode: labels each reviewed factory PR autoland=would|no, and merges nothing.

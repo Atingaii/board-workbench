@@ -150,7 +150,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
    * itself. A request from anyone else isn't this deployment's to answer.
    */
   function clientOf(caller: Caller): BoardClient {
-    if ('identity' in caller) throw servesOnly()
+    if ('request' in caller) throw servesOnly()
     if (caller.origin.via?.kind === 'engine') return own
     if (caller.origin.via?.kind === 'client') {
       if (caller.self !== null) asProfile(caller.self)
@@ -223,23 +223,44 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     throw new HttpError(502, 'remote_error', `${remote} answered ${response.status}`)
   }
 
-  const methods = Object.fromEntries(
-    METHODS.map((method) => [
-      method,
-      async (caller: Caller, input: Record<string, unknown>, signal: AbortSignal) => {
-        const registering = start()
-        const client = clientOf(caller)
-        // Sync's records name its entries, which the board it uses knows from its registration.
-        if ('self' in caller && caller.origin.via?.kind === 'engine') await registering
-        // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
-        // and a retry's lookup asks for the same.
-        if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
-          input = { ...input, id: await ownKey(input.id).catch(rethrow) }
-        const response = await call(client, method, input, signal)
-        return method === 'attachment' ? attachmentOf(String(input.id), response) : response.json()
-      },
-    ]),
-  ) as unknown as ProtocolMethods
+  /** A protocol method, called on the board it uses, as `caller`. */
+  async function remoteCall(method: Method, caller: Caller, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
+    const registering = start()
+    const client = clientOf(caller)
+    // Sync's records name its entries, which the board it uses knows from its registration.
+    if ('self' in caller && caller.origin.via?.kind === 'engine') await registering
+    // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
+    // and a retry's lookup asks for the same.
+    if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
+      input = { ...input, id: await ownKey(input.id).catch(rethrow) }
+    const response = await call(client, method, input, signal)
+    return method === 'attachment' ? attachmentOf(String(input.id), response) : response.json()
+  }
+
+  const methods: ProtocolMethods = {
+    ...(Object.fromEntries(METHODS.map((method) => [method, (caller: Caller, input: Record<string, unknown>, signal: AbortSignal) => remoteCall(method, caller, input, signal)])) as unknown as ProtocolMethods),
+    // The board it uses is what a handle here asks about; a request gets nothing to go on.
+    async discovery(caller) {
+      if ('request' in caller) throw servesOnly()
+      return discovery()
+    },
+    // A source this board's own sync reads is read here; any other is the board it uses' to read.
+    async readSource(caller, input, signal) {
+      if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().readSource(input.key, input.target, input.limit ?? 50)
+      return remoteCall('readSource', caller, input, signal) as Promise<Protocol['readSource']['output']>
+    },
+    // Typing shows where the board it uses syncs the thread, and where this board's own sync does.
+    async typing(caller, input, signal) {
+      const { targets } = (await remoteCall('typing', caller, input, signal)) as Protocol['typing']['output']
+      if (!('self' in caller) || bound().sync.length === 0) return { targets }
+      const { message, replies } = await methods.message(caller, { id: input.id }, signal)
+      const here = await bound().typing([message, ...replies], input.status).catch((error: unknown) => {
+        console.warn('[vboard] skipped typing where this board syncs:', describe(error))
+        return [] as string[]
+      })
+      return { targets: [...targets, ...here] }
+    },
+  }
 
   /** Only an https URL can be woken; anything else pulls on its own. */
   const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
@@ -340,20 +361,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
 
   const routesHere: BackendRoute[] = [
     {
-      // The board it uses is what a handle here asks about; anyone else gets nothing to go on.
-      method: 'GET',
-      path: '/',
-      auth: false,
-      async handle(_request, { caller }) {
-        if (!caller) throw servesOnly()
-        return json(await discovery())
-      },
-    },
-    {
       // Nothing in a wake-up is trusted: it only says to pull, and what's pulled comes with this board's own credentials.
       method: 'POST',
       path: '/wake',
-      auth: false,
       async handle(request) {
         started ??= Promise.resolve()
         if (request.headers.get('x-board-watchers') !== (await watchersHash())) await register(wakeable(bound().url())).catch(rethrow)
@@ -365,9 +375,8 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
       // handle here registers its own, on the board it uses, as the protocol's route does.
       method: 'POST',
       path: '/watchers',
-      auth: false,
       async handle(request, { caller }) {
-        if (caller) return json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal))
+        if ('self' in caller) return json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal))
         started ??= Promise.resolve()
         const here = wakeable(bound().url())
         const registration = await register(here).catch(rethrow)
@@ -379,8 +388,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
 
   const backend = {
     ...methods,
-    // What a caller may do is the board it uses' to say: requests here are only wake-ups.
-    issuers: [],
+    // Requests here are only wake-ups: who may do what is the board it uses' to say.
     routes: routesHere,
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')

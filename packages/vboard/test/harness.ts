@@ -7,6 +7,7 @@ import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
 import { a2, type A2Options } from '../src/backend-a2/index.ts'
+import { verifyTokens, type VerifyTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
 export const PROJECT_ID = 'prj_board'
@@ -41,23 +42,22 @@ export function testClock() {
   }
 }
 
-/** board()'s options and a2()'s, side by side, as tests write them. */
-export type MountOptions = A2Options & Omit<BoardOptions, 'backend'>
+/**
+ * board()'s options and a2()'s, side by side, as tests write them. `auth` is `verifyTokens()`'s
+ * options, for a2's `authenticate`.
+ */
+export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: VerifyTokensOptions }
 
 /** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
 export function mount(options: MountOptions) {
-  const { watch, url, basePath, authenticate, project, auth, streamMaxMs, sync, middleware, ...rest } = options
-  const backend = a2(rest)
+  const { watch, url, basePath, streamMaxMs, sync, auth, ...rest } = options
+  const backend = a2({ ...rest, ...(!rest.authenticate && auth ? { authenticate: verifyTokens(auth) } : {}) })
   const created = board({
     backend,
     ...(watch ? { watch } : {}),
     ...(sync ? { sync } : {}),
-    ...(middleware ? { middleware } : {}),
     ...('url' in options ? { url } : {}),
     ...(basePath !== undefined ? { basePath } : {}),
-    ...(authenticate ? { authenticate } : {}),
-    ...(project ? { project } : {}),
-    ...(auth ? { auth } : {}),
     ...(streamMaxMs !== undefined ? { streamMaxMs } : {}),
   })
   // Read when a test asks: a board missing a piece in production builds none of them.

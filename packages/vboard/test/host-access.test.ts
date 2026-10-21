@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import type { Can, HostPrincipal } from '../src/access/index.ts'
+import type { CallerRequest, Can, HostPrincipal } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
@@ -24,8 +24,8 @@ const GRANTS: Record<string, Can> = {
 }
 
 /** Who a request is, as a host's own credentials say: only on its own team's board. */
-const authenticate = (team: string) => (request: Request) => {
-  const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? ''
+const authenticate = (team: string) => (request: CallerRequest) => {
+  const token = request.credential ?? ''
   const found = PLATFORM[token]
   if (!found || found.team !== team) return Response.json({ error: { code: 'not_found', message: 'no board here' } }, { status: 404 })
   return found.principal
@@ -152,9 +152,20 @@ describe("a host's authenticate and access", () => {
     expect((await caller(expired.fetch, 'x')('GET', '/messages')).status).toBe(401)
   })
 
-  it("can't be combined with the test issuers it replaces", () => {
-    const authenticate = () => new Response(null, { status: 401 })
-    expect(() => board({ store: memory(), authenticate, auth: testAuth })).toThrow(/authenticate replaces/)
+  it("recognizes a page's own session from its headers, with no token", async () => {
+    const tenant = board({
+      store: memory(),
+      url: BOARD_URL,
+      // A same-site page's `fetch` sends its cookie: the host knows whose session it is.
+      authenticate: (request) =>
+        request.headers.get('cookie') === 'session=ada'
+          ? { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }
+          : Response.json({ error: { code: 'unauthorized', message: 'sign in' } }, { status: 401 }),
+      access: () => 'all',
+    })
+    const page = (cookie: string) => tenant.fetch(new Request(`${BOARD_URL}/me`, { headers: { cookie, 'x-board-profile': 'page' } }))
+    expect(await (await page('session=ada')).json()).toMatchObject({ actor: 'vercel:user:u_ada+page', principal: 'vercel:user:u_ada' })
+    expect((await page('session=eve')).status).toBe(401)
   })
 
   it("gives a host's principal nothing without an access function, and the built-in callers nothing with one", async () => {
