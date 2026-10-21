@@ -32,6 +32,11 @@ const backend = a2({
   // Every deployment shares it: a file's ID is random, and only its board can name it.
   blob: env ? vercelBlob() : undefined,
   scheduler: queues,
+});
+
+const factory = board({
+  backend,
+  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
   sync: {
     // Connect connectors: vboard builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.
@@ -65,11 +70,6 @@ const backend = a2({
   // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
   // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
   middleware: [guard({ mode: "shadow" })],
-});
-
-const factory = board({
-  backend,
-  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
   watch: {
     shipit: shipit({ tellPi }),
     // Shadow mode: labels each reviewed factory PR autoland=would|no, and merges nothing.

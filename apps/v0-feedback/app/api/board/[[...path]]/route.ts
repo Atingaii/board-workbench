@@ -35,6 +35,10 @@ const backend = a2({
   // A private Blob store connected to the project. Its credentials are read on the first
   // upload, so the board serves without one; uploads fail until it's connected.
   blob: env ? vercelBlob() : undefined,
+});
+
+export const { GET, POST, client } = board({
+  backend,
   sync: {
     slack: slack({
       adapter: slackAdapter,
@@ -50,10 +54,6 @@ const backend = a2({
       },
     }),
   },
-});
-
-export const { GET, POST, client } = board({
-  backend,
   watch: {
     triage: { tail: "feedback", run: triage },
     report: { tail: "feedback --label v0state=done", when: "enters", run: report },
