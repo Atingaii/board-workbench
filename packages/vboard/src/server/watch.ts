@@ -1,13 +1,15 @@
-import { idempotentId } from 'experimental-a2'
+import { A2Error, idempotentId } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { BoardEventView } from '../api/routes.ts'
 import { parseWatchTail } from '../api/tail.ts'
 import type { BoardClient } from '../client/client.ts'
 import { boardContract, watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, type Message, type MessagesState } from '../contract/reducers.ts'
-import { FULL_ACCESS } from './access.ts'
+import { FULL_ACCESS, type Access } from './access.ts'
 import { compileFilter, eventView, foldEvent, hasCriteria, loadBefore, OWN_CODE, type ParsedFilters } from './feed.ts'
 import type { BoardReads } from './reads.ts'
+import { due } from './registered.ts'
+import type { Registration, RegistryState, StoredPrincipal } from './registry.ts'
 import { deploymentIdentity, type Identity, type WriteOrigin } from './writes.ts'
 import { A2_TRIES, afterRetry } from './attempts.ts'
 
@@ -103,6 +105,35 @@ export async function runMatch(input: {
 /** A watcher writes as itself, and its own writes never wake it. */
 const identityOf = (id: string): Identity => deploymentIdentity(`vboard:watch:${id}`, id)
 
+type Compiled = { filters: ParsedFilters; criteria: boolean; enters: boolean; all: boolean }
+
+/** A watcher's tail, checked the way a boot checks it: errors name the watcher. */
+export function compileWatcher(id: string, spec: { tail: string; when?: 'matches' | 'enters' | undefined }): Compiled {
+  let filters: ParsedFilters
+  let all: boolean
+  try {
+    ;({ filters, all } = parseWatchTail(spec.tail))
+  } catch (error) {
+    throw new Error(`watch ${id}: ${(error as Error).message}`)
+  }
+  if (filters.mentions === 'me') throw new Error(`watch ${id}: a watcher has no "me": use --mentions @handle`)
+  const criteria = hasCriteria(filters)
+  if (spec.when === 'enters' && !criteria) throw new Error(`watch ${id}: \`when: enters\` needs a filter to enter`)
+  return { filters, criteria, enters: spec.when === 'enters', all }
+}
+
+/** A watcher to match an event against: one in config, or one a board on `http()` registered. */
+type Candidate = Compiled & {
+  id: string
+  /** Who its writes are by: an event by it never wakes it. */
+  actor: string
+  /** A registered one's registration, whose principal decides what it may see. Config ones see everything. */
+  registration?: Registration
+}
+
+/** `watch:@<principal>`: everything one registrant's watchers matched, queued for it to pull. */
+export const registrantSession = (owner: string) => watchSession(`@${owner}`)
+
 /**
  * Watchers: a board-contract consumer matches each event against every
  * watcher's filters, the way a tail does, and appends what matched to that
@@ -112,20 +143,18 @@ export function createWatchers(options: {
   watch: Record<string, Watcher>
   store?: A2Store | undefined
   scheduler?: A2Scheduler | undefined
+  /** Watchers that boards on `http()` registered here, and how to tell one it has matches. */
+  registered?: {
+    state: () => Promise<RegistryState>
+    /** What a registrant may do now, under the rules as they are: null once it may do nothing. */
+    accessNow: (principal: StoredPrincipal) => Promise<Access | null>
+    /** Tells a registrant's board it has something to pull. Never throws. */
+    wake: (registration: Registration) => Promise<void>
+  }
 }) {
   const watchers = Object.entries(options.watch).map(([id, watcher]) => {
     if (!ID.test(id)) throw new Error(`watch: ids use lowercase letters, numbers, - and _, got: ${id}`)
-    let filters: ParsedFilters
-    let all: boolean
-    try {
-      ;({ filters, all } = parseWatchTail(watcher.tail))
-    } catch (error) {
-      throw new Error(`watch ${id}: ${(error as Error).message}`)
-    }
-    if (filters.mentions === 'me') throw new Error(`watch ${id}: a watcher has no "me": use --mentions @handle`)
-    const criteria = hasCriteria(filters)
-    if (watcher.when === 'enters' && !criteria) throw new Error(`watch ${id}: \`when: enters\` needs a filter to enter`)
-    return { id, filters, criteria, enters: watcher.when === 'enters', all, identity: identityOf(id), run: watcher.run }
+    return { id, ...compileWatcher(id, watcher), identity: identityOf(id), run: watcher.run }
   })
   const byId = new Map(watchers.map((watcher) => [watcher.id, watcher]))
 
@@ -139,7 +168,8 @@ export function createWatchers(options: {
     types: ['watch.matched'],
     lane: ({ event }) => `thread:${event.payload.thread}`,
   }).run(async (ctx) => {
-    // A watcher removed from config since it matched has nothing left to run.
+    // A registered watcher's matches are its registrant's to pull; a config watcher removed
+    // since it matched has nothing left to run.
     const watcher = byId.get(ctx.session.id.slice('watch:'.length))
     if (!watcher) return
     const bound = clientAs
@@ -153,12 +183,56 @@ export function createWatchers(options: {
     })
   })
 
+  /**
+   * Wakes a registrant's board when it has something to pull: a new match, a lease that ran out,
+   * or a wait after an error that's over. Each match is its own lane, so none waits on another.
+   */
+  const waker = consumer({
+    contract: watchContract,
+    name: 'vboard-wake',
+    types: ['watch.matched', 'watch.due'],
+    lane: ({ event }) => `match:${'matched' in event.payload ? event.payload.matched : event.id}`,
+  }).run(async (ctx) => {
+    const key = ctx.session.id.slice('watch:'.length)
+    const registered = options.registered
+    if (!key.startsWith('@') || !registered) return
+    // Its queue's own appends: a consumer's session names each one, which these don't need.
+    if (ctx.event.type === 'watch.due' && !(await due(server.session(ctx.session.id) as never, ctx.event.payload))) return
+    if (ctx.event.type === 'watch.matched' && ctx.event.payload.watcher === undefined) return
+    const registration = (await registered.state()).byOwner[key.slice(1)]
+    if (registration) await registered.wake(registration)
+  })
+
   const server = createServer({
     contract: watchContract,
     ...(options.store ? { store: options.store } : {}),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-    consumers: [runner],
+    consumers: [runner, waker],
   })
+
+  const configured: Candidate[] = watchers.map((watcher) => ({ ...watcher, actor: watcher.identity.actor.id }))
+  // Each registration's tails, parsed once per hash and principal.
+  const compiled = new Map<string, { version: string; candidates: Candidate[] }>()
+  function compiledFor(registration: Registration): Candidate[] {
+    // A new principal changes what it may see, so it compiles again too.
+    const version = `${registration.hash}\u001f${JSON.stringify(registration.principal)}`
+    const hit = compiled.get(registration.owner)
+    if (hit?.version === version) return hit.candidates
+    const candidates: Candidate[] = []
+    for (const [id, spec] of Object.entries(registration.watch)) {
+      try {
+        candidates.push({ ...compileWatcher(id, spec), id, actor: `${registration.owner}+${id.toLowerCase()}`, registration })
+      } catch (error) {
+        // Checked when it was registered: only a tail this version reads differently gets here.
+        console.error(`[vboard] skipping a watcher ${registration.owner} registered:`, (error as Error).message)
+      }
+    }
+    compiled.set(registration.owner, { version, candidates })
+    return candidates
+  }
+  async function registrations(): Promise<Registration[]> {
+    return options.registered ? Object.values((await options.registered.state()).byOwner) : []
+  }
 
   /** Matches one board event; the message before or after it must match, as in a tail. */
   async function dispatch(ctx: ConsumerContext<BoardEvents>) {
@@ -170,20 +244,54 @@ export function createWatchers(options: {
     ])
     const { id, before, after } = foldEvent(messages, actors, event)
     const by = (event.payload as { by?: { actor?: string } }).by?.actor
+    const message = after ?? before
+    const thread = (event.payload as { thread: string }).thread
     let view: BoardEventView | undefined
-    for (const watcher of watchers) {
-      if (by === watcher.identity.actor.id) continue
+    /** Each session's matches, appended together: one append per watcher in config, one per registrant. */
+    const appends = new Map<string, { type: 'watch.matched'; id: string; payload: { thread: string; event: unknown; watcher?: string } }[]>()
+    const targets = [...configured, ...(await registrations()).flatMap(compiledFor)]
+    // Each registrant's access, worked out once per event.
+    const registrants = new Map<string, Promise<Access | null>>()
+    for (const watcher of targets) {
+      if (by === watcher.actor) continue
       if (RECEIPTS.has(event.type) && !watcher.all) continue
-      const match = compileFilter(watcher.filters, { me: null, actors, messages, access: FULL_ACCESS })
+      const { registration } = watcher
+      let access: Access = FULL_ACCESS
+      if (registration) {
+        let found = registrants.get(registration.owner)
+        if (!found) registrants.set(registration.owner, (found = options.registered!.accessNow(registration.principal)))
+        const now = await found
+        // A registered watcher sees what its registrant may read, as `/events` shows it: an event
+        // about a message only where it reads the message's channel, one about none only if it reads all.
+        if (!now || (id === null ? !now.readsAll : !message || !now.readable(message.channel))) continue
+        access = now
+      }
+      const match = compileFilter(watcher.filters, { me: null, actors, messages, access })
       if (watcher.enters ? !entered(match, before, after, messages) : !(watcher.criteria ? match(before) || match(after) : id !== null))
         continue
-      view ??= eventView(event, after, actors, OWN_CODE)
-      await server.session(watchSession(watcher.id)).append({
+      const key = registration ? `@${registration.owner}/${watcher.id}` : watcher.id
+      const shown = registration
+        ? eventView(event, after, actors, await reads!.reader(access, after ? [after] : []))
+        : (view ??= eventView(event, after, actors, OWN_CODE))
+      const session = registration ? registrantSession(registration.owner) : watchSession(watcher.id)
+      const list = appends.get(session) ?? appends.set(session, []).get(session)!
+      list.push({
         type: 'watch.matched',
-        id: await idempotentId('vboard-watch', watcher.id, event.id),
-        payload: { thread: (event.payload as { thread: string }).thread, event: view },
+        id: await idempotentId('vboard-watch', key, event.id),
+        payload: { thread, event: shown, ...(registration ? { watcher: watcher.id } : {}) },
       })
     }
+    await Promise.all(
+      [...appends].map(async ([session, events]) => {
+        try {
+          await server.session(session).append(...events)
+        } catch (error) {
+          // A retry after a registration changed brings matches the first try didn't: each on its own.
+          if (!(error instanceof A2Error && error.code === 'PARTIAL_DUPLICATE_BATCH')) throw error
+          for (const matched of events) await server.session(session).append(matched)
+        }
+      }),
+    )
   }
 
   /** The message `event` concerns, and its thread's root, as they were just before it. */
@@ -219,7 +327,11 @@ export function createWatchers(options: {
   return {
     server,
     boardConsumer,
-    ids: watchers.map((watcher) => watcher.id),
+    /** Every watcher's session: one per watcher in config, one per registrant. */
+    sessions: async () => [
+      ...watchers.map((watcher) => watchSession(watcher.id)),
+      ...(await registrations()).map((registration) => registrantSession(registration.owner)),
+    ],
     bind: (binding: { clientAs: (identity: Identity, trigger: string, origin: WriteOrigin) => BoardClient; reads: BoardReads }) => {
       clientAs = binding.clientAs
       reads = binding.reads

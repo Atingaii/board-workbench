@@ -14,6 +14,7 @@ import {
   MessageId,
   MessageText,
   MESSAGE_TEXT_MAX,
+  RemoteWatcherId,
   SCOPE_MAX,
   storable,
 } from './schemas.ts'
@@ -301,28 +302,102 @@ export type InboxEvent = ContractEvent<InboxEvents>
 export const inboxSession = (channel: string) => `inbox:${channel}`
 
 /** What watchers matched, outside the board log: one session per watcher, so each fails on its own. */
+const MatchId = z.string().min(1).max(200)
+const LeaseId = z.string().min(1).max(64)
+
 export const watchContract = contract({
   name: 'vboard-watch',
   events: {
     'watch.matched': z.object({
       thread: ThreadKey,
-      /** The board event, as `vb tail --json` prints it. */
+      /** The board event, as `vb tail --json` prints it, as the watcher may see it. */
       event: z.unknown(),
+      /** A registered watcher's ID: its registrant's session holds all of its watchers' matches. */
+      watcher: RemoteWatcherId.optional(),
     }),
     /** The watcher gave up on one match: `run` kept failing, and the thread's later events go on without it. */
     'watch.failed': z.object({
       /** The `watch.matched` event's ID. */
-      matched: z.string().min(1).max(200),
+      matched: MatchId,
       thread: ThreadKey,
       error: z.string().min(1).max(500),
     }),
+    /** A registrant pulled a match: it's theirs to run until `until`, or until they ack it. */
+    'watch.leased': z.object({ matched: MatchId, lease: LeaseId, until: z.number().int().nonnegative() }),
+    /** The registrant ran it: done, or an error to try again after `retryAt`. A stale lease's ack changes nothing. */
+    'watch.acked': z.object({
+      matched: MatchId,
+      lease: LeaseId,
+      error: z.string().min(1).max(500).optional(),
+      retryAt: z.number().int().nonnegative().optional(),
+    }),
+    /** A lease ran out with no ack: a try that didn't finish. */
+    'watch.expired': z.object({ matched: MatchId, lease: LeaseId }),
+    /** A match's wait after an error is over: it can be pulled again. */
+    'watch.retry': z.object({ matched: MatchId }),
+    /** A match its registrant can't have anymore: it may not read it, or the watcher is gone. */
+    'watch.skipped': z.object({ matched: MatchId, reason: z.string().min(1).max(200) }),
+    /** A timer: a lease's end, or an error's wait. Its consumer decides what it still means. */
+    'watch.due': z.object({ matched: MatchId, lease: LeaseId.optional(), retry: z.boolean().optional() }),
   },
 })
 
 export type WatchEvents = typeof watchContract.events
 
-/** `watch:triage`: the session for one watcher. */
+/** `watch:triage`: the session for one watcher, or `watch:@<principal>` for everything a registrant registered. */
 export const watchSession = (id: string) => `watch:${id}`
+
+/**
+ * A principal as the board keeps it, to work out its access again later under
+ * the rules as they are then: who it is, and the token facts rules match on.
+ */
+export const StoredPrincipal = z.object({
+  id: z.string().min(1),
+  kind: z.enum(['person', 'deployment', 'workflow', 'external']),
+  handle: Handle,
+  facts: z
+    .object({
+      issuer: z.enum(['vercel', 'github', 'oidc', 'host']),
+      iss: z.string().max(1000),
+      claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
+      /** The board's own Vercel team, as the board knew it when it verified the token. */
+      team: z.string().max(200).optional(),
+    })
+    .optional(),
+  scope: z.string().max(SCOPE_MAX).optional(),
+})
+
+/** A watcher as a board on `http()` registers it: its tail, and when it runs. */
+export const WatcherSpec = z.object({
+  tail: z.string().max(1000),
+  when: z.enum(['matches', 'enters']),
+})
+
+/**
+ * Watchers that boards on `http()` registered with this one, outside the board
+ * log: one session, `registry`. Each principal has one registration, and its
+ * newest replaces the last.
+ */
+export const registryContract = contract({
+  name: 'vboard-registry',
+  events: {
+    'watchers.registered': z.object({
+      /** The principal that registered, which its watchers' writes are by, with their IDs as profiles. */
+      owner: z.string().min(1).max(200),
+      /** It, to work out what it may read at each match: a watcher sees only what its registrant can. */
+      principal: StoredPrincipal,
+      /** Where to wake it: `<url>/wake`. Without one, it pulls on its own. */
+      url: z.string().url().max(500).nullable(),
+      watch: z.record(RemoteWatcherId, WatcherSpec),
+      /** `watchersHash(watch)`, which every wake-up carries so the board can tell it's stale. */
+      hash: z.string().min(1).max(100),
+    }),
+  },
+})
+
+export type RegistryEvents = typeof registryContract.events
+
+export const REGISTRY_SESSION = 'registry'
 
 /** Epoch milliseconds. */
 const Millis = z.number().int().nonnegative()
@@ -335,21 +410,7 @@ const Millis = z.number().int().nonnegative()
  */
 export const ScheduleIdentity = z.object({
   author: Author,
-  principal: z.object({
-    id: z.string().min(1),
-    kind: z.enum(['person', 'deployment', 'workflow', 'external']),
-    handle: Handle,
-    facts: z
-      .object({
-        issuer: z.enum(['vercel', 'github', 'oidc', 'host']),
-        iss: z.string().max(1000),
-        claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
-        /** The board's own Vercel team, as the board knew it when it verified the token. */
-        team: z.string().max(200).optional(),
-      })
-      .optional(),
-    scope: z.string().max(SCOPE_MAX).optional(),
-  }),
+  principal: StoredPrincipal,
   actor: z.object({ id: ActorId, kind: SeenActorKind, handle: Handle, name: z.string().min(1).max(128), avatar: z.string().nullable() }),
 })
 

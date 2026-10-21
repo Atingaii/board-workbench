@@ -13,9 +13,11 @@ import type {
   StuckEvent,
   SourceRead,
   Me,
+  MatchView,
   MessagesPage,
   MessagesQueryInput,
   MessageView,
+  RegistrationView,
   ScheduleView,
   SchedulesQueryInput,
   ThreadsPage,
@@ -345,6 +347,19 @@ export function createBoardClient(options: ClientOptions) {
       (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
     /** Events that failed 10 times and stopped their thread, oldest first. Full access only. */
     stuck: async () => (await call<{ stuck: StuckEvent[] }>('GET', '/stuck')).stuck,
+    /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
+    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }> }) =>
+      call<RegistrationView>('POST', '/watchers', { body: input }),
+    /** Registered watchers: every one to `manage` everywhere, the caller's own to anyone else. */
+    watchers: async () => (await call<{ watchers: RegistrationView[] }>('GET', '/watchers')).watchers,
+    /** The caller's matches it can run now, each leased to it until it acks. `wait` holds the request up to that many seconds for one. */
+    matches: async (opts: { limit?: number; wait?: number; signal?: AbortSignal } = {}) => {
+      const { signal, ...query } = opts
+      return (await call<{ matches: MatchView[] }>('GET', `/watchers/matches${queryString(query)}`, signal ? { signal } : {})).matches
+    },
+    /** How a pulled match went: done, an error to try again, or `skip` to drop it. */
+    ack: (id: string, body: { lease: string; error?: string; skip?: boolean }) =>
+      call<{ ok: true }>('POST', `/watchers/matches/${encodeURIComponent(id)}/ack`, { body }),
     /**
      * Retries a stuck event with a fresh 10 tries, or skips it so its thread goes on, for `consumer`,
      * or for every consumer it's stuck for. `redriven` is false when it wasn't stuck (anymore). Full

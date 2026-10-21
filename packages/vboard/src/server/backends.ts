@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto'
-import type { Discovery } from '../api/routes.ts'
+import type { BoardEventView, Discovery, MatchView, RegistrationView } from '../api/routes.ts'
 import type { BoardClient } from '../client/client.ts'
 import { createClient } from '../client/node.ts'
 import { VERSION } from '../version.ts'
 import { a2Board, route, type A2Options, type BoardSetup } from './board.ts'
 import { HttpError, json, notFound, toErrorResponse } from './errors.ts'
 import { discoveryIdentity } from './identity.ts'
+import { watchersHash, type WatcherSpec } from './registry.ts'
+import { compileWatcher } from './watch.ts'
 
 /** What a backend runs for `board()`: the requests it answers here, and a client for your server code. */
 export type BoardRuntime = {
@@ -61,11 +63,33 @@ export function http(url: string, options: HttpOptions = {}): Backend<ReturnType
 
 /** A watcher's or client's name is the profile its writes are by. */
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+const PROFILE_RULE = 'ids start with a letter and use up to 32 letters, numbers, and hyphens'
 
-/** A board that keeps nothing: discovery here names `remote`, and everything else is the remote's. */
+/** Registering again this soon after the same registration only repeats it. */
+const REGISTER_EVERY_MS = 10_000
+/** How long one wake-up runs matches before it leaves the rest to the next. */
+const DRAIN_MS = 4 * 60_000
+/** A pull with nothing to hand out holds this long, when the board pulls on its own. */
+const POLL_WAIT_S = 25
+
+const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
+
+/**
+ * A board that keeps nothing: discovery here names `remote`, and everything else is the remote's.
+ * Its watchers' tails are registered there. The remote wakes it when one matches, with nothing in
+ * the wake-up but a hash, and it pulls what matched with its own credentials, runs it, and acks it.
+ * When it can't be woken (no https URL of its own: a dev server, say), it pulls on its own.
+ */
 function httpBoard(remote: string, options: HttpOptions, setup: BoardSetup) {
-  if (setup.watch && Object.keys(setup.watch).length > 0)
-    throw new Error("board: watchers don't run over http() yet: keep them on an a2() board for now")
+  const watch = setup.watch ?? {}
+  const specs: Record<string, WatcherSpec> = {}
+  for (const [id, watcher] of Object.entries(watch)) {
+    if (!PROFILE.test(id)) throw new Error(`watch ${id}: ${PROFILE_RULE}`)
+    compileWatcher(id, watcher)
+    specs[id] = { tail: watcher.tail, when: watcher.when ?? 'matches' }
+  }
+  const hash = watchersHash(specs)
+  const watching = Object.keys(specs).length > 0
   const doFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init))
 
   /** The SDK against the remote, as this deployment with `profile`. Posts get IDs derived from `key`. */
@@ -110,10 +134,112 @@ function httpBoard(remote: string, options: HttpOptions, setup: BoardSetup) {
   const keyId = async (key: string, n: number) =>
     `key:${await self()}:${createHash('sha256').update(`vboard-key\u001f${key}\u001f${n}`).digest('hex').slice(0, 32)}`
 
+  /**
+   * This board's own URL, where it's woken: `url` from setup, or on Vercel its production domain
+   * (a preview's own URL there), and never from a request, whose Host its sender chooses.
+   */
+  function ownUrl(base: string | null): string | null {
+    if (setup.url) return setup.url.replace(/\/+$/, '')
+    const host = process.env.VERCEL_ENV === 'production' ? process.env.VERCEL_PROJECT_PRODUCTION_URL : process.env.VERCEL_URL
+    return host && base !== null ? `https://${host}${base}`.replace(/\/+$/, '') : null
+  }
+  /** Only an https URL can be woken; anything else pulls on its own. */
+  const wakeable = (url: string | null) => (url?.startsWith('https://') ? url : null)
+
+  let last: { url: string | null; at: number; result: RegistrationView } | null = null
+  let registering: Promise<RegistrationView> | null = null
+  /** Registers this board's watchers with the remote, as itself, replacing its last registration. */
+  function register(url: string | null): Promise<RegistrationView> {
+    if (last && last.url === url && last.result.hash === hash && Date.now() - last.at < REGISTER_EVERY_MS) return Promise.resolve(last.result)
+    registering ??= own
+      .register({ url, watch: specs })
+      .then((result) => {
+        last = { url, at: Date.now(), result }
+        return result
+      })
+      .finally(() => {
+        registering = null
+      })
+    return registering
+  }
+
+  /** Runs one match and acks it: done, its error, or a skip for a watcher this board no longer has. */
+  async function runOne(match: MatchView) {
+    const watcher = watch[match.watcher]
+    let outcome: { error?: string; skip?: boolean } = {}
+    if (!watcher) outcome = { skip: true }
+    else
+      try {
+        await watcher.run({ event: match.event as BoardEventView, board: clientFor(match.watcher, `watch:${match.watcher}:${match.id}`) })
+      } catch (error) {
+        console.error(`[vboard] watcher ${match.watcher} failed:`, error)
+        outcome = { error: describe(error) }
+      }
+    // A lease that ran out was pulled again: that pull's ack is the one that counts.
+    await own.ack(match.id, { lease: match.lease, ...outcome }).catch((error) => console.error(`[vboard] couldn't ack a match:`, describe(error)))
+  }
+
+  /** Pulls and runs what's matched until nothing's left, or this run's time is up. A thread's matches come one at a time. */
+  async function drain(): Promise<number> {
+    let ran = 0
+    const until = Date.now() + DRAIN_MS
+    while (Date.now() < until) {
+      const matches = await own.matches({ limit: 10 })
+      if (matches.length === 0) break
+      // Each is a different watcher's or thread's oldest, so they run side by side.
+      await Promise.all(matches.map(runOne))
+      ran += matches.length
+    }
+    return ran
+  }
+
+  let polling: AbortController | null = null
+  /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
+  function poll() {
+    if (polling) return
+    const controller = (polling = new AbortController())
+    void (async () => {
+      for (let pause = 1000; !controller.signal.aborted; ) {
+        try {
+          await register(null)
+          const matches = await own.matches({ limit: 10, wait: POLL_WAIT_S, signal: controller.signal })
+          await Promise.all(matches.map(runOne))
+          pause = 1000
+        } catch (error) {
+          if (controller.signal.aborted) break
+          console.error(`[vboard] couldn't pull matches from ${remote}:`, describe(error))
+          await new Promise((resolve) => setTimeout(resolve, pause))
+          pause = Math.min(pause * 2, 60_000)
+        }
+      }
+    })()
+  }
+
+  // A board that knows its URL registers when it starts. One on Vercel learns its mount path from
+  // its first request: a `POST /watchers`, or a wake-up. One that can't be woken pulls instead.
+  if (watching) {
+    const url = wakeable(ownUrl(setup.basePath ?? null))
+    if (url) void register(url).catch((error) => console.error(`[vboard] couldn't register with ${remote}:`, describe(error)))
+    else if (process.env.VERCEL !== '1') poll()
+  }
+
   async function fetchHere(request: Request): Promise<Response> {
     try {
       const url = new URL(request.url)
       const match = route(request.method, url.pathname, setup.basePath)
+      if (match?.name === 'register') {
+        // Anyone may ask: it sends this board's own watchers, with this board's own credentials.
+        const here = wakeable(ownUrl(match.base))
+        const registration = await register(here)
+        if (!here) poll()
+        return json(registration)
+      }
+      if (match?.name === 'wake') {
+        // Nothing in a wake-up is trusted: it only says to pull, and what's pulled comes with this board's own credentials.
+        const here = wakeable(ownUrl(match.base))
+        if (request.headers.get('x-board-watchers') !== hash) await register(here)
+        return json({ ran: await drain() })
+      }
       if (match?.name !== 'discovery') throw new HttpError(404, 'remote', `this board keeps no log: use ${remote}`)
       const boardUrl = (setup.url ?? `${url.origin}${match.base}`).replace(/\/+$/, '')
       const identity = await discoveryIdentity(request, undefined)
@@ -146,5 +272,12 @@ function httpBoard(remote: string, options: HttpOptions, setup: BoardSetup) {
     },
     /** The board this one uses. */
     remote,
+    /** Registers this board's watchers with the board it uses now, as `POST /watchers` does. */
+    register: () => register(wakeable(ownUrl(setup.basePath ?? null))),
+    /** Stops pulling, for a board that pulls on its own. */
+    close: () => {
+      polling?.abort()
+      polling = null
+    },
   }
 }

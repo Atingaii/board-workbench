@@ -91,9 +91,12 @@ describe('a board on http()', () => {
     expect((await project.client('deploys', { key: 'd1' }).post('deploys', 'a1b2c3 is live')).id).toEqual(expect.any(Number))
   })
 
-  it("doesn't run watchers yet", () => {
-    expect(() => board({ backend: http(BOARD_URL), watch: { fix: { tail: 'feedback', run: () => {} } } })).toThrow(
-      "board: watchers don't run over http() yet: keep them on an a2() board for now",
+  it('checks its watchers the way a2() does, and their IDs as profiles', () => {
+    expect(() => board({ backend: http(BOARD_URL), url: V0_URL, watch: { review_pi: { tail: 'prs', run: () => {} } } })).toThrow(
+      'watch review_pi: ids start with a letter and use up to 32 letters, numbers, and hyphens',
+    )
+    expect(() => board({ backend: http(BOARD_URL), url: V0_URL, watch: { fix: { tail: 'prs --after 3', run: () => {} } } })).toThrow(
+      "watch fix: --after isn't a filter",
     )
   })
 })

@@ -1,10 +1,11 @@
 import { z } from 'zod'
 import { idempotentId } from 'experimental-a2'
 import { createServer, type A2Scheduler } from 'experimental-a2/server'
-import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, watchSession, type BoardEvents } from '../contract/contract.ts'
+import { boardContract, BOARD_SESSION, inboxSession, SCHEDULES_SESSION, type BoardEvents } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, linkedTo } from '../contract/reducers.ts'
-import { ATTACHMENT_BYTES_MAX } from '../contract/schemas.ts'
+import { ATTACHMENT_BYTES_MAX, RemoteWatcherId } from '../contract/schemas.ts'
 import {
+  AckBody,
   EditBody,
   EventsQuery,
   IdentityCheckBody,
@@ -13,11 +14,13 @@ import {
   InboxQuery,
   SourceReadQuery,
   LabelBody,
+  MatchesQuery,
   MessagesQuery,
   ThreadsQuery,
   PostBody,
   ReactBody,
   RedriveBody,
+  RegisterBody,
   routes,
   ScheduleBody,
   SchedulesQuery,
@@ -47,7 +50,10 @@ import { createdBy, createSchedules, type Schedule } from './schedules.ts'
 import { defaultStore } from '../store/default.ts'
 import { TABLES_CONSUMER } from '../store/sql.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
-import { createWatchers, ID, type Watcher } from './watch.ts'
+import { compileWatcher, createWatchers, ID, registrantSession, type Watcher } from './watch.ts'
+import { ack, pull } from './registered.ts'
+import { createRegistry, storedPrincipal, type Registration } from './registry.ts'
+import { publicPost, type Post } from './transport.ts'
 import {
   authorizeMessage,
   authorizeOwn,
@@ -104,6 +110,8 @@ export type A2Options = {
    * in tests, `.a2/attachments` in development, and no uploads in production.
    */
   blob?: BlobStore
+  /** For tests: how the board POSTs wake-ups to boards on `http()`. Defaults to https to public addresses only. */
+  transport?: { post?: Post }
 }
 
 /** What every backend is given: the watchers that run in this project, and where the board is mounted. */
@@ -133,6 +141,11 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'POST', name: 'identityCheck', pattern: /\/identity\/check$/ },
   { method: 'POST', name: 'identityUnlink', pattern: /\/identity\/unlink$/ },
   { method: 'GET', name: 'identity', pattern: /\/identity$/ },
+  { method: 'POST', name: 'ack', pattern: /\/watchers\/matches\/([A-Za-z0-9_-]+)\/ack$/ },
+  { method: 'GET', name: 'matches', pattern: /\/watchers\/matches$/ },
+  { method: 'GET', name: 'watchers', pattern: /\/watchers$/ },
+  { method: 'POST', name: 'register', pattern: /\/watchers$/ },
+  { method: 'POST', name: 'wake', pattern: /\/wake$/ },
   { method: 'POST', name: 'edit', pattern: /\/messages\/(\d+)\/edit$/ },
   { method: 'POST', name: 'delete', pattern: /\/messages\/(\d+)\/delete$/ },
   { method: 'POST', name: 'react', pattern: /\/messages\/(\d+)\/reactions$/ },
@@ -184,6 +197,9 @@ const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
  * `idempotentId`'s shape, a UUIDv8: the IDs the board derives for its own writes (schedule
  * sends, watchers, sync). They're guessable, so an API caller can't post with one and take it first.
  */
+/** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
+const WAKE_TIMEOUT_MS = 5000
+
 const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
@@ -275,14 +291,19 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
     options.sync && Object.keys(options.sync).length > 0
       ? createSyncEngine({ entries: options.sync, store: log, scheduler: options.scheduler, blob })
       : null
-  const watchers =
-    options.watch && Object.keys(options.watch).length > 0
-      ? createWatchers({ watch: options.watch, store: log, scheduler: options.scheduler })
-      : null
+  const registry = createRegistry({ store: log, scheduler: options.scheduler })
+  const post = options.transport?.post ?? publicPost
+  // Always, since boards on http() may register watchers here at any time.
+  const watchers = createWatchers({
+    watch: options.watch ?? {},
+    store: log,
+    scheduler: options.scheduler,
+    registered: { state: registry.state, accessNow: (principal) => accessThen(principal), wake },
+  })
   const schedules = createSchedules({ store: log, scheduler: options.scheduler })
   const projection = tablesConsumer(store.tables)
   // The tables, watchers, and sync each keep their own place in the board's log.
-  const consumers = [projection, watchers?.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
+  const consumers = [projection, watchers.boardConsumer, engine?.outbound].filter((consumer) => consumer !== undefined)
   const server = createServer({
     contract: boardContract,
     ...(log ? { store: log } : {}),
@@ -348,7 +369,7 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
     const ids: [string, { session(id: string): Redrivable }][] = [
       [BOARD_SESSION, server],
       [SCHEDULES_SESSION, schedules.server],
-      ...(watchers ? watchers.ids.map((id): [string, typeof watchers.server] => [watchSession(id), watchers.server]) : []),
+      ...(await watchers.sessions()).map((id): [string, typeof watchers.server] => [id, watchers.server]),
       ...(engine ? (await engine.inboxChannels()).map((channel): [string, typeof engine.inboxServer] => [inboxSession(channel), engine.inboxServer]) : []),
     ]
     return ids.map(([id, owner]) => ({ id, session: owner.session(id) }))
@@ -485,14 +506,39 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
   // A schedule sends only under the verifier that made it: one from before the board
   // switched to or from a host's function is revoked rather than trusted. The board's
   // own code (`vboard:`, which a host's function can't return) sends under either.
-  schedules.bind({
-    writes,
-    accessNow: (principal) =>
-      principal.id.startsWith('vboard:') || (principal.facts?.issuer === 'host') === (host !== null)
-        ? accessNow(principal)
-        : Promise.resolve(null),
-  })
-  watchers?.bind({ clientAs, reads })
+  /**
+   * What a stored principal (a schedule's creator, a watcher's registrant) may do now, under
+   * the rules as they are. Only under the verifier that made it: one from before the board
+   * switched to or from a host's function is revoked rather than trusted. The board's own
+   * code (`vboard:`, which a host's function can't return) works under either.
+   */
+  function accessThen(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null> {
+    return principal.id.startsWith('vboard:') || (principal.facts?.issuer === 'host') === (host !== null)
+      ? accessNow(principal)
+      : Promise.resolve(null)
+  }
+  schedules.bind({ writes, accessNow: accessThen })
+  watchers.bind({ clientAs, reads })
+
+  /**
+   * Tells a registrant's board it has matches to pull, with no event and no token in it: its
+   * board pulls them with its own credentials. The hash says whether its registration is stale.
+   */
+  async function wake(registration: Registration) {
+    if (registration.url === null) return
+    try {
+      await post(`${registration.url}/wake`, {
+        headers: { 'content-type': 'application/json', 'x-board-watchers': registration.hash },
+        body: '{}',
+        // Its board runs what it pulls before it answers; the wake-up only has to arrive.
+        signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
+      })
+    } catch (error) {
+      if ((error as Error).name !== 'TimeoutError') console.error(`[vboard] couldn't wake ${registration.url}:`, (error as Error).message)
+    }
+  }
+  /** A registrant's queue, in the watch contract. */
+  const queueOf = (owner: string) => watchers.server.session(registrantSession(owner)) as never
 
   async function dispatch(request: Request, injected: Identity | null, origin: WriteOrigin = { via: { kind: 'api' } }): Promise<Response> {
     try {
@@ -777,6 +823,48 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           const query = SourceReadQuery.parse(queryObject(url))
           return json(await engine.readSource(match.param!, query.target, query.limit ?? 50))
         }
+        case 'watchers': {
+          // Each names a board's URL and tails: all of them only for `manage` in every channel, the caller's own for anyone.
+          const all = await registry.list()
+          return json({ watchers: principal.access.everywhere('manage') ? all : all.filter((found) => found.owner === principal.id) })
+        }
+        case 'register': {
+          // A registered watcher sees only what its registrant may read.
+          if (!principal.access.anywhere('read'))
+            throw forbidden("this token can't read anywhere, so a watcher it registers would see nothing")
+          const body = RegisterBody.parse(await readJson(request))
+          for (const [id, spec] of Object.entries(body.watch)) {
+            const name = RemoteWatcherId.safeParse(id)
+            if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
+            try {
+              compileWatcher(id, spec)
+            } catch (error) {
+              throw badRequest((error as Error).message, 'bad_watcher')
+            }
+          }
+          return json(await registry.register(storedPrincipal(principal), { url: body.url ?? null, watch: body.watch }))
+        }
+        case 'matches': {
+          if (!(await registry.state()).byOwner[principal.id]) throw notFound('this token has no watchers registered here', 'no_registration')
+          const query = MatchesQuery.parse(queryObject(url))
+          const queue = queueOf(principal.id)
+          const pulling = { access: principal.access, limit: query.limit ?? 10, timers: options.scheduler !== undefined }
+          const deadline = Date.now() + (query.wait ?? 0) * 1000
+          for (let pause = 100; ; pause = Math.min(pause * 2, 1000)) {
+            const matches = await pull(queue, { ...pulling, now: Date.now() })
+            if (matches.length > 0 || Date.now() >= deadline || request.signal.aborted) return json({ matches })
+            await new Promise((resolve) => setTimeout(resolve, Math.min(pause, Math.max(0, deadline - Date.now()))))
+          }
+        }
+        case 'ack': {
+          const body = AckBody.parse(await readJson(request))
+          const result = await ack(queueOf(principal.id), match.param!, body, { now: Date.now(), timers: options.scheduler !== undefined })
+          if (result === 'gone') throw notFound(`no match ${match.param} is waiting for this token`, 'no_match')
+          if (result === 'stale') throw new HttpError(409, 'stale_lease', 'that lease ran out, and the match was pulled again')
+          return json({ ok: true })
+        }
+        case 'wake':
+          throw notFound('this board keeps its own log: wake-ups go to a board on http()')
         case 'events': {
           const query = EventsQuery.parse(queryObject(url))
           const lastEventId = Number(request.headers.get('last-event-id'))
@@ -804,7 +892,8 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
     server,
     ...(engine ? [engine.inboxServer] : []),
     schedules.server,
-    ...(watchers ? [watchers.server] : []),
+    registry.server,
+    watchers.server,
   ]
   return {
     GET: handle,

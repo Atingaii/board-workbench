@@ -146,6 +146,39 @@ export const InboxQuery = z.object({
   channel: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
+/** How many watchers one registration holds: the board matches every event against every tail. */
+export const REGISTERED_WATCHERS_MAX = 32
+
+/** What a board on `http()` registers with the board it uses: its watchers' tails, and where to wake it. */
+export const RegisterBody = z.object({
+  /** Without one, the board pulls on its own instead of being woken. */
+  url: z
+    .string()
+    .url()
+    .max(500)
+    .refine((url) => /^https:\/\//.test(url), 'wake-ups go over https')
+    .transform((url) => url.replace(/\/+$/, ''))
+    .nullable()
+    .optional(),
+  // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
+  watch: z
+    .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
+    .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
+})
+
+/** A pull of the caller's matches: at most `limit`, waiting up to `wait` seconds for one. */
+export const MatchesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  wait: z.coerce.number().min(0).max(25).optional(),
+})
+
+/** How a pulled match went: its lease, and an error to try again, or `skip` to drop it. */
+export const AckBody = z.object({
+  lease: z.string().min(1).max(64),
+  error: z.string().min(1).max(500).optional(),
+  skip: z.boolean().optional(),
+})
+
 /** A stuck event to retry (with a fresh 10 tries) or skip (so its thread goes on), as `vb stuck` lists it. */
 export const RedriveBody = z.object({
   session: z.string().min(1).max(300),
@@ -258,6 +291,31 @@ export type Discovery = {
   sync: { key: string; platform: string }[]
   /** A board on another backend keeps nothing here: clients read and write this board instead. */
   remote?: string
+}
+
+/** Watchers a board on `http()` registered here: one registration per principal. */
+export type RegistrationView = {
+  /** The principal that registered. Its watchers write as it, with their IDs as profiles. */
+  owner: string
+  /** Where it's woken: `<url>/wake`. `null` when it pulls on its own. */
+  url: string | null
+  watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
+  /** Every wake-up carries it, so the board can tell its registration is stale. */
+  hash: string
+}
+
+/** One match, leased to the registrant that pulled it. */
+export type MatchView = {
+  /** The match's ID, which its watcher's writes derive their IDs from. */
+  id: string
+  watcher: string
+  thread: string
+  /** Acks name it. A lease that ran out is someone else's next try. */
+  lease: string
+  /** How many tries came before this one. */
+  attempt: number
+  /** The event, as `vb tail --json` prints it, as the registrant may see it. */
+  event: BoardEventView
 }
 
 export type Me = {
@@ -419,6 +477,15 @@ export const routes = {
   /** Finishes a sign-in: links the account it authorized, once it has. */
   identityCheck: { method: 'POST', path: '/identity/check', body: IdentityCheckBody },
   identityUnlink: { method: 'POST', path: '/identity/unlink', body: IdentityUnlinkBody },
+  /** Watchers registered by boards on `http()`: every one to `manage` everywhere, the caller's own to anyone else. */
+  watchers: { method: 'GET', path: '/watchers' },
+  /** Registers the caller's watchers, replacing its last registration. On a board on `http()`, registers its own, with no body or token. */
+  register: { method: 'POST', path: '/watchers', body: RegisterBody },
+  /** The caller's matches it can run now, each leased to it until it acks. */
+  matches: { method: 'GET', path: '/watchers/matches', query: MatchesQuery },
+  ack: { method: 'POST', path: '/watchers/matches/:id/ack', body: AckBody },
+  /** On a board on `http()`: something matched. No body, no token: the board pulls what. */
+  wake: { method: 'POST', path: '/wake' },
 } as const
 
 export type RouteName = keyof typeof routes

@@ -50,8 +50,8 @@ A board on `http()` keeps nothing:
   posts get IDs derived from the key, `key:<principal>:…`, which the other
   board takes only from that principal, so the same key never posts twice and
   no one can post with one first.
-- **Watchers don't run over `http()` yet.** A board with `watch` on `http()`
-  fails at startup; keep them on an `a2()` board for now.
+- **Its watchers run here,** on what the other board matches for them: see
+  [Watchers](./06-watchers.md#on-a-board-on-http).
 - **`store`, `sync`, `access`, and the rest belong to the other board,** so
   `http()` takes none of them.
 

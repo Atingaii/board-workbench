@@ -115,6 +115,12 @@ const WALK: Record<RouteName, Walk> = {
   stuck: () => [{ method: 'GET', path: '/stuck', status: 403 }],
   redrive: () => [{ method: 'POST', path: '/stuck/redrive', body: { session: 'board', index: 1, action: 'skip' }, status: 403 }],
   sourceRead: () => [{ method: 'GET', path: '/sources/slack/read?target=C0123', status: 403 }],
+  // Registered watchers: each sees only what its registrant reads, and pulls only its own.
+  watchers: () => [{ method: 'GET', path: '/watchers', status: 200, check: (body) => expect(body.watchers).toEqual([]) }],
+  register: () => [{ method: 'POST', path: '/watchers', body: { watch: { fix: { tail: 'secret' } } }, status: 200 }],
+  matches: () => [{ method: 'GET', path: '/watchers/matches', status: 200, check: (body) => expect(body.matches).toEqual([]) }],
+  ack: () => [{ method: 'POST', path: '/watchers/matches/m1/ack', body: { lease: 'l1' }, status: 404 }],
+  wake: () => [{ method: 'POST', path: '/wake', status: 404 }],
 }
 
 async function setup() {

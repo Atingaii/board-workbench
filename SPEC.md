@@ -135,12 +135,56 @@ says where the board lives:
   `client(name, { key })` writes there with `name` as its profile, and keyed
   posts get IDs `key:<principal>:<sha256 of the key and order>`. Any board
   takes a `key:<principal>:` ID only from that principal, so the same key
-  never posts twice and no one can post with one first. Watchers don't run
-  over `http()` yet: a board with `watch` there fails at startup.
+  never posts twice and no one can post with one first. Its watchers run
+  here, on what the other board matches for them (below).
 
 A backend is `{ kind, start(setup) }`: `start` gets the watchers, `url`, and
 `basePath`, and returns what `board()` mounts (`fetch`, `scheduler`,
 `client`, plus its own extras: `a2()`'s `servers`, `http()`'s `remote`).
+
+### Watchers over `http()`
+
+The board that keeps the log matches the tails; the board on `http()` runs
+`run`. Nothing is pushed but a wake-up with nothing in it:
+
+| Route, on the board with the log | What |
+| --- | --- |
+| `POST /watchers` | `{ url?, watch }`: registers the caller's watchers, replacing its last registration. Needs `read` somewhere; at most 32 watchers; `url` must be `https`, and without one the caller pulls on its own |
+| `GET /watchers` | Every registration to `manage` in every channel, the caller's own to anyone else |
+| `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
+| `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |
+
+| Route, on the board on `http()` | What |
+| --- | --- |
+| `POST /watchers` | Registers its own watchers with the other board, now. No body, no token |
+| `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left |
+
+- **Registrations** live in `vboard-registry`, session `registry`, one per
+  principal with its token facts, so its access is worked out again at each
+  match under the rules as they are then. A board on `http()` registers when
+  it starts if it knows its URL, on `POST /watchers`, and on a wake-up with a
+  stale hash. Its URL is `url` from setup, or on Vercel its production domain
+  (a preview's own URL there): never a request's `Host`.
+- **Matching** is `vboard-watchers`, as for config watchers. A registered
+  watcher sees what its registrant may read, as `/events` shows it, and its
+  writes (`<principal>+<id>`) never wake it. One event's matches for one
+  registrant are one append, to `watch:@<principal>` in `vboard-watch`.
+- **The queue** is a reducer over that session: one queue per watcher and
+  thread, of which only the oldest is handed out, so a thread's matches run in
+  order. Pulling leases it (`watch.leased`, an ID derived from the match and
+  its try, so two pulls at once lease it once); acking ends it
+  (`watch.acked`). An error waits 1 second, doubling to 30, and a lease that
+  runs out (`watch.expired`) counts as a try; both come back by A2 timer
+  (`watch.due`), or as soon as a pull finds their time has passed. After 5
+  tries it's `watch.failed`, and the thread goes on. A pull drops what the
+  registrant can't read anymore (`watch.skipped`).
+- **Wake-ups** go to `<url>/wake` from `vboard-wake`, on each match and each
+  timer that makes something pullable: `https` to a public address only,
+  checked as it connects, with no redirects and no token. The board woken
+  trusts nothing in it.
+- **A board that can't be woken** (no `https` URL, as on a dev server, or
+  behind Deployment Protection) registers with no `url` and pulls on its own,
+  each pull held open until something matches.
 
 ### Install
 
