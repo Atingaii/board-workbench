@@ -118,6 +118,8 @@ const CHECKS: Check[] = [
       const first = await post(ctx, 'conformance: once', { id })
       const again = await post(ctx, 'conformance: once', { id })
       same(again.id, first.id, 'the second post with the same client id')
+      same((await ctx.board.posted(id)).id, first.id, 'the post found by its client id')
+      await rejects(ctx.board.posted(`${id}-never`), 404, 'post_not_found', 'a client id nothing was posted with')
     },
   },
   {

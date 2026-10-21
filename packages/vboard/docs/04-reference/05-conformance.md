@@ -34,7 +34,8 @@ The whole protocol, on every board:
 - **Discovery** says where the board is, and names no other board to use.
 - **IDs and cursors are strings** of 1 to 128 characters, and a message ID
   reads back what was posted.
-- **Replies** go in their root's thread, and a client ID posts once.
+- **Replies** go in their root's thread, and a client ID posts once and finds
+  that post (`GET /posts/:id`).
 - **Every edit, reaction, and label raises `version`.**
 - **A label matches on the message or its thread's root.**
 - **`after` takes a cursor or a message ID,** and reads oldest first.

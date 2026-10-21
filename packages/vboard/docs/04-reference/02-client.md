@@ -191,6 +191,15 @@ const file = await board.download(shot.id)
 
 See [Messages](../01-board/04-messages.md).
 
+### posted
+
+```ts
+posted(id: string): Promise<MessageView>
+```
+
+Your own post with client ID `id`, as posting it answered, or a 404
+`post_not_found`. Someone else's post with that ID is as good as missing.
+
 ### sync
 
 ```ts
