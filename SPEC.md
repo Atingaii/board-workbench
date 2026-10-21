@@ -77,11 +77,11 @@ vboard post errors-www "deploy failed on a1b2c3"
 - **Wiring is code; the log holds facts.** Sync mappings, callbacks, watchers,
   and access live in `board()` and its backend's config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
-  read: folds stay global, and filters are per reader. Log indexes still show
-  how busy the board is.
+  read: folds stay global, and filters are per reader. On `a2()`, log indexes
+  still show how busy the board is.
 - **Everything is legible in plain text.** Actor IDs are readable strings, not
-  hashes. Message IDs and cursors are the same numbers. The CLI is a product
-  constraint, not a lesser frontend.
+  hashes. A message ID is also a cursor, and on `a2()` both are plain
+  decimals. The CLI is a product constraint, not a lesser frontend.
 - **The log is the only source of truth.** Every view is an A2 reducer, and
   reducer snapshots are caches. Deleting them is always safe. The MVP has no
   SQL tables and no second data model.
@@ -141,6 +141,27 @@ says where the board lives:
 A backend is `{ kind, start(setup) }`: `start` gets the watchers, `url`, and
 `basePath`, and returns what `board()` mounts (`fetch`, `scheduler`,
 `client`, plus its own extras: `a2()`'s `servers`, `http()`'s `remote`).
+
+### IDs, cursors, and versions
+
+The backend picks them; the protocol only says their shape:
+
+- **Message IDs, schedule IDs, and cursors are opaque strings** of 1 to 128
+  characters (`Ref` in `src/api/routes.ts`). Clients compare them for equality
+  and pass them back as they got them; they never parse them, count with them,
+  or order by them. Payload IDs in event views (`id`, `re`, `replyTo`, a
+  schedule's `id`, a link's `message`) are strings too.
+- **A message ID works as a cursor.** `after` and `before` take either; one the
+  board can't read as a cursor answers 400 `invalid_cursor`. Every read reports
+  `cursor`, and every event view carries its own `cursor` (SSE's `id:`).
+- **Every message view has `version`,** a number that grows with each change to
+  the message: of two views of one message, the higher `version` is newer.
+- **On `a2()` they're decimal log indexes.** A message's ID is the index of
+  its `message.posted` event (`"812"`), and a schedule's the index of its
+  `schedule.created` event in session `schedules`. A cursor is the index a read
+  reflects, or an event's own, and a version is the index of the last event
+  that changed the message. The log and the tables keep numbers; only views are
+  strings. The CLI shows them as `#812` and `s12`.
 
 ### Watchers over `http()`
 
@@ -587,8 +608,8 @@ only their own accounts.
 | Board | implicit; one per mount | none |
 | Actor | the principal plus an optional profile | folded from `actor.seen` |
 | Channel | a path: `errors-www`, `www/production` | created by the first post, local or synced; the path never changes |
-| Message | its log index (`#812`) | posted, then edited or deleted (tombstoned) |
-| Thread | the index of its root message | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
+| Message | its ID, an opaque string (`#812`); on `a2()`, its log index | posted, then edited or deleted (tombstoned) |
+| Thread | its root message's ID | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
@@ -596,9 +617,11 @@ only their own accounts.
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
   are display groups.
-- **Message IDs are the log index of the `message.posted` event.** They're
-  short, stable, unique within the board, and double as cursors. Other events
-  also consume indexes, so message IDs have gaps.
+- **Message IDs are opaque strings** (see
+  [IDs, cursors, and versions](#ids-cursors-and-versions)). They're stable,
+  unique within the board, and double as cursors. On `a2()` each is the log
+  index of its `message.posted` event; other events also consume indexes, so
+  IDs have gaps.
 - **Replies:** a client replies to any message with `re: <id>`. The server stores
   the thread root as `re` and the original target as `replyTo` when the two
   differ. Platforms that have sub-threads use `replyTo` (see
@@ -741,6 +764,8 @@ export const schedulesContract = contract({
 })
 ```
 
+- **IDs in the log are numbers.** `MessageId` and a schedule's `id` are log
+  indexes; views show them, and every cursor, as decimal strings.
 - **The board log holds only board facts.** Bookkeeping lives in side
   contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)), raw
   platform events in `vboard-inbox`, watcher matches in `vboard-watch` (see
@@ -980,7 +1005,7 @@ in throwaway sandboxes don't lose their place.
   acknowledges it after it has handled the results. That makes delivery
   at-least-once: a reader that dies before acknowledging sees those messages
   again. The CLI acknowledges after printing.
-- **Explicit `after: N` never moves a cursor.** Historical reads don't count as
+- **An explicit `after` never moves a cursor.** Historical reads don't count as
   reading.
 - **Filters inside a scope don't change what counts as seen.** Messages that a
   label filter skips are still behind the cursor once it's acknowledged.
@@ -1015,7 +1040,7 @@ status.
 | GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Needs `manage` in every channel |
 | POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip', consumer? }`: retries one with a fresh 10 tries, or skips it, for `consumer` or every consumer it's stuck for. Needs `manage` in every channel |
 | GET | `/cursors` | The caller's cursors, for this session |
-| POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
+| POST | `/cursors` | `{ scope, cursor }`: acknowledge reading up to `cursor` |
 | GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
 | POST | `/identity/link` | `{ sync, method?: 'code' \| 'consent' }`: start linking your account on that sync entry. Answers `{ method: 'consent', url }` when it can sign you in, otherwise `{ method: 'code', code, expiresAt }`. People only |
 | POST | `/identity/check` | `{ sync }`: after a sign-in, link the account it authorized. Answers `{ linked }`, null until you've approved |
@@ -1027,6 +1052,9 @@ status.
 - `channel=www/` (with a trailing slash) matches a whole subtree.
 - `mentions=me` resolves to the caller's actor.
 - `label=status=open` may be repeated; repeated labels are combined with AND.
+- `after` and `before` take a cursor or a message ID, as opaque strings (see
+  [IDs, cursors, and versions](#ids-cursors-and-versions)). A bad one is 400
+  `invalid_cursor`.
 - `since=last` reads from the caller's stored cursor for the scope (see
   [Cursors](#cursors)). It works on `/messages` and `/events`.
 - The profile is sent as `x-board-profile`, `x-board-avatar`, and
@@ -1035,7 +1063,8 @@ status.
   [Authorization](#principals-profiles-actors)). It never widens it.
 
 **Event feed:**
-- SSE frames carry `id: <index>`, so `Last-Event-ID` resumes exactly where the
+- Each event is `{ cursor, type, createdAt, payload, message?, actor? }`.
+  SSE frames carry `id: <cursor>`, so `Last-Event-ID` resumes exactly where the
   client left off.
 - The server closes a stream before the platform's time limit, and the client
   reconnects.
@@ -1066,7 +1095,7 @@ const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or
 await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
 const file = await board.download(shot.id)                     // a Response: the bytes, typed
 
-const page = await board.messages({ channel: 'errors-www', after: 800, limit: 50 })
+const page = await board.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
 const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
 
 const unread = await board.messages({ channel: 'firehose-www', since: 'last' })
@@ -1120,8 +1149,9 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 
 - **Writes print the new message ID on stdout.** Because IDs are also cursors,
   a script can chain them directly, e.g. `wait --after "$id"`.
-- **IDs are always accepted as bare numbers.** Output shows `#812`, but in a
-  shell an unquoted `#` starts a comment, so every example uses `812`.
+- **IDs are accepted with or without `#`.** Output shows `#812`, but in a
+  shell an unquoted `#` starts a comment, so every example uses `812`. The CLI
+  passes an ID to the board as it is.
 
 ### Configuration
 
@@ -1541,7 +1571,8 @@ sync: {
 overload exists only on the trusted in-process callback client. It accepts the
 current verified envelope, not a reconstructed object; there is no HTTP endpoint
 for submitting platform events. `board.sync(messageId, target)` retains its
-thread-attachment meaning everywhere.
+thread-attachment meaning everywhere; the second argument tells the two apart,
+a target string or the event.
 
 - `text` replaces the event's generated message or reply. If a lifecycle event
   creates both a root and a reply, it replaces the reply; `root` controls that
@@ -1561,9 +1592,10 @@ thread-attachment meaning everywhere.
   already succeeded returns its existing message, allowing later callback work to
   resume. Callbacks adding external I/O must make it idempotent themselves.
 
-`board.sync` returns `{ root, message }`. `root` identifies the board thread's
-root; `message` identifies the imported message, the affected message for an
-edit/delete/reaction, or a generated lifecycle reply. A root-only lifecycle
+`board.sync` returns `{ root, message }`, message IDs as strings. `root`
+identifies the board thread's root; `message` identifies the imported message,
+the affected message for an edit/delete/reaction, or a generated lifecycle
+reply. A root-only lifecycle
 import returns its root as `message`; a label-only update returns `message: null`.
 An event that cannot be applied returns null IDs where no board message exists.
 Results stay the same when an import is retried after succeeding.
@@ -2425,7 +2457,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 - Accounts, login, sessions, roles, and moderating others' messages
 - Restricting the board's own people, minted or stored tokens and grants, and
   per-thread access rules
-- Hiding volume: message IDs and cursors still show how busy the board is
+- Hiding volume: on `a2()`, message IDs and cursors still show how busy the
+  board is
 - A web UI; the CLI and `tail` are the UI
 - Custom views or reducers supplied by whoever mounts the board
 - Outbound webhooks as their own feature: a [watcher](#watchers) whose `run`

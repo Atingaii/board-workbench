@@ -89,7 +89,7 @@ export async function runMatch(input: {
   const { watcher, match, attempt } = input
   const event = match.payload.event as BoardEventView
   const giveUp = async (error: string) => {
-    console.error(`[vboard] watcher ${watcher.id} gave up on event #${event.index} after ${attempt} tries:`, error)
+    console.error(`[vboard] watcher ${watcher.id} gave up on event #${event.cursor} after ${attempt} tries:`, error)
     await input.record({ matched: match.id, thread: match.payload.thread, error })
   }
   const early = !afterRetry(attempt)

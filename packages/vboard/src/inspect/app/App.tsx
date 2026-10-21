@@ -8,7 +8,7 @@ import { Feed, Toasts } from './feed.tsx'
 import { Messages, Pendings, type RowOptions } from './message.tsx'
 import { Ago, here, Link, navigate, useLocation, useNow, useTypeToFocus } from './nav.tsx'
 import { FilterButton, FilterChips } from './filters.tsx'
-import { channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
+import { byWritten, channelThreads, filtering, knownLabels, matches, recent, thread as threadOf, type Filter, type State } from './store.ts'
 import { ContextMenuArea, Menu, MenuItem, MenuSeparator, ResizeHandle, type KnownLabels } from './ui.tsx'
 
 type Route = { view: 'activity' } | { view: 'channel'; channel: string } | { view: 'inbox'; key: string } | { view: 'missing' }
@@ -404,7 +404,7 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
         <FilterControls filters={props.filters} />
       </Header>
       <FilterChips filter={filter} onChange={props.filters.setFilter} />
-      <Feed scope="activity" first={messages[0]?.id ?? 0} last={(messages.at(-1)?.id ?? 0) + pending.length}>
+      <Feed scope="activity" first={messages[0]?.id ?? ''} last={`${messages.at(-1)?.id ?? ''}+${pending.length}`}>
         {messages.length === 0 && pending.length === 0 && (
           <p className="empty">{filtering(filter) ? 'nothing matches these filters' : 'nothing here yet: start a thread below'}</p>
         )}
@@ -458,7 +458,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   const roots = threads.map((t) => t.root)
   const replies = new Map(threads.map((t) => [t.root.id, t.replies]))
   const info = state.channels[channel]
-  const lastId = Math.max(roots.at(-1)?.id ?? 0, ...threads.map((t) => t.replies.at(-1)?.id ?? 0))
+  const newest = [...roots, ...threads.flatMap((t) => t.replies)].sort(byWritten).at(-1)?.id ?? ''
   return (
     <>
       <Header
@@ -470,12 +470,12 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
         <FilterControls filters={props.filters} />
       </Header>
       <FilterChips filter={filter} onChange={props.filters.setFilter} />
-      <Feed scope={channel} first={roots[0]?.id ?? 0} last={lastId + pending.length} older={() => board.loadOlder(channel)}>
+      <Feed scope={channel} first={roots[0]?.id ?? ''} last={`${newest}+${pending.length}`} older={() => board.loadOlder(channel)}>
         {roots.length === 0 && pending.length === 0 && (
           <p className="empty">{loading ? 'loading…' : filtering(filter) ? 'nothing matches these filters' : 'no messages yet: say something'}</p>
         )}
         <Messages messages={roots} now={options.now} options={{ ...options, replies: (m) => replies.get(m.id) ?? [] }} />
-        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(replies.get(roots.at(-1)?.id ?? 0)?.length ?? 0) > 0} />
+        <Pendings posts={pending} me={state.me!} after={roots.at(-1)} afterHasReplies={(replies.get(roots.at(-1)?.id ?? '')?.length ?? 0) > 0} />
       </Feed>
       <Composer
         scope={`channel:${channel}`}
@@ -492,7 +492,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
   )
 }
 
-function ThreadPane(props: { id: number; state: State; now: number; known: KnownLabels }) {
+function ThreadPane(props: { id: string; state: State; now: number; known: KnownLabels }) {
   const { id, state } = props
   const [missing, setMissing] = useState(false)
   useEffect(() => {
@@ -508,7 +508,7 @@ function ThreadPane(props: { id: number; state: State; now: number; known: Known
           <X size={15} strokeWidth={1.75} />
         </button>
       </Header>
-      <Feed scope={`thread:${id}`} first={id} last={(t?.replies.at(-1)?.id ?? id) + (t?.pending.length ?? 0)}>
+      <Feed scope={`thread:${id}`} first={id} last={`${t?.replies.at(-1)?.id ?? id}+${t?.pending.length ?? 0}`}>
         {!t ? (
           <p className="empty">{missing ? 'no such thread' : 'loading…'}</p>
         ) : (

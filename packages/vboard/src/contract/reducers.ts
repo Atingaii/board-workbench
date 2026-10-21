@@ -35,6 +35,8 @@ export type Message = {
   schedule?: { id: number; n: number }
   /** Set when its author couldn't read its channel, as `authorizeOwn` checks. Views leave it out. */
   blind?: true
+  /** The index of the last event that changed it. Folds from before it existed leave it out. */
+  version?: number
 }
 
 export type MessagesState = {
@@ -50,10 +52,18 @@ export function foldMessages(
   state: MessagesState,
   event: BoardEvent,
 ): MessagesState {
+  // Each change to a message is its newest version, so of two views of it, the later is newer.
+  const changed = foldMessage(state, event)
+  if (changed) changed.version = event.index
+  return state
+}
+
+/** Applies `event`, and returns the message it changed: none for an event that changes nothing. */
+function foldMessage(state: MessagesState, event: BoardEvent): Message | undefined {
   switch (event.type) {
     case 'message.posted': {
       const { payload } = event
-      state.byId[event.index] = {
+      const message: Message = {
         id: event.index,
         channel: payload.channel,
         text: payload.text,
@@ -76,76 +86,83 @@ export function foldMessages(
         ...(payload.schedule ? { schedule: { ...payload.schedule } } : {}),
         ...(payload.blind ? { blind: true as const } : {}),
       }
+      state.byId[event.index] = message
       if (payload.re !== null) (state.replies[payload.re] ??= []).push(event.index)
-      return state
+      return message
     }
     case 'message.edited': {
       const message = state.byId[event.payload.id]
-      if (!message || message.deleted) return state
+      if (!message || message.deleted) return undefined
       message.text = event.payload.text
       message.mentions = event.payload.mentions
       message.editedAt = iso(event.createdAt)
-      return state
+      return message
     }
     case 'message.deleted': {
       const message = state.byId[event.payload.id]
-      if (!message) return state
+      if (!message || message.deleted) return undefined
       message.deleted = true
       message.text = ''
       message.reactions = {}
       message.mentions = []
       message.attachments = []
       message.links = []
-      return state
+      return message
     }
     case 'reaction.added': {
       const message = state.byId[event.payload.id]
-      if (!message || message.deleted) return state
+      if (!message || message.deleted) return undefined
       // Older events may use Slack's names (`+1`); they group with Chat SDK's (`thumbs_up`).
-      const actors = (message.reactions[canonicalEmoji(event.payload.emoji)] ??= [])
-      if (!actors.includes(event.payload.by.actor)) actors.push(event.payload.by.actor)
-      return state
+      const emoji = canonicalEmoji(event.payload.emoji)
+      if (message.reactions[emoji]?.includes(event.payload.by.actor)) return undefined
+      ;(message.reactions[emoji] ??= []).push(event.payload.by.actor)
+      return message
     }
     case 'reaction.removed': {
       const message = state.byId[event.payload.id]
-      if (!message || message.deleted) return state
+      if (!message || message.deleted) return undefined
       const { by } = event.payload
       const emoji = canonicalEmoji(event.payload.emoji)
-      const actors = (message.reactions[emoji] ?? []).filter((a) => a !== by.actor)
+      if (!message.reactions[emoji]?.includes(by.actor)) return undefined
+      const actors = message.reactions[emoji].filter((a) => a !== by.actor)
       if (actors.length > 0) message.reactions[emoji] = actors
       else delete message.reactions[emoji]
-      return state
+      return message
     }
     case 'labels.changed': {
       const message = state.byId[event.payload.id]
-      if (!message || message.deleted) return state
+      if (!message || message.deleted) return undefined
       Object.assign(message.labels, event.payload.set)
       for (const key of event.payload.unset) delete message.labels[key]
-      return state
+      return message
     }
     case 'message.linked': {
       const message = state.byId[event.payload.id]
-      if (message && !message.deleted) message.links = event.payload.links
-      return state
+      if (!message || message.deleted) return undefined
+      message.links = event.payload.links
+      return message
     }
     case 'message.sync_failed': {
       const message = state.byId[event.payload.id]
-      if (message) message.undelivered[event.payload.target] = event.payload.error
-      return state
+      if (!message) return undefined
+      message.undelivered[event.payload.target] = event.payload.error
+      return message
     }
     case 'message.synced': {
       const message = state.byId[event.payload.id]
-      if (message) delete message.undelivered[event.payload.target]
-      return state
+      // Most receipts are for a delivery that never failed: nothing to clear.
+      if (!message || !(event.payload.target in message.undelivered)) return undefined
+      delete message.undelivered[event.payload.target]
+      return message
     }
     default:
-      return state
+      return undefined
   }
 }
 
 export const messagesReducer = reducer({
   contract: boardContract,
-  name: 'vboard.messages.v4',
+  name: 'vboard.messages.v5',
   initialState: { byId: {}, replies: {} } as MessagesState,
 }).fold(foldMessages)
 

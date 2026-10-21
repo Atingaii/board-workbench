@@ -32,10 +32,11 @@ describe('client', () => {
     const old = await client.post('triage', { text: 'old bug', labels: { state: 'open' } })
     const quiet = await client.post('triage', 'quiet question')
     const busy = await client.post('triage', { text: 'busy bug', labels: { state: 'open' } })
-    let latest = 0
+    let latest = ''
     for (const n of [1, 2, 3]) latest = (await client.reply(busy.id, `busy ${n}`)).id
     const gone = await client.reply(busy.id, 'oops')
     await client.delete(gone.id)
+    const { cursor } = await client.threads({ channel: 'triage' })
     const late = await client.reply(old.id, 'still broken')
 
     const page = await client.threads({ channel: 'triage' })
@@ -48,13 +49,13 @@ describe('client', () => {
     expect((await client.threads({ channel: 'triage', limit: 1 })).threads.map((t) => t.message.text)).toEqual(['old bug'])
     // A label on the root matches its replies, so a thread is in once.
     expect((await client.threads({ channel: 'triage', label: { state: 'open' } })).threads.map((t) => t.message.id)).toEqual([busy.id, old.id])
-    expect((await client.threads({ channel: 'triage', after: late.id - 1 })).threads.map((t) => t.message.id)).toEqual([old.id])
+    expect((await client.threads({ channel: 'triage', after: cursor })).threads.map((t) => t.message.id)).toEqual([old.id])
     expect((await client.threads({ text: 'busy 2' })).threads.map((t) => t.message.id)).toEqual([busy.id])
   })
 
   it('throws BoardError with the server code', async () => {
     const { client } = await setup()
-    await expect(client.thread(999)).rejects.toMatchObject({
+    await expect(client.thread('999')).rejects.toMatchObject({
       name: 'BoardError',
       code: 'message_not_found',
       status: 404,

@@ -17,6 +17,7 @@ import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
 import { authorizePost, deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
 import { DroppedError } from './middleware.ts'
+import { indexOf, ref } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
@@ -138,9 +139,9 @@ export const createdBy = (schedule: Schedule, principal: Pick<Principal, 'id' | 
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
   return {
-    id: schedule.id,
+    id: ref(schedule.id),
     channel: schedule.channel,
-    re: schedule.re,
+    re: schedule.re === null ? null : ref(schedule.re),
     text: schedule.text,
     labels: { ...schedule.labels },
     noSync: schedule.noSync,
@@ -151,7 +152,7 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
     times: schedule.times,
     sent: schedule.sent,
     next: schedule.next === null ? null : new Date(schedule.next).toISOString(),
-    last: schedule.last,
+    last: schedule.last === null ? null : ref(schedule.last),
     state: schedule.canceled ? 'canceled' : schedule.next === null ? 'done' : 'pending',
     canceled: schedule.canceled,
     by: schedule.as.author,
@@ -216,7 +217,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     // A retry after the post landed gets the same event ID, so A2 hands back the message it already posted.
     let posted: number
     try {
-      posted = (
+      posted = indexOf((
       await writePost(writes, {
         via: { kind: 'schedule', id },
         identity: { ...schedule.as, principal: { ...schedule.as.principal, access } },
@@ -231,7 +232,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
         // Checked when it was scheduled; a handle that's ambiguous since stays plain text.
         lenientMentions: true,
       })
-    ).id
+    ).id)!
     } catch (error) {
       if (!(error instanceof DroppedError)) throw error
       // Its text never changes, so the middleware would drop every send after this one too.
@@ -324,7 +325,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
 
     async create(
       identity: Identity,
-      body: ScheduleBodyOutput,
+      /** The body, with `re` as the log index it names. */
+      body: Omit<ScheduleBodyOutput, 're'> & { re?: number | undefined },
       attachments: Attachment[],
     ): Promise<{ schedule: ScheduleView; unknownMentions?: string[] }> {
       if (!writes) throw new Error('schedules used before the board bound them')

@@ -31,9 +31,10 @@ vb reply "$id" "rolled back to d4e5f6"
 echo "a longer note" | vb reply "$id" -              # - reads the text from stdin
 ```
 
-- **A message's ID is its log index,** shown as `#812`. IDs are short, unique
-  within the board, and double as positions in the log, so a script can chain
-  them: `vb wait --after "$id"`. Other events use indexes too, so IDs have gaps.
+- **A message's ID is a string,** shown as `#812`. It's unique within the
+  board; pass it back as you got it, and don't count with it or order by it.
+  An ID doubles as a cursor, so a script can chain it: `vb wait --after "$id"`.
+  On `a2()` it's a [log index](../04-reference/04-log.md#one-log).
 - **Threads are one level deep.** Reply to any message in a thread and the
   board stores the root as `re`, plus the exact message you replied to as
   `replyTo` when that isn't the root. Platforms with sub-threads use `replyTo`
@@ -148,7 +149,7 @@ import { createClient } from 'vboard/client'
 
 const board = createClient()
 const shot = await board.upload({ data: new Uint8Array(await readFile('after.png')), name: 'after.png' })
-await board.reply(812, { text: 'fixed, see after', attachments: [shot] })
+await board.reply('812', { text: 'fixed, see after', attachments: [shot] })
 ```
 
 ## Idempotent writes

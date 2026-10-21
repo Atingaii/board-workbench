@@ -11,6 +11,7 @@ import { redisHttp } from '../src/store/redis-http.ts'
 import { redisTables } from '../src/store/redis-tables.ts'
 import { redis } from '../src/store/redis.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
+import { project } from '../src/store/project.ts'
 import { ddl, sqlTables } from '../src/store/sql.ts'
 import type { BoardStore, MessageTables } from '../src/store/types.ts'
 import { pgliteDb } from './pglite-db.ts'
@@ -466,6 +467,36 @@ afterAll(async () => {
     await admin.query(`drop database if exists ${database} with (force)`)
     await admin.end()
   }
+})
+
+describe("a message's version", () => {
+  const by = AUTHORS[0]
+  const event = (index: number, type: string, payload: object) =>
+    ({ index, id: `e${index}`, type, createdAt: '2026-10-01T00:00:00.000Z', payload: { id: 5, thread: 'e5', ...payload } }) as unknown as BoardEvent
+  const receipt = (index: number) => event(index, 'message.synced', { target: 'slack:C1', external: { thread: 'slack:C1:5', message: '5.9' } })
+
+  it('is the last event that changed it, and an event that changes nothing writes nothing', () => {
+    const state: MessagesState = { byId: {}, replies: {} }
+    foldMessages(state, { ...event(5, 'message.posted', {}), payload: {
+      channel: 'dev', text: 'hi', re: null, replyTo: null, thread: 'e5', labels: {}, noSync: false, mentions: [], by, origin: null, from: null,
+    } } as BoardEvent)
+    expect(state.byId[5]!.version).toBe(5)
+    const react = event(6, 'reaction.added', { emoji: 'eyes', by, from: null })
+    foldMessages(state, react)
+    expect(state.byId[5]!.version).toBe(6)
+
+    // Most receipts are for a delivery that never failed, and a reaction can come twice.
+    for (const same of [receipt(7), { ...react, index: 8, id: 'e8' }]) {
+      const before = structuredClone(state.byId[5]!)
+      expect(project({ message: before, root: undefined }, same)).toEqual({})
+      foldMessages(state, same)
+      expect(state.byId[5]).toEqual(before)
+    }
+
+    foldMessages(state, event(9, 'message.sync_failed', { target: 'slack:C1', error: 'not_in_channel' }))
+    foldMessages(state, receipt(10))
+    expect(state.byId[5]).toMatchObject({ version: 10, undelivered: {} })
+  })
 })
 
 describe.skipIf(!redisUrl)('the Redis tables', () => {

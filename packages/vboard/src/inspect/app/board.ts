@@ -83,15 +83,15 @@ export async function setProfile(next: string | null | undefined) {
 
 // --- which message you're editing ---------------------------------------------------
 
-let editing: number | null = null
+let editing: string | null = null
 const editingListeners = new Set<() => void>()
 
-export function setEditing(id: number | null) {
+export function setEditing(id: string | null) {
   editing = id
   editingListeners.forEach((listener) => listener())
 }
 
-export function useEditing(): number | null {
+export function useEditing(): string | null {
   return useSyncExternalStore(
     (listener) => {
       editingListeners.add(listener)
@@ -158,14 +158,13 @@ export async function boot() {
     store.merge(
       { ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])), cursor: recent.cursor },
       recent.messages,
-      recent.cursor,
     ),
   )
   void stream(recent.cursor)
 }
 
 /** Folds the live stream in, a frame's worth of events at a time. */
-async function stream(after: number) {
+async function stream(after: string) {
   let queue: BoardEventView[] = []
   let scheduled = false
   const flush = () => {
@@ -198,18 +197,18 @@ export const loadChannel = (channel: string) =>
   once(`channel:${channel}`, async () => {
     const page = await client.messages({ channel, limit: PAGE })
     if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.merge(s, page.messages, page.cursor))
+    set((s) => store.merge(s, page.messages))
   })
 
 export async function loadOlder(channel: string): Promise<boolean> {
   const oldest = Object.values(state.messages)
     .filter((m) => m.channel === channel)
-    .reduce((min, m) => Math.min(min, m.id), Number.POSITIVE_INFINITY)
-  if (exhausted.has(channel) || !Number.isFinite(oldest)) return false
+    .sort(store.byWritten)[0]
+  if (exhausted.has(channel) || !oldest) return false
   try {
-    const page = await client.messages({ channel, before: oldest, limit: PAGE })
+    const page = await client.messages({ channel, before: oldest.id, limit: PAGE })
     if (page.messages.length < PAGE) exhausted.add(channel)
-    set((s) => store.merge(s, page.messages, page.cursor))
+    set((s) => store.merge(s, page.messages))
     return !exhausted.has(channel)
   } catch (error) {
     toast(message(error))
@@ -219,10 +218,10 @@ export async function loadOlder(channel: string): Promise<boolean> {
 
 export const hasOlder = (channel: string) => !exhausted.has(channel)
 
-export const loadThread = (id: number) =>
+export const loadThread = (id: string) =>
   once(`thread:${id}`, async () => {
-    const { message: root, replies, cursor } = await client.thread(id)
-    set((s) => store.merge(s, [root, ...replies], cursor))
+    const { message: root, replies } = await client.thread(id)
+    set((s) => store.merge(s, [root, ...replies]))
   })
 
 export const loadInbox = (key: string): Promise<InboxEntry[]> => client.inbox(key, { limit: 100 })
@@ -241,7 +240,7 @@ export const loadFiltered = (channel: string | undefined, filter: store.Filter) 
       ...(filter.label.length > 0 ? { label: filter.label } : {}),
       limit: PAGE,
     })
-    set((s) => store.merge(s, page.messages, page.cursor))
+    set((s) => store.merge(s, page.messages))
     const missing = [...new Set(page.messages.flatMap((m) => (m.re !== null && !state.messages[m.re] ? [m.re] : [])))].slice(0, 30)
     await Promise.all(missing.map((id) => loadThread(id)))
   })
@@ -253,7 +252,7 @@ const outgoing = new Map<string, File[]>()
 
 /** Shows a post at once; the board's answer replaces it. Files upload first. */
 export async function send(
-  post: { channel: string; re: number | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[] },
+  post: { channel: string; re: string | null; text: string; noSync: boolean; labels: Record<string, string>; files?: File[] },
   key: string = crypto.randomUUID(),
 ) {
   const files = post.files ?? outgoing.get(key) ?? []
@@ -281,7 +280,7 @@ export async function send(
     }
     const sent = post.re === null ? await client.post(post.channel, options) : await client.reply(post.re, options)
     outgoing.delete(key)
-    set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent], sent.id))
+    set((s) => store.merge({ ...s, pending: s.pending.filter((p) => p.key !== key) }, [sent]))
   } catch (error) {
     set((s) => ({ ...s, pending: s.pending.map((p) => (p.key === key ? { ...p, error: message(error) } : p)) }))
   }
@@ -325,7 +324,7 @@ export const discard = (key: string) => {
  * confirms it; if that never comes, the overlay drops after a while and the
  * board's view stands.
  */
-async function change(id: number, op: store.Op, run: () => Promise<unknown>) {
+async function change(id: string, op: store.Op, run: () => Promise<unknown>) {
   const opId = crypto.randomUUID()
   set((s) => store.addOp(s, id, opId, op))
   try {
@@ -337,12 +336,12 @@ async function change(id: number, op: store.Op, run: () => Promise<unknown>) {
   }
 }
 
-export const react = (id: number, emoji: string, remove: boolean) =>
+export const react = (id: string, emoji: string, remove: boolean) =>
   change(id, { kind: 'react', emoji, remove }, () => client.react(id, emoji, { remove }))
 
-export const edit = (id: number, text: string) => change(id, { kind: 'edit', text }, () => client.edit(id, text))
+export const edit = (id: string, text: string) => change(id, { kind: 'edit', text }, () => client.edit(id, text))
 
-export const remove = (id: number) => change(id, { kind: 'delete' }, () => client.delete(id))
+export const remove = (id: string) => change(id, { kind: 'delete' }, () => client.delete(id))
 
-export const label = (id: number, put: Record<string, string>, unset: string[]) =>
+export const label = (id: string, put: Record<string, string>, unset: string[]) =>
   change(id, { kind: 'label', set: put, unset }, () => client.label(id, { set: put, unset }))

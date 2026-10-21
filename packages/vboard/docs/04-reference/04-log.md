@@ -13,6 +13,11 @@ always safe.
 - **A message's ID is the log index of its `message.posted` event.** IDs are
   short, stable, unique within the board, and double as positions in the log
   (`after`). Other events consume indexes too, so message IDs have gaps.
+- **The API shows indexes as strings.** Message IDs, schedule IDs, and cursors
+  are decimal strings there (`"812"`). Clients pass them back as they got them
+  and don't count with them: a board on another backend picks its own. An
+  event's `cursor` is its index, and a message's `version` is the index of the
+  last event that changed it. See [IDs and cursors](./03-http.md#ids-and-cursors).
 - **One log means one global order**, reducers that see everything, and atomic
   batches: a root and the `thread.synced` events for its targets commit
   together.
@@ -111,7 +116,8 @@ thread's events in order on its lane.
 
 ### Schedule events
 
-A schedule's ID is the index of its `schedule.created` event (`s12`).
+A schedule's ID is the index of its `schedule.created` event in the
+`schedules` session (`s12`, and `"12"` in the API).
 
 | Event | Payload |
 | --- | --- |
@@ -166,7 +172,7 @@ as the tables keep it, for anyone reading the log themselves.
 | --- | --- | --- | --- |
 | `channelsReducer` | `vboard.channels.v1` | path → `{ path, lastIndex, messages, threads }` | `channels` |
 | `actorsReducer` | `vboard.actors.v2` | `byId`: actor ID → `{ id, kind, handle, name, avatar }`; `byHandle`: lowercased handle → actor IDs; `links`: platform actor → the person it's linked to | mention resolution, `actors`, rendering |
-| `messagesReducer` | `vboard.messages.v4` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | not the board: its tables hold the same messages |
+| `messagesReducer` | `vboard.messages.v5` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | not the board: its tables hold the same messages |
 
 A message, as the tables keep it and `messagesReducer` folds it:
 
@@ -176,6 +182,7 @@ A message, as the tables keep it and `messagesReducer` folds it:
 | `reactions` | emoji → the actor IDs who reacted |
 | `createdAt`, `editedAt` | ISO times; `editedAt` is null until an edit |
 | `deleted` | true for a tombstone, whose text, reactions, files, and links are cleared |
+| `version` | the index of the last event that changed it. Folds from before it existed leave it out, and views fall back to its post's index |
 | `undelivered` | target → error, for each sync target it didn't reach. A later delivery clears its entry |
 
 - **Edits to a deleted message are ignored**, as are reactions and labels.

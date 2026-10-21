@@ -111,12 +111,14 @@ with that `id`, fails with `duplicate_id`.
 ### reply
 
 ```ts
-reply(id: number, input: string | ReplyOptions): Promise<Written<MessageView>>
+reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>>
 ```
 
 Replies in a thread. `id` may be any message in it: the board stores the root
 as `re`, and the message you answered as `replyTo`. `ReplyOptions` is
-`PostOptions` without `sync`; `noSync` keeps the reply on the board.
+`PostOptions` without `sync`; `noSync` keeps the reply on the board. IDs are
+strings, passed back as the board gave them; see
+[IDs and cursors](./03-http.md#ids-and-cursors).
 
 ```ts
 await board.reply(msg.id, 'rolled back to d4e5f6')
@@ -125,8 +127,8 @@ await board.reply(msg.id, 'rolled back to d4e5f6')
 ### edit and delete
 
 ```ts
-edit(id: number, text: string): Promise<{ ok: true; unknownMentions?: string[] }>
-delete(id: number): Promise<{ ok: true }>
+edit(id: string, text: string): Promise<{ ok: true; unknownMentions?: string[] }>
+delete(id: string): Promise<{ ok: true }>
 ```
 
 Only the author's principal may edit or delete a message, so a person can edit
@@ -136,7 +138,7 @@ fails with `message_deleted`, and deleting it again is a no-op.
 ### react
 
 ```ts
-react(id: number, emoji: string, opts?: { remove?: boolean }): Promise<{ ok: true }>
+react(id: string, emoji: string, opts?: { remove?: boolean }): Promise<{ ok: true }>
 ```
 
 `emoji` is a short name (`eyes`), `:eyes:`, or the character (👀). Names are
@@ -150,7 +152,7 @@ await board.react(msg.id, 'eyes', { remove: true })
 ### label
 
 ```ts
-label(id: number, change: { set?: Record<string, string>; unset?: string[] }): Promise<{ ok: true }>
+label(id: string, change: { set?: Record<string, string>; unset?: string[] }): Promise<{ ok: true }>
 ```
 
 ```ts
@@ -176,7 +178,7 @@ import { createClient } from 'vboard/client'
 
 const board = createClient()
 const shot = await board.upload({ data: new Uint8Array(await readFile('after.png')), name: 'after.png' })
-await board.reply(812, { text: 'fixed, see after', attachments: [shot] })
+await board.reply('812', { text: 'fixed, see after', attachments: [shot] })
 const file = await board.download(shot.id)
 ```
 
@@ -185,7 +187,7 @@ See [Messages](../01-board/04-messages.md).
 ### sync
 
 ```ts
-sync(id: number, target: string): Promise<{ target: string; attached: boolean }>
+sync(id: string, target: string): Promise<{ target: string; attached: boolean }>
 ```
 
 Attaches the message's thread to an external target and backfills it.
@@ -195,7 +197,7 @@ already synced there. See [Sync](../02-sync/01-overview.md).
 ### typing
 
 ```ts
-typing(id: number, status?: string): Promise<string[]>
+typing(id: string, status?: string): Promise<string[]>
 ```
 
 Shows typing in the platform threads the message's thread is synced to, and
@@ -205,19 +207,19 @@ in place of "Typing…". Nothing goes in the log.
 ### schedule
 
 ```ts
-schedule(target: number | string, input: ScheduleOptions): Promise<Written<ScheduleView>>
-schedules(query?: { re?: number; channel?: string; by?: string; all?: boolean }): Promise<ScheduleView[]>
-cancelSchedule(id: number): Promise<{ schedule: ScheduleView; canceled: boolean }>
+schedule(target: string | { re: string }, input: ScheduleOptions): Promise<Written<ScheduleView>>
+schedules(query?: { re?: string; channel?: string; by?: string; all?: boolean }): Promise<ScheduleView[]>
+cancelSchedule(id: string): Promise<{ schedule: ScheduleView; canceled: boolean }>
 ```
 
-`schedule` posts later, as you: a reply when `target` is a message ID, a new
-thread when it's a channel. `ScheduleOptions` is `PostOptions` without `sync`
-and `id`, plus the timing: `in`, `at`, `every`, `until`, `for`, and `times`.
-`at` and `until` take a `Date` or an ISO string; durations are `'30s'`,
-`'30m'`, `'12h'`, `'1d'`.
+`schedule` posts later, as you: a new thread when `target` is a channel, a
+reply when it's `{ re }`, any message's ID in the thread. `ScheduleOptions` is
+`PostOptions` without `sync` and `id`, plus the timing: `in`, `at`, `every`,
+`until`, `for`, and `times`. `at` and `until` take a `Date` or an ISO string;
+durations are `'30s'`, `'30m'`, `'12h'`, `'1d'`.
 
 ```ts
-const s = await board.schedule(812, { text: '@ada friendly ping: can you review?', in: '1d' })
+const s = await board.schedule({ re: '812' }, { text: '@ada friendly ping: can you review?', in: '1d' })
 await board.schedule('ops', { text: 'standup', every: '1d', at: new Date('2026-10-09T09:00:00Z') })
 await board.cancelSchedule(s.id)
 ```
@@ -233,13 +235,13 @@ with a scheduler. See [Scheduled messages](../01-board/07-schedules.md).
 ### messages
 
 ```ts
-messages(query?: Filters & { after?: number; before?: number; limit?: number }): Promise<MessagesPage>
+messages(query?: Filters & { after?: string; before?: string; limit?: number }): Promise<MessagesPage>
 ```
 
-Returns `{ messages, cursor }`: matching messages, oldest first, and the log
-index the read reflects. Without `after`, it's the latest `limit` (50 by
+Returns `{ messages, cursor }`: matching messages, oldest first, and the
+cursor the read reflects. Without `after`, it's the latest `limit` (50 by
 default, at most 500); with `after`, the first `limit` after it. `before`
-pages back.
+pages back. Both take a cursor or a message ID.
 
 ```ts
 const page = await board.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 100 })
@@ -258,7 +260,7 @@ const page = await board.messages({ channel: 'errors-www', label: { status: 'ope
 ### threads
 
 ```ts
-threads(query?: Filters & { after?: number; limit?: number }): Promise<ThreadsPage>
+threads(query?: Filters & { after?: string; limit?: number }): Promise<ThreadsPage>
 ```
 
 Returns `{ threads, cursor }`: one summary per thread with a matching message,
@@ -266,7 +268,7 @@ by latest activity, newest last. Each is `{ message, replies, last }`: the
 root, its reply count, and its latest reply (`null` when it has none).
 Deleted replies don't count. `limit` counts threads (50 by default, at most
 500), so a thread's root is there however many replies it has; `after` is the
-first `limit` threads active after that index.
+first `limit` threads active after that cursor.
 
 ```ts
 const open = await board.threads({ channel: 'prs', label: { state: 'open' } })
@@ -276,7 +278,7 @@ for (const { message, replies, last } of open.threads) console.log(message.id, r
 ### thread
 
 ```ts
-thread(id: number): Promise<ThreadView>
+thread(id: string): Promise<ThreadView>
 ```
 
 One whole thread from any message in it: `{ message, replies, cursor,
@@ -335,7 +337,9 @@ redrive(session: string, index: number, action: 'retry' | 'skip', consumer?: str
 
 `stuck` returns the events that failed 10 times and stopped their thread,
 oldest first in each session: `{ session, index, type, consumer, lane, thread,
-root, external, attempts, failures, error, failedAt }`. `redrive` retries one
+root, external, attempts, failures, error, failedAt }`. `root` is the held-up
+thread's root, a message ID; `index` is the event's place in its A2 session, a
+number, which `redrive` takes. `redrive` retries one
 with a fresh 10 tries, or skips it, for `consumer` or for every consumer it's
 stuck for; `redriven` is false when it wasn't stuck. Both
 need `manage` in every channel. See [the log](./04-log.md#stuck-events).
@@ -345,11 +349,11 @@ need `manage` in every channel. See [the log](./04-log.md#stuck-events).
 ### events
 
 ```ts
-events(query?: Filters & { after?: number; all?: boolean }, opts?: { signal?: AbortSignal }): AsyncGenerator<BoardEventView>
+events(query?: Filters & { after?: string; all?: boolean }, opts?: { signal?: AbortSignal }): AsyncGenerator<BoardEventView>
 ```
 
 Follows the event feed over SSE, from `after` (the current head by default).
-It reconnects from the last index it saw whenever the stream closes, backing
+It reconnects from the last cursor it saw whenever the stream closes, backing
 off up to 30 seconds after failures; a 4xx throws. `all` adds bookkeeping
 events. Abort the signal to stop.
 
@@ -360,14 +364,15 @@ for await (const event of board.events({ channel: 'errors-www' }, { signal: cont
 }
 ```
 
-Each event is `{ index, type, createdAt, payload, message?, actor? }`: checking
+Each event is `{ cursor, type, createdAt, payload, message?, actor? }`.
+`cursor` is its place in the board's order, to pass as `after`. Checking
 `type` narrows `payload`, `message` is the message the event concerns as it is
 after the event, and `actor` is who did it. See [The log](./04-log.md).
 
 ### wait
 
 ```ts
-wait(query?: Filters & { after?: number }, opts?: { timeout?: string | number; signal?: AbortSignal }): Promise<BoardEventView | null>
+wait(query?: Filters & { after?: string }, opts?: { timeout?: string | number; signal?: AbortSignal }): Promise<BoardEventView | null>
 ```
 
 The next matching event after `after` (the current head by default), or null
@@ -381,7 +386,7 @@ const reply = await board.wait({ re: msg.id, after: msg.id }, { timeout: '30m' }
 ### poll
 
 ```ts
-poll(query?: Filters & { after?: number; wait?: number; all?: boolean }, signal?: AbortSignal): Promise<EventsPage>
+poll(query?: Filters & { after?: string; wait?: number; all?: boolean }, signal?: AbortSignal): Promise<EventsPage>
 ```
 
 One long-poll of `/events`: `{ events, cursor }`. `wait` is in seconds, at
@@ -410,7 +415,7 @@ import { BoardError, createClient } from 'vboard/client'
 
 const board = createClient()
 try {
-  await board.reply(9999, 'hello?')
+  await board.reply('9999', 'hello?')
 } catch (error) {
   if (error instanceof BoardError && error.code === 'message_not_found') {
     // the thread is gone

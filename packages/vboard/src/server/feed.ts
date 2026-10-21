@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import type { ActorView, Filters, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
+import type { ActorView, Filters, LinkView, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
 import type { BoardEvent, Link } from '../contract/contract.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import {
@@ -57,22 +57,32 @@ export const linkedIds = (links: readonly Link[]): number[] => links.flatMap((li
  * it's read. A linked message the reader's lookup doesn't have hides too: its
  * snapshot shows only where it's known to be readable.
  */
-export function readableLinks(links: Link[], reader: Reader): Link[] {
-  if (reader.access.readsAll) return links
+export function readableLinks(links: Link[], reader: Reader): LinkView[] {
   return links.map((link) => {
-    if (link.message === null) return link
-    const channel = reader.channelOf(link.message)
-    return channel !== undefined && reader.access.readable(channel)
-      ? link
+    if (link.message === null) return { ...link, message: null }
+    const channel = reader.access.readsAll ? undefined : reader.channelOf(link.message)
+    return reader.access.readsAll || (channel !== undefined && reader.access.readable(channel))
+      ? { ...link, message: ref(link.message) }
       : { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
   })
 }
 
+/** A message's or a cursor's ID as clients see it. On this board it's the log index, in decimal. */
+export const ref = (index: number): string => String(index)
+
+/** The log index a ref names on this board, or null for a string that names nothing here. */
+export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.test(value) ? Number(value) : null)
+
 /** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
 export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
-  const { blind: _blind, ...shown } = message
+  const { blind: _blind, version, schedule, ...shown } = message
   return {
     ...shown,
+    id: ref(message.id),
+    re: message.re === null ? null : ref(message.re),
+    replyTo: message.replyTo === null ? null : ref(message.replyTo),
+    version: version ?? message.id,
+    ...(schedule ? { schedule: { id: ref(schedule.id), n: schedule.n } } : {}),
     links: readableLinks(message.links, reader),
     labels: { ...message.labels },
     reactions: Object.fromEntries(
@@ -158,7 +168,7 @@ export function compileFilter(
         if (message.channel !== subtree && !message.channel.startsWith(`${subtree}/`)) return false
       } else if (message.channel !== channel) return false
     }
-    if (filters.re !== undefined && message.id !== filters.re && message.re !== filters.re)
+    if (filters.re !== undefined && ref(message.id) !== filters.re && (message.re === null || ref(message.re) !== filters.re))
       return false
     if (by !== null && !covers(by, message.by.actor, message.by.principal)) return false
     if (mentions !== null && !message.mentions.some((id) => mentions.has(id))) return false
@@ -191,7 +201,8 @@ export function toMessageFilter(filters: ParsedFilters, context: { me: string | 
   const channel = filters.channel
   if (channel !== undefined)
     out.channel = channel.endsWith('/') ? { path: channel.slice(0, -1), subtree: true } : { path: channel, subtree: false }
-  if (filters.re !== undefined) out.re = filters.re
+  // A ref that names nothing on this board matches nothing.
+  if (filters.re !== undefined) out.re = indexOf(filters.re) ?? -1
   if (filters.by !== undefined) {
     const who = whoIs(filters.by, context.actors)
     out.by = { actors: [...who.actors], principals: [...who.principals] }
@@ -264,13 +275,23 @@ export function eventView(event: BoardEvent, after: Message | undefined, actors:
   // `type` and `payload` come from the same event, so they still match; TypeScript
   // can't follow that through a union, and this is the one place views are made.
   return {
-    index: event.index,
+    cursor: ref(event.index),
     type: event.type,
     createdAt: iso(event.createdAt),
-    payload: links ? { ...event.payload, links: readableLinks(links, reader) } : event.payload,
+    payload: payloadView(event.payload as Record<string, unknown>, links ? readableLinks(links, reader) : undefined),
     ...(after ? { message: view(after, actors, reader) } : {}),
     ...(actor ? { actor: { id: actor.id, ...actorView(actors, actor.id)! } } : {}),
   } as BoardEventView
+}
+
+/** An event's payload as clients see it: the message IDs in it are refs. */
+function payloadView(payload: Record<string, unknown>, links: LinkView[] | undefined): Record<string, unknown> {
+  const shown: Record<string, unknown> = { ...payload }
+  for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
+  const schedule = shown.schedule as { id: number; n: number } | undefined
+  if (schedule) shown.schedule = { id: ref(schedule.id), n: schedule.n }
+  if (links) shown.links = links
+  return shown
 }
 
 export type FeedItem = { index: number; view: BoardEventView | null }

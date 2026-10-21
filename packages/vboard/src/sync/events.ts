@@ -53,7 +53,8 @@ export const SyncOverrides = z.object({
 }).strict()
 
 export type SyncOverrides = z.infer<typeof SyncOverrides>
-export type SyncResult = { root: number | null; message: number | null }
+/** What an import made: its thread's root and the message, as IDs clients pass back as they got them. */
+export type SyncResult = { root: string | null; message: string | null }
 
 export function immutable<T>(value: T): T {
   if (value && typeof value === 'object') {

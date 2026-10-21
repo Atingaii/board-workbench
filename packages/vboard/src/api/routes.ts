@@ -7,15 +7,19 @@ import {
   LabelKey,
   Labels,
   MESSAGE_TEXT_MAX,
-  MessageId,
   MessageText,
   storable,
 } from '../contract/schemas.ts'
-import type { BoardEvent } from '../contract/contract.ts'
+import type { BoardEvent, Link } from '../contract/contract.ts'
 import type { Actor, Channel, Message } from '../contract/reducers.ts'
 import type { AccessSummary } from '../server/access.ts'
 
-const id = z.coerce.number().int().positive()
+/**
+ * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
+ * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals.
+ */
+export const Ref = z.string().min(1).max(128)
+const id = Ref
 const repeated = z
   .union([z.string(), z.array(z.string())])
   .transform((value) => (Array.isArray(value) ? value : [value]))
@@ -46,19 +50,19 @@ export const Filters = z.object({
 })
 
 export const MessagesQuery = Filters.extend({
-  after: z.coerce.number().int().nonnegative().optional(),
+  after: Ref.optional(),
   before: id.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
 /** `limit` counts threads: each thread with a matching message, by its latest reply. */
 export const ThreadsQuery = Filters.extend({
-  after: z.coerce.number().int().nonnegative().optional(),
+  after: Ref.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
 export const EventsQuery = Filters.extend({
-  after: z.coerce.number().int().nonnegative().optional(),
+  after: Ref.optional(),
   wait: z.coerce.number().min(0).max(300).optional(),
   all: z.coerce.boolean().optional(),
 })
@@ -66,7 +70,7 @@ export const EventsQuery = Filters.extend({
 export const PostBody = z
   .object({
     channel: ChannelPath.optional(),
-    re: MessageId.optional(),
+    re: Ref.optional(),
     /** May be empty when the message has attachments. */
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
     labels: Labels.optional(),
@@ -101,7 +105,7 @@ const Instant = z.string().datetime({ offset: true })
 export const ScheduleBody = z
   .object({
     channel: ChannelPath.optional(),
-    re: MessageId.optional(),
+    re: Ref.optional(),
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
@@ -229,10 +233,10 @@ export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
 export type ScheduleView = {
-  id: number
+  id: string
   channel: string
   /** The thread it replies in, or null when each send starts a new thread in `channel`. */
-  re: number | null
+  re: string | null
   text: string
   labels: Record<string, string>
   noSync: boolean
@@ -247,7 +251,7 @@ export type ScheduleView = {
   /** When the next send is due; null once it's done or canceled. */
   next: string | null
   /** The last message it posted. */
-  last: number | null
+  last: string | null
   state: 'pending' | 'done' | 'canceled'
   canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
   by: { actor: string; principal: string; profile: string | null; session: string | null }
@@ -263,16 +267,44 @@ export type PersonView = { id: string; handle: string; name: string; avatar: str
  * `person` is who a linked platform account belongs to.
  */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'> & { person?: PersonView }
-export type MessageView = Message & { author: ActorView | null }
+/** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
+export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'blind' | 'version'> & {
+  id: string
+  /** The thread's root, or null for a root. */
+  re: string | null
+  /** The exact message replied to, when it isn't the root. */
+  replyTo: string | null
+  /** Grows with each change to this message: of two views of it, the one with the higher version is newer. */
+  version: number
+  links: LinkView[]
+  /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
+  schedule?: { id: string; n: number }
+  author: ActorView | null
+}
+
+/** A link in a message: a board message it names is a ref. */
+export type LinkView = Omit<Link, 'message'> & { message: string | null }
+
+/** An event's payload as clients see it: message IDs are refs. */
+type PayloadView<P> = {
+  [K in keyof P]: K extends 'id' | 're' | 'replyTo'
+    ? P[K] extends number ? string : P[K] extends number | null ? string | null : P[K]
+    : K extends 'links'
+      ? LinkView[]
+      : K extends 'schedule'
+        ? P[K] extends undefined ? undefined : { id: string; n: number } | Exclude<P[K], object>
+        : P[K]
+}
 
 /** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */
 export type BoardEventView = BoardEvent extends infer E
   ? E extends { type: infer T; payload: infer P }
     ? {
-        index: number
+        /** Where this event is in the board's order: pass it as `after` to read on from here. */
+        cursor: string
         type: T
         createdAt: string
-        payload: P
+        payload: PayloadView<P>
         /** The message the event concerns, as it is after the event. */
         message?: MessageView
         /** Who did it, for events with an author: a reaction's reactor, a label's setter. */
@@ -339,7 +371,7 @@ export type IdentityView = {
   links: LinkedAccount[]
   /** The sync entries you haven't linked an account on. Boards older than it leave it out. */
   unlinked?: string[]
-  cursor: number
+  cursor: string
 }
 /**
  * How to prove an account is yours: post `code` from it anywhere the board syncs
@@ -352,18 +384,18 @@ export type IdentityChallenge =
 export type IdentityCheck = { linked: LinkedAccount | null }
 
 export type ChannelView = Channel
-export type MessagesPage = { messages: MessageView[]; cursor: number }
+export type MessagesPage = { messages: MessageView[]; cursor: string }
 export type ThreadView = {
   message: MessageView
   replies: MessageView[]
-  cursor: number
+  cursor: string
   /** The pending schedules that reply in this thread. Boards older than schedules leave it out. */
   schedules?: ScheduleView[]
 }
 /** A thread at a glance: its root, how many replies it has, and the latest one (null when none). Deleted replies don't count. */
 export type ThreadSummaryView = { message: MessageView; replies: number; last: MessageView | null }
-export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: number }
-export type EventsPage = { events: BoardEventView[]; cursor: number }
+export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: string }
+export type EventsPage = { events: BoardEventView[]; cursor: string }
 
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
 export type TypingResult = { targets: string[] }
@@ -424,7 +456,7 @@ export type StuckEvent = {
   lane: string | null
   /** The board thread it holds up, when there is one, and its root. */
   thread: string | null
-  root: number | null
+  root: string | null
   /** The platform thread, for an inbox event that never reached the board. */
   external: string | null
   attempts: number

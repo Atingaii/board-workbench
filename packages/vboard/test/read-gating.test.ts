@@ -239,7 +239,7 @@ describe('links', () => {
     const link = { url: 'https://slack.test/p1', message: 7, snapshot: { author: 'ada', text: 'the key is…', createdAt: null, files: [] }, unavailable: null }
     const hidden = { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
     expect(readableLinks([link], { access: compileAccess({ 'dev/': ['read'] }), channelOf })).toEqual([hidden])
-    expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([link])
+    expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([{ ...link, message: '7' }])
     // One the reader's lookup doesn't have shows nothing either.
     expect(readableLinks([{ ...link, message: 8 }], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([hidden])
   })

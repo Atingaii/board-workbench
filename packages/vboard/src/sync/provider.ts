@@ -10,7 +10,7 @@ export const ResolvedTarget = z.object({ target: z.string().min(1), channel: z.s
 export type ResolvedTarget = z.infer<typeof ResolvedTarget>
 
 export type SyncClient<E extends ProviderEvent = ProviderEvent> = Omit<BoardClient, 'sync'> & {
-  sync(id: number, target: string): ReturnType<BoardClient['sync']>
+  sync(id: string, target: string): ReturnType<BoardClient['sync']>
   sync(channel: string, event: E, overrides?: SyncOverrides): Promise<SyncResult>
 }
 

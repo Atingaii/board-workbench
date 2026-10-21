@@ -192,11 +192,15 @@ const positionals = marked.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.l
 const out = (text: string) => process.stdout.write(`${text}\n`)
 const printJson = (value: unknown) => out(JSON.stringify(value))
 
-function messageId(value: string | undefined, what = 'message id'): number {
-  const id = Number(value?.replace(/^#/, ''))
-  if (!value || !Number.isInteger(id) || id <= 0) throw new UsageError(`expected a ${what}, got: ${value ?? '(nothing)'}`)
+/** A message's ID as you'd write it: `#812` or `812`. It's passed to the board as it is. */
+function messageId(value: string | undefined, what = 'message id'): string {
+  const id = value?.replace(/^#/, '') ?? ''
+  if (!/^[^\s/]+$/.test(id)) throw new UsageError(`expected a ${what}, got: ${value ?? '(nothing)'}`)
   return id
 }
+
+/** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
+const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
 
 function labelPairs(values: string[] | undefined): Record<string, string> {
   const pairs: Record<string, string> = {}
@@ -237,9 +241,9 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
 }
 
 /** `s12` or `12`. */
-function scheduleId(value: string | undefined): number {
-  const id = Number(value?.replace(/^s/i, ''))
-  if (!value || !Number.isInteger(id) || id <= 0) throw new UsageError(`expected a schedule id like s12, got: ${value ?? '(nothing)'}`)
+function scheduleId(value: string | undefined): string {
+  const id = value?.replace(/^s(?=\d)/i, '') ?? ''
+  if (!/^[^\s/]+$/.test(id)) throw new UsageError(`expected a schedule id like s12, got: ${value ?? '(nothing)'}`)
   return id
 }
 
@@ -250,7 +254,7 @@ function instant(flag: string, value: string): string {
   return time.toISOString()
 }
 
-function filters(channel?: string): Filters & { after?: number } {
+function filters(channel?: string): Filters & { after?: string } {
   return {
     ...(channel ? { channel } : {}),
     ...(flags.re ? { re: messageId(flags.re) } : {}),
@@ -259,7 +263,7 @@ function filters(channel?: string): Filters & { after?: number } {
     ...(flags.label?.length ? { label: flags.label } : {}),
     ...(flags.from ? { from: flags.from } : {}),
     ...(flags.text ? { text: flags.text } : {}),
-    ...(flags.after !== undefined ? { after: Number(flags.after) } : {}),
+    ...(flags.after !== undefined ? { after: flags.after.replace(/^#/, '') } : {}),
   }
 }
 
@@ -581,7 +585,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'read': {
       const target = args[0]
       const board = client()
-      if (target && /^#?\d+$/.test(target)) {
+      if (target && isMessageRef(target)) {
         const thread = await board.thread(messageId(target))
         // With filters, the root and only the replies that match them.
         const narrowed = Object.keys(filters()).length > 0
@@ -619,7 +623,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'post': {
       const [target, body] = args
       if (!target) throw new UsageError('usage: vboard post <channel|id> "<text>"')
-      const re = /^#?\d+$/.test(target) ? messageId(target) : undefined
+      const re = isMessageRef(target) ? messageId(target) : undefined
       if (re !== undefined && flags.sync?.length) throw new UsageError('--sync attaches whole threads: post to a channel, or use vb sync <id> <target>')
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const board = client()
@@ -674,7 +678,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
       const files = await attachments(board)
-      const where = /^#?\d+$/.test(target) ? messageId(target) : target
+      const where = isMessageRef(target) ? { re: messageId(target) } : target
       const schedule = await board.schedule(where, {
         text: content,
         ...(files.length ? { attachments: files } : {}),

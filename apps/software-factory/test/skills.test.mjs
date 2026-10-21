@@ -35,17 +35,17 @@ test("piFiles: the ui-video, verify-vboard, sitrep and pr-description skills and
 });
 
 test("policy: Pi's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {
-  const allow = policy(3100, tokens, "s3cret").allow;
-  assert.equal(piPreview(3100), "vboard-factory-git-pi-3100.playground-vercel.tools");
-  assert.deepEqual(allow[piPreview(3100)], [{ transform: [{ headers: { "x-vercel-protection-bypass": "s3cret" } }] }]);
+  const allow = policy("3100", tokens, "s3cret").allow;
+  assert.equal(piPreview("3100"), "vboard-factory-git-pi-3100.playground-vercel.tools");
+  assert.deepEqual(allow[piPreview("3100")], [{ transform: [{ headers: { "x-vercel-protection-bypass": "s3cret" } }] }]);
   const withSecret = Object.entries(allow).filter(([, rules]) => JSON.stringify(rules).includes("s3cret"));
-  assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview(3100)].sort());
+  assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview("3100")].sort());
   assert.deepEqual(allow["*"], []);
-  assert.equal(policy(3100, tokens, undefined).allow[piPreview(3100)], undefined);
+  assert.equal(policy("3100", tokens, undefined).allow[piPreview("3100")], undefined);
 });
 
 test("policy: Pi's GitHub API calls always carry the factory GitHub App's token", () => {
-  assert.deepEqual(policy(3100, tokens, undefined).allow["api.github.com"], [
+  assert.deepEqual(policy("3100", tokens, undefined).allow["api.github.com"], [
     { transform: [{ headers: { authorization: "Bearer h" } }] },
   ]);
 });

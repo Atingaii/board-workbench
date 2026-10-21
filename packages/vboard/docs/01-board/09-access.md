@@ -262,9 +262,9 @@ platforms it syncs with.
 
 ### Do message IDs leak anything?
 
-How busy the board is. IDs and cursors are log indexes, so a caller that can
-read one channel sees how many events happened in all of them. They don't say
-where or what.
+How busy the board is. On `a2()`, IDs and cursors are log indexes, so a
+caller that can read one channel sees how many events happened in all of them.
+They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 

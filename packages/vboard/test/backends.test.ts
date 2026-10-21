@@ -88,7 +88,7 @@ describe('a board on http()', () => {
     })
     expect((await marketing('POST', '/messages', { channel: 'deploys', text: 'fine', id: 'key:vercel:project:prj_marketing:production:abc' })).status).toBe(201)
     // v0's own keyed post still lands, under its own principal.
-    expect((await project.client('deploys', { key: 'd1' }).post('deploys', 'a1b2c3 is live')).id).toEqual(expect.any(Number))
+    expect((await project.client('deploys', { key: 'd1' }).post('deploys', 'a1b2c3 is live')).id).toEqual(expect.any(String))
   })
 
   it('checks its watchers the way a2() does, and their IDs as profiles', () => {

@@ -108,15 +108,15 @@ async function triage({ event, board }: WatcherContext) {
   const firstLine = message.text.split("\n")[0]!.slice(0, 140);
   const announcement = await board.post("v0-prs", {
     text: `v0 is on a ${kind}: “${quoted(firstLine)}”\n${quoted(reason)}\nhttps://v0.app/chat/${chatId}${message.origin ? `\nsource: ${slackLink(message.origin.thread)}` : ""}`,
-    labels: { source: String(message.id), v0: chatId, kind },
+    labels: { source: message.id, v0: chatId, kind },
   });
-  await board.label(message.id, { set: { announcement: String(announcement.id) } });
+  await board.label(message.id, { set: { announcement: announcement.id } });
 }
 
 /** v0 finished (labelled by /api/v0-hook): reply once in the announcement's thread with what it did. */
 async function report({ event, board }: WatcherContext) {
   const labels = event.message?.labels;
-  const announcement = Number(labels?.announcement);
+  const announcement = labels?.announcement;
   if (!labels || !announcement) return;
   const { pr, owner, summary } = labels;
   const text = [

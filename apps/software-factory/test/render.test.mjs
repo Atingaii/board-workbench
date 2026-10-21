@@ -39,17 +39,17 @@ test("a PR root mentions its author where Slack can", () => {
   const martin = input({ by: { actor: "slack:user:U0AP7QRUM7E" } }, { author: { name: "martinsione" } });
   assert.ok(renderForSlack(martin).endsWith(") · <@U0AP7QRUM7E>"));
   // Replies keep the default label.
-  assert.equal(renderForSlack({ ...martin, message: { ...martin.message, re: 68, text: "fixed" } }), "**julianbenegas (github)**: fixed");
+  assert.equal(renderForSlack({ ...martin, message: { ...martin.message, re: "68", text: "fixed" } }), "**julianbenegas (github)**: fixed");
 });
 
 test("everything else keeps the default", () => {
-  assert.equal(renderForSlack(input({ re: 68, text: "looks good" })), "**julianbenegas (github)**: looks good");
+  assert.equal(renderForSlack(input({ re: "68", text: "looks good" })), "**julianbenegas (github)**: looks good");
   const issue = input({ text: "Issue #6: Link identities\nhttps://github.com/x", labels: { issue: "x#6", state: "open" } });
   assert.equal(renderForSlack(issue), `**julianbenegas (github)**: ${issue.message.text}`);
 });
 
 test("crosspost links go without a label", () => {
   const text = ":crosspost: [#105 Link threads](https://vercel.slack.com/archives/C0C6MNT9LLC/p1791405000000100)";
-  const message = { re: 2326, text, labels: {}, by: { actor: "vboard:watch:crosspost" } };
+  const message = { re: "2326", text, labels: {}, by: { actor: "vboard:watch:crosspost" } };
   assert.equal(renderForSlack({ ...input(message), label: "crosspost" }), text);
 });

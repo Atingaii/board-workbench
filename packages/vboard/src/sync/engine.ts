@@ -52,6 +52,7 @@ import {
   type WriteContext,
   type WriteOrigin,
 } from '../server/writes.ts'
+import { indexOf, ref } from '../server/feed.ts'
 import { DroppedError } from '../server/middleware.ts'
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
@@ -59,6 +60,9 @@ import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncR
 import { ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderMapping, type ProviderSender, type SyncClient, type SyncContext } from './provider.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
+
+/** What an import made, by log index: the engine's own, before the callback sees refs. */
+type Applied = { root: number | null; message: number | null }
 
 export type BoardBinding = {
   session: BoardSession
@@ -383,27 +387,31 @@ export function createSyncEngine(options: {
     const author = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null }
     const board = clientAs(externalIdentity(author), trigger.id, originOf(trigger))
     let applied: Promise<SyncResult> | undefined
+    const shown = (made: Applied): SyncResult => ({ root: made.root === null ? null : ref(made.root), message: made.message === null ? null : ref(made.message) })
     let active = true
     const context: SyncContext = {
       id: trigger.id, key, event, raw, board,
       apply(channel, overrides = {}) {
         if (!active) throw badRequest('the sync callback has finished')
         if (applied) throw badRequest('an event can only be imported once per callback')
-        applied = applyIncoming(trigger, attempt, ChannelPath.parse(channel), SyncOverrides.parse(overrides)).catch(async (error: unknown) => {
-          if (!(error instanceof DroppedError)) throw error
-          // Dropped: nothing of it is on the board, though a root fetched for it may be.
-          const thread = await tables.threadOf(event.thread)
-          const root = thread === null ? undefined : (await tables.syncOf(thread))?.root
-          return { root: root ?? null, message: null }
-        })
+        applied = applyIncoming(trigger, attempt, ChannelPath.parse(channel), SyncOverrides.parse(overrides))
+          .catch(async (error: unknown): Promise<Applied> => {
+            if (!(error instanceof DroppedError)) throw error
+            // Dropped: nothing of it is on the board, though a root fetched for it may be.
+            const thread = await tables.threadOf(event.thread)
+            const root = thread === null ? undefined : (await tables.syncOf(thread))?.root
+            return { root: root ?? null, message: null }
+          })
+          .then(shown)
         return applied
       },
       client<E extends ProviderEvent>(publicEvent: E) {
-        function sync(id: number, target: string): ReturnType<BoardClient['sync']>
+        function sync(id: string, target: string): ReturnType<BoardClient['sync']>
         function sync(channel: string, event: E, overrides?: SyncOverrides): Promise<SyncResult>
-        async function sync(first: string | number, second: string | E, overrides?: SyncOverrides) {
+        async function sync(first: string, second: string | E, overrides?: SyncOverrides) {
           if (!active) throw badRequest('the sync callback has finished')
-          if (typeof first === 'number' && typeof second === 'string') return board.sync(first, second)
+          // A message's ID and a target, or a channel and the event: the second says which.
+          if (typeof second === 'string') return board.sync(first, second)
           if (typeof first !== 'string' || second !== publicEvent) throw badRequest('sync only accepts the current verified event')
           return platform.sync(context, first, overrides)
         }
@@ -544,7 +552,7 @@ export function createSyncEngine(options: {
     return link(account, identity.principal.id, 'consent', identity.author)
   }
 
-  async function applyIncoming(trigger: InboxEvent, attempt: number, channel: string, overrides: SyncOverrides): Promise<SyncResult> {
+  async function applyIncoming(trigger: InboxEvent, attempt: number, channel: string, overrides: SyncOverrides): Promise<Applied> {
     const { writes, session } = bound()
     const source = originOf(trigger)
     const { sync: key, event } = trigger.payload
@@ -554,9 +562,13 @@ export function createSyncEngine(options: {
     const rootId = threadKey ? (await tables.syncOf(threadKey))?.root : undefined
     const writeId = (n: number) => idempotentId('vboard-inbound', trigger.id, String(n))
     // Sync is the owner's code, so it has full access; each write is still proved against the channel it lands in.
-    const post = async (input: Omit<PostInput, 'proofs'>) => writePost(writes, { ...input, proofs: await trusted.post(writes, input) })
+    // What it posted, by log index: the engine works in indexes, and views in refs.
+    const post = async (input: Omit<PostInput, 'proofs'>) => {
+      const shown = await writePost(writes, { ...input, proofs: await trusted.post(writes, input) })
+      return { ...shown, id: indexOf(shown.id)!, re: shown.re === null ? null : indexOf(shown.re)! }
+    }
     const authorized = <P extends Permission>(permission: P, id: number) => trusted.message(writes, permission, id)
-    const result = (message: { id: number; re: number | null }): SyncResult => ({ root: message.re ?? message.id, message: message.id })
+    const result = (message: { id: number; re: number | null }): Applied => ({ root: message.re ?? message.id, message: message.id })
     const labels = (defaults: Record<string, string> = {}) => {
       const merged = { ...defaults, ...overrides.labels }
       for (const key of overrides.unset ?? []) delete merged[key]

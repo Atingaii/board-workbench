@@ -13,15 +13,15 @@ export function navigate(to: string, replace = false) {
 import type { Filter } from './store.ts'
 
 /** Where you are: the view's path, an open thread, and the view's filters, all in the URL. */
-export type Where = { path: string; thread: number | null; filter: Filter }
+export type Where = { path: string; thread: string | null; filter: Filter }
 
 export function useLocation(): Where {
   const read = (): Where => {
     const params = new URLSearchParams(location.search)
-    const thread = Number(params.get('thread'))
+    const thread = params.get('thread')
     return {
       path: location.pathname,
-      thread: Number.isInteger(thread) && thread > 0 ? thread : null,
+      thread: thread || null,
       filter: {
         ...(params.get('from') ? { from: params.get('from')! } : {}),
         label: params.getAll('label').filter(Boolean),
@@ -39,7 +39,7 @@ export function useLocation(): Where {
 }
 
 /** This view's URL with a thread opened or closed, or other filters; the rest stays. */
-export function here(changes: { thread?: number | null; filter?: Filter }): string {
+export function here(changes: { thread?: string | null; filter?: Filter }): string {
   const params = new URLSearchParams(location.search)
   if (changes.thread !== undefined) {
     if (changes.thread === null) params.delete('thread')

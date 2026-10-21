@@ -26,7 +26,7 @@ describe('tail expressions', () => {
       channel: 'prs/',
       label: [['pr', null]],
       mentions: 'claude',
-      re: 12,
+      re: '12',
     })
     expect(parseTail('--mentions')).toEqual({ mentions: 'me' })
     expect(parseTail('')).toEqual({})
@@ -37,7 +37,6 @@ describe('tail expressions', () => {
   it('reject what a filter is not', () => {
     expect(() => parseTail('firehose --after 3')).toThrow("--after isn't a filter")
     expect(() => parseTail('firehose prs')).toThrow('expected one channel, got: firehose prs')
-    expect(() => parseTail('--re nope')).toThrow('--re:')
     expect(() => parseTail('--text "open')).toThrow('unterminated "')
   })
 })
@@ -234,7 +233,7 @@ describe('watchers', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const run = vi.fn()
     const recorded: unknown[] = []
-    const match = { id: 'm1', payload: { thread: 't1', event: { index: 7, type: 'message.posted' } } }
+    const match = { id: 'm1', payload: { thread: 't1', event: { cursor: '7', type: 'message.posted' } } }
     const input = { watcher: { id: 'pi', run }, match, board: () => ({}) as never, record: async (failure: unknown) => void recorded.push(failure) }
 
     // Short of twice the tries, a run gets another go: earlier attempts may have been kills.

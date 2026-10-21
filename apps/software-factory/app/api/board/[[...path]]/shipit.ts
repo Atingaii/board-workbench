@@ -46,7 +46,7 @@ export function shipit(options: GitHubOptions & { tellPi: typeof tellPi }): Watc
           board,
           task: "review",
           thread: root.id,
-          key: `shipit-${event.index}`,
+          key: `shipit-${event.cursor}`,
           message: [
             `${requester} (${event.payload.by.actor}) reacted with ${emoji} to request a merge of ${root.labels.pr} in board thread #${root.id}.`,
             `The factory couldn't merge it: ${reason}`,

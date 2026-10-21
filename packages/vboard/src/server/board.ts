@@ -43,7 +43,7 @@ import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
 import { attachmentNotFound, attachmentResponse, defaultBlob, readUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
-import { liveFeed, personView, pollFeed, readableFilter, toMessageFilter, view } from './feed.ts'
+import { indexOf, liveFeed, personView, pollFeed, readableFilter, ref, toMessageFilter, view } from './feed.ts'
 import { discoveryIdentity, ownProjectId, ownTeamId } from './identity.ts'
 import { createReads, tablesConsumer } from './reads.ts'
 import { createdBy, createSchedules, type Schedule } from './schedules.ts'
@@ -146,17 +146,17 @@ const PATTERNS: { method: string; name: RouteName; pattern: RegExp }[] = [
   { method: 'GET', name: 'watchers', pattern: /\/watchers$/ },
   { method: 'POST', name: 'register', pattern: /\/watchers$/ },
   { method: 'POST', name: 'wake', pattern: /\/wake$/ },
-  { method: 'POST', name: 'edit', pattern: /\/messages\/(\d+)\/edit$/ },
-  { method: 'POST', name: 'delete', pattern: /\/messages\/(\d+)\/delete$/ },
-  { method: 'POST', name: 'react', pattern: /\/messages\/(\d+)\/reactions$/ },
-  { method: 'POST', name: 'label', pattern: /\/messages\/(\d+)\/labels$/ },
-  { method: 'POST', name: 'sync', pattern: /\/messages\/(\d+)\/sync$/ },
-  { method: 'POST', name: 'typing', pattern: /\/messages\/(\d+)\/typing$/ },
-  { method: 'GET', name: 'message', pattern: /\/messages\/(\d+)$/ },
+  { method: 'POST', name: 'edit', pattern: /\/messages\/([^/]+)\/edit$/ },
+  { method: 'POST', name: 'delete', pattern: /\/messages\/([^/]+)\/delete$/ },
+  { method: 'POST', name: 'react', pattern: /\/messages\/([^/]+)\/reactions$/ },
+  { method: 'POST', name: 'label', pattern: /\/messages\/([^/]+)\/labels$/ },
+  { method: 'POST', name: 'sync', pattern: /\/messages\/([^/]+)\/sync$/ },
+  { method: 'POST', name: 'typing', pattern: /\/messages\/([^/]+)\/typing$/ },
+  { method: 'GET', name: 'message', pattern: /\/messages\/([^/]+)$/ },
   { method: 'GET', name: 'messages', pattern: /\/messages$/ },
   { method: 'POST', name: 'post', pattern: /\/messages$/ },
   { method: 'GET', name: 'threads', pattern: /\/threads$/ },
-  { method: 'POST', name: 'cancelSchedule', pattern: /\/schedules\/s?(\d+)\/cancel$/ },
+  { method: 'POST', name: 'cancelSchedule', pattern: /\/schedules\/s?([^/]+)\/cancel$/ },
   { method: 'GET', name: 'schedules', pattern: /\/schedules$/ },
   { method: 'POST', name: 'schedule', pattern: /\/schedules$/ },
   { method: 'GET', name: 'channels', pattern: /\/channels$/ },
@@ -193,13 +193,27 @@ type Redrivable = {
 
 const MIDDLEWARE_IDENTITY = deploymentIdentity(MIDDLEWARE_ACTOR, 'middleware')
 
+/** A cursor or message ref in a request, as this board's log index: decimals, from 0. */
+function cursorAt(value: string): number {
+  const index = indexOf(value)
+  if (index === null) throw badRequest(`${value} isn't a cursor or a message ID on this board`, 'invalid_cursor')
+  return index
+}
+
+/** The message a ref in a request names, as its log index, or a 404 for one that names nothing here. */
+function messageAt(value: string): number {
+  const index = indexOf(value)
+  if (index === null || index === 0) throw notFound(`message not found: #${value}`, 'message_not_found')
+  return index
+}
+
+/** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
+const WAKE_TIMEOUT_MS = 5000
+
 /**
  * `idempotentId`'s shape, a UUIDv8: the IDs the board derives for its own writes (schedule
  * sends, watchers, sync). They're guessable, so an API caller can't post with one and take it first.
  */
-/** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
-const WAKE_TIMEOUT_MS = 5000
-
 const DERIVED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 const NUMERIC = new Set<RouteName>(['edit', 'delete', 'react', 'label', 'sync', 'typing', 'message', 'cancelSchedule'])
@@ -225,8 +239,13 @@ export function route(method: string, pathname: string, basePath?: string): Matc
   return method === 'GET' ? { name: 'discovery', base: path === '/' ? '' : path } : null
 }
 
-const withParam = (name: RouteName, base: string, param: string | undefined): Match =>
-  param === undefined ? { name, base } : NUMERIC.has(name) ? { name, base, id: Number(param) } : { name, base, param }
+function withParam(name: RouteName, base: string, param: string | undefined): Match {
+  if (param === undefined) return { name, base }
+  if (!NUMERIC.has(name)) return { name, base, param }
+  const ref = decodeURIComponent(param)
+  // A ref that names nothing here is 0, which no message or schedule is: a 404, as one that's gone.
+  return { name, base, id: indexOf(ref) ?? 0, param: ref }
+}
 
 function queryObject(url: URL): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {}
@@ -381,9 +400,12 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
     // The tables first: reads and writes wait on them, so they're what to retry first.
     found.sort((a, b) => Number(b.dead.consumer === TABLES_CONSUMER) - Number(a.dead.consumer === TABLES_CONSUMER))
     // A thread's key is its root's post's event ID.
-    const roots = new Map<string, number | null>()
+    const roots = new Map<string, string | null>()
     const rootOf = async (thread: string) => {
-      if (!roots.has(thread)) roots.set(thread, (await store.tables.byEventId(thread))?.id ?? null)
+      if (!roots.has(thread)) {
+        const root = await store.tables.byEventId(thread)
+        roots.set(thread, root ? ref(root.id) : null)
+      }
       return roots.get(thread)!
     }
     return Promise.all(found.map(async ({ id, dead }) => {
@@ -545,6 +567,10 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
       const url = new URL(request.url)
       const match = route(request.method, url.pathname, options.basePath)
       if (!match) throw notFound(`no route: ${request.method} ${url.pathname}`)
+      if (match.id === 0)
+        throw match.name === 'cancelSchedule'
+          ? notFound(`schedule not found: s${match.param}`, 'schedule_not_found')
+          : notFound(`message not found: #${match.param}`, 'message_not_found')
       const boardUrl = (options.url ?? `${url.origin}${match.base}`).replace(/\/+$/, '')
 
       switch (match.name) {
@@ -600,7 +626,7 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           const channels = Object.values(state)
             .filter((channel) => principal.access.readable(channel.path))
             .sort((a, b) => a.path.localeCompare(b.path))
-          return json({ channels, cursor: index })
+          return json({ channels, cursor: ref(index) })
         }
         case 'actors': {
           const { state, index } = await session.state(actorsReducer)
@@ -618,7 +644,7 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
               const person = personView(state, a.id)
               return person ? { ...a, person } : a
             })
-          return json({ actors, cursor: index })
+          return json({ actors, cursor: ref(index) })
         }
         case 'identity': {
           const { state, index } = await session.state(actorsReducer)
@@ -632,7 +658,7 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           const unlinked = Object.entries(options.sync ?? {})
             .filter(([, entry]) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`)))
             .map(([key]) => key)
-          const body: IdentityView = { principal: principal.id, links, unlinked, cursor: index }
+          const body: IdentityView = { principal: principal.id, links, unlinked, cursor: ref(index) }
           return json(body)
         }
         case 'identityLink': {
@@ -662,25 +688,25 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           const { state: actors } = await session.state(actorsReducer)
           const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
           const { messages, position } = await reads.messages(filter, {
-            ...(query.before !== undefined ? { before: query.before } : {}),
-            ...(query.after !== undefined ? { after: query.after } : {}),
+            ...(query.before !== undefined ? { before: cursorAt(query.before) } : {}),
+            ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
             limit: query.limit ?? 50,
           })
           const reader = await reads.reader(principal.access, messages)
-          return json({ messages: messages.map((m) => view(m, actors, reader)), cursor: Math.min(position, through) })
+          return json({ messages: messages.map((m) => view(m, actors, reader)), cursor: ref(Math.min(position, through)) })
         }
         case 'threads': {
           const query = ThreadsQuery.parse(queryObject(url))
           const { state: actors } = await session.state(actorsReducer)
           const { filter, through } = await readable(toMessageFilter(query, { me: actor.id, actors }), principal.access)
           const { threads, position } = await reads.threads(filter, {
-            ...(query.after !== undefined ? { after: query.after } : {}),
+            ...(query.after !== undefined ? { after: cursorAt(query.after) } : {}),
             limit: query.limit ?? 50,
           })
           const reader = await reads.reader(principal.access, threads.flatMap((t) => (t.last ? [t.root, t.last] : [t.root])))
           return json({
             threads: threads.map((t) => ({ message: view(t.root, actors, reader), replies: t.replies, last: t.last && view(t.last, actors, reader) })),
-            cursor: Math.min(position, through),
+            cursor: ref(Math.min(position, through)),
           })
         }
         case 'message': {
@@ -696,12 +722,13 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           return json({
             message: view(root!, actors, reader),
             replies: replies.map((reply) => view(reply, actors, reader)),
-            cursor,
+            cursor: ref(cursor),
             schedules: await schedules.forThread(root!.id),
           })
         }
         case 'post': {
-          const body = PostBody.parse(await readJson(request))
+          const parsed = PostBody.parse(await readJson(request))
+          const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
           const proofs = await authorizePost(writes, principal.access, body)
           if (!injected && body.id !== undefined && DERIVED_ID.test(body.id))
             throw badRequest("id: UUIDv8s are the board's own, for the writes it makes itself")
@@ -726,7 +753,8 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           return json({ message, ...(unknownMentions ? { unknownMentions } : {}) }, 201)
         }
         case 'schedule': {
-          const body = ScheduleBody.parse(await readJson(request))
+          const parsed = ScheduleBody.parse(await readJson(request))
+          const body = { ...parsed, re: parsed.re === undefined ? undefined : messageAt(parsed.re) }
           // Checked now, where the caller sees it, and again at every send.
           await authorizePost(writes, principal.access, body)
           const attachments = await attachmentsFor(principal, body.attachments)
@@ -735,7 +763,10 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
         case 'schedules': {
           const query = SchedulesQuery.parse(queryObject(url))
           let root: number | undefined
-          if (query.re !== undefined) root = (await authorizeMessage(writes, principal.access, 'read', query.re)).message.re ?? query.re
+          if (query.re !== undefined) {
+            const at = messageAt(query.re)
+            root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
+          }
           const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
           return json({ schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) })
         }
@@ -867,14 +898,15 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
           throw notFound('this board keeps its own log: wake-ups go to a board on http()')
         case 'events': {
           const query = EventsQuery.parse(queryObject(url))
-          const lastEventId = Number(request.headers.get('last-event-id'))
-          const after =
-            query.after ?? (Number.isInteger(lastEventId) && lastEventId > 0 ? lastEventId : undefined)
+          // SSE's own resume header, when the client reconnects by itself.
+          const lastEventId = indexOf(request.headers.get('last-event-id') ?? '')
+          const after = query.after !== undefined ? cursorAt(query.after) : lastEventId !== null && lastEventId > 0 ? lastEventId : undefined
           const { state: actors } = await session.state(actorsReducer)
           const feedOptions = { session, reads, after, filters: query, all: query.all ?? false, me: actor.id, actors, access: principal.access }
           if ((request.headers.get('accept') ?? '').includes('text/event-stream'))
             return sse(feedOptions, request.signal, streamMaxMs)
-          return json(await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal))
+          const { events, cursor } = await pollFeed(feedOptions, (query.wait ?? 0) * 1000, request.signal)
+          return json({ events, cursor: ref(cursor) })
         }
       }
       throw notFound(`no route: ${request.method} ${url.pathname}`)

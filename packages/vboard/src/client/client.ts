@@ -139,6 +139,9 @@ export function duration(value: string | number): number {
   return Number(match[1]) * UNITS[match[2] ?? 'ms']!
 }
 
+/** A ref as a path segment: opaque, so it's encoded as it is. */
+const path = (id: string) => encodeURIComponent(id)
+
 function queryString(query: object): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
@@ -226,7 +229,7 @@ export function createBoardClient(options: ClientOptions) {
   const filtersQuery = (filters: Filters = {}) => filters
 
   async function poll(
-    query: Filters & { after?: number; wait?: number; all?: boolean } = {},
+    query: Filters & { after?: string; wait?: number; all?: boolean } = {},
     signal?: AbortSignal,
   ): Promise<EventsPage> {
     return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
@@ -277,7 +280,7 @@ export function createBoardClient(options: ClientOptions) {
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
       call<MessagesPage>('GET', `/messages${queryString(query)}`),
-    thread: (id: number) => call<ThreadView>('GET', `/messages/${id}`),
+    thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
     /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads. */
     threads: (query: Filters & Omit<ThreadsQueryInput, keyof FiltersInput> = {}) =>
       call<ThreadsPage>('GET', `/threads${queryString(query)}`),
@@ -287,17 +290,17 @@ export function createBoardClient(options: ClientOptions) {
       const { message, unknownMentions } = await call<{ message: MessageView; unknownMentions?: string[] }>('POST', '/messages', { body: { channel, ...messageBody(input) } })
       return written(message, unknownMentions)
     },
-    async reply(id: number, input: string | ReplyOptions): Promise<Written<MessageView>> {
+    async reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>> {
       const { message, unknownMentions } = await call<{ message: MessageView; unknownMentions?: string[] }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })
       return written(message, unknownMentions)
     },
     /**
-     * Posts later, as you: a reply when `target` is a message ID (any message in the
-     * thread), a new thread when it's a channel. Each message it posts carries
+     * Posts later, as you: a new thread when `target` is a channel, a reply when it's
+     * `{ re }`, any message's ID in the thread. Each message it posts carries
      * `schedule: { id, n }`. Needs a board with a scheduler.
      */
-    async schedule(target: number | string, input: ScheduleOptions): Promise<Written<ScheduleView>> {
-      const where = typeof target === 'number' ? { re: target } : { channel: target }
+    async schedule(target: string | { re: string }, input: ScheduleOptions): Promise<Written<ScheduleView>> {
+      const where = typeof target === 'string' ? { channel: target } : { re: target.re }
       const { schedule, unknownMentions } = await call<{ schedule: ScheduleView; unknownMentions?: string[] }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })
       return written(schedule, unknownMentions)
     },
@@ -305,8 +308,8 @@ export function createBoardClient(options: ClientOptions) {
     schedules: async (query: SchedulesQueryInput = {}) =>
       (await call<{ schedules: ScheduleView[] }>('GET', `/schedules${queryString(query)}`)).schedules,
     /** Stops a schedule: yours, or any with manage in its channel. `canceled` is false when it was already done or canceled. */
-    cancelSchedule: (id: number) =>
-      call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${id}/cancel`, { body: {} }),
+    cancelSchedule: (id: string) =>
+      call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
     /** Stores a file on the board, for a post or reply's `attachments`. At most 4 MB. */
     async upload(input: UploadInput): Promise<Attachment> {
       const type = input.type || (input.data instanceof Blob ? input.data.type : '') || typeOf(input.name)
@@ -321,27 +324,27 @@ export function createBoardClient(options: ClientOptions) {
     /** An attachment's bytes, as the board serves them: `content-type` is the file's type. */
     download: (id: string, opts: { signal?: AbortSignal } = {}) =>
       raw('GET', `/attachments/${encodeURIComponent(id)}`, opts.signal ? { signal: opts.signal } : {}),
-    edit: (id: number, text: string) =>
-      call<{ ok: true; unknownMentions?: string[] }>('POST', `/messages/${id}/edit`, { body: { text } }),
-    delete: (id: number) => call<{ ok: true }>('POST', `/messages/${id}/delete`, { body: {} }),
+    edit: (id: string, text: string) =>
+      call<{ ok: true; unknownMentions?: string[] }>('POST', `/messages/${path(id)}/edit`, { body: { text } }),
+    delete: (id: string) => call<{ ok: true }>('POST', `/messages/${path(id)}/delete`, { body: {} }),
     /** `emoji` is a short name, `:name:`, or the character itself. */
-    react: (id: number, emoji: string, opts: { remove?: boolean } = {}) =>
-      call<{ ok: true }>('POST', `/messages/${id}/reactions`, {
+    react: (id: string, emoji: string, opts: { remove?: boolean } = {}) =>
+      call<{ ok: true }>('POST', `/messages/${path(id)}/reactions`, {
         body: { emoji: normalizeEmoji(emoji), ...opts },
       }),
-    label: (id: number, change: { set?: Record<string, string>; unset?: string[] }) =>
-      call<{ ok: true }>('POST', `/messages/${id}/labels`, { body: change }),
+    label: (id: string, change: { set?: Record<string, string>; unset?: string[] }) =>
+      call<{ ok: true }>('POST', `/messages/${path(id)}/labels`, { body: change }),
     /**
      * Shows typing in the platform threads the message's thread is synced to
      * (on WhatsApp, also marking the latest inbound message read). Ephemeral:
      * nothing goes in the log. Answers the external threads that took it.
      * `status` replaces "Typing…" on Slack ("running tests…").
      */
-    typing: async (id: number, status?: string) =>
-      (await call<TypingResult>('POST', `/messages/${id}/typing`, { body: status ? { status } : {} })).targets,
+    typing: async (id: string, status?: string) =>
+      (await call<TypingResult>('POST', `/messages/${path(id)}/typing`, { body: status ? { status } : {} })).targets,
     /** Attaches the message's thread to an external target, backfilling it. Attaching twice is a no-op. */
-    sync: (id: number, target: string) =>
-      call<{ target: string; attached: boolean }>('POST', `/messages/${id}/sync`, { body: { target } }),
+    sync: (id: string, target: string) =>
+      call<{ target: string; attached: boolean }>('POST', `/messages/${path(id)}/sync`, { body: { target } }),
     /** Raw platform events for a sync entry, newest first. */
     inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
       (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
@@ -401,7 +404,7 @@ export function createBoardClient(options: ClientOptions) {
         failures = 0
         try {
           for await (const message of parseSse(response.body!, opts.signal)) {
-            if (message.id !== undefined) after = Number(message.id)
+            if (message.id !== undefined) after = message.id
             if (message.event === 'board' && message.data) yield JSON.parse(message.data) as BoardEventView
           }
         } catch (error) {
@@ -413,7 +416,7 @@ export function createBoardClient(options: ClientOptions) {
 
     /** The next matching event after `after` (default: now), or null on timeout. */
     async wait(
-      query: Filters & { after?: number } = {},
+      query: Filters & { after?: string } = {},
       opts: WaitOptions = {},
     ): Promise<BoardEventView | null> {
       const deadline = Date.now() + duration(opts.timeout ?? '30m')

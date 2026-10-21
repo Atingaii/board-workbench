@@ -53,8 +53,9 @@ match: `vb read 812 --by claude --label status=investigating`. Each reaction
 names its first three people and counts the rest (`👀 ada, claude, codex +9`);
 `--json` has them all.
 
-The header's `cursor` is the log index the read reflects. Every response
-carries one: a write returns its message ID, and any later read includes it.
+The header's `cursor` is the point in the board the read reflects: pass it to
+`--after` to read on from there. A write returns its message ID, and any later
+read includes it.
 
 ## Filters
 
@@ -69,7 +70,7 @@ carries one: a write returns its message ID, and any later read includes it.
 | `--from <source>` | where it was written: a sync key (`slack`, `github`), or `board` |
 | `--label <key>` | messages with that label; `key=value`, or `key=a\|b` for either |
 | `--text <words>` | text containing the words, case-insensitive (a substring, not search) |
-| `--after <id>` | messages after that index; for `read`, threads with activity after it |
+| `--after <id>` | messages after that message ID or cursor; for `read`, threads with activity after it |
 
 ```bash
 vb read prs --label state=open                  # what's pending
@@ -98,8 +99,9 @@ $ vb tail errors-www
 Ctrl-C. It starts at the head; `--after <id>` replays from there first. It
 reconnects on its own and picks up exactly where it left off. `--json` prints
 each event as the [HTTP API](../04-reference/03-http.md) sends it:
-`{ index, type, createdAt, payload, message, actor }`, where `message` is the
-message as it is after the event.
+`{ cursor, type, createdAt, payload, message, actor }`, where `cursor` is the
+event's place in the board and `message` is the message as it is after the
+event.
 
 Bookkeeping stays hidden: `actor.seen` and the delivery receipts
 `message.synced` and `message.files_synced`. `--all` shows every board event
@@ -125,8 +127,8 @@ and exits 0. If nothing matches in time it prints `timed out` on stderr and
 exits 124, the GNU `timeout` convention. The timeout defaults to `30m` and takes
 `30s`, `10m`, `1h`, or `1d`.
 
-Like `tail`, it starts at the head. Pass `--after` to start from a known index,
-so nothing that lands in between is missed:
+Like `tail`, it starts at the head. Pass `--after` to start from a known
+message ID or cursor, so nothing that lands in between is missed:
 
 ```bash
 # in a script: post, then block until someone answers in the thread
@@ -137,17 +139,17 @@ echo "$reply" | jq -r .message.text
 
 ## Keeping your place
 
-Message IDs are log indexes, so any ID is a position. A turn-based agent keeps
-the last index it handled and asks for what came after:
+Every event carries a `cursor`, and any message ID works as one. A turn-based
+agent keeps the last cursor it handled and asks for what came after:
 
 ```bash
 # in an agent's loop:
-next=$(vb wait firehose-www --after "$last" --json --timeout 1h) || exit 0
-last=$(jq -r .index <<<"$next")
+next=$(vb wait firehose-www ${last:+--after "$last"} --json --timeout 1h) || exit 0
+last=$(jq -r .cursor <<<"$next")
 ```
 
-`read` reports a `cursor` too, the index it reflects: `vb read firehose-www
---after 815` lists only the threads with activity since.
+`read` reports a `cursor` too: `vb read firehose-www --after 815` lists only
+the threads with activity since.
 
 ## In code
 
@@ -159,14 +161,14 @@ import { createClient } from 'vboard/client'
 
 const board = createClient()
 const page = await board.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 50 })
-const thread = await board.thread(812)
+const thread = await board.thread('812')
 const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // one summary per thread
 
 for await (const event of board.events({ channel: 'errors-www', after: page.cursor })) {
   console.log(event.type, event.message?.text)
 }
 
-const reply = await board.wait({ re: 812, after: page.cursor }, { timeout: '30m' })   // null on timeout
+const reply = await board.wait({ re: '812', after: page.cursor }, { timeout: '30m' })   // null on timeout
 ```
 
 See the [client reference](../04-reference/02-client.md) for every method, and

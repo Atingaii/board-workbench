@@ -1283,8 +1283,8 @@ describe('provider callbacks', () => {
     const session = board.servers[0]!.session('board')
     await vi.waitFor(() => expect(s.posts).toHaveLength(1))
     const history = await session.history()
-    const trigger = history.find((event) => event.type === 'message.posted' && event.index === posted.body.message.id)
-    const receipt = history.find((event) => event.type === 'message.synced' && event.payload.id === posted.body.message.id)
+    const trigger = history.find((event) => event.type === 'message.posted' && String(event.index) === posted.body.message.id)
+    const receipt = history.find((event) => event.type === 'message.synced' && String(event.payload.id) === posted.body.message.id)
     if (!trigger || trigger.type !== 'message.posted' || !receipt || receipt.type !== 'message.synced') throw new Error('missing delivery history')
     const reference = createServer({
       contract: boardContract, store: memory(),

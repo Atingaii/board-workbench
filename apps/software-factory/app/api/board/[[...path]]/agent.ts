@@ -79,7 +79,7 @@ const GIT = {
 const GIT_EMAIL = "pi@vboard-factory.playground-vercel.tools";
 
 /** A thread's Pi session, on the board and in the sandbox. */
-const piSession = (thread: number) => `thread-${thread}`;
+const piSession = (thread: string) => `thread-${thread}`;
 
 const ADJECTIVES = [
   "amber", "brave", "brisk", "calm", "clever", "cosmic", "crisp", "dapper",
@@ -94,13 +94,17 @@ const ANIMALS = [
   "seal", "sloth", "stoat", "tapir", "toucan", "walrus", "wombat", "yak",
 ];
 
+/** The number a Pi's words come from: the thread's own on this board, whose IDs are numbers, so names stay put. */
+const seed = (thread: string) =>
+  /^\d{1,15}$/.test(thread) ? Number(thread) : [...thread].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 0);
+
 /**
  * Who a thread's Pi is on the board: a name of its own, like `clever-lemur-1956 via vboard-factory`,
  * so people can tell one thread's Pi from another's. The words make it easy to tell apart at a glance;
  * the thread number makes it unique, since a profile is part of the actor's ID.
  */
-export function piName(thread: number) {
-  const n = Math.imul(thread, 0x9e3779b1) >>> 0;
+export function piName(thread: string) {
+  const n = Math.imul(seed(thread), 0x9e3779b1) >>> 0;
   return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}-${thread}`;
 }
 
@@ -108,7 +112,7 @@ export function piName(thread: number) {
  * A thread's Pi's picture, generated from its name so each Pi has its own: a PNG, since Slack
  * won't use the board's SVG avatars as a message's icon.
  */
-export const piAvatar = (thread: number) =>
+export const piAvatar = (thread: string) =>
   `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(piName(thread))}`;
 
 /**
@@ -116,7 +120,7 @@ export const piAvatar = (thread: number) =>
  * posts as the factory's production deployment, whose OIDC token its network policy adds; its profile and session
  * are headers anyone who can write may send, so they only say which thread's Pi it is.
  */
-export const byPi = (thread: number, by: { principal: string; profile: string | null; session: string | null }) =>
+export const byPi = (thread: string, by: { principal: string; profile: string | null; session: string | null }) =>
   !!process.env.VERCEL_PROJECT_ID &&
   by.principal === `vercel:project:${process.env.VERCEL_PROJECT_ID}:production` &&
   (by.profile === piName(thread) || by.profile === "pi") &&
@@ -153,7 +157,7 @@ export function sourceLink(origin: { thread: string } | null | undefined) {
 /** The task message that starts Pi on a thread, with where it came from when it's synced. */
 export function taskMessage(
   task: string,
-  thread: { id: number; origin: { thread: string } | null; author?: { name: string } | null },
+  thread: { id: string; origin: { thread: string } | null; author?: { name: string } | null },
 ) {
   const source = sourceLink(thread.origin);
   const by = thread.author?.name ? ` by ${thread.author.name}` : "";
@@ -248,14 +252,14 @@ cd ~ && exec flock ~/.pi/lock bash -c '
  * gets it past Vercel Authentication. Only this host: `*.playground-vercel.tools` would also hand the bypass secret
  * to every other deployment on that domain.
  */
-export const piPreview = (thread: number) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
+export const piPreview = (thread: string) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
 
 /**
  * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
  * On the board, the policy also sets who Pi is, so nothing in the sandbox can post as anyone else.
  */
 export function policy(
-  thread: number,
+  thread: string,
   tokens: { gateway: string; board: string; github: string },
   bypass: string | undefined,
 ): NetworkPolicy {
@@ -323,7 +327,7 @@ const RETRY_MS = 5_000;
  */
 export async function startOrSay(
   board: Pick<WatcherContext["board"], "reply">,
-  thread: number,
+  thread: string,
   start: () => Promise<void>,
   retryMs = RETRY_MS,
 ) {
@@ -355,16 +359,16 @@ export async function tellPi({ board, ...input }: PiMessage & { board: Pick<Watc
 
 type PiMessage = {
   task: Task;
-  thread: number;
+  thread: string;
   key: string;
   message: string;
 };
 
 /** A thread's sandbox. */
-const piSandbox = (thread: number) => `pi-${thread}`;
+const piSandbox = (thread: string) => `pi-${thread}`;
 
 /** Puts fresh tokens in a running sandbox's network policy, and says when they die. */
-async function giveTokens(sandbox: Sandbox, thread: number) {
+async function giveTokens(sandbox: Sandbox, thread: string) {
   const [{ getToken }, { getVercelOidcToken }] = await Promise.all([import("@vercel/connect"), import("@vercel/oidc")]);
   const [gateway, board, github] = await Promise.all([
     getVercelOidcToken(),

@@ -166,7 +166,8 @@ describe('messages', () => {
 
     const channels = await julian('GET', '/channels')
     expect(channels.body.channels).toEqual([
-      { path: 'errors-www', lastIndex: nested.body.message.id, messages: 3, threads: 1 },
+      // A channel's last index is a2's own count, which a decimal ID happens to equal.
+      { path: 'errors-www', lastIndex: Number(nested.body.message.id), messages: 3, threads: 1 },
     ])
   })
 

@@ -4,7 +4,7 @@ import { shipit } from "../app/api/board/[[...path]]/shipit.ts";
 
 function event() {
   return {
-    index: 71,
+    cursor: "71",
     type: "reaction.added",
     actor: { id: "slack:user:U123", handle: "sam" },
     payload: {
@@ -13,7 +13,7 @@ function event() {
       by: { actor: "slack:user:U123", principal: "slack:user:U123" },
     },
     message: {
-      id: 59,
+      id: "59",
       re: null,
       labels: { pr: "vercel-labs/vboard#53", state: "open" },
       by: { actor: "github:user:40034115", principal: "github:user:40034115" },
@@ -187,7 +187,7 @@ function assertIntent(h, reason, requester = "sam") {
   assert.equal(h.notifications.length, 1);
   const notification = h.notifications[0];
   assert.equal(notification.task, "review");
-  assert.equal(notification.thread, 59);
+  assert.equal(notification.thread, "59");
   assert.equal(notification.key, "shipit-71");
   assert.ok(notification.message.includes(`${requester} (slack:user:U123)`));
   assert.ok(notification.message.includes("request a merge of vercel-labs/vboard#53"));

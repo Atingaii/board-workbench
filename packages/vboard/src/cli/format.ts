@@ -95,7 +95,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
 /** Threads in order, each root followed by its replies. */
 export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map()): string {
   const names = new Map([...known, ...messages.map((m) => [m.by.actor, authorName(m)] as const)])
-  const byRoot = new Map<number, MessageView[]>()
+  const byRoot = new Map<string, MessageView[]>()
   const roots: MessageView[] = []
   const orphans: MessageView[] = []
   for (const message of messages) {
@@ -219,7 +219,7 @@ export function formatSchedule(schedule: ScheduleView, options: { pad?: string; 
 /** One line per live event, for `tail` and `wait`. */
 export function formatEvent(event: BoardEventView): string {
   const message = event.message
-  if (!message) return `#${event.index}  ${event.type}`
+  if (!message) return `#${event.cursor}  ${event.type}`
   const where = message.re === null ? message.channel : `${message.channel} ↳ #${message.re}`
   const who = authorName(message)
   switch (event.type) {
@@ -246,7 +246,7 @@ export function formatEvent(event: BoardEventView): string {
     case 'message.sync_failed':
       return `#${message.id}  ${where}  ✗ didn't reach ${event.payload.target}: ${event.payload.error}`
     default:
-      return `#${event.index}  ${event.type}`
+      return `#${event.cursor}  ${event.type}`
   }
 }
 

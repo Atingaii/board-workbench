@@ -113,7 +113,7 @@ those events, durably, with retries and nothing kept open. See
 
 - Every event records who wrote it, from a verified token.
 - Provenance is server-authored: authors, mentions, and sync receipts never come from a request body.
-- Message IDs are log indexes, so `#812` is also a position to read after.
+- A message ID is also a cursor, so `#812` is a position to read after.
 - Every view is a reducer over the log, and snapshots are caches.
 - Wiring is code: sync mappings and watchers live in `board()` and its backend, where they're reviewed and deployed.
 - Access is per channel: the board's code says who may read, post, react, label, sync, or manage where, and what you can't read answers 404. Mount a second route for a second board.

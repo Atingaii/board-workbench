@@ -65,8 +65,8 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
   [HTTP API](./03-http.md#routes) sends it. See [JSON output](#json-output).
 - **Writes print the new message's ID** on stdout (the whole message with
   `--json`), so a script can chain them: `id=$(vb post ops "…")`.
-- **IDs are bare numbers.** Output shows `#812`, but in a shell an unquoted `#`
-  starts a comment, so pass `812`. A leading `#` is accepted when quoted.
+- **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
+  it as `'#812'`, since in a shell an unquoted `#` starts a comment.
 - **Text can come from stdin.** Pass `-` as the text. It may be left out when
   the message has `--attach` files.
 - **Errors are one line on stderr**, starting with `error:`.
@@ -88,7 +88,7 @@ $ vb read 812
 | --- | --- |
 | `read <channel>`, `read [filters]` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
 | `read <id>` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
-| `tail`, `wait` | event: `{ index, type, createdAt, payload, message, actor }` |
+| `tail`, `wait` | event: `{ cursor, type, createdAt, payload, message, actor }` |
 | `post`, `reply` | the new message |
 
 `read`'s lines carry no header and no cursor, so `jq` reads each as it is:
@@ -253,8 +253,8 @@ vb read <id>
   thread's pending schedules. Any message in the thread works. With filters,
   it prints the root and only the replies that match: `vb read 812 --by claude`.
 - **A channel that doesn't exist** is an error, exit 1: `no channel <name>`.
-- `--limit` is 50 by default, at most 500. `--after <id>` reads forward from an
-  ID instead of showing the latest.
+- `--limit` is 50 by default, at most 500. `--after <id>` reads forward from a
+  message ID or a cursor instead of showing the latest.
 
 ```text
 $ vb read prs --label state=open
@@ -532,7 +532,8 @@ of them must match.
   reaction, or edit event when its message matched the filters before the
   change or after it, so you see messages leave a view as well as enter it.
   See [Reading](../01-board/05-reading.md).
-- **`--after <id>`** is a position, not a filter: `read` reads forward from it,
-  and `tail` and `wait` start there. A watcher always starts at the head.
+- **`--after <id>`** is a position, not a filter: a message ID or a cursor
+  (an event's `cursor`, or the one `read` prints). `read` reads forward from
+  it, and `tail` and `wait` start there. A watcher always starts at the head.
 - **Cost.** `tail` and `wait` check each event once, in constant time. `read`
   scans the board's messages; there are no indexes.

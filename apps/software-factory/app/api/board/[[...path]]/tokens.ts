@@ -29,18 +29,19 @@ export type Given = { tokensEnd: number; sessionEnd: number } | null;
 
 const tokens = contract({
   name: "factory-pi-tokens",
-  events: { "tokens.expiring": z.object({ thread: z.number().int().positive() }) },
+  // Timers armed before board IDs were strings carry the thread as a number.
+  events: { "tokens.expiring": z.object({ thread: z.union([z.string().min(1), z.number().int().positive()]) }) },
 });
 
 /** Refreshes of Pi's tokens: `later` arms one after Pi gets tokens, and `give` hands it new ones when it fires. */
 export function tokenRefreshes(options: {
   store?: A2Store | undefined;
   scheduler: A2Scheduler;
-  give: (thread: number) => Promise<Given>;
+  give: (thread: string) => Promise<Given>;
 }) {
   const refresh = consumer({ contract: tokens, name: "factory-pi-tokens", types: ["tokens.expiring"] }).run(
     async ({ event }) => {
-      const { thread } = event.payload;
+      const thread = String(event.payload.thread);
       let given: Given;
       try {
         given = await options.give(thread);
@@ -60,7 +61,7 @@ export function tokenRefreshes(options: {
     consumers: [refresh],
   });
 
-  async function later(thread: number, given: NonNullable<Given>) {
+  async function later(thread: string, given: NonNullable<Given>) {
     const at = refreshAt(given.tokensEnd, given.sessionEnd, Date.now());
     if (!at) return;
     // Named for when it fires: messages that hand Pi the same tokens arm one refresh.

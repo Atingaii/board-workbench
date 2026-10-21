@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { crosspost } from "../app/api/board/[[...path]]/crosspost.ts";
 
 const root = (labels = { pr: "vercel-labs/vboard#105", state: "open" }) => ({
-  id: 2400,
+  id: "2400",
   re: null,
   text: "PR #105: Link [PR] threads\nhttps://github.com/vercel-labs/vboard/pull/105",
   labels,
@@ -14,7 +14,7 @@ const synced = (message = root(), thread = "slack:C0C6MNT9LLC:1791405000.000100"
   message,
 });
 const slackSource = {
-  id: 2326,
+  id: "2326",
   origin: { thread: "slack:C0C6MNT9LLC:1791404203.820609" },
   author: { handle: "JB", name: "Julian Benegas" },
 };
@@ -42,14 +42,14 @@ test("a factory PR's Slack thread and its source's Slack thread link to each oth
   const h = harness();
   await h.run(synced());
   assert.deepEqual(h.requests, ["https://api.github.com/repos/vercel-labs/vboard/pulls/105"]);
-  assert.deepEqual(h.labels, [{ id: 2400, change: { set: { crosspost: "yes" } } }]);
+  assert.deepEqual(h.labels, [{ id: "2400", change: { set: { crosspost: "yes" } } }]);
   assert.deepEqual(h.replies, [
     {
-      id: 2400,
+      id: "2400",
       text: ":crosspost: From [Julian Benegas's Slack thread](https://vercel.slack.com/archives/C0C6MNT9LLC/p1791404203820609) · board #2326",
     },
     {
-      id: 2326,
+      id: "2326",
       text: ":crosspost: [#105 Link \\[PR\\] threads](https://vercel.slack.com/archives/C0C6MNT9LLC/p1791405000000100)",
     },
   ]);
@@ -58,7 +58,7 @@ test("a factory PR's Slack thread and its source's Slack thread link to each oth
 test("skips posts, replies, GitHub receipts, crossposted roots, other branches, and sources not from Slack", async () => {
   const h = harness();
   await h.run({ ...synced(), type: "message.posted" });
-  await h.run(synced({ ...root(), re: 2399 }));
+  await h.run(synced({ ...root(), re: "2399" }));
   await h.run(synced(root(), "github:vercel-labs/vboard:105"));
   await h.run(synced(root({ pr: "vercel-labs/vboard#105", crosspost: "yes" })));
   await h.run(synced(root({ pr: "vercel/v0#1" })));

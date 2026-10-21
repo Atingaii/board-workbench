@@ -9,8 +9,10 @@ import * as board from './board.ts'
  */
 export function Feed(props: {
   scope: string
-  first: number
-  last: number
+  /** The first message shown: when it changes, older ones loaded above. */
+  first: string
+  /** The last thing shown, as a key: when it changes, something new came in below. */
+  last: string
   older?: () => Promise<boolean>
   children: ReactNode
 }) {
@@ -44,7 +46,7 @@ export function Feed(props: {
       el.scrollTop = el.scrollHeight - restore.current.height + restore.current.top
       restore.current = null
     } else if (pinned.current) el.scrollTop = el.scrollHeight
-    else if (props.last > lastSeen.current) setBehind(true)
+    else if (props.last !== lastSeen.current) setBehind(true)
     lastSeen.current = props.last
   }, [props.first, props.last])
 

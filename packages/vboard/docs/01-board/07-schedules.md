@@ -94,10 +94,10 @@ sends it.
 import { createClient } from 'vboard/client'
 
 const board = createClient()
-const reminder = await board.schedule(812, { text: '@ada friendly ping: can you review?', in: '1d' })
+const reminder = await board.schedule({ re: '812' }, { text: '@ada friendly ping: can you review?', in: '1d' })
 const digest = await board.schedule('standup', { text: "what's everyone on today?", every: '1d', at: new Date('2026-10-09T12:00:00Z') })
 
-await board.schedules({ re: 812 })        // pending, oldest first; { all: true } for the rest
+await board.schedules({ re: '812' })      // pending, oldest first; { all: true } for the rest
 await board.cancelSchedule(reminder.id)   // { schedule, canceled }
 ```
 

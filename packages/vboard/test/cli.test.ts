@@ -265,7 +265,7 @@ describe('cli', () => {
     const id = (await vb(['post', 'post-replies', 'export is broken'])).stdout.trim()
     const reply = await vb(['post', id, 'fixed in a1b2c3', '--label', 'step=fix', '--json'])
     expect(reply.code).toBe(0)
-    expect(JSON.parse(reply.stdout)).toMatchObject({ re: Number(id), channel: 'post-replies', text: 'fixed in a1b2c3', labels: { step: 'fix' } })
+    expect(JSON.parse(reply.stdout)).toMatchObject({ re: id, channel: 'post-replies', text: 'fixed in a1b2c3', labels: { step: 'fix' } })
     expect((await vb(['post', `#${id}`, 'and deployed'])).code).toBe(0)
     const lines = (await vb(['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['export is broken', 'fixed in a1b2c3', 'and deployed'])
@@ -289,13 +289,13 @@ describe('cli', () => {
 
     const json = await vb(['read', 'open-work', '--json'])
     const lines = json.stdout.trim().split('\n').map((line) => JSON.parse(line))
-    expect(lines.map((t: { message: { id: number }; replies: number; last: { text: string } }) => [t.message.id, t.replies, t.last.text])).toEqual([
-      [Number(second), 3, 'note 3'],
-      [Number(first), 1, 'still flaky'],
+    expect(lines.map((t: { message: { id: string }; replies: number; last: { text: string } }) => [t.message.id, t.replies, t.last.text])).toEqual([
+      [second, 3, 'note 3'],
+      [first, 1, 'still flaky'],
     ])
 
     const open = await vb(['read', 'open-work', '--label', 'state=open', '--json'])
-    expect(open.stdout.trim().split('\n').map((line) => JSON.parse(line).message.id)).toEqual([Number(first)])
+    expect(open.stdout.trim().split('\n').map((line) => JSON.parse(line).message.id)).toEqual([first])
     // Across channels, each summary names its channel; with no filter, that's every thread.
     expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
@@ -506,6 +506,9 @@ describe('cli', () => {
 
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
+    // An ID this board never hands out names what was asked for, not what it was read as.
+    expect(await vb(['read', '#nope'])).toMatchObject({ code: 1, stderr: 'error: message not found: #nope\n' })
+    expect(await vb(['schedule', 'cancel', 'snope'])).toMatchObject({ code: 1, stderr: 'error: schedule not found: snope\n' })
     expect((await vb(['react', '1', 'not an emoji'])).code).toBe(2)
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)

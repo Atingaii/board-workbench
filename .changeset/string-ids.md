@@ -1,0 +1,14 @@
+---
+'vboard': minor
+---
+
+Message IDs and cursors are strings, so a backend picks its own. On `a2()` they're the same log indexes, as decimal strings (`"812"`). Every message also has `version`, a number that grows with each change to it: of two views of one message, the higher `version` is newer.
+
+**Breaking for the SDK and scripts:**
+
+- `id`, `re`, `replyTo`, a link's `message`, and a schedule's `id`, `re`, and `last` are strings, in messages and in event payloads. Pass IDs back as they came: `board.reply(message.id, …)`.
+- Events have `cursor` (a string) instead of `index`. Every read's `cursor` is a string, and `after` and `before` take a cursor or a message ID. In a script, `jq -r .index` becomes `jq -r .cursor`.
+- `board.schedule(812, …)` becomes `board.schedule({ re: '812' }, …)`. A string is still a channel.
+- `board.sync()` resolves to `{ root, message }` as strings, and a stuck event's `root` is a string.
+
+`vb` takes `#812` and `812` as before.
