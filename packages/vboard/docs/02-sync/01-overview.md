@@ -243,16 +243,16 @@ channel's inbox.
 ## Typing
 
 ```ts
-// in the route that mounts the board with its `sync`:
+// anywhere with a handle on the board, the CLI included (`vb typing 812 running tests…`):
 await team.typing('812', 'running tests…')
 ```
 
 Shows typing in every platform thread the board thread is synced to, through
-the sync this board runs: only a board that runs it shows any, so `vb typing`,
-whose own board runs none, shows nowhere. Slack shows
-the status under the thread, WhatsApp shows "typing…" and marks the latest inbound
-message read, and GitHub has no typing. Nothing is written to the log. It needs
-`post` and `read` in the thread's channel.
+the sync the board that keeps the log runs beside it, so `vb typing` on the
+board you link shows it there. A board on `http()` also shows it through its
+own sync. Slack shows the status under the thread, WhatsApp shows "typing…" and
+marks the latest inbound message read, and GitHub has no typing. Nothing is
+written to the log. It needs `post` and `read` in the thread's channel.
 
 ## Debug it
 

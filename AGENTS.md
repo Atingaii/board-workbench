@@ -349,14 +349,18 @@ for a person at a terminal first; `--json` is for programs.
 
 API → `board()` → CLI. The CLI makes no HTTP calls of its own; everything goes
 through a handle from `board()`, and `board()` only ever calls the backend's
-methods: the backend stores and decides, and nothing reaches around them. A
-board on `http()` answers only wake-ups and webhooks, so a repo links the
-team's board itself. Request schemas live in `src/api/routes.ts` and are
-shared by the server and the handle. Nothing on the way to a handle over
-`http()` imports Node: credentials go in `http(url, { fetch })`, whose Node
-default (`vb`'s) lives in the `node` builds of `vboard` and
-`vboard/backend-http`, and serving requests and sync load from there when
-they're used (`test/browser.test.ts` checks).
+methods: the backend verifies, decides, and stores, and nothing reaches around
+them. `board()` does no auth: it routes, validates, serves, and runs watchers
+and sync, and hands each method what the request said about its caller,
+unverified. `a2()` verifies it (`authenticate`, `verifyTokens()` from
+`vboard/access` by default), applies `access`, and runs the `middleware`, so
+the middleware sees every write once. A board on `http()` answers only
+wake-ups and webhooks, so a repo links the team's board itself. Request
+schemas live in `src/api/routes.ts` and are shared by the server and the
+handle. Nothing on the way to a handle over `http()` imports Node: credentials
+go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
+builds of `vboard` and `vboard/backend-http`, and sync loads from there when
+it's used (`test/browser.test.ts` checks).
 
 ## invariants
 

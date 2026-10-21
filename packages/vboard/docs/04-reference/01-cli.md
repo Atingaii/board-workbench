@@ -396,9 +396,9 @@ Prints the schedule. See [Scheduled messages](../01-board/07-schedules.md).
 vb typing <id> [status]
 ```
 
-Shows typing in every platform thread the message's thread is synced to, by
-the sync the CLI's own board runs: none, so from the CLI it shows nowhere.
-Slack shows the status (up to 100 characters) in place of "Typing…";
+Shows typing in every platform thread the message's thread is synced to,
+through the sync the board runs. Slack shows the status (up to 100 characters)
+in place of "Typing…";
 WhatsApp marks the latest inbound message read. Nothing is written to the log.
 `--json` prints the threads that took it.
 
@@ -425,8 +425,9 @@ vb sources <key> read <channel|thread|link> [--limit N]
 - **`sources`** lists the board's sync entries and their platforms.
 - **`sources <key> read`** reads a platform channel (`'#general'`, `C0123`),
   thread (`C0123:1727000000.123456`), or message permalink without syncing or
-  storing it, on the board that runs entry `<key>`: the CLI's own board runs
-  none, so it answers that it doesn't run it. See
+  storing it, with the app of the board that runs entry `<key>`. One that
+  doesn't run it says so: `error: this board doesn't run sync entry slack:
+  read it where its sync runs`. See
   [Read on demand](../02-sync/03-slack.md#read-on-demand).
 
 ### inbox

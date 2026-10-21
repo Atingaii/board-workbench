@@ -32,12 +32,16 @@ Authorization: Bearer <OIDC JWT>
   development token carrying `user_id`), the project's own deployments in the
   environment the board runs in, and
   anything matching a rule in `access`. See [Access](../01-board/09-access.md).
+- **The backend verifies.** `board()` hands each route's method the token, the
+  headers below, and the board's URL as they came, and the board that keeps the
+  log checks them: `a2()` with its `authenticate`, which may also take a
+  session cookie of the app's own (see [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier)).
 
 These routes take no token:
 
 | Route | Why |
 | --- | --- |
-| `GET /` | discovery: tells a client which project to mint a token for |
+| `GET /` | discovery, the backend's: tells a client which project to mint a token for |
 | `GET /avatars/:name` | built-in agent avatars |
 | `GET /openapi.json` | the API's schema |
 | `POST /webhooks/:key` | platforms can't send a board token; the sync adapter verifies the request |
@@ -55,7 +59,8 @@ These routes take no token:
 | `x-board-scope` | narrows what the token may do, for a proxy that holds it: `dev/=read,post;ci/=read`, or `all` for an entry's permissions (`dev/=all`). It never widens. See [Access](../01-board/09-access.md#narrowing-a-token) |
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
-The board records these after verifying the token. Provenance (`by`,
+`board()` checks their shape (a 400 for one that's malformed), and the board
+records them after verifying the token. Provenance (`by`,
 `mentions`, `origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
 origin, from a caller that may `sync` where they land.
@@ -108,7 +113,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). With `sync` in every channel, the board's own and every registered sync's; a sync elsewhere sees what it pushed |
-| GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). Only the board that runs entry `key` answers it, and needs `manage` in every channel; any other answers 404 `not_synced_here` |
+| GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). The board reads it with entry `key`'s app, through the sync it runs, and needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
 | GET | `/identity/sign-in` | `?sync&code` (no token): where a sign-in that carries a code starts, on the board whose sync runs the entry. Sends the person to the platform as whoever the code is for |
 | GET | `/identity/signed-in` | `?sync&code` (no token): where the platform sends them back. Links the account they approved, by the code |
@@ -122,11 +127,12 @@ message, so any later read already includes it.
 ### The whole protocol
 
 Every board that keeps its own log answers every route here. The sync routes
-a person calls (`/webhooks/:key`, `/sources/:key/read`, `/messages/:id/sync`,
-`/messages/:id/typing`, `/identity/sign-in`, `/identity/signed-in`, and
-`/identity/unlink`) are `board()`'s, and work on any backend: the ones that
-need a sync entry answer 404 on a board that doesn't run it. A board on
-`http()` answers only wake-ups, webhooks, and its sync's sign-ins. There are no
+a person calls (`/webhooks/:key`, `/messages/:id/sync`, `/identity/sign-in`,
+`/identity/signed-in`, and `/identity/unlink`) are `board()`'s, and work on any
+backend: the ones that need a sync entry answer 404 on a board that doesn't
+run it. `/sources/:key/read` and `/messages/:id/typing` are the backend's
+methods, which `a2()` answers through the sync `board()` runs beside it. A
+board on `http()` answers only wake-ups, webhooks, and its sync's sign-ins. There are no
 optional groups, so a client never asks a board what it does.
 [Conformance](./05-conformance.md) checks a board against all of it.
 
@@ -139,7 +145,7 @@ lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. The author is a user of a platform the caller syncs (the entry's, with `from`), never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`, `local:`, `vboard:`): 403 otherwise. `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find |
+| POST | `/sync/imports` | A platform's write, as its platform `author` (`{ id, handle, name, avatar, isBot }`), through sync entry `from`. The author is a user of a platform the caller syncs (the entry's, with `from`), never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`, `local:`, `vboard:`): 403 otherwise. `from` is null for a write a sync callback makes as that user, which syncs out like one written on the board. `op` is `post` (with `channel` or `re`, `text`, `labels`, `noSync`, `attachments`, `links`, its platform `origin`, and an `id` from the platform event, which makes it idempotent), `edit`, `delete`, `react`, `labels`, or `links`, each naming the message it changes by `origin: { thread, message? }`, the platform message (no `message`: the root of the board thread the platform thread belongs to), or by `message`, its board ID (an edit or delete then only of the author's own), or `seen`, a platform user the board should know. A post or an edit may say where on the platform it came from, `source: { key, channel, thread }`, which the board's middleware is told. Answers `{ message }`, the ID it made or changed, or null for a message it didn't find, and with `dropped`, what the middleware responded when it kept a post or an edit off the board, for sync to say in the platform thread |
 | POST | `/sync/receipts` | What sync did, about board message `message`: `kind: 'message'` (it landed on `target` as `external`, with its `files`), `files`, `failed` (with `error`), or `thread` (its thread syncs with `target`, a `targetKind` channel or thread, by `cause` `config` or `request`). Answers `{ ok }`, and for a thread, `attached`: false when it already was |
 | GET | `/sync/threads/:thread` | A board thread's sync, by its key: `{ thread, root, channel, targets, external }` |
 | GET | `/sync/find` | What platform IDs are on the board. Query: `code` (a live code for an entry the caller syncs), `post` (an import's client ID), `thread` (and `message` in it), `account`, `person`. Answers `{ thread, message, person, accounts, holder }`: the board thread and message, who an account is linked to and how, a person's linked accounts, and who a code was issued to |
