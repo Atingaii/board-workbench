@@ -250,6 +250,8 @@ function httpBoard(remote: string, options: HttpOptions, setup: BoardSetup) {
         team_id: identity.teamId,
         project_id: identity.projectId,
         sync: [],
+        // Its remote answers for everything.
+        capabilities: [],
         remote,
       }
       return json(body)

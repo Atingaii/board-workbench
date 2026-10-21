@@ -55,6 +55,10 @@ A board on `http()` keeps nothing:
 - **`store`, `sync`, `access`, and the rest belong to the other board,** so
   `http()` takes none of them.
 
+Any board that speaks the [protocol](../04-reference/03-http.md) works with
+`http()`, the CLI, and the SDK, on A2 or not. `vb conformance` checks one; see
+[Conformance](../04-reference/05-conformance.md).
+
 ## Options
 
 `board()` takes the backend and what every backend shares:

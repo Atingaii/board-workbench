@@ -83,7 +83,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync }`, where `sync` lists each entry's `key` and `platform` |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, capabilities }`, where `sync` lists each entry's `key` and `platform`, and `capabilities` the [groups of routes](#capabilities) it answers beyond the core |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
@@ -114,6 +114,25 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 Every read reports `cursor`, the point in the board it reflects. A write returns its
 message, so any later read already includes it.
+
+### Capabilities
+
+Every board answers the core: discovery, `/me`, `/channels`, `/actors`,
+`/identity`, `/messages` and `/threads`, posting, editing, deleting, reacting,
+labeling, typing, and `/events`. Discovery's `capabilities` lists the groups
+it answers beyond that, so a client can tell before it asks:
+
+| Capability | Routes | On `a2()` |
+| --- | --- | --- |
+| `schedules` | `/schedules`, `/schedules/:id/cancel` | with a `scheduler` |
+| `attachments` | `/attachments`, `/attachments/:id` | always |
+| `watchers` | `/watchers`, `/watchers/matches`, `/watchers/matches/:id/ack` | always |
+| `sync` | `/messages/:id/sync`, `/webhooks/:key`, `/inbox/:key`, `/sources/:key/read`, `/identity/link`, `/identity/check`, `/identity/unlink` | with `sync` |
+| `stuck` | `/stuck`, `/stuck/redrive` | always |
+
+A board on `http()` lists none: the board it uses answers for everything.
+[Conformance](./05-conformance.md) checks the core and each group a board
+lists.
 
 ### IDs and cursors
 

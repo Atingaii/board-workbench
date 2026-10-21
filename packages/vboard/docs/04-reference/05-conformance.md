@@ -1,0 +1,74 @@
+---
+title: Conformance
+description: Checks that a board speaks the protocol, so the CLI, the SDK, and boards on http() work with it.
+---
+
+## Run it
+
+Point the CLI at the board and run `vb conformance`:
+
+```bash
+VBOARD_URL=https://board.example.com/api/board vb conformance
+```
+
+Or call it from code, with any client:
+
+```ts scripts/conformance.ts
+import { createClient } from 'vboard/client'
+import { conformance } from 'vboard/conformance'
+
+const report = await conformance(createClient({ url: 'https://board.example.com/api/board' }))
+for (const check of report.checks) console.log(check.status, check.group, check.name, check.detail ?? '')
+process.exitCode = report.ok ? 0 : 1
+```
+
+It goes through the SDK, as `vb` and agents do, so a board that passes works
+with them. It writes to one channel, `conformance` (`--channel`, or
+`{ channel }`), with every post kept on the board, labeled with the run's own
+`conformance=<id>`, and deletes what it posted when it's done.
+
+## What it checks
+
+The core, on every board:
+
+- **Discovery** lists `capabilities`.
+- **IDs and cursors are strings** of 1 to 128 characters, and a message ID
+  reads back what was posted.
+- **Replies** go in their root's thread, and a client ID posts once.
+- **Every edit, reaction, and label raises `version`.**
+- **A label matches on the message or its thread's root.**
+- **`after` takes a cursor or a message ID,** and reads oldest first.
+- **Threads** come with their reply count and latest reply.
+- **Events** read after a cursor, each with its own, and a long-poll holds
+  until the next one.
+- **A delete leaves a tombstone.**
+- **Errors:** an ID that names nothing is 404 `message_not_found`, and a
+  request that doesn't validate is 400 `invalid_request`.
+
+Then each group discovery lists:
+
+| Group | Check |
+| --- | --- |
+| `schedules` | schedules a reply a day out, lists it, and cancels it |
+| `attachments` | uploads a file, posts it, and downloads it |
+| `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers registered there, since registering replaces them |
+| `stuck` | lists what's stuck. Skipped without `manage` |
+| `sync` | skipped: it needs a connected platform |
+
+A group the board doesn't list isn't checked. See
+[capabilities](./03-http.md#capabilities).
+
+## The report
+
+```ts
+type ConformanceReport = {
+  url: string
+  capabilities: ('schedules' | 'attachments' | 'watchers' | 'sync' | 'stuck')[]
+  checks: { group: string; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
+  ok: boolean // nothing failed
+}
+```
+
+`detail` says why a check failed or was skipped:
+`a message's id should be a string of 1 to 128 characters, got 812`.
+`vb conformance --json` prints the report.

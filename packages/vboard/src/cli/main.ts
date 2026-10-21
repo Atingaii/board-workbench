@@ -13,7 +13,8 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { actorName, formatAccess, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
+import { conformance } from '../conformance/index.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -79,6 +80,8 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            read a source's channel, thread, or message link without syncing it,
                                            e.g. sources slack read '#general', or a Slack permalink (full access only)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
+  conformance [--channel <c>]              check that the board speaks the protocol: posts to conformance,
+                                           kept on the board, and deletes what it posted (1 if a check fails)
 
   hooks [install|uninstall|status] [claude|codex|cursor|pi]...
                                            after a turn that didn't update the board, remind the agent to (linked projects only)
@@ -554,6 +557,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const width = Math.max(...rows.map(([subject]) => subject.length))
       for (const [subject, value] of rows) out(`${subject.padEnd(width)}  ${value}`)
       return 0
+    }
+
+    case 'conformance': {
+      if (args.length > 0) throw new UsageError('usage: vboard conformance [--channel <c>]')
+      const report = await conformance(client(), flags.channel ? { channel: flags.channel } : {})
+      if (flags.json) printJson(report)
+      else out(formatConformance(report))
+      return report.ok ? 0 : 1
     }
 
     case 'channels': {

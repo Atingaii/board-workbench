@@ -2,6 +2,7 @@ import type { BoardEventView, Me, MessageView, ScheduleView, SourceRead, StuckEv
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
+import type { CheckResult, ConformanceReport } from '../conformance/index.ts'
 
 /** "claude via julian" for a profile, the name otherwise. */
 export const who = (me: { name: string; handle: string; profile: string | null }): string =>
@@ -270,4 +271,23 @@ export function formatSourceRead(key: string, read: SourceRead, now = Date.now()
   })
   const more = read.more ? [`(${read.thread ? 'later replies' : 'older messages'} not shown: raise --limit, up to 200)`] : []
   return [where, ...blocks, ...more].join('\n')
+}
+
+/**
+ * A conformance report: each group a heading, its checks under it, and why for one that failed
+ * or was skipped, then the counts.
+ */
+export function formatConformance(report: ConformanceReport): string {
+  const blocks: string[] = []
+  for (const group of [...new Set(report.checks.map((check) => check.group))]) {
+    const lines: string[] = [group]
+    for (const check of report.checks.filter((c) => c.group === group)) {
+      lines.push(`  ${check.status.padEnd(7)}  ${check.name}`)
+      if (check.detail) lines.push(`           ${check.detail}`)
+    }
+    blocks.push(lines.join('\n'))
+  }
+  const count = (status: CheckResult['status']) => report.checks.filter((check) => check.status === status).length
+  const counts = [`${count('passed')} passed`, ...(count('skipped') ? [`${count('skipped')} skipped`] : []), ...(count('failed') ? [`${count('failed')} failed`] : [])]
+  return `${blocks.join('\n\n')}\n\n${counts.join(', ')}`
 }

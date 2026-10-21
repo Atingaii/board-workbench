@@ -504,6 +504,16 @@ describe('cli', () => {
     }
   })
 
+  it('checks that the board speaks the protocol, a group at a time', async () => {
+    const run = await vb(['conformance'])
+    expect(run).toMatchObject({ code: 0, stderr: '' })
+    expect(run.stdout).toMatch(/^core\n  passed   says in its discovery what it does\n  passed   posts a message, and reads it back by its ID\n/)
+    expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
+    expect(run.stdout).toMatch(/\n\n\d+ passed\n$/)
+    expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'])).stdout)).toMatchObject({ ok: true, capabilities: expect.arrayContaining(['watchers']) })
+    expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: 'error: usage: vboard conformance [--channel <c>]\n' })
+  })
+
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
     // An ID this board never hands out names what was asked for, not what it was read as.

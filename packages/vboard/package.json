@@ -52,6 +52,10 @@
       "types": "./dist/contract.d.mts",
       "default": "./dist/contract.mjs"
     },
+    "./conformance": {
+      "types": "./dist/conformance.d.mts",
+      "default": "./dist/conformance.mjs"
+    },
     "./package.json": "./package.json",
     "./sync": {
       "types": "./dist/sync.d.mts",

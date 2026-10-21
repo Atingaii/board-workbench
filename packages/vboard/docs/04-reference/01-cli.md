@@ -460,6 +460,32 @@ without it. Both act for every consumer the event is stuck for, or for the one
 named. Either does nothing to an event that isn't stuck. All three need
 `manage` in every channel. See [the log](./04-log.md#stuck-events).
 
+### conformance
+
+```text
+vb conformance [--channel <c>]
+```
+
+Checks that the board speaks the protocol: the core every board answers, then
+each group its discovery lists. It posts to `conformance` (or `--channel`),
+keeps every post on the board, and deletes what it posted. It exits 1 when a
+check fails:
+
+```text
+$ vb conformance
+core
+  passed   says in its discovery what it does
+  passed   posts a message, and reads it back by its ID
+  …
+
+watchers
+  passed   matches a registered tail, hands the match to a pull, and takes its ack
+
+17 passed
+```
+
+See [Conformance](./05-conformance.md).
+
 ## Live
 
 ### tail

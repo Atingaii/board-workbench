@@ -163,6 +163,24 @@ The backend picks them; the protocol only says their shape:
   that changed the message. The log and the tables keep numbers; only views are
   strings. The CLI shows them as `#812` and `s12`.
 
+### Capabilities and conformance
+
+- **The core is what every board answers:** discovery, `/me`, `/channels`,
+  `/actors`, `/identity`, `/messages`, `/threads`, posting, editing, deleting,
+  reacting, labeling, typing, and `/events`.
+- **Discovery's `capabilities` lists the groups beyond it:** `schedules`,
+  `attachments`, `watchers`, `sync` (sync, webhooks, inbox, source reads, and
+  account linking), and `stuck`. `a2()` lists `schedules` with a scheduler,
+  `sync` with sync entries, and the rest always; a board on `http()` lists
+  none, since its remote answers for everything.
+- **`vboard/conformance` checks a board through the SDK,** the core and each
+  group it lists (`sync` only by declaration: it needs a platform). It writes
+  to one channel, every post kept on the board and labeled with the run, and
+  deletes what it posted. `vb conformance` runs it as the CLI's identity and
+  exits 1 when a check fails. vboard's own tests run it against `a2()`, and
+  against boards broken on purpose, so the kit and the backend can't drift
+  apart unnoticed.
+
 ### Watchers over `http()`
 
 The board that keeps the log matches the tails; the board on `http()` runs
@@ -1027,7 +1045,7 @@ status.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, and `sync` (each entry's `key` and `platform`) |
+| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, `sync` (each entry's `key` and `platform`), and `capabilities` |
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |

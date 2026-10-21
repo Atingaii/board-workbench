@@ -22,6 +22,7 @@ import {
   RedriveBody,
   RegisterBody,
   routes,
+  CAPABILITIES,
   ScheduleBody,
   SchedulesQuery,
   SyncBody,
@@ -589,6 +590,7 @@ export function a2Board(options: A2Options & BoardSetup = {}) {
             team_id: identity.teamId,
             project_id: identity.projectId,
             sync: Object.entries(options.sync ?? {}).map(([key, entry]) => ({ key, platform: entry.platform })),
+            capabilities: CAPABILITIES.filter((group) => (group === 'schedules' ? !!options.scheduler : group === 'sync' ? !!engine : true)),
           }
           return json(body)
         }
