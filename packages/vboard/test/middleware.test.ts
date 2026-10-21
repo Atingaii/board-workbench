@@ -127,6 +127,20 @@ describe('middleware', () => {
     ])
   })
 
+  it('sees what Slack sends before it lands, and what it passes on is what the board keeps', async () => {
+    const s = fakePlatform('slack')
+    const quiet: Middleware = async ({ write, next }) => next({ text: write.text.replace(/\s*hunter2/g, '') })
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) }, middleware: [quiet] })
+    const julian = await person(board)
+    const webhook = (body: unknown) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    await webhook({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'the password is hunter2', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await texts(julian, 'firehose')).toEqual(['the password is']))
+    // An edit on Slack goes through it too.
+    await webhook({ type: 'edit', threadId: 'slack:C1:100', id: '100', text: 'the password is still hunter2', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await texts(julian, 'firehose')).toEqual(['the password is still']))
+  })
+
   it("covers watchers' writes, and its own board client skips it", async () => {
     const sources: WriteSource[] = []
     const board = testBoard({
