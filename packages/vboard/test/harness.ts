@@ -46,7 +46,7 @@ export type MountOptions = A2Options & Omit<BoardOptions, 'backend'>
 
 /** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
 export function mount(options: MountOptions) {
-  const { watch, url, basePath, access, project, auth, streamMaxMs, sync, middleware, ...rest } = options
+  const { watch, url, basePath, authenticate, project, auth, streamMaxMs, sync, middleware, ...rest } = options
   const backend = a2(rest)
   const created = board({
     backend,
@@ -55,7 +55,7 @@ export function mount(options: MountOptions) {
     ...(middleware ? { middleware } : {}),
     ...('url' in options ? { url } : {}),
     ...(basePath !== undefined ? { basePath } : {}),
-    ...(access ? { access } : {}),
+    ...(authenticate ? { authenticate } : {}),
     ...(project ? { project } : {}),
     ...(auth ? { auth } : {}),
     ...(streamMaxMs !== undefined ? { streamMaxMs } : {}),

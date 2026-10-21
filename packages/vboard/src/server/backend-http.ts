@@ -6,7 +6,7 @@ import { createClient } from '../client/node.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { HttpError, json } from './errors.ts'
-import { watchersHash, type WatcherSpec } from './registry.ts'
+import { watchersHash, type SyncEntrySpec, type WatcherSpec } from './registry.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch.ts'
 
@@ -15,12 +15,6 @@ export type HttpOptions = {
   fetch?: typeof fetch
   /** A token whose audience is the board's URL. Defaults to what the SDK finds: on Vercel, the deployment's. */
   token?: () => Promise<string>
-  /**
-   * Forwards requests to this board to the remote: what to merge into each request a caller's
-   * call makes there, such as a token you mint for it. Without it, only this deployment's own
-   * code calls the remote, and a request here answers 404 `remote`.
-   */
-  init?: (context: { caller: Caller }) => RequestInit | Promise<RequestInit>
 }
 
 /** A watcher's or client's name is the profile its writes are by. */
@@ -92,7 +86,8 @@ export function http(url: string, options: HttpOptions = {}) {
   let binding: BoardBinding | null = null
   const specs: Record<string, WatcherSpec> = {}
   /** Whether this board's sync subscribes too. */
-  let syncing = false
+  /** This board's sync entries, registered there when it syncs. */
+  let sync: SyncEntrySpec[] = []
   let hash = watchersHash(specs)
   const bound = () => {
     if (!binding) throw new Error("http: this backend isn't serving a board yet: pass it to board({ backend })")
@@ -122,16 +117,13 @@ export function http(url: string, options: HttpOptions = {}) {
     return client
   }
 
-  /** The client a caller's call goes through: this deployment's own, or one `init` takes over. Sync's is the deployment itself. */
-  async function clientOf(caller: Caller): Promise<BoardClient> {
-    if ('self' in caller) return caller.origin.via?.kind === 'engine' ? own : asProfile(caller.self)
-    if (!options.init) throw new HttpError(404, 'remote', `${bound().url() ?? 'this board'} keeps no log: use ${remote}`)
-    const init = await options.init({ caller })
-    return sdk(null, (input, request = {}) => {
-      const headers = new Headers(request.headers)
-      for (const [name, value] of new Headers(init.headers)) headers.set(name, value)
-      return doFetch(input, { ...request, ...init, headers })
-    })
+  /**
+   * The client a caller's call goes through: this deployment's own, with its profile, and sync's as
+   * the deployment itself. A request here is someone else's, which the board it uses answers.
+   */
+  function clientOf(caller: Caller): BoardClient {
+    if ('identity' in caller) throw new HttpError(404, 'remote', `${bound().url() ?? 'this board'} keeps no log: use ${remote}`)
+    return caller.origin.via?.kind === 'engine' ? own : asProfile(caller.self)
   }
 
   let principal: Promise<string> | null = null
@@ -191,8 +183,10 @@ export function http(url: string, options: HttpOptions = {}) {
     METHODS.map((method) => [
       method,
       async (caller: Caller, input: Record<string, unknown>, signal: AbortSignal) => {
-        start()
-        const client = await clientOf(caller)
+        const registering = start()
+        const client = clientOf(caller)
+        // Sync's records name its entries, which the board it uses knows from its registration.
+        if ('self' in caller && caller.origin.via?.kind === 'engine') await registering
         // A post board() gave an ID derived from a trigger: the remote takes it as this deployment's key,
         // and a retry's lookup asks for the same.
         if ((method === 'post' || method === 'posted') && 'self' in caller && typeof input.id === 'string' && DERIVED_ID.test(input.id))
@@ -212,7 +206,7 @@ export function http(url: string, options: HttpOptions = {}) {
   function register(here: string | null): Promise<RegistrationView> {
     if (last && last.url === here && last.result.hash === hash && Date.now() - last.at < REGISTER_EVERY_MS) return Promise.resolve(last.result)
     registering ??= own
-      .register({ url: here, watch: specs, ...(syncing ? { sync: true } : {}) })
+      .register({ url: here, watch: specs, ...(sync.length > 0 ? { sync } : {}) })
       .then((result) => {
         last = { url: here, at: Date.now(), result }
         return result
@@ -280,21 +274,23 @@ export function http(url: string, options: HttpOptions = {}) {
     })()
   }
 
-  let started = false
+  let started: Promise<void> | null = null
   /**
-   * On first use, a board with watchers registers them if it knows its URL. One on Vercel learns
-   * its mount path from a request (a `POST /watchers`, or a wake-up); one that can't be woken pulls instead.
+   * On first use, a board with watchers or sync registers them if it knows its URL. One on Vercel
+   * learns its mount path from a request (a `POST /watchers`, a webhook, or a wake-up); one that
+   * can't be woken registers without one and pulls instead. Resolves once the first try is done.
    */
-  function start() {
-    if (started || (Object.keys(specs).length === 0 && !syncing)) return
+  function start(): Promise<void> {
+    if (started) return started
+    if (Object.keys(specs).length === 0 && sync.length === 0) return Promise.resolve()
     const here = wakeable(bound().url())
-    if (here) {
-      started = true
-      void register(here).catch((error) => console.error(`[vboard] couldn't register with ${remote}:`, describe(error)))
-    } else if (process.env.VERCEL !== '1') {
-      started = true
-      poll()
-    }
+    if (!here && process.env.VERCEL === '1') return Promise.resolve()
+    started = register(here).then(
+      () => {},
+      (error: unknown) => console.error(`[vboard] couldn't register with ${remote}:`, describe(error)),
+    )
+    if (!here) poll()
+    return started
   }
 
   const routesHere: BackendRoute[] = [
@@ -304,7 +300,7 @@ export function http(url: string, options: HttpOptions = {}) {
       path: '/wake',
       auth: false,
       async handle(request) {
-        started = true
+        started ??= Promise.resolve()
         if (request.headers.get('x-board-watchers') !== hash) await register(wakeable(bound().url())).catch(rethrow)
         return json({ ran: await drain().catch(rethrow) })
       },
@@ -315,7 +311,7 @@ export function http(url: string, options: HttpOptions = {}) {
       path: '/watchers',
       auth: false,
       async handle() {
-        started = true
+        started ??= Promise.resolve()
         const here = wakeable(bound().url())
         const registration = await register(here).catch(rethrow)
         if (!here) poll()
@@ -326,22 +322,23 @@ export function http(url: string, options: HttpOptions = {}) {
 
   const backend = {
     ...methods,
-    /** With `init`, requests here are forwarded, so discovery names no other board. */
-    remote: options.init ? null : remote,
+    remote,
+    // What a caller may do is the board it uses' to say: requests here are only wake-ups.
+    issuers: [],
     routes: routesHere,
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')
       for (const [id, spec] of Object.entries(next.subscriptions)) {
         // Sync subscribes as itself, beside the watchers: the remote sends it what it may sync.
         if (spec.kind === 'sync') {
-          syncing = id === SYNC
+          if (id === SYNC) sync = next.sync.map((entry) => ({ ...entry }))
           continue
         }
         if (!PROFILE.test(id)) throw new Error(`watch ${id}: ${PROFILE_RULE}`)
         compileWatcher(id, spec)
         specs[id] = { tail: spec.tail, when: spec.when }
       }
-      hash = watchersHash(specs, syncing)
+      hash = watchersHash(specs, sync)
       binding = next
     },
     /** Registers this board's watchers with the board it uses now, as `POST /watchers` does. */

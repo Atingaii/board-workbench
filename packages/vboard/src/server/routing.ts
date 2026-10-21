@@ -7,7 +7,7 @@ import type { BackendRoute } from './backend.ts'
 import { badRequest, HttpError } from './errors.ts'
 
 /** board()'s own routes: discovery and the files it serves, and sync's, which run where board() does. */
-export const BOARD_ROUTES = ['avatar', 'openapi', 'webhook', 'sourceRead', 'typing', 'identityLink', 'identityCheck', 'identityUnlink', 'sync'] as const
+export const BOARD_ROUTES = ['avatar', 'openapi', 'webhook', 'signIn', 'signedIn', 'sourceRead', 'typing', 'identityLink', 'identityCheck', 'identityUnlink', 'sync'] as const
 export type BoardRoute = 'discovery' | (typeof BOARD_ROUTES)[number]
 
 /** What a request is for: one of board()'s own routes, a protocol method, or one of the backend's routes. */

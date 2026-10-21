@@ -67,7 +67,7 @@ describe('board() and its backend', () => {
     }
     const mine = {
       remote: null,
-      sync: [],
+      issuers: [],
       routes: [{ method: 'GET', path: '/health', auth: false, handle: async () => Response.json({ ok: true }) }],
       bind: () => {},
       messages: record('messages'),
@@ -90,6 +90,9 @@ describe('board() and its backend', () => {
       identity: { principal: { id: 'vercel:user:u_julian', kind: 'person' }, actor: { id: 'vercel:user:u_julian', handle: 'julian' } },
       origin: { via: { kind: 'api' } },
     })
+    // Who's calling, and nothing about what it may do: that's the backend's to decide.
+    const { caller: first } = calls[0]!
+    expect('identity' in first && 'access' in first.identity.principal).toBe(false)
 
     // What it throws, it answers; what doesn't validate never reaches it.
     expect(await julian('POST', '/messages', { channel: 'missing', text: 'hi' })).toEqual({
@@ -162,27 +165,6 @@ describe('a board on http()', () => {
     // Its discovery, then the other board's, and everything else there.
     expect(seen).toEqual([`GET ${V0_URL}`, `GET ${BOARD_URL}`, `GET ${BOARD_URL}/me`, `POST ${BOARD_URL}/messages`, `GET ${V0_URL}/`])
     vi.unstubAllEnvs()
-  })
-
-  it('forwards a request with what init adds, which decides who it is there', async () => {
-    const { remote, project, seen } = team({
-      init: async ({ caller }) => {
-        if (!('identity' in caller)) throw new Error('only requests are forwarded')
-        // Here, the person as themselves: a token for the board it uses, which this deployment minted for them.
-        return { headers: { authorization: `Bearer ${await personToken(caller.identity.principal.id.replace('vercel:user:', ''))}`, 'x-board-handle': caller.identity.actor.handle } }
-      },
-    })
-    // Clients stay here: discovery names no other board.
-    expect((await (await project.fetch(new Request(V0_URL))).json()).remote).toBeUndefined()
-    const julian = await julianOn(project.fetch, V0_URL)
-    const posted = await julian('POST', '/messages', { channel: 'dev', text: 'through v0' })
-    expect(posted).toMatchObject({ status: 201, body: { message: { text: 'through v0', by: { actor: 'vercel:user:u_julian' } } } })
-    expect(seen.at(-1)!.headers.get('x-board-handle')).toBe('julian')
-    expect((await (await julianOn(remote.fetch))('GET', `/messages/${posted.body.message.id}`)).body.message.text).toBe('through v0')
-    // What the board it uses answers, this one answers.
-    expect(await julian('GET', '/messages/99999')).toEqual({ status: 404, body: { error: { code: 'message_not_found', message: 'message not found: #99999' } } })
-    // This deployment's own code still writes as itself.
-    expect((await project.client('deploys').post('dev', 'from v0')).by.actor).toBe(`${V0}+deploys`)
   })
 
   it('writes from your own code as its deployment, idempotent by key', async () => {

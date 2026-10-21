@@ -480,6 +480,9 @@ async function identity(args: string[]): Promise<number> {
   if (flags.json) printJson(challenge)
   const until = Date.now() + LINK_WAIT_MS
   const sleep = () => new Promise((resolve) => setTimeout(resolve, 2000))
+  /** An account linked on that platform since this run began: where the code or the sign-in landed. */
+  const linkedSince = async () =>
+    (await board.identity()).links.find((link) => link.actor.startsWith(`${challenge.platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
   if (challenge.method === 'consent') {
     if (!flags.json) {
       out(`Sign in to ${challenge.platform} as yourself to link it (and to post as you there):\n\n  ${challenge.url}\n`)
@@ -488,7 +491,8 @@ async function identity(args: string[]): Promise<number> {
     if (!flags['no-open'] && !flags.json) openBrowser(challenge.url)
     if (flags['no-wait']) return 0
     while (Date.now() < until) {
-      const linked = await board.checkAccount(target)
+      // Here the board finishes a sign-in it ran itself; one that ran where its sync is shows up in your links.
+      const linked = (await board.checkAccount(target)) ?? (await linkedSince())
       if (linked) {
         if (flags.json) printJson(linked)
         else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
@@ -504,7 +508,7 @@ async function identity(args: string[]): Promise<number> {
     if (flags['no-wait']) return 0
     while (Date.now() < Math.min(until, Date.parse(challenge.expiresAt))) {
       await sleep()
-      const linked = (await board.identity()).links.find((link) => link.actor.startsWith(`${challenge.platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
+      const linked = await linkedSince()
       if (linked) {
         if (flags.json) printJson(linked)
         else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)

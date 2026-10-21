@@ -6,6 +6,8 @@ import { REGISTRY_SESSION, registryContract, type RegistryEvents } from '../cont
 import type { Principal } from './auth.ts'
 
 export type WatcherSpec = { tail: string; when: 'matches' | 'enters' }
+/** A registrant's sync entry: what it imports through, and whether it signs people in. */
+export type SyncEntrySpec = { key: string; platform: string; signIn: boolean }
 
 /** A principal as a registration keeps it. */
 export type StoredPrincipal = RegistryPayload['principal']
@@ -33,12 +35,12 @@ export const viewOf = ({ principal: _principal, ...view }: Registration): Regist
  * The same on both ends: a board on `http()` hashes its watchers, and whether its sync subscribes,
  * and the board it uses hashes what it holds.
  */
-export function watchersHash(watch: Record<string, WatcherSpec>, sync = false): string {
+export function watchersHash(watch: Record<string, WatcherSpec>, sync: readonly SyncEntrySpec[] = []): string {
   const canonical: unknown[] = Object.keys(watch)
     .sort()
     .map((id) => [id, watch[id]!.tail, watch[id]!.when])
   // Older registrations hashed only their watchers: one with no sync hashes as it did.
-  if (sync) canonical.push('sync')
+  if (sync.length > 0) canonical.push(['sync', [...sync].sort((a, b) => a.key.localeCompare(b.key)).map((entry) => [entry.key, entry.platform, entry.signIn])])
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 32)
 }
 
@@ -46,7 +48,7 @@ function foldRegistry(state: RegistryState, event: ContractEvent<RegistryEvents>
   if (event.type === 'watchers.registered') {
     const { owner, principal, url, watch, sync, hash } = event.payload
     const copied = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when }]))
-    state.byOwner[owner] = { owner, principal: structuredClone(principal), url, watch: copied, sync: sync ?? false, hash }
+    state.byOwner[owner] = { owner, principal: structuredClone(principal), url, watch: copied, sync: (sync ?? []).map((entry) => ({ ...entry })), hash }
   }
   return state
 }
@@ -74,7 +76,7 @@ export function createRegistry(options: { store?: A2Store | undefined; scheduler
      * Replaces `principal`'s registration. One that changes nothing writes nothing, so asking
      * again is free, unless the principal's token facts changed: those decide what it may read.
      */
-    async register(principal: StoredPrincipal, input: { url: string | null; watch: Record<string, WatcherSpec>; sync: boolean }): Promise<RegistrationView> {
+    async register(principal: StoredPrincipal, input: { url: string | null; watch: Record<string, WatcherSpec>; sync: SyncEntrySpec[] }): Promise<RegistrationView> {
       const owner = principal.id
       const hash = watchersHash(input.watch, input.sync)
       const current = (await state()).byOwner[owner]
@@ -82,7 +84,7 @@ export function createRegistry(options: { store?: A2Store | undefined; scheduler
         return viewOf(current)
       await session.append({
         type: 'watchers.registered',
-        payload: { owner, principal, url: input.url, watch: input.watch, ...(input.sync ? { sync: true } : {}), hash },
+        payload: { owner, principal, url: input.url, watch: input.watch, ...(input.sync.length > 0 ? { sync: input.sync } : {}), hash },
       })
       return { owner, url: input.url, watch: input.watch, sync: input.sync, hash }
     },

@@ -1,18 +1,25 @@
 import type { Protocol } from '../api/protocol.ts'
 import type { BoardClient } from '../client/client.ts'
 import type { ExternalEvent } from '../contract/contract.ts'
-import type { Access } from './access.ts'
+import type { Actor } from '../contract/reducers.ts'
+import type { Author } from '../contract/schemas.ts'
 import type { Principal } from './auth.ts'
 import type { WatcherContext } from './watch.ts'
-import type { Identity, WriteOrigin } from './writes.ts'
+import type { WriteOrigin } from './writes.ts'
+
+/**
+ * Who a request is: the principal board() verified (its scope included, which only narrows), the
+ * author record its writes carry, and the actor it writes as. What it may do is the backend's call.
+ */
+export type CallerIdentity = { principal: Principal; author: Author; actor: Actor }
 
 /** Who's calling a backend's method. Every method honors what the caller may do. */
 export type Caller =
   /**
    * A request board() verified, or a write a backend makes in-process for someone it trusts:
-   * the principal, the actor it writes as, and its access (`identity.principal.access`).
+   * the principal and the actor it writes as. A backend decides what it may do from the principal.
    */
-  | { identity: Identity; origin: WriteOrigin }
+  | { identity: CallerIdentity; origin: WriteOrigin }
   /**
    * This deployment's own code, writing as `self`: `client(name)`, a watcher, the middleware's
    * client (`via: middleware`), or sync (`via: engine`). Each backend decides who that is on its
@@ -45,6 +52,9 @@ export type Subscription =
   /** Sync's outbound: every post, change, and thread sync in every channel, as its own code sees them. */
   | { kind: 'sync' }
 
+/** One of board()'s sync entries: its key, its platform, and whether it can sign people in. */
+export type SyncEntry = { key: string; platform: string; signIn: boolean }
+
 /** A platform event sync pushed to an inbox, as the backend delivers it back. */
 export type InboxDelivery = { event: ExternalEvent; raw: unknown }
 
@@ -65,11 +75,10 @@ export type BoardBinding = {
   receive(key: string, item: InboxDelivery, meta: { id: string; attempt: number; signal: AbortSignal }): Promise<void>
   /** Pulls and runs what this board's sync queued in a backend's inbox, for one that queues them: http()'s, when it's woken. */
   pull(): Promise<number>
-  /**
-   * What a stored principal (a schedule's creator, a watcher's registrant) may do now, under the
-   * board's rules as they are: null once it may do nothing. Background work checks with it.
-   */
-  accessFor(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null>
+  /** board()'s sync entries: what its sync imports through, and what discovery lists. */
+  sync: readonly SyncEntry[]
+  /** The board's own Vercel project and team, as board() knows them: a backend's rules name them as `self`. */
+  project(): Promise<{ id: string | null; teamId: string | null }>
   /**
    * An in-process client through the board, as `caller`: every write goes through what a request's
    * does, the middleware included. Its posts get IDs derived from `trigger`.
@@ -87,6 +96,11 @@ export type BoardBinding = {
 export interface Backend extends ProtocolMethods {
   /** Set when this backend keeps nothing here: discovery sends clients to that board instead. */
   readonly remote: string | null
+  /**
+   * OIDC issuers past Vercel's and GitHub's whose tokens board() verifies, so the backend can say
+   * what they may do: a2() names its `oidc()` rules'.
+   */
+  readonly issuers: readonly string[]
   /** Routes of its own, beside the protocol. */
   readonly routes: readonly BackendRoute[]
   /**

@@ -10,7 +10,7 @@ import {
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
-import type { Principal } from './auth.ts'
+import type { Granted, Known, Principal } from './auth.ts'
 import { actorsReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
@@ -131,7 +131,7 @@ export function nextSend(schedule: Pick<Schedule, 'every' | 'until' | 'times'>, 
  * schedule is its own only if it was created without reading too, so a
  * principal ID shared with a caller that reads doesn't reach that caller's.
  */
-export const createdBy = (schedule: Schedule, principal: Pick<Principal, 'id' | 'access'>) =>
+export const createdBy = (schedule: Schedule, principal: Pick<Granted, 'id' | 'access'>) =>
   schedule.as.principal.id === principal.id &&
   principal.access.can('post', schedule.channel) &&
   (schedule.blind || principal.access.readable(schedule.channel))
@@ -164,7 +164,7 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
 const SYSTEM = deploymentIdentity('vboard:schedule', 'schedule')
 
 /** The board's `accessNow`: a stored creator's access under the rules as they are now, or null. */
-type AccessNow = (principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>) => Promise<Access | null>
+type AccessNow = (principal: Known) => Promise<Access | null>
 
 /** A refusal (a 403, or a 404 for a thread the creator can no longer read) as null; anything else still throws. */
 const refused = (error: unknown): null => {

@@ -503,9 +503,9 @@ describe('schedules', () => {
       const store = memory()
       const queue = fakeQueue()
       const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { project: { id: PROJECT_ID }, auth: testAuth, access, url: BOARD_URL }
-      const route = mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
-      mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
+      const options = { project: { id: PROJECT_ID }, auth: testAuth, url: BOARD_URL }
+      const route = mount({ backend: a2({ store, scheduler: queue.scheduler, access }), ...options })
+      mount({ backend: a2({ store, scheduler: queue.scheduler, access }), ...options })
       const platform = await deploymentToken('board', PROJECT_ID)
       const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
       expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)

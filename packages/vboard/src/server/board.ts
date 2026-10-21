@@ -19,6 +19,7 @@ import {
   RegisterBody,
   ScheduleBody,
   SchedulesQuery,
+  SignInQuery,
   SourceReadQuery,
   SyncAccountBody,
   SyncBody,
@@ -33,6 +34,7 @@ import {
   TypingBody,
   type Discovery,
   type MessageView,
+  type RegistrationView,
 } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { createBoardClient, type BoardClient } from '../client/client.ts'
@@ -42,9 +44,9 @@ import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { createSyncEngine, type SyncEngine, type SyncEvent } from '../sync/engine.ts'
 import type { SyncProvider } from '../sync/provider.ts'
-import { SYNC, type Backend, type BoardBinding, type Caller, type Subscription } from './backend.ts'
-import { createVerifier, hostPrincipal, type AccessRule, type AuthOptions, type HostAccess, type Principal } from './auth.ts'
-import { parseScope, type Access } from './access.ts'
+import { SYNC, type Backend, type BoardBinding, type Caller, type Subscription, type SyncEntry } from './backend.ts'
+import { createVerifier, hostPrincipal, type Authenticate, type AuthOptions, type Principal } from './auth.ts'
+import { compileAccess, parseScope, type Access } from './access.ts'
 import { KNOWN_AGENTS, resolveActor } from './actors.ts'
 import { avatarSvg } from './avatars.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse, unauthorized } from './errors.ts'
@@ -65,17 +67,12 @@ export type BoardOptions = {
   /** The mount path, e.g. `/api/board`. Inferred from requests otherwise. */
   basePath?: string
   /**
-   * Who may call the board besides its people and its own deployments in the
-   * environment it runs in (a production board's previews need a rule), and what
-   * they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`.
-   * The first rule that matches a token decides.
-   *
-   * Or a function, `(request) => ({ id, kind, handle, can })`, that replaces the built-in
-   * verifier: a host's own credentials, for a host serving many teams' boards. Nothing
-   * else is trusted then, not the board's own project nor any token's audience. To reject,
-   * return or throw a `Response`.
+   * A host's own verifier, for a host serving many teams' boards: `(request) => ({ id, kind, handle })`,
+   * who the request is in the board's ID scheme. It replaces the built-in one, so no token's audience
+   * or the board's own project counts then. To reject, return or throw a `Response`. What a principal
+   * may do is the backend's: `a2({ access })`'s function.
    */
-  access?: readonly AccessRule[] | HostAccess
+  authenticate?: Authenticate
   /** The board's Vercel project. Defaults to `VERCEL_PROJECT_ID` or `.vercel/project.json`. */
   project?: { id: string; teamId?: string }
   /** Test issuers. Production uses Vercel's and GitHub's. */
@@ -257,16 +254,17 @@ const sourceOf = (caller: Caller): WriteSource | null => {
  */
 export function board(options: BoardOptions): Board {
   const { backend } = options
-  const host = typeof options.access === 'function' ? options.access : null
-  if (host && options.auth) throw new Error('board: an access function replaces the built-in verifier, so drop `auth`')
+  const host = options.authenticate ?? null
+  if (host && options.auth) throw new Error('board: authenticate replaces the built-in verifier, so drop `auth`')
   const watch = options.watch ?? {}
   const middleware = options.middleware ?? []
   const entries = options.sync ?? {}
   const engine = Object.keys(entries).length > 0 ? createSyncEngine(entries) : null
-  const { verify, accessNow } = createVerifier({
+  const { verify } = createVerifier({
     projectId: () => ownProjectId(options.project),
     teamId: () => ownTeamId(options.project),
-    access: typeof options.access === 'function' ? [] : (options.access ?? []),
+    // One of your own may leave it out: it trusts no other issuer then.
+    issuers: backend.issuers ?? [],
     ...(options.auth ? { auth: options.auth } : {}),
   })
   const streamMaxMs = options.streamMaxMs ?? 280_000
@@ -276,7 +274,7 @@ export function board(options: BoardOptions): Board {
 
   async function verified(request: Request, boardUrl: string): Promise<Principal> {
     if (host) {
-      let result: Awaited<ReturnType<HostAccess>>
+      let result: Awaited<ReturnType<Authenticate>>
       try {
         result = await host(request)
       } catch (error) {
@@ -299,10 +297,11 @@ export function board(options: BoardOptions): Board {
     const scope = request.headers.get('x-board-scope')
     if (scope === null) return principal
     try {
-      return { ...principal, access: principal.access.narrow(parseScope(scope)), scope }
+      parseScope(scope)
     } catch (error) {
       throw badRequest((error as Error).message, 'invalid_scope')
     }
+    return { ...principal, scope }
   }
 
   /** The verified caller of a request: its principal, and the actor it writes as. */
@@ -310,18 +309,6 @@ export function board(options: BoardOptions): Board {
     const principal = await authenticate(request, boardUrl)
     const { author, actor } = resolveActor(principal, request.headers, boardUrl)
     return { identity: { principal, author, actor }, origin: { via: { kind: 'api' } } }
-  }
-
-  /**
-   * What a stored principal (a schedule's creator, a watcher's registrant) may do now, under
-   * the rules as they are. Only under the verifier that made it: one from before the board
-   * switched to or from a host's function is revoked rather than trusted. The board's own
-   * code (`vboard:`, which a host's function can't return) works under either.
-   */
-  function accessFor(principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>): Promise<Access | null> {
-    return principal.id.startsWith('vboard:') || (principal.facts?.issuer === 'host') === (host !== null)
-      ? accessNow(principal)
-      : Promise.resolve(null)
   }
 
   /**
@@ -630,9 +617,58 @@ export function board(options: BoardOptions): Board {
     if (!engine) throw notFound('this board has no sync configured')
     return engine
   }
+
+  /** What `caller` may do, as the backend says: board() decides nothing itself. */
+  const accessOf = async (caller: Caller, signal: AbortSignal): Promise<Access> => compileAccess((await backend.me(caller, {}, signal)).can)
+
+  /** This board's own code, for what it looks up itself: the syncs registered here. */
+  const boardCaller: Caller = { self: 'board', origin: { via: { kind: 'client', name: 'board' } } }
+  /** This board's sync entries, as its sync and discovery see them. */
+  const ownEntries: SyncEntry[] = Object.entries(entries).map(([key, entry]) => ({ key, platform: entry.platform, signIn: entry.users !== null }))
+  let registered: { at: number; list: Promise<RegistrationView[]> } | null = null
+  /** The syncs registered here: another board's, which link accounts and import through this one. Discovery asks at most every 10 seconds. */
+  function registrants(fresh = false): Promise<RegistrationView[]> {
+    if (fresh || !registered || Date.now() - registered.at > 10_000) {
+      const list = backend.watchers(boardCaller, {}, new AbortController().signal).then(
+        ({ watchers }) => watchers.filter((registration) => registration.sync?.length),
+        () => [] as RegistrationView[],
+      )
+      registered = { at: Date.now(), list }
+    }
+    return registered.list
+  }
+  /** Every sync entry this board links accounts on: its own, then each registrant's, by key. */
+  async function syncEntries(fresh = false): Promise<(SyncEntry & { url: string | null; own: boolean })[]> {
+    const found = new Map<string, SyncEntry & { url: string | null; own: boolean }>()
+    for (const entry of ownEntries) found.set(entry.key, { ...entry, url: ownUrl(), own: true })
+    for (const registration of await registrants(fresh))
+      for (const entry of registration.sync) if (!found.has(entry.key)) found.set(entry.key, { ...entry, url: registration.url, own: false })
+    return [...found.values()]
+  }
   const needPerson = (caller: Caller): string => {
     if (!('identity' in caller) || caller.identity.principal.kind !== 'person') throw forbidden('only people link platform accounts')
     return caller.identity.principal.id
+  }
+
+  /**
+   * A sign-in that carries a code, where the entry's sync runs: a browser opens it with no token,
+   * so the code is all it has. `signIn` sends the person to the platform as whoever the code was
+   * issued to; `signedIn`, where the platform sends them back, links the account they approved.
+   */
+  async function signingIn(name: 'signIn' | 'signedIn', url: URL, signal: AbortSignal): Promise<Response> {
+    const { sync: key, code } = SignInQuery.parse(queryObject(url))
+    if (!engine || !entries[key]) throw notFound(`no sync entry named ${key}`)
+    const page = (status: number, text: string) => new Response(`${text}\n`, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
+    const { holder } = await backend.syncFind(engine.caller, { code }, signal)
+    if (holder === null) return page(404, "That link has expired or been used. Run `vb identity link` again for a new one.")
+    if (name === 'signIn') {
+      const back = ownUrl()
+      const at = await engine.signIn(key, holder, back ? `${back}/identity/signed-in?${new URLSearchParams({ sync: key, code })}` : undefined)
+      return new Response(null, { status: 302, headers: { location: at } })
+    }
+    const linked = await engine.redeemSignIn(key, holder, code)
+    if (!linked) return page(409, `${entries[key]!.platform} hasn't said you approved yet: finish signing in, then open this page again.`)
+    return page(200, `Linked ${linked.handle ? `@${linked.handle}` : linked.actor}. You can close this tab.`)
   }
 
   /** board()'s own routes that need a verified caller: sync's, which run where board() does. */
@@ -646,7 +682,7 @@ export function board(options: BoardOptions): Board {
         if ('identity' in caller && engine) {
           const message = await lookup(caller, params.id ?? '', signal)
           if (!message) throw notFound(`message not found: #${params.id}`, 'message_not_found')
-          if (!caller.identity.principal.access.can('sync', message.channel)) throw forbidden(`this token can't sync in ${message.channel}`)
+          if (!(await accessOf(caller, signal)).can('sync', message.channel)) throw forbidden(`this token can't sync in ${message.channel}`)
         }
         const target = await resolveTarget(body.target)
         const { attached } = await backend.syncReceipt(caller, { kind: 'thread', message: params.id ?? '', target: target.target, targetKind: target.kind, cause: 'request' }, signal)
@@ -659,27 +695,50 @@ export function board(options: BoardOptions): Board {
         const { message: root, replies } = await backend.message(caller, { id }, signal)
         const message = [root, ...replies].find((candidate) => candidate.id === id)
         if (!message || message.deleted) throw notFound(`message not found: #${id}`, 'message_not_found')
-        if ('identity' in caller && !caller.identity.principal.access.can('post', message.channel)) throw forbidden(`this token can't post in ${message.channel}`)
+        if (!(await accessOf(caller, signal)).can('post', message.channel)) throw forbidden(`this token can't post in ${message.channel}`)
         return json({ targets: engine ? await engine.typing([root, ...replies], body.status) : [] })
       }
       case 'sourceRead': {
         // The app's token reads what the app can, not what the caller can.
-        if ('identity' in caller && !caller.identity.principal.access.everywhere('manage'))
-          throw forbidden("this token can't read a source: it needs manage in every channel")
+        if (!(await accessOf(caller, signal)).everywhere('manage')) throw forbidden("this token can't read a source: it needs manage in every channel")
         const query = SourceReadQuery.parse(queryObject(url))
         return json(await needSync().readSource(params.key ?? '', query.target, query.limit ?? 50))
       }
       case 'identityLink': {
-        const sync = needSync()
-        const person = needPerson(caller)
         const body = IdentityLinkBody.parse(await readJson(request))
-        return json(await sync.startLink(person, body.sync, body.method))
+        const known = await syncEntries(true)
+        if (known.length === 0) throw notFound('this board has no sync configured')
+        const entry = known.find((candidate) => candidate.key === body.sync)
+        if (!entry) throw notFound(`no sync entry named ${body.sync}`)
+        const person = needPerson(caller)
+        // A sign-in where the entry's sync runs and can be reached; a code to post from the account otherwise.
+        const signs = entry.signIn && (entry.own || entry.url !== null)
+        if (body.method === 'consent' && !signs) throw badRequest(`${body.sync} can't sign people in: link it with a code`)
+        if (body.method !== 'code' && signs) {
+          // The board that keeps the log issues the code; the sign-in carries it, and the sync redeems it.
+          if (entry.own) return json({ method: 'consent', sync: entry.key, platform: entry.platform, url: await engine!.signIn(entry.key, person) })
+          const { code } = await backend.syncCode(caller, { sync: entry.key }, signal)
+          const at = `${entry.url}/identity/sign-in?${new URLSearchParams({ sync: entry.key, code })}`
+          return json({ method: 'consent', sync: entry.key, platform: entry.platform, url: at })
+        }
+        const { code, expiresAt } = await backend.syncCode(caller, { sync: entry.key }, signal)
+        return json({ method: 'code', sync: entry.key, platform: entry.platform, code, expiresAt })
       }
       case 'identityCheck': {
-        const sync = needSync()
-        const person = needPerson(caller)
         const body = IdentityCheckBody.parse(await readJson(request))
-        return json({ linked: await sync.checkLink(person, body.sync) })
+        const known = await syncEntries(true)
+        if (known.length === 0) throw notFound('this board has no sync configured')
+        const entry = known.find((candidate) => candidate.key === body.sync)
+        if (!entry) throw notFound(`no sync entry named ${body.sync}`)
+        const person = needPerson(caller)
+        // A sign-in elsewhere links where it comes back: the person sees it in their links.
+        if (!entry.own) return json({ linked: null })
+        if (!entry.signIn) throw badRequest(`${body.sync} can't sign people in: link it with a code`)
+        // Their sign-in, here: once it's done, a code of their own links the account it authorized.
+        const account = await engine!.signedIn(entry.key, person)
+        if (!account) return json({ linked: null })
+        const { code } = await backend.syncCode(caller, { sync: entry.key }, signal)
+        return json({ linked: (await backend.syncAccount(engine!.caller, { sync: entry.key, account, code, method: 'consent' }, signal)).link })
       }
       case 'identityUnlink': {
         needPerson(caller)
@@ -714,7 +773,8 @@ export function board(options: BoardOptions): Board {
       await engine.receive(key, item, { id, attempt })
     },
     pull: () => (engine ? engine.pull() : Promise.resolve(0)),
-    accessFor,
+    sync: ownEntries,
+    project: async () => ({ id: await ownProjectId(options.project), teamId: await ownTeamId(options.project) }),
     client: clientAs,
     url: ownUrl,
   }
@@ -790,6 +850,7 @@ export function board(options: BoardOptions): Board {
         if (!engine || !entries[match.params.key ?? '']) throw notFound(`no sync entry named ${match.params.key}`)
         return await engine.handleWebhook(match.params.key!, request)
       }
+      if (target.kind === 'board' && (target.name === 'signIn' || target.name === 'signedIn')) return await signingIn(target.name, url, request.signal)
       // A sync callback's client does everything but its own writes as sync.
       const own = injected && 'platform' in injected ? engine!.caller : injected
       if (target.kind === 'board' && target.name !== 'avatar' && target.name !== 'openapi' && target.name !== 'discovery') {
@@ -813,7 +874,8 @@ export function board(options: BoardOptions): Board {
           audience: boardUrl,
           team_id: identity.teamId,
           project_id: identity.projectId,
-          sync: Object.entries(entries).map(([key, entry]) => ({ key, platform: entry.platform })),
+          // Its own sync's entries, and those of the syncs registered here, which link accounts here too.
+          sync: (await syncEntries()).map(({ key, platform }) => ({ key, platform })),
           ...(backend.remote !== null ? { remote: backend.remote } : {}),
         }
         return json(body)

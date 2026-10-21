@@ -32,11 +32,12 @@ const backend = a2({
   // Every deployment shares it: a file's ID is random, and only its board can name it.
   blob: env ? vercelBlob() : undefined,
   scheduler: queues,
+  // Factories elsewhere that may use this board, by project and team.
+  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
 });
 
 const factory = board({
   backend,
-  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
   sync: {
     // Connect connectors: vboard builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.

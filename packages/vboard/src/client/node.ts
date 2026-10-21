@@ -329,38 +329,21 @@ export function createClient(options: NodeClientOptions = {}): BoardClient {
    * board alone, so it stays here.
    */
   const follows = () => options.token === undefined && !process.env.VBOARD_TOKEN && !localToken(url)
-  /**
-   * Where a request goes: the board its discovery sends this client to, except what this board does
-   * for its own sync entries (linking an account on one, reading a source through it), which only
-   * it can, and its discovery.
-   */
-  async function where(path: string, body: unknown): Promise<Reached> {
-    if (!follows()) return home
+  /** Where a request goes: the board its discovery sends this client to, which keeps the log. Its discovery stays here. */
+  async function where(path: string): Promise<Reached> {
+    if (!follows() || path === '/') return home
     const found = await home.discover()
-    if (!found.remote) return home
-    const own = new Set(found.sync.map((entry) => entry.key))
-    const key =
-      path === '/identity/link' || path === '/identity/check'
-        ? (() => {
-            try {
-              return (JSON.parse(String(body)) as { sync?: string }).sync
-            } catch {
-              return undefined
-            }
-          })()
-        : path.match(/^\/sources\/([^/]+)\/read$/)?.[1]
-    if (path === '/' || (key !== undefined && own.has(decodeURIComponent(key)))) return home
-    return reach(found.remote, true)
+    return found.remote ? reach(found.remote, true) : home
   }
-  /** The board most requests go to, whose token says who this client is. */
-  const primary = () => where('/me', undefined)
+  /** The board requests go to, whose token says who this client is. */
+  const primary = () => where('/me')
 
   /** Each request, to the board it goes to, with a token for that board. */
   const routed = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const href = input instanceof Request ? input.url : String(input)
     const path = (href.startsWith(url) ? href.slice(url.length) : new URL(href).pathname) || '/'
     if (!follows()) return home.fetch(input, init)
-    const target = await where(path.split('?')[0]!, init.body)
+    const target = await where(path.split('?')[0]!)
     // The token the request carries is the main board's: one to another goes with that board's own.
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
     if (headers.has('authorization')) headers.set('authorization', `Bearer ${await target.token()}`)

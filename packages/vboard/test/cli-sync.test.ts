@@ -37,6 +37,8 @@ beforeAll(async () => {
     auth: testAuth,
     sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
   })
+  // Its registration tells the team's board it syncs Slack, as its first request would.
+  await backend.register()
   const clean = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^(CLAUDE|CODEX|GROK|PI_|AI_AGENT|VBOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key)),
   )
@@ -62,13 +64,13 @@ function vb(args: string[]) {
 }
 
 describe('the CLI on a project whose board is on http()', () => {
-  it('links a Slack account where the sync runs, and reads the link where the log is', async () => {
+  it("follows it to the team's board to link a Slack account, which the project's sync links when the code comes in", async () => {
     const linked = await vb(['identity', 'link', 'slack', '--no-wait'])
     expect(linked).toMatchObject({ code: 0, stderr: '' })
     const code = linked.stdout.match(/vb-[A-Z2-9]{4}-[A-Z2-9]{4}/)?.[0]
     expect(code).toBeDefined()
 
-    // Posted from that Slack account, the code links it: on the team's board, which keeps the log.
+    // The team's board issued it. Posted from that Slack account, the project's sync redeems it there.
     await project.fetch(
       new Request(`${projectUrl}/webhooks/slack`, {
         method: 'POST',

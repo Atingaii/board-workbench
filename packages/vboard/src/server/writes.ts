@@ -3,7 +3,7 @@ import { idempotentId } from 'experimental-a2'
 import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
 import { actorsReducer, foldMessages, isThreadTarget, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
-import type { Principal } from './auth.ts'
+import type { Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
@@ -14,8 +14,8 @@ import { view, type Reader } from './feed.ts'
 import type { MessageView } from '../api/routes.ts'
 import type { WriteSource } from './middleware.ts'
 
-/** Who a write is attributed to. */
-export type Identity = { principal: Principal; author: Author; actor: Actor }
+/** Who a write is attributed to, with what its principal may do, as the backend worked it out. */
+export type Identity = { principal: Granted; author: Author; actor: Actor }
 
 /** A piece of the board's own deployment, writing as `actor` with full access. */
 export function deploymentIdentity(actor: string, handle: string): Identity {
@@ -112,7 +112,7 @@ export async function authorizeMessage<P extends Permission>(
  */
 export async function authorizeOwn(
   ctx: WriteContext,
-  principal: Principal,
+  principal: Granted,
   id: number,
   verb: 'edit' | 'delete',
 ): Promise<Authorized<'post'>> {

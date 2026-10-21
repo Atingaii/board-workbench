@@ -277,7 +277,8 @@ const CHECKS: Check[] = [
     run: async (ctx) => {
       const registered = (await ctx.board.watchers()).find((r) => r.owner === ctx.me.principal)
       // Registering replaces a principal's watchers: never on one that has some.
-      if (registered && Object.keys(registered.watch).length > 0) return 'this token has watchers registered here, and checking would replace them'
+      if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
+        return 'this token has watchers or a sync registered here, and checking would replace them'
       await ctx.board.register({ url: null, watch: { conformance: { tail: `${ctx.channel} --label conformance=${ctx.labels.conformance}` } } })
       try {
         const message = await post(ctx, 'conformance: for a watcher')
@@ -302,6 +303,16 @@ const CHECKS: Check[] = [
       const thread = `${key}:${ctx.labels.conformance}:1`
       const author = { id: `${key}:user:${ctx.labels.conformance}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
       const origin = { thread, message: '1' }
+      // A sync names its entries when it registers; registering replaces the token's watchers.
+      const registered = (await ctx.board.watchers()).find((registration) => registration.owner === ctx.me.principal)
+      if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
+        return 'this token has watchers or a sync registered here, which registering would replace'
+      try {
+        await ctx.board.register({ url: null, watch: {}, sync: [{ key, platform: key }] })
+      } catch (error) {
+        if (error instanceof BoardError && error.status === 403) return "this token can't register a sync here"
+        throw error
+      }
       let imported: { message: string | null }
       try {
         imported = await ctx.board.syncImport({
@@ -310,6 +321,7 @@ const CHECKS: Check[] = [
           id: `conformance-sync-${ctx.labels.conformance}`,
         })
       } catch (error) {
+        await ctx.board.register({ url: null, watch: {} }).catch(() => {})
         if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
         throw error
       }
@@ -332,6 +344,7 @@ const CHECKS: Check[] = [
       } finally {
         // Its author is the platform user: only an import can take it down.
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
+        await ctx.board.register({ url: null, watch: {} }).catch(() => {})
       }
     },
   },

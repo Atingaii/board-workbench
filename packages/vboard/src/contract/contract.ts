@@ -403,8 +403,8 @@ export const registryContract = contract({
       /** Where to wake it: `<url>/wake`. Without one, it pulls on its own. */
       url: z.string().url().max(500).nullable(),
       watch: z.record(RemoteWatcherId, WatcherSpec),
-      /** Its sync subscribes too: every post, change, and thread sync where it may sync. Older registrations have none. */
-      sync: z.boolean().optional(),
+      /** Its sync entries: with any, its sync subscribes too, to every post, change, and thread sync where it may sync. Older registrations have none. */
+      sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean() })).max(32).optional(),
       /** `watchersHash(watch)`, which every wake-up carries so the board can tell it's stale. */
       hash: z.string().min(1).max(100),
     }),

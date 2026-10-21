@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import type { HostPrincipal } from '../src/access/index.ts'
+import type { Can, HostPrincipal } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
@@ -9,13 +9,26 @@ import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, t
 
 /** A host's credentials: opaque platform tokens it verifies itself, each naming a team. */
 const PLATFORM: Record<string, { team: string; principal: HostPrincipal }> = {
-  pt_ada: { team: 'team_a', principal: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-ada', can: 'all' } },
-  pt_viewer: { team: 'team_a', principal: { id: 'vercel:user:u_view', kind: 'person', handle: 'user-view', can: ['read'] } },
-  pt_bob: { team: 'team_b', principal: { id: 'vercel:user:u_bob', kind: 'person', handle: 'user-bob', can: 'all' } },
-  pt_deploy: {
-    team: 'team_a',
-    principal: { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app', can: { 'feedback/': ['post'] } },
-  },
+  pt_ada: { team: 'team_a', principal: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-ada' } },
+  pt_viewer: { team: 'team_a', principal: { id: 'vercel:user:u_view', kind: 'person', handle: 'user-view' } },
+  pt_bob: { team: 'team_b', principal: { id: 'vercel:user:u_bob', kind: 'person', handle: 'user-bob' } },
+  pt_deploy: { team: 'team_a', principal: { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } },
+}
+
+/** The host's own model: what each principal may do. */
+const GRANTS: Record<string, Can> = {
+  'vercel:user:u_ada': 'all',
+  'vercel:user:u_view': ['read'],
+  'vercel:user:u_bob': 'all',
+  'vercel:project:prj_app:production': { 'feedback/': ['post'] },
+}
+
+/** Who a request is, as a host's own credentials say: only on its own team's board. */
+const authenticate = (team: string) => (request: Request) => {
+  const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? ''
+  const found = PLATFORM[token]
+  if (!found || found.team !== team) return Response.json({ error: { code: 'not_found', message: 'no board here' } }, { status: 404 })
+  return found.principal
 }
 
 /** One board per team, like a host would build them, each answering only for its own team. */
@@ -23,19 +36,15 @@ function hosted(team: string, options: Partial<MountOptions> = {}) {
   return board({
     store: memory(),
     url: BOARD_URL,
-    // The host's own project: its tokens must get nothing unless `authenticate` grants them.
+    // The host's own project: its tokens must get nothing unless `authenticate` names them.
     project: { id: PROJECT_ID, teamId: TEAM_ID },
-    access: (request) => {
-      const token = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? ''
-      const found = PLATFORM[token]
-      if (!found || found.team !== team) return Response.json({ error: { code: 'not_found', message: 'no board here' } }, { status: 404 })
-      return found.principal
-    },
+    authenticate: authenticate(team),
+    access: (principal) => GRANTS[principal.id] ?? null,
     ...options,
   })
 }
 
-describe('an access function', () => {
+describe("a host's authenticate and access", () => {
   it("trusts nothing built in: the host project's own person and deployment tokens get no access", async () => {
     const tenant = hosted('team_a')
     for (const token of [await personToken(), await deploymentToken('board', PROJECT_ID)]) {
@@ -85,7 +94,7 @@ describe('an access function', () => {
     controller.abort()
   })
 
-  it('narrows access with `can`, per channel: a viewer reads but cannot write', async () => {
+  it('gives what its access function grants, per channel: a viewer reads but cannot write', async () => {
     const tenant = hosted('team_a')
     await caller(tenant.fetch, 'pt_ada')('POST', '/messages', { channel: 'dev', text: 'one' })
     const viewer = caller(tenant.fetch, 'pt_viewer')
@@ -113,7 +122,7 @@ describe('an access function', () => {
     const thrown = board({
       store: memory(),
       url: BOARD_URL,
-      access: () => {
+      authenticate: () => {
         throw new Response('{"error":"nope"}', { status: 401, headers: { 'www-authenticate': 'Bearer' } })
       },
     })
@@ -124,28 +133,33 @@ describe('an access function', () => {
     const malformed = board({
       store: memory(),
       url: BOARD_URL,
-      access: () => ({ id: 'ada+pi', kind: 'person', handle: 'ada', can: 'all' }),
+      authenticate: () => ({ id: 'ada+pi', kind: 'person', handle: 'ada' }),
     })
     expect((await caller(malformed.fetch, 'x')('GET', '/messages')).status).toBe(500)
     // `]` would end an exact mention, `@[<actor id>]`, so nobody could mention it.
     const unmentionable = board({
       store: memory(),
       url: BOARD_URL,
-      access: () => ({ id: 'vercel:user:a]b', kind: 'person', handle: 'ada', can: 'all' }),
+      authenticate: () => ({ id: 'vercel:user:a]b', kind: 'person', handle: 'ada' }),
     })
     expect((await caller(unmentionable.fetch, 'x')('GET', '/messages')).status).toBe(500)
 
     const expired = board({
       store: memory(),
       url: BOARD_URL,
-      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all', expiresAt: new Date(0) }),
+      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', expiresAt: new Date(0) }),
     })
     expect((await caller(expired.fetch, 'x')('GET', '/messages')).status).toBe(401)
   })
 
   it("can't be combined with the test issuers it replaces", () => {
-    const access = () => new Response(null, { status: 401 })
-    expect(() => board({ store: memory(), access, auth: testAuth })).toThrow(/access function/)
+    const authenticate = () => new Response(null, { status: 401 })
+    expect(() => board({ store: memory(), authenticate, auth: testAuth })).toThrow(/authenticate replaces/)
+  })
+
+  it("gives a host's principal nothing without an access function, and the built-in callers nothing with one", async () => {
+    const rules = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
+    expect((await caller(rules.fetch, 'pt_ada')('GET', '/me')).status).toBe(403)
   })
 })
 
@@ -179,7 +193,7 @@ describe('two hosted boards on one Vercel Blob store', () => {
   })
 })
 
-describe("schedules from an access function's principal", () => {
+describe("schedules from a host's principal", () => {
   const T0 = Date.parse('2026-10-07T12:00:00.000Z')
   const HOUR = 3_600_000
   beforeEach(() => {
@@ -196,7 +210,8 @@ describe("schedules from an access function's principal", () => {
       store: memory(),
       url: BOARD_URL,
       scheduler: queue.scheduler,
-      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: { 'dev/': ['read', 'post'] }, expiresAt: new Date(grant.until) }),
+      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', expiresAt: new Date(grant.until) }),
+      access: () => ({ 'dev/': ['read', 'post'] }),
     })
     const ada = caller(tenant.fetch, 'pt_ada')
     const advance = async (ms: number) => {
@@ -228,7 +243,7 @@ describe("schedules from an access function's principal", () => {
   })
 })
 
-describe('a board that switches to an access function', () => {
+describe("a board that switches to a host's model", () => {
   const T0 = Date.parse('2026-10-07T12:00:00.000Z')
   const HOUR = 3_600_000
   beforeEach(() => {
@@ -249,7 +264,8 @@ describe('a board that switches to an access function', () => {
       store,
       url: BOARD_URL,
       scheduler: queue.scheduler,
-      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all' }),
+      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
+      access: () => 'all',
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
     vi.setSystemTime(T0 + HOUR)
@@ -267,7 +283,8 @@ describe('a board that switches to an access function', () => {
       store,
       url: BOARD_URL,
       scheduler: queue.scheduler,
-      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all' }),
+      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
+      access: () => 'all',
     })
     expect((await caller(before.fetch, 'pt_ada')('POST', '/schedules', { channel: 'dev', text: 'from the host', in: '1h' })).status).toBe(201)
 
@@ -287,7 +304,8 @@ describe('a board that switches to an access function', () => {
       store: memory(),
       url: BOARD_URL,
       scheduler: queue.scheduler,
-      access: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', can: 'all' }),
+      authenticate: () => ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }),
+      access: () => 'all',
     })
     await hostedBoard.client('digest').schedule('dev', { text: 'daily digest', in: '1h' })
     await new Promise((resolve) => setTimeout(resolve, 20))

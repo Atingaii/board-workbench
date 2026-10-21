@@ -176,8 +176,11 @@ export const RegisterBody = z.object({
   watch: z
     .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
     .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
-  /** Its sync subscribes too: every post, change, and thread sync in the channels where it may sync. */
-  sync: z.boolean().optional(),
+  /**
+   * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
+   * where it may sync, and the board lists the entries and links accounts on them.
+   */
+  sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().default(false) })).max(32).optional(),
 })
 
 /** A pull of the caller's matches: at most `limit`, waiting up to `wait` seconds for one. */
@@ -294,6 +297,8 @@ export const SyncReceiptBody = z.discriminatedUnion('kind', [
 
 /** What sync looks up by platform ID: a thread or message, who an account is, and a person's accounts. */
 export const SyncFindQuery = z.object({
+  /** A live one-time code: who it was issued to, for a sign-in that carries it. */
+  code: z.string().min(1).max(64).optional(),
   /** The post the caller's sync imported with this client ID. */
   post: z.string().min(1).max(200).optional(),
   thread: ExternalTarget.optional(),
@@ -313,13 +318,22 @@ export const InboxPushBody = z.object({
 export const InboxNextQuery = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() })
 export const InboxAckBody = z.object({ lease: z.string().min(1).max(64), error: z.string().min(1).max(500).optional() })
 
-/** A one-time code for linking an account: the caller's own, or with `person`, theirs. */
-export const SyncCodeBody = z.object({ sync: SyncKey, person: ActorId.optional() })
-/** A platform account, linked by a code posted from it, or for a person who signed in with it. */
-export const SyncAccountBody = z.union([
-  z.object({ sync: SyncKey, account: ExternalAuthor, code: z.string().min(1).max(64), message: z.string().max(1024).optional() }).strict(),
-  z.object({ sync: SyncKey, account: ExternalAuthor, person: ActorId }).strict(),
-])
+/** A one-time code for linking an account on sync entry `sync`: a person's own, for themselves. */
+export const SyncCodeBody = z.object({ sync: SyncKey })
+/**
+ * A platform account, linked to whoever a code was issued to: one posted from the account, or
+ * carried through its sign-in. `message` is the platform message that posted it.
+ */
+export const SyncAccountBody = z.object({
+  sync: SyncKey,
+  account: ExternalAuthor,
+  code: z.string().min(1).max(64),
+  message: z.string().max(1024).optional(),
+  /** `consent` when the code came through the account's own sign-in, so the board posts as them. */
+  method: z.enum(['code', 'consent']).optional(),
+})
+/** A sign-in that carries a code, on the board whose sync runs the entry. */
+export const SignInQuery = z.object({ sync: SyncKey, code: z.string().min(1).max(64) })
 export const SyncUnlinkBody = z.object({ account: ActorId })
 
 export const EditBody = z.object({ text: MessageText })
@@ -448,8 +462,8 @@ export type RegistrationView = {
   /** Where it's woken: `<url>/wake`. `null` when it pulls on its own. */
   url: string | null
   watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
-  /** Whether its sync gets every event it delivers to platforms, as matches of watcher `@sync`. */
-  sync: boolean
+  /** Its sync entries. With any, its sync gets every event it delivers to platforms, as matches of watcher `@sync`. */
+  sync: { key: string; platform: string; signIn: boolean }[]
   /** Every wake-up carries it, so the board can tell its registration is stale. */
   hash: string
 }
@@ -513,6 +527,8 @@ export type SyncFindView = {
   person: { id: string; method: 'code' | 'consent' } | null
   /** The platform accounts linked to a person, and how. */
   accounts: { id: string; method: 'code' | 'consent' }[]
+  /** Who a live code was issued to. */
+  holder: string | null
 }
 /** A message's copies, by target: where it went, or came from, on each platform. */
 export type SyncCopiesView = { copies: Record<string, Record<string, ExternalCopy>> }
@@ -682,6 +698,10 @@ export const routes = {
   identityLink: { method: 'POST', path: '/identity/link', body: IdentityLinkBody },
   /** Finishes a sign-in: links the account it authorized, once it has. */
   identityCheck: { method: 'POST', path: '/identity/check', body: IdentityCheckBody },
+  /** Starts a sign-in that carries a code (no token): where the board that keeps the log sends a person. */
+  signIn: { method: 'GET', path: '/identity/sign-in', query: SignInQuery },
+  /** Where a sign-in comes back (no token): links the account it authorized to the code's person. */
+  signedIn: { method: 'GET', path: '/identity/signed-in', query: SignInQuery },
   identityUnlink: { method: 'POST', path: '/identity/unlink', body: IdentityUnlinkBody },
   /** Watchers registered by boards on `http()`: every one to `manage` everywhere, the caller's own to anyone else. */
   watchers: { method: 'GET', path: '/watchers' },

@@ -362,7 +362,7 @@ export function createBoardClient(options: ClientOptions) {
     /** Events that failed 10 times and stopped their thread, oldest first. Full access only. */
     stuck: async () => (await call<{ stuck: StuckEvent[] }>('GET', '/stuck')).stuck,
     /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
-    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: boolean }) =>
+    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: { key: string; platform: string; signIn?: boolean }[] }) =>
       call<RegistrationView>('POST', '/watchers', { body: input }),
     /** Registered watchers: every one to `manage` everywhere, the caller's own to anyone else. */
     watchers: async () => (await call<{ watchers: RegistrationView[] }>('GET', '/watchers')).watchers,
@@ -419,9 +419,9 @@ export function createBoardClient(options: ClientOptions) {
     /** How an inbox event went: done, or an error to try it again. */
     inboxAck: (key: string, id: string, body: { lease: string; error?: string }) =>
       call<{ ok: true }>('POST', `/inbox/${path(key)}/${path(id)}/ack`, { body }),
-    /** A one-time code for linking an account on `sync`: yours, or with `person`, theirs. */
-    syncCode: (sync: string, opts: { person?: string } = {}) => call<{ code: string; expiresAt: string }>('POST', '/sync/codes', { body: { sync, ...opts } }),
-    /** Links a platform account: by the code posted from it, or for the person who signed in with it. */
+    /** A one-time code for linking your account on sync entry `sync`. Only people get one, each for themselves. */
+    syncCode: (sync: string) => call<{ code: string; expiresAt: string }>('POST', '/sync/codes', { body: { sync } }),
+    /** Links a platform account to whoever a code was issued to: one posted from it, or carried through its sign-in. */
     syncAccount: (body: SyncAccountInput) => call<{ person: string; link: LinkedAccount }>('POST', '/sync/accounts', { body }),
     /** Unlinks a platform account: your own, or anyone's with `sync`. */
     syncUnlink: (account: string) => call<{ ok: true }>('POST', '/sync/accounts/unlink', { body: { account } }),

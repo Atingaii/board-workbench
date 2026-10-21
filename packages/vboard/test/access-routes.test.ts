@@ -27,6 +27,8 @@ const WALK: Record<RouteName, Walk> = {
   avatar: 'public',
   openapi: 'public',
   webhook: 'public',
+  signIn: 'public',
+  signedIn: 'public',
   // About the caller.
   me: () => [{ method: 'GET', path: '/me', status: 200, check: (body) => expect(body.can).toEqual({ open: ['read'] }) }],
   identity: () => [{ method: 'GET', path: '/identity', status: 200 }],
@@ -151,7 +153,8 @@ const WALK: Record<RouteName, Walk> = {
   ],
   syncAccount: () => [
     { method: 'POST', path: '/sync/accounts', body: { sync: 'slack', account: SLACK_USER, code: 'vb-AAAA-BBBB' }, status: 403 },
-    { method: 'POST', path: '/sync/accounts', body: { sync: 'slack', account: SLACK_USER, person: 'vercel:user:u_keeper' }, status: 403 },
+    // Only by a code: there's no linking an account to someone by naming them.
+    { method: 'POST', path: '/sync/accounts', body: { sync: 'slack', account: SLACK_USER, person: 'vercel:user:u_keeper' }, status: 400 },
   ],
   syncUnlink: () => [{ method: 'POST', path: '/sync/accounts/unlink', body: { account: 'slack:user:U1' }, status: 404 }],
   // Registered watchers: each sees only what its registrant reads, and pulls only its own.

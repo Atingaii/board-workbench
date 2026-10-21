@@ -5,14 +5,12 @@ import { externalMessageKey, isThreadTarget, type Actor, type ExternalCopy } fro
 import type { ExternalAuthor, ExternalEvent, ExternalFile, ExternalLink, Origin } from '../contract/contract.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment } from '../contract/schemas.ts'
-import type { BoardEventView, IdentityChallenge, InboxItem, LinkedAccount, LinkView, MessageView, SyncThreadView } from '../api/routes.ts'
+import type { BoardEventView, InboxItem, LinkedAccount, LinkView, MessageView, SyncThreadView } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { afterRetry } from '../server/attempts.ts'
-import { FULL_ACCESS } from '../server/access.ts'
-import type { Principal } from '../server/auth.ts'
 import type { Backend, Caller, InboxDelivery } from '../server/backend.ts'
 import { badRequest, HttpError, notFound } from '../server/errors.ts'
-import { channelOf, type Identity, type SyncTarget, type WriteOrigin } from '../server/writes.ts'
+import { channelOf, type SyncTarget, type WriteOrigin } from '../server/writes.ts'
 import { DroppedError, type Write, type WriteSource } from '../server/middleware.ts'
 import { waitUntil } from '../server/wait-until.ts'
 import type { SyncProvider } from './provider.ts'
@@ -118,16 +116,6 @@ const storableJson = <T>(value: T): T => {
   if (value !== null && typeof value === 'object')
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [toStorable(key), storableJson(item)])) as T
   return value
-}
-
-/** A platform user, as the board writes for them: full access, each write still proved against the channel it lands in. */
-const externalIdentity = (author: { id: string; handle: string; name: string; avatar: string | null }): Identity => {
-  const principal: Principal = { id: author.id, kind: 'external', handle: author.handle, access: FULL_ACCESS, expiresAt: null }
-  return {
-    principal,
-    author: { actor: author.id, principal: author.id, profile: null, session: null },
-    actor: { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar },
-  }
 }
 
 const actorOf = (author: ExternalAuthor): Actor => ({ id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar })
@@ -576,25 +564,35 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     return true
   }
 
-  /** How `person` proves an account on `key` is theirs: its sign-in, or a code to post from it. */
-  async function startLink(person: string, key: string, method?: 'code' | 'consent'): Promise<IdentityChallenge> {
-    const platform = platformOf(key)
-    if (method !== 'code' && platform.users)
-      return { method: 'consent', sync: key, platform: platform.platform, url: await platform.users.authorize(person) }
-    if (method === 'consent') throw badRequest(`${key} can't sign people in: link it with a code`)
-    const { code, expiresAt } = await call('syncCode', { sync: key, person })
-    return { method: 'code', sync: key, platform: platform.platform, code, expiresAt }
-  }
+  /** Whether entry `key` signs people in: its sign-in links the account, and lets the board post as them. */
+  const signsIn = (key: string) => platformOf(key).users !== null
 
-  /** After a sign-in: the account the person's token belongs to, linked to them. */
-  async function checkLink(person: string, key: string): Promise<LinkedAccount | null> {
+  /**
+   * A sign-in on entry `key` for `subject`, the person a code was issued to: the platform's URL,
+   * which sends them to `callback` once they've approved.
+   */
+  async function signIn(key: string, subject: string, callback?: string): Promise<string> {
     const platform = platformOf(key)
     if (!platform.users) throw badRequest(`${key} can't sign people in: link it with a code`)
-    const token = await platform.users.token(person)
+    return platform.users.authorize(subject, callback ? { callback } : {})
+  }
+
+  /** The account `subject` signed in with on entry `key`, or null while they haven't. */
+  async function signedIn(key: string, subject: string): Promise<ExternalAuthor | null> {
+    const platform = platformOf(key)
+    if (!platform.users) throw badRequest(`${key} can't sign people in: link it with a code`)
+    const token = await platform.users.token(subject)
     if (!token) return null
     const account = await platform.whoAmI(token)
     if (!account.id.startsWith(`${platform.platform}:user:`)) throw badRequest(`${key} named an account that isn't a ${platform.platform} user`)
-    return (await call('syncAccount', { sync: key, account, person })).link
+    return account
+  }
+
+  /** Links the account `subject` signed in with to them, by the code they carried through: null while they haven't. */
+  async function redeemSignIn(key: string, subject: string, code: string): Promise<LinkedAccount | null> {
+    const account = await signedIn(key, subject)
+    if (!account) return null
+    return (await call('syncAccount', { sync: key, account, code, method: 'consent' })).link
   }
 
   async function applyIncoming(key: string, item: InboxDelivery, meta: { id: string; attempt: number }, channel: string, overrides: SyncOverrides): Promise<SyncResult> {
@@ -1244,8 +1242,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     findByEmail,
     handleWebhook,
     inboxChannel,
-    startLink,
-    checkLink,
+    signsIn,
+    signIn,
+    signedIn,
+    redeemSignIn,
     typing,
     readSource,
   }

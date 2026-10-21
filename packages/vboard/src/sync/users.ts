@@ -5,8 +5,11 @@
  * (never signed in, revoked, expired) is delivered as the bot, as before.
  */
 export type UserTokens = {
-  /** A sign-in URL that binds whoever completes it to `principal`. Show it only to them. */
-  authorize(principal: string): Promise<string>
+  /**
+   * A sign-in URL that binds whoever completes it to `principal`. Show it only to them. With
+   * `callback`, the platform sends them there once they've approved.
+   */
+  authorize(principal: string, options?: { callback?: string }): Promise<string>
   /** `principal`'s token on the platform, or null when they haven't signed in. */
   token(principal: string): Promise<string | null>
 }
@@ -30,9 +33,9 @@ export const userTokensOf = (adapter: object): UserTokens | null =>
 export function connectUserTokens(connector: string): UserTokens {
   const subject = (principal: string) => ({ subject: { type: 'user' as const, id: principal } })
   return {
-    async authorize(principal) {
+    async authorize(principal, options = {}) {
       const { startAuthorization } = await import('@vercel/connect')
-      return (await startAuthorization(connector, subject(principal))).url
+      return (options.callback ? await startAuthorization(connector, subject(principal), { callbackUrl: options.callback }) : await startAuthorization(connector, subject(principal))).url
     },
     async token(principal) {
       const { getToken, NoValidTokenError, UserAuthorizationRequiredError } = await import('@vercel/connect')

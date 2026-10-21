@@ -315,7 +315,7 @@ export function createWatchers(options: {
       })
     }
     // A registrant's sync, in the channels where it may sync: a thread's sync is about its root.
-    const syncing = SYNCED.has(event.type) ? registered.filter((registration) => registration.sync) : []
+    const syncing = SYNCED.has(event.type) ? registered.filter((registration) => registration.sync.length > 0) : []
     if (syncing.length > 0) {
       const about = event.type === 'thread.synced' ? await rootOf(event.payload.thread, event.index, ctx.signal) : message
       for (const registration of syncing) {
