@@ -147,8 +147,8 @@ async function writeCache(audience: string, cached: Cached) {
 
 /**
  * A person's token: their Vercel CLI login mints a development token for the
- * board's project, exchanged so its audience is the board's URL. Cached on
- * disk for its 12-hour life.
+ * project the board's host is a deployment of, exchanged so its audience is the
+ * board's URL. Cached on disk for its 12-hour life.
  */
 async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
   const cached = await readCache(audience)
@@ -165,14 +165,13 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   if (!discovery.project_id)
     throw new BoardError('no_project', `the board at ${discovery.url} doesn't know its Vercel project`, 0)
 
+  const authToken = await getVercelToken().catch(() => null)
+  const project = await boardProject(audience, discovery, authToken)
   let development: string
-  let authToken: string | null = null
   try {
-    authToken = await getVercelToken()
+    if (!authToken) throw new Error('no Vercel CLI credentials file')
     const response = await fetch(
-      `https://api.vercel.com/v1/projects/${discovery.project_id}/token?source=vboard${
-        discovery.team_id ? `&teamId=${discovery.team_id}` : ''
-      }`,
+      `https://api.vercel.com/v1/projects/${project.id}/token?source=vboard${project.team ? `&teamId=${project.team}` : ''}`,
       { method: 'POST', headers: { authorization: `Bearer ${authToken}` } },
     )
     if (response.status === 403 || response.status === 404)
@@ -185,7 +184,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
     development = ((await response.json()) as { token: string }).token
   } catch (error) {
     if (error instanceof BoardError) throw error
-    development = await tokenFromVercelCli(discovery)
+    development = await tokenFromVercelCli(project)
   }
 
   const token = await exchangeVercelOidcToken({ token: development, audience })
@@ -195,10 +194,39 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   return fresh
 }
 
+/**
+ * The project to mint a person's token for: the one Vercel, asked with your own
+ * login, says the board's host is a deployment of (its deployment URL, a branch
+ * alias, or a domain), found as `vercel curl` finds it. Discovery names a project
+ * too, but any board can name any project you can access, and a token for one it
+ * isn't could be replayed where that project is trusted, so the two must agree.
+ * Vercel knows no loopback host: a board there runs on your machine (`next dev`).
+ */
+async function boardProject(url: string, discovery: Discovery, authToken: string | null): Promise<{ id: string; team: string | null }> {
+  const { host, hostname } = new URL(url)
+  if (LOOPBACK.has(hostname)) return { id: discovery.project_id!, team: discovery.team_id }
+  const api: VercelApi = authToken
+    ? async (method, path) => {
+        const response = await fetch(`https://api.vercel.com${path}`, { method, headers: { authorization: `Bearer ${authToken}` } })
+        return response.ok ? await response.json() : null
+      }
+    : vercelCliApi
+  const found = await findProject(api, host)
+  if (!found)
+    throw new BoardError('no_access', `your Vercel login can't see the project ${host} belongs to: run \`vercel login\` or ask for access to it`, 0)
+  if (found.projectId !== discovery.project_id)
+    throw new BoardError(
+      'wrong_project',
+      `the board at ${url} says its project is ${discovery.project_id}, but it's a deployment of ${found.projectId}, so vb won't sign in to it`,
+      0,
+    )
+  return { id: found.projectId, team: found.ownerId.startsWith('team_') ? found.ownerId : null }
+}
+
 /** When credentials live in the keychain, the Vercel CLI mints the token itself. */
-async function tokenFromVercelCli(discovery: Discovery): Promise<string> {
-  const args = ['project', 'token', discovery.project_id!, '--format=json']
-  if (discovery.team_id) args.push('--scope', discovery.team_id)
+async function tokenFromVercelCli(project: { id: string; team: string | null }): Promise<string> {
+  const args = ['project', 'token', project.id, '--format=json']
+  if (project.team) args.push('--scope', project.team)
   try {
     const { stdout } = await promisify(execFile)('vercel', args, { timeout: 30_000 })
     return (JSON.parse(stdout) as { token: string }).token
