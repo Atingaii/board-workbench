@@ -427,13 +427,13 @@ export function board(options: BoardOptions): Board {
 
   /** A post, through the middleware, with the targets its channel syncs with landing beside it. */
   async function post(caller: Caller, input: Protocol['post']['input'], signal: AbortSignal): Promise<Protocol['post']['output']> {
-    let body = input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input
-    let as = caller
+    const body = input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input
+    let poster = caller
     if (engine && body.channel !== undefined && !body.noSync) {
       const config = await engine.configTargets(body.channel)
-      if (config.length > 0) as = { ...caller, origin: { ...caller.origin, config } } as Caller
+      if (config.length > 0) poster = { ...caller, origin: { ...caller.origin, config } } as Caller
     }
-    const send = async (patched: typeof body) => backend.post(as, { ...patched, text: await withEmails(patched.text) }, signal)
+    const send = async (patched: typeof body) => backend.post(poster, { ...patched, text: await withEmails(patched.text) }, signal)
     const source = sourceOf(caller)
     if (middleware.length === 0 || source === null) return send(body)
     // What it would put on the board: a reply lands in its root's channel.
@@ -456,7 +456,7 @@ export function board(options: BoardOptions): Board {
     return screen(
       { kind: 'post', channel: channel!, re, text: body.text, labels: body.labels ?? {}, attachments },
       { author: actor, source, respond: caller.origin.respond },
-      (write) => send((body = { ...body, text: write.text, labels: write.labels })),
+      (write) => send({ ...body, text: write.text, labels: write.labels }),
     )
   }
 
@@ -518,8 +518,14 @@ export function board(options: BoardOptions): Board {
     const signal = request.signal
     switch (name) {
       case 'sync': {
-        // Attaching a thread is a `thread` receipt, recorded as the caller: it needs `sync` where the thread is.
+        // Attaching a thread is a `thread` receipt, recorded as the caller: it needs `sync` where the thread is,
+        // which a request's caller shows before its target goes to the platform to resolve.
         const body = SyncBody.parse(await readJson(request))
+        if ('identity' in caller && engine) {
+          const message = await lookup(caller, params.id ?? '', signal)
+          if (!message) throw notFound(`message not found: #${params.id}`, 'message_not_found')
+          if (!caller.identity.principal.access.can('sync', message.channel)) throw forbidden(`this token can't sync in ${message.channel}`)
+        }
         const target = await resolveTarget(body.target)
         const { attached } = await backend.syncReceipt(caller, { kind: 'thread', message: params.id ?? '', target: target.target, targetKind: target.kind, cause: 'request' }, signal)
         return json({ target: target.target, attached: attached ?? true })
