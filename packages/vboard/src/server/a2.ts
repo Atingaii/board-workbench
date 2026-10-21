@@ -892,22 +892,26 @@ function build(options: A2Options, binding: BoardBinding) {
     },
 
     async inbox(caller, { key, channel, limit }) {
-      // Raw platform payloads. This board's own inbox spans every channel; a caller's own pushes are its own.
+      // Raw platform payloads. This board's own inbox, and every sync's that registered here, span every
+      // channel; a caller's own pushes are its own.
       const { principal } = needSync(caller, 'read an inbox')
+      const everywhere = principal.access.everywhere('sync')
       const entries: InboxEntry[] = []
-      if (principal.access.everywhere('sync')) {
+      if (everywhere) {
         const channels = channel !== undefined ? [channel] : Object.keys((await inboxes.state(inboxesReducer)).state).filter((found) => found.startsWith(`${key}:`))
         for (const found of channels)
           for (const event of await inboxServer.session(inboxSession(found)).history())
             if (event.type === 'external.received' && event.payload.sync === key)
               entries.push({ id: event.id, channel: found, createdAt: new Date(event.createdAt).toISOString(), ...event.payload } as InboxEntry)
       }
-      for (const event of await queueOf(principal.id).history()) {
-        const pushed = event.payload as { inbox?: string; event?: { sync: string; event: PlatformEvent; raw: unknown } }
-        if (event.type !== 'watch.matched' || pushed.inbox !== key || !pushed.event) continue
-        if (channel !== undefined && pushed.event.event.channel !== channel) continue
-        entries.push({ id: event.id, channel: pushed.event.event.channel, createdAt: new Date(event.createdAt).toISOString(), ...pushed.event } as InboxEntry)
-      }
+      const pushers = new Set([principal.id, ...(everywhere ? Object.keys((await registry.state()).byOwner) : [])])
+      for (const pusher of pushers)
+        for (const event of await queueOf(pusher).history()) {
+          const pushed = event.payload as { inbox?: string; event?: { sync: string; event: PlatformEvent; raw: unknown } }
+          if (event.type !== 'watch.matched' || pushed.inbox !== key || !pushed.event) continue
+          if (channel !== undefined && pushed.event.event.channel !== channel) continue
+          entries.push({ id: event.id, channel: pushed.event.event.channel, createdAt: new Date(event.createdAt).toISOString(), ...pushed.event } as InboxEntry)
+        }
       return { events: entries.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit ?? 50) }
     },
 

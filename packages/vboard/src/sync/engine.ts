@@ -1,7 +1,7 @@
 import { idempotentId } from 'experimental-a2'
 import { canonicalEmoji } from '../contract/emoji.ts'
 import type { BoardClient } from '../client/client.ts'
-import { externalMessageKey, type Actor, type ExternalCopy } from '../contract/reducers.ts'
+import { externalMessageKey, isThreadTarget, type Actor, type ExternalCopy } from '../contract/reducers.ts'
 import type { ExternalAuthor, ExternalEvent, ExternalFile, ExternalLink, Origin } from '../contract/contract.ts'
 import { fileSize, typeOf } from '../contract/files.ts'
 import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, toStorable, type Attachment } from '../contract/schemas.ts'
@@ -991,7 +991,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function deliverThread(event: Extract<SyncEvent, { type: 'thread.synced' }>, attempt: number) {
     const { thread, target } = event.payload
     // Joining: only messages written after the join are delivered.
-    if ((event.payload.kind ?? (target.slice(target.indexOf(':') + 1).includes(':') ? 'thread' : 'channel')) === 'thread') return
+    if ((event.payload.kind ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'thread') return
     const synced = await syncOf(thread)
     const [root, ...replies] = synced ? await threadOf(synced.root) : []
     if (!synced || !root || root.id !== synced.root || root.deleted) return

@@ -70,6 +70,9 @@ describe('sync on a board on http()', () => {
     await vi.waitFor(async () => expect((await julian('GET', `/messages/${root!.id}`)).body.replies.map((r: Read) => [r.text, r.by.actor])).toEqual([['same here', 'slack:user:U_BOB']]))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect((await julian('GET', `/messages/${root!.id}`)).body.replies).toHaveLength(1)
+    // What it pushed is in the inbox there, once each, for whoever may sync everywhere.
+    const { body } = await julian('GET', '/inbox/slack')
+    expect(body.events.map((event: { channel: string; event: { message: string } }) => `${event.channel}|${event.event.message}`).sort()).toEqual(['slack:C1|100', 'slack:C1|101'])
   })
 
   it("delivers a post on the board it uses to Slack, and records the delivery's receipt there", async () => {
