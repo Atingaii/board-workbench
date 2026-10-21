@@ -102,7 +102,7 @@ thread's events in order on its lane.
 
 | Contract | Sessions | Events | Holds |
 | --- | --- | --- | --- |
-| `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC`, and `inboxes` | `external.received { sync, event, raw }`, `inbox.opened { channel }` | every platform event the board's own sync pushed, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here. `inboxes` lists each inbox, for `vb stuck` |
+| `vboard-inbox` | `inbox:<external channel>`, e.g. `inbox:slack:C0123ABC`, and `inboxes` | `external.received { sync, event, raw }`, `inbox.opened { channel }` | every platform event the board's own sync pushed, stored before the board answers the webhook; the inbound consumer, `vboard-inbox`, runs here. `inboxes` lists each inbox, for a key's `GET /inbox/:key` |
 | `vboard-watch` | `watch:<id>`, e.g. `watch:triage`, and `watch:@<principal>` | `watch.matched { thread, event }` | each [watcher's](../01-board/06-watchers.md) matches; its `run` happens here. A registrant's session queues its watchers' matches, its sync's (when it registers sync entries), and what it pushed to an inbox (`inbox: <key>`), for it to pull |
 | `vboard-identity` | `identity` | `identity.code_issued`, `identity.code_used` | one-time codes for linking accounts, as hashes |
 | `vboard-schedules` | `schedules` | `schedule.created`, `schedule.canceled`, `schedule.due`, `schedule.fired` | [scheduled messages](../01-board/07-schedules.md) |
@@ -127,7 +127,7 @@ A schedule's ID is the index of its `schedule.created` event in the
 | `schedule.due` | (server) `id`, `n`, `at`: an A2 timer saying send `n` is due |
 | `schedule.fired` | (server) `id`, `n`, `message`, `next`: send `n` was posted as `message`; the next is due at `next`, or never |
 
-### Stuck events
+### Consumers and dead letters
 
 The board's work runs as A2 consumers. Each runs events in order on lanes, and
 most lanes are threads, so a thread's events run in order:
@@ -143,22 +143,15 @@ most lanes are threads, so a thread's events run in order:
 | `vboard-schedule-sends` | `schedules` | schedule | posts a send when it's due |
 
 Each consumer keeps its own place, so one that fails holds up only itself,
-except `vboard-tables`: reads by message ID and writes wait on it, and
-`vb stuck` lists it first. When
-an event keeps failing, A2 gives up on it after 10 tries: it's dead-lettered for
+except `vboard-tables`: reads by message ID and writes wait on it. When an
+event keeps failing, A2 gives up on it after 10 tries: it's dead-lettered for
 that consumer, and nothing after it on that consumer's lane runs. vboard keeps that rare. A delivery that keeps
 failing is recorded as `message.sync_failed`, and a watcher gives up on its
 event, so neither stops its thread. What's left is mostly the cause outside
 vboard's control: a blob store that's down while files come in, or a bug.
 
-`vb stuck` lists them across the `board` session, every inbox (the mapped
-channels', and those of threads synced anywhere else), every watcher, and
-`schedules`. Each names the consumer it's stuck for. `vb stuck retry` runs one again with a
-fresh 10 tries, and its thread's later events follow; `vb stuck skip` marks it
-done without running it. Given a consumer, either acts for that consumer alone;
-otherwise for every consumer the event is stuck for.
-Both are one atomic A2 operation (`session.redrive()`), and the board logs who
-did which.
+Dead letters are A2's: list and redrive them through A2, on the sessions of
+the backend's `servers` (`session.deadLetters()`, `session.redrive()`).
 
 ## Reducers and tables
 
