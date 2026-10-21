@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { configDir, detectAgent, projectDir, projectUrl } from '../client/node.ts'
+import { boardUrl, configDir, connect, detectAgent, projectDir, projectUrl } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
@@ -270,8 +270,15 @@ function filters(channel?: string): Filters & { after?: string } {
   }
 }
 
-/** The board this command talks to: `--url`'s, or the one the environment points at, as `--as` says. */
-function client(): Board {
+/**
+ * The board this command talks to, `--url`'s or the one the environment points at, as `--as`
+ * says: a handle on it, and how it reaches it (the credentials `vb` finds, `--handle`'s handle).
+ */
+function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
+  const at = (url ?? boardUrl()).replace(/\/+$/, '')
+  const handle = options.handle ?? flags.handle
+  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
+  const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   const profile: ProfileOption | undefined = flags.human
     ? null
     : flags.as
@@ -279,9 +286,11 @@ function client(): Board {
         ? { name: flags.as, avatar: flags.avatar }
         : flags.as
       : undefined
-  const board = boardAt({ backend: http(flags.url, flags.handle ? { handle: flags.handle } : {}) })
-  return profile !== undefined ? board.as(profile) : board
+  return { url: at, transport, board: profile !== undefined ? board.as(profile) : board }
 }
+
+/** A handle on the board this command talks to. */
+const client = (): Board => connection().board
 
 /**
  * What names an agent's turns, for the turn-end hook: its session, or for
@@ -473,44 +482,35 @@ async function identity(args: string[]): Promise<number> {
   }
   if (sub !== 'link' || !target || args.length !== 2) throw new UsageError('usage: vboard identity [link <key> [--code] [--no-wait] | unlink <account>]')
   const before = new Set((await board.identity()).links.map((link) => `${link.actor}|${link.at}`))
-  const challenge = await board.linkAccount(target, flags.code ? { method: 'code' } : {})
-  if (flags.json) printJson(challenge)
+  // The entry's platform, as the board lists it: what the code is posted from, or the sign-in is for.
+  const platform = (await board.discovery().catch(() => null))?.sync.find((entry) => entry.key === target)?.platform ?? target
+  const { code, expiresAt, signIn } = await board.syncCode(target)
+  const consent = signIn !== undefined && !flags.code
+  if (flags.json) printJson({ sync: target, platform, code, expiresAt, ...(signIn !== undefined ? { signIn } : {}) })
   const until = Date.now() + LINK_WAIT_MS
   const sleep = () => new Promise((resolve) => setTimeout(resolve, 2000))
   /** An account linked on that platform since this run began: where the code or the sign-in landed. */
   const linkedSince = async () =>
-    (await board.identity()).links.find((link) => link.actor.startsWith(`${challenge.platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
-  if (challenge.method === 'consent') {
+    (await board.identity()).links.find((link) => link.actor.startsWith(`${platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
+  if (consent) {
     if (!flags.json) {
-      out(`Sign in to ${challenge.platform} as yourself to link it (and to post as you there):\n\n  ${challenge.url}\n`)
+      out(`Sign in to ${platform} as yourself to link it (and to post as you there):\n\n  ${signIn}\n`)
       out(`Only open it yourself: whoever completes it links their account to you.`)
     }
-    if (!flags['no-open'] && !flags.json) openBrowser(challenge.url)
-    if (flags['no-wait']) return 0
-    while (Date.now() < until) {
-      // Here the board finishes a sign-in it ran itself; one that ran where its sync is shows up in your links.
-      const linked = (await board.checkAccount(target)) ?? (await linkedSince())
-      if (linked) {
-        if (flags.json) printJson(linked)
-        else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
-        return 0
-      }
-      await sleep()
-    }
-  } else {
-    if (!flags.json) {
-      const minutes = Math.round((Date.parse(challenge.expiresAt) - Date.now()) / 60_000)
-      out(`From your ${challenge.platform} account, post this as a message anywhere the board syncs, within ${minutes} minutes:\n\n  ${challenge.code}\n`)
-    }
-    if (flags['no-wait']) return 0
-    while (Date.now() < Math.min(until, Date.parse(challenge.expiresAt))) {
-      await sleep()
-      const linked = await linkedSince()
-      if (linked) {
-        if (flags.json) printJson(linked)
-        else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
-        return 0
-      }
+    if (!flags['no-open'] && !flags.json) openBrowser(signIn!)
+  } else if (!flags.json) {
+    const minutes = Math.round((Date.parse(expiresAt) - Date.now()) / 60_000)
+    out(`From your ${platform} account, post this as a message anywhere the board syncs, within ${minutes} minutes:\n\n  ${code}\n`)
+  }
+  if (flags['no-wait']) return 0
+  // The sign-in, or the code's post, links the account where the entry's sync runs: it shows up in your links.
+  while (Date.now() < Math.min(until, consent ? Infinity : Date.parse(expiresAt))) {
+    await sleep()
+    const linked = await linkedSince()
+    if (linked) {
+      if (flags.json) printJson(linked)
+      else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
+      return 0
     }
   }
   process.stderr.write('timed out\n')
@@ -528,7 +528,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'use': {
       const url = args[0]
       if (!url || args.length !== 1) throw new UsageError(`usage: vboard ${command} <url>`)
-      const discovery = await boardAt({ backend: http(url) }).discovery()
+      const discovery = await connection(url).board.discovery()
       const root = command === 'link' ? projectDir() : null
       await saveLink(root, discovery.url)
       out(root === null ? `using ${discovery.url}` : `linked ${root} to ${discovery.url}`)
@@ -536,16 +536,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'whoami': {
-      const board = client()
+      const { board, url, transport } = connection()
       const me = await board.me()
-      const source = await board.source()
+      const source = transport.source()
       if (flags.json) {
-        printJson({ ...me, board: board.url, source })
+        printJson({ ...me, board: url, source })
         return 0
       }
       const name = me.profile !== null ? `${me.name} via ${me.handle.split('/')[0]}` : me.name
       out(`${name} (${me.actor})`)
-      const rows: [string, string][] = [['board', board.url]]
+      const rows: [string, string][] = [['board', url]]
       if (source) rows.push(['source', source])
       if (me.expiresAt) {
         const minutes = Math.max(0, Math.round((Date.parse(me.expiresAt) - Date.now()) / 60_000))
@@ -923,9 +923,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (sub !== 'read' || !target) throw new UsageError('usage: vboard sources <key> read <channel|thread|link> [--limit N]')
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
-      // A board older than this CLI answers an unknown path with its discovery document.
-      if (!Array.isArray((read as { messages?: unknown }).messages))
-        throw new Error("this board can't read sources yet: update vboard where the board is deployed")
       if (flags.json) return printJson(read), 0
       return out(formatSourceRead(key, read)), 0
     }
@@ -979,8 +976,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
         if (!flags['no-inspect']) {
           // With this board's token, whatever VBOARD_TOKEN says.
-          const board = boardAt({ backend: http(local.url, { token: local.token, handle: local.handle }) }).as(null)
-          inspector = await startInspector({ client: board })
+          const { board } = connection(local.url, { token: local.token, handle: local.handle })
+          inspector = await startInspector({ client: board.as(null) })
           out(`inspector at ${inspector.url}`)
           if (!flags['no-open']) openBrowser(inspector.url)
         }

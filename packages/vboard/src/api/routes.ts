@@ -205,13 +205,6 @@ export const SourceReadQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 })
 
-export const IdentityLinkBody = z.object({
-  /** The sync entry whose account to link, e.g. `slack`. */
-  sync: z.string().min(1).max(64),
-  /** `code` even when the entry can sign people in. */
-  method: z.enum(['code', 'consent']).optional(),
-})
-export const IdentityCheckBody = z.object({ sync: z.string().min(1).max(64) })
 export const IdentityUnlinkBody = z.object({ actor: z.string().min(1).max(256) })
 
 /** A sync entry's key: `slack`, `github`. */
@@ -442,8 +435,6 @@ export type Discovery = {
   project_id: string | null
   /** The board's sync entries: `key` names its webhook and inbox, `platform` is e.g. `slack`. */
   sync: { key: string; platform: string }[]
-  /** A board on another backend keeps nothing here: clients read and write this board instead. */
-  remote?: string
 }
 
 /** Watchers a board on `http()` registered here: one registration per principal. */
@@ -497,14 +488,10 @@ export type IdentityView = {
   cursor: string
 }
 /**
- * How to prove an account is yours: post `code` from it anywhere the board syncs
- * before `expiresAt`, or open `url` (the platform's sign-in) and approve.
+ * How to prove an account is yours: post `code` from it anywhere the board syncs before
+ * `expiresAt`, or, when the entry signs people in, open `signIn` and approve: it carries the code.
  */
-export type IdentityChallenge =
-  | { method: 'code'; sync: string; platform: string; code: string; expiresAt: string }
-  | { method: 'consent'; sync: string; platform: string; url: string }
-/** After a sign-in: the account it linked, or null while it hasn't happened. */
-export type IdentityCheck = { linked: LinkedAccount | null }
+export type SyncCodeView = { code: string; expiresAt: string; signIn?: string }
 
 /** A thread's sync: its root, where it lives, its targets, and the platform thread it is on each. */
 export type SyncThreadView = { thread: string; root: string; channel: string; targets: string[]; external: Record<string, string> }
@@ -654,11 +641,7 @@ export const routes = {
   openapi: { method: 'GET', path: '/openapi.json' },
   /** Your linked platform accounts. */
   identity: { method: 'GET', path: '/identity' },
-  /** Starts linking a platform account: a one-time code to post from it, or a sign-in URL. */
-  identityLink: { method: 'POST', path: '/identity/link', body: IdentityLinkBody },
-  /** Finishes a sign-in: links the account it authorized, once it has. */
-  identityCheck: { method: 'POST', path: '/identity/check', body: IdentityCheckBody },
-  /** Starts a sign-in that carries a code (no token): where the board that keeps the log sends a person. */
+  /** Starts a sign-in that carries a code (no token), on the board that runs the entry's sync. */
   signIn: { method: 'GET', path: '/identity/sign-in', query: SignInQuery },
   /** Where a sign-in comes back (no token): links the account it authorized to the code's person. */
   signedIn: { method: 'GET', path: '/identity/signed-in', query: SignInQuery },

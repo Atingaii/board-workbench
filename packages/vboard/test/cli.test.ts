@@ -128,7 +128,7 @@ describe('cli', () => {
     try {
       const root = await tmp('vboard-link-')
       expect(await vb(['link', `${missing.origin}/api/board`], {}, undefined, root)).toEqual({
-        code: 1, stdout: '', stderr: 'error: 404 Not Found\n',
+        code: 1, stdout: '', stderr: `error: no board at ${missing.origin}/api/board (404)\n`,
       })
     } finally {
       await missing.close()
@@ -474,18 +474,15 @@ describe('cli', () => {
     const misuse = await vb(['sources', 'slack', '#general'])
     expect(misuse.code).toBe(2)
     expect(misuse.stderr).toContain('usage: vboard sources <key> read')
+    // Only the board that runs a sync entry reads its source.
     const unsynced = await vb(['sources', 'slack', 'read', '#general'])
-    expect(unsynced.code).toBe(1)
-    expect(unsynced.stderr).toContain('no sync configured')
+    expect(unsynced).toMatchObject({ code: 1, stderr: "error: this board doesn't run sync entry slack: read it where its sync runs\n" })
   })
 
-  it("says so when the board is older than `sources read`, instead of crashing on its discovery document", async () => {
+  it('says so when the board is older than thread summaries, instead of crashing on its discovery document', async () => {
     // An old board answers any unknown GET with its discovery document, 200.
     const old = await serve(async () => Response.json({ version: '0.4.0', sync: [] }))
     try {
-      const read = await vb(['sources', 'slack', 'read', '#general'], { VBOARD_URL: `${old.origin}/api/board` })
-      expect(read.code).toBe(1)
-      expect(read.stderr).toContain("this board can't read sources yet")
       const threads = await vb(['read', 'errors-www'], { VBOARD_URL: `${old.origin}/api/board` })
       expect(threads).toMatchObject({ code: 1, stderr: OLD_THREADS })
     } finally {

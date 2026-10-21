@@ -448,8 +448,11 @@ function build(options: A2Options, binding: BoardBinding) {
         method: state.links[id]!.method,
         at: state.links[id]!.at,
       }))
-      // Which sync entries have none is board()'s to say: it has the entries.
-      return { principal: principal.id, links, cursor: ref(index) }
+      // The entries this board links accounts on that have none of the caller's yet.
+      const unlinked = (await linkable())
+        .filter((entry) => !links.some((link) => link.actor.startsWith(`${entry.platform}:user:`)))
+        .map((entry) => entry.key)
+      return { principal: principal.id, links, unlinked, cursor: ref(index) }
     },
     async messages(caller, query) {
       const { principal, actor } = (await identityOf(caller))
@@ -877,12 +880,15 @@ function build(options: A2Options, binding: BoardBinding) {
       // A person's own, for themselves: no one gets a code for someone else.
       const identity = await identityOf(caller)
       if (identity.principal.kind !== 'person') throw forbidden('only people link platform accounts')
-      if (!(await knownKeys()).has(sync)) throw notFound(`no sync entry named ${sync}`)
+      const entry = (await linkable()).find((candidate) => candidate.key === sync)
+      if (!entry) throw notFound(`no sync entry named ${sync}`)
       const principal = identity.principal.id
       const code = newCode()
       const expiresAt = new Date(Date.now() + CODE_TTL_MS).toISOString()
       await codes.append({ type: 'identity.code_issued', payload: { hash: hashCode(code), principal, sync, expiresAt } })
-      return { code, expiresAt }
+      // An entry that signs people in does it where its sync runs, which redeems the code the sign-in carries.
+      const signIn = entry.signIn && entry.url !== null ? `${entry.url}/identity/sign-in?${new URLSearchParams({ sync, code })}` : null
+      return { code, expiresAt, ...(signIn ? { signIn } : {}) }
     },
 
     async syncAccount(caller, body) {
@@ -928,10 +934,16 @@ function build(options: A2Options, binding: BoardBinding) {
     return (await registry.state()).byOwner[principal]?.sync ?? []
   }
 
-  /** The sync keys this board links accounts on: its own sync's, and those of every sync registered here. */
-  async function knownKeys(): Promise<Set<string>> {
-    const registered = Object.values((await registry.state()).byOwner).flatMap((registration) => registration.sync)
-    return new Set([...binding.sync, ...registered].map((entry) => entry.key))
+  /**
+   * The sync entries this board links accounts on: its own sync's, then those of every sync
+   * registered here, by key, each with the URL where its sync runs, once that's known.
+   */
+  async function linkable(): Promise<(SyncEntrySpec & { url: string | null })[]> {
+    const found = new Map<string, SyncEntrySpec & { url: string | null }>()
+    for (const entry of binding.sync) found.set(entry.key, { ...entry, url: binding.url() })
+    for (const registration of Object.values((await registry.state()).byOwner))
+      for (const entry of registration.sync) if (!found.has(entry.key)) found.set(entry.key, { ...entry, url: registration.url })
+    return [...found.values()]
   }
 
   /**
@@ -1045,7 +1057,6 @@ export function a2(given: A2Options = {}) {
   ) as unknown as ProtocolMethods
   const backend = {
     ...methods,
-    remote: null,
     // The issuers its `oidc()` rules name: board() verifies their tokens for it.
     issuers: typeof options.access === 'function' ? [] : issuersOf(options.access ?? []),
     // Everything it answers is the protocol's.
