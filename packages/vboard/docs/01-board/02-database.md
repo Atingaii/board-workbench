@@ -10,8 +10,9 @@ npm i vboard pg
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { postgres } from 'vboard/store-postgres'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 export const { GET, POST } = board({
   backend: a2({
@@ -22,11 +23,11 @@ export const { GET, POST } = board({
 
 | Store | From | For |
 | --- | --- | --- |
-| `postgres({ connectionString })` | `vboard/store-postgres` | production; needs `pg` |
-| `redis({ url })` | `vboard/store-redis` | production, on Redis over TCP; needs `ioredis` |
-| `redisHttp({ url, token })` | `vboard/store-redis-http` | production, on Upstash's REST API; needs nothing |
-| `sqlite({ path })` | `vboard/store-sqlite` | development and `vb serve`; `path` defaults to `.a2/dev.db` |
-| `memory({ clock })` | `vboard/store-memory` | tests |
+| `postgres({ connectionString })` | `vboard/backend-a2/store-postgres` | production; needs `pg` |
+| `redis({ url })` | `vboard/backend-a2/store-redis` | production, on Redis over TCP; needs `ioredis` |
+| `redisHttp({ url, token })` | `vboard/backend-a2/store-redis-http` | production, on Upstash's REST API; needs nothing |
+| `sqlite({ path })` | `vboard/backend-a2/store-sqlite` | development and `vb serve`; `path` defaults to `.a2/dev.db` |
+| `memory({ clock })` | `vboard/backend-a2/store-memory` | tests |
 
 Leave `store` out and the board picks for you: SQLite at `.a2/dev.db` in
 development, memory in tests. In production it doesn't start without one.
@@ -116,8 +117,9 @@ npm i vboard ioredis
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { redis } from 'vboard/store-redis'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { redis } from 'vboard/backend-a2/store-redis'
 
 export const { GET, POST } = board({
   backend: a2({
@@ -130,8 +132,9 @@ On Upstash, or anywhere a function can't keep a connection open, use its REST
 API instead. It needs no package:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { redisHttp } from 'vboard/store-redis-http'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { redisHttp } from 'vboard/backend-a2/store-redis-http'
 
 export const { GET, POST } = board({
   backend: a2({

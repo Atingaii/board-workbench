@@ -162,7 +162,8 @@ A board on [`http()`](./01-mounting.md#backends) runs its watchers too. The
 board it uses keeps the log and matches the tails, and this one runs `run`:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board, http } from 'vboard'
+import { board } from 'vboard'
+import { http } from 'vboard/backend-http'
 
 export const { GET, POST } = board({
   backend: http('https://board.example.com/api/board'),

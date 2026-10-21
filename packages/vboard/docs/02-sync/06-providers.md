@@ -218,5 +218,5 @@ review threads), `channelOf`, `toChatId` and `fromChatId` (ID encodings),
 `markdown` and `author` (reading a message), `context`, `fetchRoot`, `links`,
 `read`, `uploadFiles`, `refusesFiles`, `startTyping`, and `intercept` and `missed`
 (webhook events the adapter doesn't emit). The built-in providers in
-`vboard/adapter-slack`, `vboard/adapter-github`, and `vboard/adapter-kapso` are
+`vboard/sync-slack`, `vboard/sync-github`, and `vboard/sync-kapso` are
 working examples of each.

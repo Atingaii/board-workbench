@@ -8,8 +8,9 @@ the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { postgres } from 'vboard/store-postgres' // or store-redis, store-redis-http, store-sqlite
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
 export const { GET, POST } = board({
   backend: a2({
@@ -23,14 +24,14 @@ omit it, you get SQLite at `.a2/dev.db` in development, memory in tests, and a
 startup error in production.
 
 `blob` is where [attachments](#attachments) live: `vercelBlob()` from
-`vboard/adapter-vercel-blob`, on a private Vercel Blob store connected to the
+`vboard/backend-a2/blob-vercel`, on a private Vercel Blob store connected to the
 project. If you
 omit it, the same rule holds: files under `.a2/attachments` in development,
 memory in tests, and in production every upload is refused (the rest of the
 board works).
 
 ```ts
-import { vercelBlob } from 'vboard/adapter-vercel-blob'
+import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
 
 export const { GET, POST } = board({ backend: a2({ store, blob: vercelBlob() }) })
 ```
@@ -105,18 +106,25 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()`, its backends (`a2()`, `http()`), and the access helpers (`vercelProject()`, `githubActions()`, `oidc()`) | server |
+| `vboard` | `board()`, the `Backend` type, watchers, and middleware | server |
+| `vboard/access` | Who may use a board: `vercelProject()`, `githubActions()`, `oidc()`, and the permission types | server |
+| `vboard/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
+| `vboard/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
+| `vboard/backend-a2/scheduler-vercel`, `…/scheduler-qstash` | What runs `a2()`'s consumers and timers | server |
+| `vboard/backend-a2/blob-vercel` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `vboard/backend-a2/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
+| `vboard/backend-http` | `http()`, a board that uses another one over its protocol | server |
 | `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
-| `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
-| `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
-| `vboard/adapter-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
-| `vboard/adapter-vercel-blob` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `vboard/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
+| `vboard/sync-slack` | `slack()`, the Slack sync adapter | server |
+| `vboard/sync-github` | `github()`, the GitHub sync adapter | server |
+| `vboard/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `vboard/sync` | Shared event schemas, `SyncProvider`, and the trusted callback client | server |
-| `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
 | bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
 
-Sync adapters are named for the Chat SDK adapter they take: `adapter-kapso`
-takes `@kapso/chat-adapter`, which leaves `adapter-whatsapp` for
+A backend's own pieces live under its path, and everything that works with any
+backend lives at the top. Sync adapters are named for the Chat SDK adapter they
+take: `sync-kapso` takes `@kapso/chat-adapter`, which leaves `sync-whatsapp` for
 `@chat-adapter/whatsapp`, Meta's own, whose threads are contacts rather than
 conversations.
 
@@ -249,15 +257,15 @@ with `npx vboard`.
 **Dependencies:**
 
 - **Regular dependency: `experimental-a2`.** vboard owns it: you import your
-  store and scheduler from vboard (`vboard/store-postgres`,
-  `vboard/scheduler-vercel`), so they're always the copy vboard uses.
+  store and scheduler from vboard (`vboard/backend-a2/store-postgres`,
+  `vboard/backend-a2/scheduler-vercel`), so they're always the copy vboard uses.
 - **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`.**
-  Loaded only by `vboard/store-postgres`, `vboard/store-redis`,
-  `vboard/scheduler-vercel`, and `vboard/scheduler-qstash`.
-  `vboard/store-redis-http` needs none: it speaks Upstash's REST API.
+  Loaded only by `vboard/backend-a2/store-postgres`, `vboard/backend-a2/store-redis`,
+  `vboard/backend-a2/scheduler-vercel`, and `vboard/backend-a2/scheduler-qstash`.
+  `vboard/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`,
-  `@kapso/chat-adapter`.** They are loaded only by `vboard/adapter-slack`,
-  `vboard/adapter-github`, and `vboard/adapter-kapso`. Your adapters
+  `@kapso/chat-adapter`.** They are loaded only by `vboard/sync-slack`,
+  `vboard/sync-github`, and `vboard/sync-kapso`. Your adapters
   must match the `chat` version that vboard builds its Chat instances with.
 - **Installed by you, optionally: `@vercel/connect`.** You don't install a Chat
   SDK state adapter, because vboard backs Chat SDK's state with the A2 store
@@ -1000,9 +1008,9 @@ state is folded from the log by A2 reducers.
   lookups, flat in the board's size. Other lists stop at a page, so a rare
   match or `/threads` with filters beyond a channel reads further.
 
-**Store support:** `vboard/store-postgres`, `vboard/store-redis` (TCP), or
-`vboard/store-redis-http` (Upstash REST) in production, `vboard/store-sqlite` in
-development and `vb serve`, `vboard/store-memory` in tests. Each holds A2's log
+**Store support:** `vboard/backend-a2/store-postgres`, `vboard/backend-a2/store-redis` (TCP), or
+`vboard/backend-a2/store-redis-http` (Upstash REST) in production, `vboard/backend-a2/store-sqlite` in
+development and `vb serve`, `vboard/backend-a2/store-memory` in tests. Each holds A2's log
 and the tables in one database. Postgres gets its tables from
 `sql/postgres/schema.sql`, A2's then vboard's, applied before deploying; Redis
 and SQLite need nothing applied.
@@ -1493,11 +1501,12 @@ by the platform's own things: Slack channels, GitHub repos.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'vboard/store-redis-http'
-import { vercelQueues } from 'vboard/scheduler-vercel'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
+import { github } from 'vboard/sync-github'
+import { redisHttp } from 'vboard/backend-a2/store-redis-http'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({
@@ -1594,7 +1603,7 @@ sync: {
 }
 ```
 
-`GitHubPayload` comes from `vboard/adapter-github`. The new event-taking `sync`
+`GitHubPayload` comes from `vboard/sync-github`. The new event-taking `sync`
 overload exists only on the trusted in-process callback client. It accepts the
 current verified envelope, not a reconstructed object; there is no HTTP endpoint
 for submitting platform events. `board.sync(messageId, target)` retains its
@@ -1895,7 +1904,7 @@ adapter: withUserTokens(createSlackAdapter({ ... }), { authorize, token }),
   so vboard asks GraphQL's `viewer`, which answers for that token, once per
   instance. `botUserId` skips the call.
 - **An adapter** is used as given. It posts as the app unless it's wrapped in
-  `withUserTokens` (from `vboard/adapter-slack`, `vboard/adapter-github`, or
+  `withUserTokens` (from `vboard/sync-slack`, `vboard/sync-github`, or
   `vboard/sync`).
 
 With an adapter of your own and async tokens, including Connect, a public Slack `client` resolver is required for name lookups, membership,
@@ -2258,7 +2267,7 @@ Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
 the numbers themselves.
 
 ```ts
-import { kapso } from 'vboard/adapter-kapso'
+import { kapso } from 'vboard/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 

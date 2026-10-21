@@ -10,8 +10,9 @@ connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), 
 [mappings](./01-overview.md#mappings):
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({

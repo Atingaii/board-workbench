@@ -1,7 +1,8 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { a2, board } from '../src/server/index.ts'
+import { board } from '../src/server/index.ts'
+import { a2 } from '../src/backend-a2/index.ts'
 import type { A2Options, BoardSetup } from '../src/server/board.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'

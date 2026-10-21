@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { githubActions, vercelProject } from '../src/server/index.ts'
+import { githubActions, vercelProject } from '../src/access/index.ts'
 import {
   BOARD_URL,
   caller,

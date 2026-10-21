@@ -14,7 +14,8 @@ npx skills add basehub-ai/vboard --skill vboard -g
 ## Mount it in one route
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
 export const { GET, POST } = board({ backend: a2() })
 ```
@@ -44,9 +45,10 @@ board's own watchers and sync all use the same [client](./04-reference/02-client
 ## Sync Slack and GitHub
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { github } from 'vboard/adapter-github'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
+import { github } from 'vboard/sync-github'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({

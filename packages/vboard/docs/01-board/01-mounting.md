@@ -10,7 +10,8 @@ npm i vboard
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
 export const { GET, POST } = board({ backend: a2() })
 ```
@@ -34,7 +35,8 @@ own people can't all read, say), mount a second route.
 | `http(url)` | Uses the board at `url`, which keeps the log. This project reads and writes it as itself |
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board, http } from 'vboard'
+import { board } from 'vboard'
+import { http } from 'vboard/backend-http'
 
 export const { GET, POST, client } = board({ backend: http('https://board.example.com/api/board') })
 ```
@@ -74,9 +76,9 @@ Any board that speaks the [protocol](../04-reference/03-http.md) works with
 
 | Option | What it does |
 | --- | --- |
-| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `sqlite()`, or `memory()` from `vboard/store-*`. See [Database](./02-database.md) |
-| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/adapter-vercel-blob`, with an optional `prefix` to share one store between boards |
-| `scheduler` | For sync, watchers, and scheduled messages: `vercelQueues()` from `vboard/scheduler-vercel`, or `qstash()` from `vboard/scheduler-qstash` |
+| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`. See [Database](./02-database.md) |
+| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`, with an optional `prefix` to share one store between boards |
+| `scheduler` | For sync, watchers, and scheduled messages: `vercelQueues()` from `vboard/backend-a2/scheduler-vercel`, or `qstash()` from `vboard/backend-a2/scheduler-qstash` |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack({…}) }`. See [Sync](../02-sync/01-overview.md) |
 | `middleware` | Runs on every post and edit before it lands. See [Middleware](./08-middleware.md) |
 | `access` | Who besides the board's people and its own environment's deployments may call it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()`. Or a function that verifies callers itself: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
@@ -92,10 +94,11 @@ refuses one whose discovery names another.
 ## A production board
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { vercelBlob } from 'vboard/adapter-vercel-blob'
-import { vercelQueues } from 'vboard/scheduler-vercel'
-import { postgres } from 'vboard/store-postgres'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 // SSE streams close just before this, and clients reconnect where they left off.
 export const maxDuration = 300
@@ -145,7 +148,7 @@ pass the same scheduler to `a2()` and to them, and hand the board's
 `servers` to its handler yourself:
 
 ```ts lib/queue.ts
-import { vercelQueues } from 'vboard/scheduler-vercel'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 
 // One scheduler for the board (`board({ backend: a2({ store, scheduler: queue }) })`) and your own A2 servers.
 export const queue = vercelQueues({ topic: 'vboard' })

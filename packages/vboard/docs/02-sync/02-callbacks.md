@@ -9,8 +9,9 @@ A string mapping imports every event into one channel. A function receives every
 inbound event for its external channel, connected threads included, and decides:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { github, GitHubPayload } from 'vboard/adapter-github'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { github, GitHubPayload } from 'vboard/sync-github'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({
@@ -72,8 +73,8 @@ Then, by kind:
 
 GitHub events also carry `subject: { type: 'pull_request' | 'issue', repo, number }`,
 comments and reactions included. The types are exported: `SlackEvent` from
-`vboard/adapter-slack`, `GitHubEvent` and `GitHubPayload` from
-`vboard/adapter-github`, and `WhatsAppEvent` from `vboard/adapter-kapso`.
+`vboard/sync-slack`, `GitHubEvent` and `GitHubPayload` from
+`vboard/sync-github`, and `WhatsAppEvent` from `vboard/sync-kapso`.
 
 ## Permalinks
 

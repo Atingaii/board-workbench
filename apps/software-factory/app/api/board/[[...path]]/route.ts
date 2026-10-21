@@ -1,7 +1,8 @@
-import { a2, board } from "vboard";
-import { slack } from "vboard/adapter-slack";
-import { github } from "vboard/adapter-github";
-import { vercelBlob } from "vboard/adapter-vercel-blob";
+import { board } from "vboard";
+import { a2 } from "vboard/backend-a2";
+import { slack } from "vboard/sync-slack";
+import { github } from "vboard/sync-github";
+import { vercelBlob } from "vboard/backend-a2/blob-vercel";
 import { queues, store } from "./a2";
 import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";

@@ -76,7 +76,7 @@ import { MIDDLEWARE_ACTOR, type Middleware } from './middleware.ts'
 export type A2Options = {
   /**
    * Where the board keeps its log and tables: `postgres()`, `sqlite()`, or `memory()` from
-   * `vboard/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
+   * `vboard/backend-a2/store-*`. Omitted: SQLite in development, memory in tests, an error in production.
    */
   store?: BoardStore
   /** Required for sync in production, and for scheduled messages. Mount the board's `scheduler` as `POST` in its own route. */
@@ -107,7 +107,7 @@ export type A2Options = {
   /** SSE streams close after this long, before the platform's limit; clients reconnect. */
   streamMaxMs?: number
   /**
-   * Where attachments live: `vercelBlob()` from `vboard/adapter-vercel-blob`. Omitted: memory
+   * Where attachments live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`. Omitted: memory
    * in tests, `.a2/attachments` in development, and no uploads in production.
    */
   blob?: BlobStore

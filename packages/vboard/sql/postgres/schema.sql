@@ -1,4 +1,4 @@
--- The tables for vboard/store-postgres: A2's, which keep the board's log, then
+-- The tables for vboard/backend-a2/store-postgres: A2's, which keep the board's log, then
 -- vboard's, which it reads from. Apply this file before the first deploy, and
 -- again when a vboard release says the tables changed. Every statement creates
 -- only what is missing and leaves existing data alone, so it's safe to re-run.

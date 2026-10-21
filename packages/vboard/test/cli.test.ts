@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/server/index.ts'
+import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 
 useBoard()

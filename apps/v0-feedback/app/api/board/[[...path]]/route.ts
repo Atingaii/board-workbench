@@ -1,9 +1,10 @@
-import { a2, board, type WatcherContext } from "vboard";
-import { slack } from "vboard/adapter-slack";
+import { board, type WatcherContext } from "vboard";
+import { a2 } from "vboard/backend-a2";
+import { slack } from "vboard/sync-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
-import { redisHttp } from "vboard/store-redis-http";
-import { vercelQueues } from "vboard/scheduler-vercel";
+import { redisHttp } from "vboard/backend-a2/store-redis-http";
+import { vercelQueues } from "vboard/backend-a2/scheduler-vercel";
 import { experimental_decide as decide, generateText } from "ai";
 import { startV0 } from "./v0";
 

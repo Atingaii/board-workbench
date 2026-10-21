@@ -10,8 +10,9 @@ connector and a map of repos to [mappings](./01-overview.md#mappings). vboard
 builds the Chat SDK adapter and people's sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { github } from 'vboard/adapter-github'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { github } from 'vboard/sync-github'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({

@@ -131,7 +131,9 @@ Machines outside the board's project need a rule in `access`, and the rule
 says what they may do in each channel:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board, githubActions, vercelProject } from 'vboard'
+import { board } from 'vboard'
+import { githubActions, vercelProject } from 'vboard/access'
+import { a2 } from 'vboard/backend-a2'
 
 export const { GET, POST } = board({
   backend: a2({

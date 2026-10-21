@@ -26,7 +26,7 @@ always safe.
 
 ```ts
 // anywhere: the contract, its schemas, and the reducers are isomorphic
-import { boardContract, messagesReducer, type BoardEvent } from 'vboard/contract'
+import { boardContract, messagesReducer, type BoardEvent } from 'vboard/backend-a2/contract'
 ```
 
 ## Board events
@@ -164,7 +164,7 @@ did which.
 Messages, and where each one lives on each platform, are read from tables the
 board keeps from the log, with the `vboard-tables` consumer (see
 [Database](../01-board/02-database.md)). Smaller
-state is folded from the `board` session by these reducers. `vboard/contract`
+state is folded from the `board` session by these reducers. `vboard/backend-a2/contract`
 exports the first three, and `messagesReducer`, which folds a message exactly
 as the tables keep it, for anyone reading the log themselves.
 
@@ -211,11 +211,11 @@ job through one scheduler.
 
 | Store | Import | Typical use |
 | --- | --- | --- |
-| `postgres()` | `vboard/store-postgres` | production |
-| `redis()` | `vboard/store-redis` | production, on Redis over TCP |
-| `redisHttp()` | `vboard/store-redis-http` | production, on Upstash's REST API |
-| `sqlite()` | `vboard/store-sqlite` | development and `vb serve` |
-| `memory()` | `vboard/store-memory` | tests |
+| `postgres()` | `vboard/backend-a2/store-postgres` | production |
+| `redis()` | `vboard/backend-a2/store-redis` | production, on Redis over TCP |
+| `redisHttp()` | `vboard/backend-a2/store-redis-http` | production, on Upstash's REST API |
+| `sqlite()` | `vboard/backend-a2/store-sqlite` | development and `vb serve` |
+| `memory()` | `vboard/backend-a2/store-memory` | tests |
 
 Without `store`, the board uses SQLite at `.a2/dev.db` in development and
 memory in tests; in production it doesn't start. See

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { board, http, vercelProject, type Watcher, type WatcherContext } from '../src/server/index.ts'
+import { board, type Watcher, type WatcherContext } from '../src/server/index.ts'
+import { vercelProject } from '../src/access/index.ts'
+import { http } from '../src/backend-http/index.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 import { LEASE_MS } from '../src/server/registered.ts'

@@ -15,8 +15,9 @@ a read operation, and a map of WhatsApp phone number IDs to
 [mappings](./01-overview.md#mappings):
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { kapso } from 'vboard/adapter-kapso'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { kapso } from 'vboard/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 

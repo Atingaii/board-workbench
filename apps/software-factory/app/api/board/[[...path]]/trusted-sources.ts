@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { vercelProject } from "vboard";
+import { vercelProject } from "vboard/access";
 
 const sourcesSchema = z.array(z.strictObject({
   projectId: z.string().regex(/^prj_[A-Za-z0-9]+$/),

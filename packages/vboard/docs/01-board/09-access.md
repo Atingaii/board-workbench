@@ -35,7 +35,9 @@ it in: `error: this token can't use this board: add githubActions({ repository:
 ## Configure it
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board, githubActions, oidc, vercelProject } from 'vboard'
+import { board } from 'vboard'
+import { githubActions, oidc, vercelProject } from 'vboard/access'
+import { a2 } from 'vboard/backend-a2'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({

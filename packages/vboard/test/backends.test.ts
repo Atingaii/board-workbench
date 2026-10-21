@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createClient } from '../src/client/node.ts'
 import { memory } from '../src/store/memory.ts'
-import { a2, board, http, vercelProject } from '../src/server/index.ts'
+import { board } from '../src/server/index.ts'
+import { vercelProject } from '../src/access/index.ts'
+import { a2 } from '../src/backend-a2/index.ts'
+import { http } from '../src/backend-http/index.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */

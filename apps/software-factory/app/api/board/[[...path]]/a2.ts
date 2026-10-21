@@ -1,5 +1,5 @@
-import { redisHttp } from "vboard/store-redis-http";
-import { vercelQueues } from "vboard/scheduler-vercel";
+import { redisHttp } from "vboard/backend-a2/store-redis-http";
+import { vercelQueues } from "vboard/backend-a2/scheduler-vercel";
 
 // The factory's store and queue, shared by the board and Pi's token refreshes (`tokens.ts`): A2's log and
 // the board's tables on the project's Upstash, under one prefix. Locally there's no VERCEL_ENV, so it's

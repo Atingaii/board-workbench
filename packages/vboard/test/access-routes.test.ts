@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { routes, type RouteName } from '../src/api/routes.ts'
-import { githubActions } from '../src/server/index.ts'
+import { githubActions } from '../src/access/index.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 

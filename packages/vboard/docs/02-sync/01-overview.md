@@ -25,11 +25,12 @@ two-way mirror) or to a function that handles inbound events however you like.
 Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { a2, board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { github } from 'vboard/adapter-github'
-import { vercelQueues } from 'vboard/scheduler-vercel'
-import { postgres } from 'vboard/store-postgres'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
+import { github } from 'vboard/sync-github'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 export const { GET, POST, scheduler } = board({
   backend: a2({

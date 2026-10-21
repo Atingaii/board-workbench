@@ -236,7 +236,7 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 
 - Every environment syncs with the real Slack, so a local or preview board posts
   there too. `VERCEL_ENV` only picks the store: production's Redis keys
-  (`vboard/store-redis-http` on the project's Upstash, prefix `vboard-2`), a
+  (`vboard/backend-a2/store-redis-http` on the project's Upstash, prefix `vboard-2`), a
   preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
   board's tables fill from the log on their own, so a new prefix needs nothing
   applied. The channels are private, so they're mapped by ID.

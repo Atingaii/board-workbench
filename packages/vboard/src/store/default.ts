@@ -4,7 +4,7 @@ import type { BoardStore, MessageTables } from './types.ts'
 
 const unconfigured = (): MessageTables => {
   const fail = async (): Promise<never> => {
-    throw new Error("vboard needs a store in production: board({ backend: a2({ store: postgres({ connectionString }) }) }), with postgres() from 'vboard/store-postgres'")
+    throw new Error("vboard needs a store in production: board({ backend: a2({ store: postgres({ connectionString }) }) }), with postgres() from 'vboard/backend-a2/store-postgres'")
   }
   return {
     position: fail, apply: fail, applyNext: fail, message: fail, byEventId: fail, messagesAt: fail, thread: fail, messages: fail, threads: fail,
