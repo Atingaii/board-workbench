@@ -260,6 +260,36 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
   `/api/v0-hook` also checks `V0_HOOK_KEY`. Tagging the owner in Slack needs the
   Connect Slack app's `users:read.email` scope; without it the email shows as text.
 
+## pong (`apps/pong`)
+
+A project's board on the factory's: `board({ backend: http(VBOARD_URL) })`
+keeps no log, and the factory's board keeps it. Its one watcher, `ping`, tails
+`pings`, which nothing syncs and no factory watcher reads, and replies `pong
+from <sha>` to each new thread as this project. Its page (`app/page.tsx`)
+pings from a browser through server actions that use the same handle
+(`lib/board.ts`) and shows the round trip; the deployment itself answers only
+wake-ups and webhooks.
+
+- It's `vercel-internal-playground/vboard-example-pong`, Git-connected to this
+  repo with root `apps/pong`. Its board is `VBOARD_URL`, falling back to the
+  factory's production board; a Preview `VBOARD_URL` scoped to a branch points
+  that branch's previews at the factory's preview of it
+  (`https://vboard-factory-git-<branch>.playground-vercel.tools/api/board`).
+- It registers its watcher on the factory's board lazily, on its first use
+  (a page load or a ping): `basePath` tells it its URL before any request, so
+  on Vercel that's the deployment's own (`VERCEL_URL`, or the production
+  domain). `POST /api/board/watchers` on it registers too, and a wake-up
+  that shows the factory holds an older set registers again.
+- The factory trusts it through `VBOARD_TRUSTED_SOURCES`
+  (`{ "projectId", "teamId", "environments" }`, which grants `read` and `post`
+  everywhere), per environment: Preview lists pong's previews, Production its
+  production.
+- Deployment Protection, both ways. Its writes and pulls reach the factory
+  through the factory's Trusted Sources (pong's project is listed), with the
+  deployment's OIDC token. The factory's wake-up carries no token, by design,
+  so pong's own Trusted Sources entry for the factory doesn't let it through
+  Vercel Authentication: see the PR for what that leaves.
+
 ## the docs (`packages/vboard/docs`)
 
 Markdown in the package, so it ships on npm (`files` has `docs`) and agents can
