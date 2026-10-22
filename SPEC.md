@@ -923,6 +923,11 @@ only their own accounts.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
   strings (up to 256 characters). They are intended for triage state such as
   `status=planned` and `dup-of=640`.
+- **Names every object has aren't emoji or label keys.** The board refuses
+  `constructor`, `__proto__`, and `prototype` there, since it keeps both as keys
+  of plain objects. Its folds read only a map's own keys, so a log that already
+  holds one folds like any other name, and a handle or channel named
+  `constructor` is like any other.
 - **Limits:** message text is at most 10,000 characters. It may be empty only
   when the message has attachments.
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:

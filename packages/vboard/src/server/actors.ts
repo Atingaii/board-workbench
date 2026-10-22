@@ -1,3 +1,4 @@
+import { own } from '../contract/own.ts'
 import type { ActorsState, Actor } from '../contract/reducers.ts'
 import { toStorable, type Author } from '../contract/schemas.ts'
 import { extractMentions } from '../contract/mentions.ts'
@@ -10,6 +11,8 @@ export const KNOWN_AGENTS = ['claude', 'codex', 'grok', 'pi'] as const
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 const HANDLE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/
+/** An actor ID starts with where it's from: `vercel:user:u_abc123+claude`, `slack:user:U0456`, `vboard:client`. */
+const isActorId = (id: string) => id.length <= 256 && /^[^\s:]+:\S+$/.test(id)
 
 export type ResolvedActor = {
   author: Author
@@ -92,7 +95,7 @@ function isAvatarUrl(value: string): boolean {
  * a host's principal or one of its profiles, which the board records once.
  */
 export function actorSeen(seen: Actor, known: ActorsState, host = false) {
-  const existing = known.byId[seen.id]
+  const existing = own(known.byId, seen.id)
   // Platforms don't always send an avatar (GitHub comments via Chat SDK omit it,
   // its webhooks include it): a missing one keeps the avatar the board knows.
   const actor = seen.kind === 'external' && seen.avatar === null ? { ...seen, avatar: existing?.avatar ?? null } : seen
@@ -146,18 +149,18 @@ export function resolveMentions(
   }
   for (const token of extractMentions(text)) {
     if (token.kind === 'actor') {
-      if (known.byId[token.actor] || pending?.id === token.actor) add(token.actor)
+      if ((isActorId(token.actor) && own(known.byId, token.actor)) || pending?.id === token.actor) add(token.actor)
       else fail(badRequest(`unknown actor @[${token.actor}]`, 'unknown_mention'))
       continue
     }
-    const ids = new Set(known.byHandle[token.handle] ?? [])
+    const ids = new Set(own(known.byHandle, token.handle) ?? [])
     if (pending && pending.handle.toLowerCase() === token.handle) ids.add(pending.id)
     if (ids.size === 1) add([...ids][0]!)
     else if (ids.size === 0) unknown.push(token.handle)
     else if (!candidates) fail(badRequest(`ambiguous mention @${token.handle}: use @[actor-id]`, 'ambiguous_mention'))
     else {
       const options = [...ids]
-        .map((id) => `@[${id}] (${known.byId[id]?.name ?? pending?.name ?? id})`)
+        .map((id) => `@[${id}] (${own(known.byId, id)?.name ?? pending?.name ?? id})`)
         .join(' or ')
       fail(badRequest(`ambiguous mention @${token.handle}: use ${options}`, 'ambiguous_mention'))
     }

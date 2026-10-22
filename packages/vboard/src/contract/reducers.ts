@@ -1,10 +1,13 @@
 import { reducer } from 'experimental-a2'
 import { canonicalEmoji } from './emoji.ts'
+import { own, setOwn } from './own.ts'
 import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
 import { boardContract, identityContract, type BoardEvent, type Link, type Origin } from './contract.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
-// in place: an event costs O(1) instead of a copy of every message.
+// in place: an event costs O(1) instead of a copy of every message. A key a
+// caller or platform chose is read with `own` and written with `setOwn`, so a
+// handle or a channel named `constructor` is like any other.
 
 export type Message = {
   id: number
@@ -117,8 +120,10 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       if (!message || message.deleted) return undefined
       // Older events may use Slack's names (`+1`); they group with Chat SDK's (`thumbs_up`).
       const emoji = canonicalEmoji(event.payload.emoji)
-      if (message.reactions[emoji]?.includes(event.payload.by.actor)) return undefined
-      ;(message.reactions[emoji] ??= []).push(event.payload.by.actor)
+      const actors = own(message.reactions, emoji)
+      if (actors?.includes(event.payload.by.actor)) return undefined
+      if (actors) actors.push(event.payload.by.actor)
+      else setOwn(message.reactions, emoji, [event.payload.by.actor])
       return message
     }
     case 'reaction.removed': {
@@ -126,16 +131,17 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       if (!message || message.deleted) return undefined
       const { by } = event.payload
       const emoji = canonicalEmoji(event.payload.emoji)
-      if (!message.reactions[emoji]?.includes(by.actor)) return undefined
-      const actors = message.reactions[emoji].filter((a) => a !== by.actor)
-      if (actors.length > 0) message.reactions[emoji] = actors
+      const had = own(message.reactions, emoji)
+      if (!had?.includes(by.actor)) return undefined
+      const actors = had.filter((a) => a !== by.actor)
+      if (actors.length > 0) setOwn(message.reactions, emoji, actors)
       else delete message.reactions[emoji]
       return message
     }
     case 'labels.changed': {
       const message = state.byId[event.payload.id]
       if (!message || message.deleted) return undefined
-      Object.assign(message.labels, event.payload.set)
+      for (const [key, value] of Object.entries(event.payload.set)) setOwn(message.labels, key, value)
       for (const key of event.payload.unset) delete message.labels[key]
       return message
     }
@@ -148,13 +154,13 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
     case 'message.sync_failed': {
       const message = state.byId[event.payload.id]
       if (!message) return undefined
-      message.undelivered[event.payload.target] = event.payload.error
+      setOwn(message.undelivered, event.payload.target, event.payload.error)
       return message
     }
     case 'message.synced': {
       const message = state.byId[event.payload.id]
       // Most receipts are for a delivery that never failed: nothing to clear.
-      if (!message || !(event.payload.target in message.undelivered)) return undefined
+      if (!message || !Object.hasOwn(message.undelivered, event.payload.target)) return undefined
       delete message.undelivered[event.payload.target]
       return message
     }
@@ -178,7 +184,7 @@ export const postedReducer = reducer({
   name: 'vboard.posted.v1',
   initialState: {} as Record<string, number>,
 }).fold((state, event) => {
-  if (event.type === 'message.posted') state[event.id] = event.index
+  if (event.type === 'message.posted') setOwn(state, event.id, event.index)
   return state
 })
 
@@ -198,12 +204,7 @@ export const channelsReducer = reducer({
 }).fold((state, event) => {
   if (event.type !== 'message.posted') return state
   const { channel, re } = event.payload
-  const entry = (state[channel] ??= {
-    path: channel,
-    lastIndex: 0,
-    messages: 0,
-    threads: 0,
-  })
+  const entry = own(state, channel) ?? setOwn(state, channel, { path: channel, lastIndex: 0, messages: 0, threads: 0 })
   entry.lastIndex = event.index
   entry.messages += 1
   if (re === null) entry.threads += 1
@@ -233,7 +234,7 @@ export type ActorsState = {
 
 /** The principal an actor belongs to: its link, its own principal for a profile (`…+claude`), or itself. */
 export function personOf(actors: ActorsState, actor: string): string {
-  const linked = actors.links[actor]?.to
+  const linked = own(actors.links, actor)?.to
   if (linked) return linked
   const plus = actor.indexOf('+')
   return plus === -1 ? actor : actor.slice(0, plus)
@@ -245,7 +246,7 @@ export const linkedTo = (actors: ActorsState, principal: string): string[] =>
 
 export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
   if (event.type === 'actor.linked') {
-    state.links[event.payload.actor] = { to: event.payload.to, method: event.payload.method, at: iso(event.createdAt) }
+    setOwn(state.links, event.payload.actor, { to: event.payload.to, method: event.payload.method, at: iso(event.createdAt) })
     return state
   }
   if (event.type === 'actor.unlinked') {
@@ -254,16 +255,16 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
   }
   if (event.type !== 'actor.seen') return state
   const { actor, kind, handle, name, avatar, host } = event.payload
-  const previous = state.byId[actor]
+  const previous = own(state.byId, actor)
   if (previous) {
     const key = previous.handle.toLowerCase()
-    const remaining = (state.byHandle[key] ?? []).filter((id) => id !== actor)
-    if (remaining.length > 0) state.byHandle[key] = remaining
+    const remaining = (own(state.byHandle, key) ?? []).filter((id) => id !== actor)
+    if (remaining.length > 0) setOwn(state.byHandle, key, remaining)
     else delete state.byHandle[key]
   }
-  state.byId[actor] = { id: actor, kind: actorKind(kind), handle, name, avatar, ...(host || previous?.host ? { host: true as const } : {}) }
+  setOwn(state.byId, actor, { id: actor, kind: actorKind(kind), handle, name, avatar, ...(host || previous?.host ? { host: true as const } : {}) })
   const key = handle.toLowerCase()
-  const ids = (state.byHandle[key] ??= [])
+  const ids = own(state.byHandle, key) ?? setOwn(state.byHandle, key, [])
   if (!ids.includes(actor)) ids.push(actor)
   return state
 }
@@ -315,46 +316,47 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
     case 'message.posted': {
       const { payload } = event
       if (payload.re === null)
-        state.threads[payload.thread] = { root: event.index, channel: payload.channel, targets: [], external: {} }
+        setOwn(state.threads, payload.thread, { root: event.index, channel: payload.channel, targets: [], external: {} })
       const origin = payload.origin
       if (!origin) return state
-      const thread = state.threads[payload.thread]
+      const thread = own(state.threads, payload.thread)
       if (thread && payload.re === null) {
         addTarget(thread, origin.thread)
-        ;(thread.kinds ??= {})[origin.thread] = 'thread'
-        thread.external[origin.thread] = origin.thread
-        state.byExternalThread[origin.thread] = payload.thread
+        setOwn((thread.kinds ??= {}), origin.thread, 'thread')
+        setOwn(thread.external, origin.thread, origin.thread)
+        setOwn(state.byExternalThread, origin.thread, payload.thread)
       }
       const precise = origin.subthread ?? origin.thread
-      ;(state.copies[event.index] ??= {})[origin.thread] = { thread: precise, message: origin.message, ...(payload.importedBy ? { by: payload.importedBy } : {}) }
+      setOwn((state.copies[event.index] ??= {}), origin.thread, { thread: precise, message: origin.message, ...(payload.importedBy ? { by: payload.importedBy } : {}) })
       state.byExternalMessage[externalMessageKey(precise, origin.message)] = event.index
       return state
     }
     case 'thread.synced': {
-      const thread = state.threads[event.payload.thread]
+      const thread = own(state.threads, event.payload.thread)
       if (!thread) return state
       addTarget(thread, event.payload.target)
-      if (event.payload.kind) (thread.kinds ??= {})[event.payload.target] = event.payload.kind
+      if (event.payload.kind) setOwn((thread.kinds ??= {}), event.payload.target, event.payload.kind)
       if ((event.payload.kind ?? (isThreadTarget(event.payload.target) ? 'thread' : 'channel')) === 'thread') {
-        thread.external[event.payload.target] = event.payload.target
-        state.byExternalThread[event.payload.target] = event.payload.thread
+        setOwn(thread.external, event.payload.target, event.payload.target)
+        setOwn(state.byExternalThread, event.payload.target, event.payload.thread)
       }
       return state
     }
     case 'message.files_synced': {
       // Only the sync whose copy it is says what its files are there.
-      const copy = state.copies[event.payload.id]?.[event.payload.target]
+      const copies = state.copies[event.payload.id]
+      const copy = copies && own(copies, event.payload.target)
       if (copy && copy.by === event.payload.syncedBy) copy.files = event.payload.files
       return state
     }
     case 'message.synced': {
       const { id, target, external, syncedBy } = event.payload
-      ;(state.copies[id] ??= {})[target] = { ...external, ...(syncedBy ? { by: syncedBy } : {}) }
+      setOwn((state.copies[id] ??= {}), target, { ...external, ...(syncedBy ? { by: syncedBy } : {}) })
       state.byExternalMessage[externalMessageKey(external.thread, external.message)] = id
-      const thread = state.threads[event.payload.thread]
-      if (thread && thread.root === id && (thread.kinds?.[target] ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'channel') {
-        thread.external[target] = external.thread
-        state.byExternalThread[external.thread] = event.payload.thread
+      const thread = own(state.threads, event.payload.thread)
+      if (thread && thread.root === id && ((thread.kinds && own(thread.kinds, target)) ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'channel') {
+        setOwn(thread.external, target, external.thread)
+        setOwn(state.byExternalThread, external.thread, event.payload.thread)
       }
       return state
     }

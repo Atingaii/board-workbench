@@ -14,6 +14,7 @@ import {
   type Message,
   type MessagesState,
 } from '../contract/reducers.ts'
+import { own } from '../contract/own.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
 import type { BoardSession } from './a2.ts'
@@ -28,13 +29,13 @@ const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
 
 /** The person a linked platform actor is, as views show it. */
 export function personView(actors: ActorsState, actor: string): PersonView | undefined {
-  const link = actors.links[actor]
-  const person = link ? actors.byId[link.to] : undefined
+  const link = own(actors.links, actor)
+  const person = link ? own(actors.byId, link.to) : undefined
   return link ? { id: link.to, handle: person?.handle ?? link.to, name: person?.name ?? link.to, avatar: person?.avatar ?? null } : undefined
 }
 
 export function actorView(actors: ActorsState, id: string): ActorView | null {
-  const author = actors.byId[id]
+  const author = own(actors.byId, id)
   if (!author) return null
   const person = personView(actors, id)
   return { kind: author.kind, handle: author.handle, name: author.name, avatar: author.avatar, ...(person ? { person } : {}) }
@@ -124,7 +125,7 @@ export function view(message: Message, actors: ActorsState, reader: Reader): Mes
 const hasLinks = (actors: ActorsState, id: string) => Object.values(actors.links).some((link) => link.to === id)
 
 const actorSet = (value: string, actors: ActorsState): Set<string> =>
-  actors.byId[value] || actors.links[value] || hasLinks(actors, value) ? new Set([value]) : new Set(actors.byHandle[value.toLowerCase()] ?? [])
+  own(actors.byId, value) || own(actors.links, value) || hasLinks(actors, value) ? new Set([value]) : new Set(own(actors.byHandle, value.toLowerCase()) ?? [])
 
 /**
  * Who a `--by` or `--mentions` value covers. A person (`julian`, or one of their
@@ -137,8 +138,8 @@ export function whoIs(value: string, actors: ActorsState): { actors: Set<string>
   const out = new Set(ids)
   const principals = new Set<string>()
   for (const id of ids) {
-    const kind = actors.byId[id]?.kind
-    const person = actors.links[id] ? personOf(actors, id) : kind === 'person' || hasLinks(actors, id) ? id : null
+    const kind = own(actors.byId, id)?.kind
+    const person = own(actors.links, id) ? personOf(actors, id) : kind === 'person' || hasLinks(actors, id) ? id : null
     if (person === null) continue
     principals.add(person)
     out.add(person)
@@ -156,7 +157,7 @@ export { hasCriteria }
 type LabelFilter = readonly [string, readonly string[] | null]
 
 const hasLabel = (labels: Record<string, string>, [key, values]: LabelFilter) =>
-  key in labels && (values === null || values.includes(labels[key]!))
+  Object.hasOwn(labels, key) && (values === null || values.includes(labels[key]!))
 
 /**
  * Compiles filters once; handles resolve against the actors known at that
@@ -292,7 +293,7 @@ export function foldEvent(messages: MessagesState, actors: ActorsState, event: B
 /** An event as subscribers receive it, with its message as it is afterwards. */
 export function eventView(event: BoardEvent, after: Message | undefined, actors: ActorsState, reader: Reader): BoardEventView {
   const by = (event.payload as { by?: { actor?: string } }).by?.actor
-  const actor = by ? actors.byId[by] : undefined
+  const actor = by ? own(actors.byId, by) : undefined
   const { links } = event.payload as { links?: Link[] }
   // `type` and `payload` come from the same event, so they still match; TypeScript
   // can't follow that through a union, and this is the one place views are made.

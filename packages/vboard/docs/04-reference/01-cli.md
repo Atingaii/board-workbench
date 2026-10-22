@@ -370,7 +370,8 @@ vb label <id> k=v... [--unset k]...
 ```
 
 Sets and unsets labels. Each key holds one value. Keys match
-`[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are up to 256 characters.
+`[a-z0-9][a-z0-9_.-]*` (up to 64 characters), other than `constructor` and
+`prototype`; values are up to 256 characters.
 
 ### schedule
 

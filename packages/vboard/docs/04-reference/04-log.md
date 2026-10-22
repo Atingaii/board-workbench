@@ -92,9 +92,9 @@ thread's events in order on its lane.
 | Value | Rule |
 | --- | --- |
 | Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters |
-| Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters |
+| Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype` |
 | Label value | a string up to 256 characters; each key holds one value |
-| Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them |
+| Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
 | Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
 | Attachment ID | 128 random bits, base64url (22 characters) |
 | External target | prefixed with its sync key: `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread), `github:owner/repo:12` |
