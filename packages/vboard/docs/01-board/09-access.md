@@ -263,7 +263,9 @@ export async function callerOf(caller: Caller) {
 - **`sync` attaches only a platform thread no other board thread has.** Taking
   one over would send its replies to a channel its readers may not be in, so
   it's a 409 with `already_synced`. A caller that reads the other thread's
-  channel is told which thread it is.
+  channel is told which thread it is. Imports and delivery receipts hold to it
+  too: neither can say a message came from, or landed in, a platform thread or
+  message another board thread or message has.
 
 ## Channels
 

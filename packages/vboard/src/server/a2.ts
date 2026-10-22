@@ -17,6 +17,7 @@ import {
   type ExternalAuthor,
   type InboxEvent,
   type Link,
+  type Origin,
 } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/reducers.ts'
 import { RemoteWatcherId, type Author, type Labels } from '../contract/schemas.ts'
@@ -991,6 +992,7 @@ function build(options: A2Options, binding: BoardBinding) {
         }
         // A retry of one that landed: it stands, and the middleware doesn't see it again.
         if (id !== undefined && (await reads.byEventId(id, signal))) return { message: await commit(write) }
+        if (body.origin) await claimable(body.origin, body.from, root?.thread ?? null)
         return screenImport(write, body.author, await importSource(caller, principal.id, { ...body, origin: body.origin ?? undefined }), commit)
       }
       // The message it changes: found from its platform IDs, or named by its board ID. One the caller
@@ -1028,6 +1030,7 @@ function build(options: A2Options, binding: BoardBinding) {
       const { message } = authorized
       if (body.kind === 'thread')
         return { ok: true, ...(await writeAttach(writes, { identity, authorized, target: { target: body.target, kind: body.targetKind }, cause: body.cause })) }
+      await deliverable(caller, identity.principal.id, message, body.target, body.kind === 'message' ? body.external : undefined)
       const about = { id: message.id, thread: message.thread, target: body.target }
       if (body.kind === 'message')
         await receipt(caller, `receipt:${message.id}:${body.target}`, [
@@ -1283,6 +1286,46 @@ function build(options: A2Options, binding: BoardBinding) {
     const identity = await identityOf(caller)
     if (!identity.principal.access.anywhere('sync')) throw forbidden(`this token can't ${what}: it needs sync`)
     return identity
+  }
+
+  /**
+   * Refuses a platform origin an import can't have. Sync's records map each platform thread and
+   * message to one board thread and message, board-wide, so taking one over would send what the
+   * platform says there to another channel: a new root's platform thread must be no board
+   * thread's yet, a reply's must be its own thread's, and its platform message no board message's.
+   * Its platform locations are under the sync key it came through.
+   */
+  async function claimable(origin: Origin, from: string | null, thread: string | null) {
+    if (from === null) throw badRequest('an import with an origin names the sync key it came through: pass `from`')
+    for (const location of [origin.channel, origin.thread, origin.subthread])
+      if (location !== undefined && location !== null && !location.startsWith(`${from}:`))
+        throw badRequest(`an import's platform locations belong to its sync key: ${location} isn't ${from}'s`)
+    await reads.ensure()
+    const owner = await store.tables.threadOf(origin.thread)
+    if (owner !== null && owner !== thread) throw new HttpError(409, 'already_synced', `${origin.thread} is already synced with another thread`)
+    if (owner === null && thread !== null) throw new HttpError(409, 'not_synced', `${origin.thread} isn't synced with this thread`)
+    const exact = origin.subthread ?? origin.thread
+    if ((await store.tables.messageOf(exact, origin.message)) !== null)
+      throw new HttpError(409, 'already_synced', `${origin.message} in ${exact} is already on the board`)
+  }
+
+  /**
+   * Refuses a delivery receipt a caller's sync can't have made: one for a target of another sync's,
+   * or of none of its message's thread's, or one that says its message landed as a platform thread
+   * or message another board thread or message syncs with. Receipts map those board-wide.
+   */
+  async function deliverable(caller: Inner, principal: string, message: Message, target: string, external?: { thread: string; message: string }) {
+    const key = target.slice(0, target.indexOf(':'))
+    if (!(await entriesOf(caller, principal)).some((entry) => entry.key === key)) throw forbidden(`this token doesn't sync ${key} here: its board registers its sync entries`)
+    await reads.ensure()
+    if (!(await store.tables.syncOf(message.thread))?.targets.includes(target))
+      throw badRequest(`#${message.id}'s thread doesn't sync with ${target}`, 'not_a_target')
+    if (!external) return
+    if (!external.thread.startsWith(`${key}:`)) throw badRequest(`a delivery to ${target} lands under ${key}, not in ${external.thread}`)
+    const owner = await store.tables.threadOf(external.thread)
+    if (owner !== null && owner !== message.thread) throw new HttpError(409, 'already_synced', `${external.thread} is already synced with another thread`)
+    const copy = await store.tables.messageOf(external.thread, external.message)
+    if (copy !== null && copy !== message.id) throw new HttpError(409, 'already_synced', `${external.message} in ${external.thread} is another board message's`)
   }
 
   /** The board message an import changes: a platform message, or the root of the thread a platform thread belongs to. */

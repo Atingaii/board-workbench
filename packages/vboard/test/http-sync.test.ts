@@ -198,6 +198,33 @@ describe('sync on a board on http()', () => {
     expect(sources).toEqual([{ kind: 'sync', key: 'slack', platform: 'slack', channel: 'slack:C1', thread: 'slack:C1:100' }])
   })
 
+  it("delivers to its own platforms beside the team board's own sync, each to its own targets", async () => {
+    const queue = fakeQueue()
+    const ours = fakePlatform('slack')
+    const theirs = fakePlatform('slack')
+    let project: ReturnType<typeof board>
+    const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = new Request(input, init)
+      if (request.url.startsWith(BOARD_URL)) return team.fetch(request)
+      if (request.url.startsWith(SUPPORT_URL)) return project.fetch(request)
+      return Promise.resolve(new Response('no such host', { status: 502 }))
+    }
+    const team = testBoard({
+      scheduler: queue.scheduler,
+      access: [vercelProject({ project: 'prj_support', can: 'all' })],
+      transport: { post: (url, init) => route(url, { method: 'POST', headers: init.headers, body: init.body }) },
+      sync: { workspace: slack({ adapter: theirs.adapter, channels: { C1: 'firehose' } }) },
+    })
+    const backend = http(BOARD_URL, { fetch: bearer(route, supportToken) })
+    project = board({ backend, url: SUPPORT_URL, sync: { slack: slack({ adapter: ours.adapter, channels: { C2: 'firehose' } }) } })
+    await backend.registerWatchers()
+    const julian = await julianOn(team.fetch)
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'hello, both' })).body.message
+    // Neither tries the other's: each Slack gets the root once, and nothing says it failed.
+    await vi.waitFor(() => expect([ours.channelPosts.map((p) => p.channelId), theirs.channelPosts.map((p) => p.channelId)]).toEqual([['slack:C2'], ['slack:C1']]))
+    expect((await julian('GET', `/messages/${root.id}`)).body.message.undelivered).toEqual({})
+  })
+
   it('answers in the Slack thread when the team board\'s middleware drops what its sync imports', async () => {
     const guard: Middleware = async ({ write, respond, next }) =>
       /ignore previous instructions/i.test(write.text) ? respond("I didn't post that: it reads like instructions for an agent.") : next()
@@ -369,5 +396,83 @@ describe('the sync permission', () => {
     const posted = (await support('POST', '/messages', { channel: 'firehose', text: 'hi', author, origin: { thread: 'slack:C1:1', message: '1' }, from: 'slack' })).body.message
     expect(posted).toMatchObject({ by: { actor: SUPPORT }, from: null, origin: null })
     expect((await read(julian, 'firehose'))[0]).toMatchObject({ by: { actor: SUPPORT }, from: null })
+  })
+})
+
+describe("sync's records", () => {
+  const author = { id: 'slack:user:U_EVE', handle: 'eve', name: 'Eve', avatar: null, isBot: false }
+
+  /**
+   * The team's board syncs Slack's C1 with firehose itself, and the support project may sync only
+   * in support/, under the same key: a Slack thread the team syncs is its, not the project's.
+   */
+  async function synced() {
+    const s = fakePlatform('slack')
+    const team = testBoard({
+      access: [vercelProject({ project: 'prj_support', can: { 'support/': 'all' } })],
+      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
+    })
+    const webhook = (body: unknown) =>
+      team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    const support = caller(team.fetch, await supportToken())
+    const julian = await julianOn(team.fetch)
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })).status).toBe(200)
+    await webhook({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'the incident', user: 'U_ADA' })
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const [incident] = await read(julian, 'firehose')
+    /** A Slack reply in the team's thread lands in its board thread, wherever else it could have gone. */
+    const replied = async () => {
+      await webhook({ type: 'message', threadId: 'slack:C1:100', id: '101', text: 'the fix is in the runbook', user: 'U_BOB' })
+      await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(2))
+      expect((await read(julian, 'firehose')).map((m) => m.text)).toEqual(['the incident', 'the fix is in the runbook'])
+    }
+    return { team, s, support, julian, incident: incident!, replied }
+  }
+
+  it("won't let an import's origin take a platform thread or message another board thread syncs with", async () => {
+    const { support, julian, replied } = await synced()
+    const origin = (thread: string, message: string, subthread: string | null = null) => ({ channel: 'slack:C1', thread, subthread, message, context: null })
+    const root = (body: object) => support('POST', '/sync/imports', { op: 'post', author, from: 'slack', channel: 'support/inbox', text: 'mine now', ...body })
+    // A new root from the team's Slack thread, or one that claims one of its messages.
+    for (const claim of [origin('slack:C1:100', '999'), origin('slack:C1:555', '100', 'slack:C1:100')]) {
+      const taken = await root({ origin: claim })
+      expect([taken.status, taken.body.error?.code], JSON.stringify(claim)).toEqual([409, 'already_synced'])
+    }
+    // A reply in its own thread, from a platform thread that isn't that thread's.
+    const own = (await root({ text: 'a thread of its own' })).body.message as string
+    const reply = await support('POST', '/sync/imports', { op: 'post', author, from: 'slack', re: own, text: 'mine too', origin: origin('slack:C1:100', '998') })
+    expect([reply.status, reply.body.error?.code]).toEqual([409, 'already_synced'])
+    // Nor from a platform it doesn't sync under that key, or with no key at all.
+    const elsewhere = await root({ origin: { thread: 'github:acme/www:12', subthread: null, message: '1', context: null } })
+    expect([elsewhere.status, elsewhere.body.error?.code]).toEqual([400, 'invalid_request'])
+    const keyless = await root({ from: null, origin: origin('slack:C1:556', '1') })
+    expect([keyless.status, keyless.body.error?.code]).toEqual([400, 'invalid_request'])
+    expect((await read(julian, 'support/inbox')).map((m) => m.text)).toEqual(['a thread of its own'])
+    await replied()
+  })
+
+  it("won't let a receipt take a platform thread or message another board thread syncs with, or name a target its thread lacks", async () => {
+    const { support, julian, replied, incident } = await synced()
+    const own = (await support('POST', '/sync/imports', { op: 'post', author, from: 'slack', channel: 'support/inbox', text: 'a thread of its own' })).body.message as string
+    expect((await support('POST', '/sync/receipts', { kind: 'thread', message: own, target: 'slack:C9', targetKind: 'channel', cause: 'request' })).status).toBe(200)
+    const receipt = (target: string, external: { thread: string; message: string }) => support('POST', '/sync/receipts', { kind: 'message', message: own, target, external })
+    // Its root landed in the team's Slack thread, or as the team's root there.
+    for (const external of [{ thread: 'slack:C1:100', message: '777' }, { thread: 'slack:C1:100', message: '100' }]) {
+      const taken = await receipt('slack:C9', external)
+      expect([taken.status, taken.body.error?.code], JSON.stringify(external)).toEqual([409, 'already_synced'])
+    }
+    // A target its thread doesn't sync with, or one under a key it doesn't sync.
+    const unsynced = await receipt('slack:C7', { thread: 'slack:C7:300', message: '300' })
+    expect([unsynced.status, unsynced.body.error?.code]).toEqual([400, 'not_a_target'])
+    expect((await support('POST', '/sync/receipts', { kind: 'thread', message: own, target: 'github:acme/www:12', targetKind: 'thread', cause: 'request' })).status).toBe(200)
+    expect((await receipt('github:acme/www:12', { thread: 'github:acme/www:12', message: '1' })).status).toBe(403)
+    expect((await support('POST', '/sync/receipts', { kind: 'failed', message: own, target: 'slack:C7', error: 'gone' })).body.error?.code).toBe('not_a_target')
+    // Its own delivery lands, and a copy is one board message's.
+    expect((await receipt('slack:C9', { thread: 'slack:C9:200', message: '200' })).status).toBe(200)
+    const reply = (await support('POST', '/sync/imports', { op: 'post', author, from: 'slack', re: own, text: 'and a reply' })).body.message as string
+    const twice = await support('POST', '/sync/receipts', { kind: 'message', message: reply, target: 'slack:C9', external: { thread: 'slack:C9:200', message: '200' } })
+    expect([twice.status, twice.body.error?.code]).toEqual([409, 'already_synced'])
+    expect((await julian('GET', `/messages/${incident.id}`)).body.message.undelivered).toEqual({})
+    await replied()
   })
 })

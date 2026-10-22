@@ -706,7 +706,13 @@ board({
   only posts in `ci/` can't touch what a workflow that reads `ci/` wrote.
 - `sync` attaches only an external thread no other board thread is synced
   with; one that is answers 409 `already_synced`. Taking it over would route
-  its replies to a thread its readers may not be able to read.
+  its replies to a thread its readers may not be able to read. Sync's own
+  records hold to the same: an import's platform `origin` is under its sync
+  key, a new root's platform thread is no board thread's yet, a reply's is its
+  own thread's, and its platform message is no board message's. A delivery
+  receipt is for one of its thread's targets, under a key the caller syncs, and
+  lands in a platform thread and message no other board thread or message has.
+  Each sync delivers only to its own keys' targets.
 - Sync callbacks are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)). An import's author is always a

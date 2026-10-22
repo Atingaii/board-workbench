@@ -342,12 +342,23 @@ const CHECKS: Check[] = [
         same((await ctx.board.syncThread(found.thread!)).root, id, "the synced thread's root")
         const again = await ctx.board.syncImport({ op: 'post', author, from: key, channel: ctx.channel, text: 'conformance: from a platform', noSync: true, id: `conformance-sync-${ctx.labels.conformance}` })
         same(again.message, id, 'the same import, sent again')
+        // A platform thread is one board thread's: another import can't take it over.
+        await rejects(
+          ctx.board.syncImport({ op: 'post', author, from: key, channel: ctx.channel, text: 'conformance: a second root', noSync: true, origin: { thread, subthread: null, message: '3', context: null } }),
+          409,
+          'already_synced',
+          'an import from a platform thread another board thread syncs with',
+        )
+        // A delivery is to one of its thread's targets.
         const external = { thread: `${key}:${ctx.labels.conformance}:2`, message: '2' }
-        await ctx.board.syncReceipt({ kind: 'message', message: id!, target: `${key}:${ctx.labels.conformance}:2`, external })
+        await ctx.board.syncReceipt({ kind: 'thread', message: id!, target: external.thread, targetKind: 'thread', cause: 'request' })
+        await ctx.board.syncReceipt({ kind: 'message', message: id!, target: external.thread, external })
         same(JSON.stringify((await ctx.board.syncCopies([id!]))[id!]?.[external.thread]), JSON.stringify(external), 'the copy its receipt recorded')
       } finally {
         // Its author is the platform user: only an import can take it down.
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
+        // And a second root, on a board that took one.
+        await ctx.board.syncImport({ op: 'delete', author, from: key, origin: { thread, message: '3' } }).catch(() => {})
         await ctx.board.register({ url, watch: {} }).catch(() => {})
       }
     },

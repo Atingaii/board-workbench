@@ -152,6 +152,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     return platform
   }
   const keyOf = (target: string) => target.slice(0, target.indexOf(':'))
+  /** A target of this sync's own: another sync on the board (its own, or one elsewhere) delivers the rest. */
+  const ours = (target: string) => entries[keyOf(target)] !== undefined
   const native = (external: string) => external.slice(external.indexOf(':') + 1)
 
   // --- lookups --------------------------------------------------------------------
@@ -986,6 +988,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   async function deliverThread(event: Extract<SyncEvent, { type: 'thread.synced' }>, attempt: number) {
     const { thread, target } = event.payload
+    if (!ours(target)) return
     // Joining: only messages written after the join are delivered.
     if ((event.payload.kind ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'thread') return
     const synced = await syncOf(thread)
@@ -1067,7 +1070,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const failures: Failure[] = []
     for (const target of synced.targets) {
       const externalThread = synced.external[target]
-      if (!externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
+      if (!ours(target) || !externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
       if (cameFrom(message, target)) continue
       try {
         const copy = (await copiesOf([message.id]))[message.id]?.[target] ?? (await postReply(message, target, externalThread, actors))
@@ -1086,7 +1089,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const message = event.message
     const actors = await actorsNow()
     for (const [target, copy] of Object.entries(copies)) {
-      if (event.payload.from !== null && keyOf(target) === event.payload.from) continue
+      if (!ours(target) || (event.payload.from !== null && keyOf(target) === event.payload.from)) continue
       try {
         const platform = platformOf(keyOf(target))
         const thread = native(copy.thread)
@@ -1131,6 +1134,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const message = { ...current, labels: after.labels }
     const previous = { ...current, labels: event.before?.labels ?? {} }
     for (const [target, copy] of Object.entries(copies)) {
+      if (!ours(target)) continue
       try {
         const body = renderFor(target, message, actors, copy.files === null)
         if (body.markdown === renderFor(target, previous, actors, copy.files === null).markdown) continue
@@ -1170,7 +1174,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function typing(messages: readonly MessageView[], status?: string): Promise<string[]> {
     const synced = messages[0] ? await syncOf(messages[0].thread) : null
     if (!synced) return []
-    const externals = [...new Set(Object.values(synced.external))]
+    const externals = [...new Set(Object.values(synced.external))].filter(ours)
     const done = await Promise.all(
       externals.map(async (external) => {
         const key = keyOf(external)
