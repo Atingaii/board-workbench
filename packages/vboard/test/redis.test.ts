@@ -3,6 +3,9 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 // The engine itself, as a2() starts it.
 import { mount as board } from './harness.ts'
 import { redis } from '../src/store/redis.ts'
+import { redisHttp } from '../src/store/redis-http.ts'
+import { tablesKeyBase } from '../src/store/redis-tables.ts'
+import { upstashRest } from './upstash.ts'
 import type { BoardStore } from '../src/store/types.ts'
 import { BOARD_URL, caller, PROJECT_ID, personToken, TEAM_ID, testAuth } from './harness.ts'
 
@@ -56,8 +59,52 @@ describe.skipIf(!url)('vboard on Redis', () => {
     await julian('POST', '/messages', { re: root.body.message.id, text: 'for both' })
     const thread = await julian('GET', `/messages/${root.body.message.id}`)
     expect(thread.body.replies.map((reply: { text: string }) => reply.text)).toEqual(['for both'])
-    expect(await client.exists(`${prefix}b:vboard:m`)).toBe(1)
+    expect(await client.exists(`${tablesKeyBase(`${prefix}b`)}:m`)).toBe(1)
     await shared.close()
     await vi.waitFor(() => expect(client.status).toBe('end'))
+  })
+
+  it("runs on Upstash's REST API, every script held to its key-locking rules", async () => {
+    const rest = await upstashRest(url!)
+    const store = redisHttp({ url: rest.url, token: 'test', keyPrefix: `${prefix}c` })
+    try {
+      const mounted = board({ store, url: BOARD_URL, project: { id: PROJECT_ID, teamId: TEAM_ID }, auth: testAuth })
+      const julian = caller(mounted.fetch, await personToken())
+      const root = await julian('POST', '/messages', { channel: 'dev', text: 'Upstash locks keys', labels: { kind: 'bug' } })
+      expect(root.status).toBe(201)
+      await julian('POST', '/messages', { re: root.body.message.id, text: 'only its own' })
+      const thread = await julian('GET', `/messages/${root.body.message.id}`)
+      expect(thread.body.replies.map((reply: { text: string }) => reply.text)).toEqual(['only its own'])
+      expect((await julian('GET', '/messages?label=kind=bug')).body.messages).toHaveLength(2)
+      // A2's scripts and the tables' both carried the flag: the shim ran each under Upstash's rules.
+      const scripts = rest.commands.filter(([command]) => command === 'EVAL').map(([, script]) => script!)
+      expect(scripts.length).toBeGreaterThan(0)
+      expect(scripts.filter((script) => !script.startsWith('#!lua flags='))).toEqual([])
+      expect(rest.commands.filter(([command]) => command === 'PUBLISH').length).toBeGreaterThan(0)
+    } finally {
+      await store.close()
+      await rest.close()
+    }
+  })
+
+  it('refuses a prefix vboard wrote on A2 0.21, saying to give the store a new one', async () => {
+    const client = new Redis(url!)
+    // What A2 0.21 marked its prefix with, and the tables it kept beside it.
+    await client.set(`${prefix}d:schema`, 'cursors-2')
+    await client.set(`${prefix}d:vboard:pos`, '12')
+    client.disconnect()
+    const store = redis({ url: url!, keyPrefix: `${prefix}d` })
+    stores.push(store)
+    const mounted = board({ store, url: BOARD_URL, project: { id: PROJECT_ID, teamId: TEAM_ID }, auth: testAuth })
+    const julian = caller(mounted.fetch, await personToken())
+    const posted = await julian('POST', '/messages', { channel: 'dev', text: 'on the old prefix' })
+    expect(posted.status).toBe(503)
+    expect(posted.body.error.message).toContain(`the redis keys under prefix '${prefix}d' hold an A2 layout other than 'tagged-1'`)
+    expect(posted.body.error.message).toContain('point the store at a fresh keyPrefix')
+  })
+
+  it("can't take a keyPrefix with braces", () => {
+    expect(() => redis({ url: url!, keyPrefix: 'board{1}' })).toThrow(TypeError)
+    expect(() => redisHttp({ url: 'http://127.0.0.1:1', token: 'test', keyPrefix: 'board{1}' })).toThrow(TypeError)
   })
 })

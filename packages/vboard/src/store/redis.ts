@@ -6,7 +6,11 @@ import type { BoardStore } from './types.ts'
 const IOREDIS: string = 'ioredis'
 
 export type RedisOptions = {
-  /** Isolates boards on one Redis: A2's log and vboard's tables both live under it. Default `'a2'`. */
+  /**
+   * Isolates boards on one Redis: A2's log and vboard's tables both live under it. Default `'a2'`.
+   * It can't contain braces. vboard 0.14 (A2 0.22) names every key differently, so a board moves
+   * to a new prefix and starts with an empty log: on one vboard 0.13 wrote, every request answers 503.
+   */
   keyPrefix?: string
 } & (
   | {

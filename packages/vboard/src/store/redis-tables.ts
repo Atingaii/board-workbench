@@ -301,6 +301,19 @@ const CHANNELS = `
 return { redis.call('GET', KEYS[1]) or '0', redis.call('SMEMBERS', KEYS[2]) }
 `
 
+/**
+ * Upstash runs a script under a lock on the whole database unless the script
+ * sets `allow-key-locking`, and then locks only the hash tags of its KEYS and
+ * refuses any other key. Every key of the tables shares one tag, so a script
+ * locks only its board's tables; a `no-writes` one takes the shared lock. Redis
+ * and Valkey reject the flag, and have no such lock: one thread runs every
+ * command. A2's Redis store does the same for its sessions.
+ */
+const KEY_LOCKING = '#!lua flags=allow-key-locking'
+const READ_ONLY_KEY_LOCKING = '#!lua flags=no-writes,allow-key-locking'
+/** A server that doesn't know the flag (Redis 7, Valkey), or shebangs at all (Redis 6). */
+const SHEBANG_REJECTED = /shebang|unexpected symbol near '#'/i
+
 const SEP = '\u001f'
 
 /** How many IDs one query script reads before it hands back where it got to. */
@@ -319,18 +332,28 @@ const inLabelSets = (own: Record<string, string>, root: Record<string, string> |
 
 type Op = [command: string, key: string, ...args: string[]]
 
+/** The tables' keys, `<prefix>:{<prefix>:vboard}:<name>`: one hash tag, its board's own. */
+export const tablesKeyBase = (prefix: string) => `${prefix}:{${prefix}:vboard}`
+
 /**
  * The tables on Redis: messages, versions, and sync rows in hashes and sorted
- * sets under `${prefix}:vboard`, and a sorted set per filter value, scored by
- * message ID. Each event is two scripts, one that reads what it changes and
- * one that checks the position and writes; each query is one script, which
- * walks the smallest set that applies.
+ * sets under `<prefix>:{<prefix>:vboard}`, and a sorted set per filter value,
+ * scored by message ID. Each event is two scripts, one that reads what it
+ * changes and one that checks the position and writes; each query is one
+ * script, which walks the smallest set that applies.
+ *
+ * Every key shares the hash tag `{<prefix>:vboard}`: the board's alone, since a
+ * prefix can't hold a brace, and never an A2 session's, which is a JSON string.
+ * Each script declares every key it touches. Keys of an earlier layout,
+ * `<prefix>:vboard:<name>`, have other names, so they're never read: the tables
+ * fill from the log.
  */
 export function redisTables(send: RedisCall, prefix: string, options: { scanBudget?: number } = {}): MessageTables {
+  if (prefix.includes('{') || prefix.includes('}')) throw new TypeError("a Redis keyPrefix can't contain braces: they'd set every key's hash tag")
   // Redis keeps a lone surrogate as U+FFFD: every string goes out well-formed, so a write and the read that finds it agree.
   const call: RedisCall = (command, ...args) => send(command, ...args.map((arg) => (typeof arg === 'string' ? arg.toWellFormed() : arg)))
   const budget = options.scanBudget ?? SCAN_BUDGET
-  const p = `${prefix}:vboard`
+  const p = tablesKeyBase(prefix)
   const k = {
     pos: `${p}:pos`,
     messages: `${p}:m`,
@@ -362,7 +385,30 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
 
   const parse = <T>(value: unknown): T | null =>
     value === null || value === undefined || value === false ? null : (JSON.parse(String(value)) as T)
-  const evaluate = (script: string, keys: string[], args: Array<string | number>) => call('EVAL', script, keys.length, ...keys, ...args)
+  /**
+   * Whether the server takes `allow-key-locking`, asked once, before the first script. Only its
+   * rejection of the flag means no: a transport error decides nothing, and the next script asks again.
+   */
+  let keyLocking: Promise<boolean> | null = null
+  const locking = () =>
+    (keyLocking ??= call('EVAL', `${KEY_LOCKING}\nreturn 1`, 1, k.pos).then(
+      () => true,
+      (error: unknown) => {
+        if (SHEBANG_REJECTED.test(String((error as Error | undefined)?.message ?? error))) return false
+        keyLocking = null
+        throw error
+      },
+    ))
+  const run = async (flags: string, script: string, keys: string[], args: Array<string | number>) =>
+    call('EVAL', (await locking()) ? `${flags}\n${script}` : script, keys.length, ...keys, ...args)
+  /** A query: on Upstash it takes the shared lock, beside other reads. */
+  const evaluate = (script: string, keys: string[], args: Array<string | number>) => run(READ_ONLY_KEY_LOCKING, script, keys, args)
+  /**
+   * An event's apply, and the reads its writes are worked out from: they run as writing scripts,
+   * so they read where the write that checks the position runs, whatever a provider does with a
+   * read-only one.
+   */
+  const evaluateWrite = (script: string, keys: string[], args: Array<string | number>) => run(KEY_LOCKING, script, keys, args)
 
   async function messagesOf(ids: readonly number[]): Promise<Map<number, Message>> {
     const out = new Map<number, Message>()
@@ -393,7 +439,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
       reads.thread ?? '',
       reads.copy?.[1] ?? '',
     ]
-    const found = (await evaluate(BEFORE, keys, args)) as unknown[] | null
+    const found = (await evaluateWrite(BEFORE, keys, args)) as unknown[] | null
     if (!found) return null
     const [data, rootId, rootData, rootSummary, thread, copy] = found
     const sync = { thread: parse<SyncedThread>(thread) ?? undefined, copy: parse<ExternalCopy>(copy) ?? undefined }
@@ -403,7 +449,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     const root = summary ? { replies: summary.n, at: summary.at } : undefined
     const read: Read = { message, root, rootLabels: parse<Message>(rootData)?.labels ?? null }
     if (event.type === 'message.deleted' && message && !message.deleted && root?.at === id) {
-      const newest = await evaluate(NEWEST, [k.thread(Number(rootId)), k.metas], [String(rootId), String(id)])
+      const newest = await evaluateWrite(NEWEST, [k.thread(Number(rootId)), k.metas], [String(rootId), String(id)])
       read.previousLast = newest === null || newest === undefined || newest === false ? null : Number(newest)
     }
     return { read, sync }
@@ -414,7 +460,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     const after = change.message?.after
     if (!after || after.re !== null || change.message!.created || !change.message!.terms) return []
     if (JSON.stringify(after.labels) === JSON.stringify(read.message!.labels)) return []
-    const rows = (await evaluate(THREAD, [k.thread(after.id), k.messages], [])) as unknown[]
+    const rows = (await evaluateWrite(THREAD, [k.thread(after.id), k.messages], [])) as unknown[]
     return rows.flatMap((row) => {
       const message = parse<Message>(row)
       return message && message.id !== after.id ? [message] : []
@@ -490,7 +536,7 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
       if (!slots.has(key)) slots.set(key, keys.push(key))
       return [command, slots.get(key)!, ...args]
     })
-    return Number(await evaluate(APPLY, keys, [event.index, mode, luaJson(encoded)])) === 1
+    return Number(await evaluateWrite(APPLY, keys, [event.index, mode, luaJson(encoded)])) === 1
   }
 
   /**
