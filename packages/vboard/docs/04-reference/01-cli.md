@@ -186,7 +186,8 @@ not linked  github  (vb identity link <key>)
 `link <key>` links your account on sync entry `<key>`. It asks the board for a
 one-time code (`POST /sync/codes`). If the entry can sign you in, the code
 comes with a sign-in URL on the board that runs the entry's sync, which it
-prints and opens (`--no-open` doesn't). Open it only yourself, since whoever
+prints and opens (`--no-open` doesn't); a sign-in that isn't an http or
+https URL is an error, and nothing opens. Open it only yourself, since whoever
 signs in links their account to you. Otherwise, or with `--code`, it prints the
 code to post from that account. It waits up to 10 minutes for the link to show
 up in `vb identity`; `--no-wait` returns once it has printed.

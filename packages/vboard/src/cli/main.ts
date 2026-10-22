@@ -419,9 +419,22 @@ function printEvent(event: BoardEventView) {
 }
 
 /** Best-effort: the URL is printed either way. */
+/** `url`, when it's an http or https URL as `new URL` reads it: the only kind the CLI opens, so a board can't hand the opener a flag or another scheme. */
+function browsable(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
+/** Opens an http(s) URL in the browser, as one argument to the opener: no shell reads it, Windows' included. */
 function openBrowser(url: string) {
+  const at = browsable(url)
+  if (at === null) return
   const [command, ...args] =
-    process.platform === 'darwin' ? ['open', url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '', url] : ['xdg-open', url]
+    process.platform === 'darwin' ? ['open', at] : process.platform === 'win32' ? ['rundll32', 'url.dll,FileProtocolHandler', at] : ['xdg-open', at]
   const child = spawn(command!, args, { detached: true, stdio: 'ignore' })
   child.on('error', () => {})
   child.unref()
@@ -486,6 +499,8 @@ async function identity(args: string[]): Promise<number> {
   const platform = (await board.discovery().catch(() => null))?.sync.find((entry) => entry.key === target)?.platform ?? target
   const { code, expiresAt, signIn } = await board.syncCode(target)
   const consent = signIn !== undefined && !flags.code
+  // The board says where its sign-in is, and the CLI opens it: only a web page.
+  if (consent && browsable(signIn) === null) throw new Error(`the board's sign-in isn't an http or https URL: ${JSON.stringify(signIn)}`)
   if (flags.json) printJson({ sync: target, platform, code, expiresAt, ...(signIn !== undefined ? { signIn } : {}) })
   const until = Date.now() + LINK_WAIT_MS
   const sleep = () => new Promise((resolve) => setTimeout(resolve, 2000))
