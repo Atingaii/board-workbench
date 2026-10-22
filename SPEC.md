@@ -2407,7 +2407,7 @@ gets the bot token and returns `adapter.withBotToken(token, () =>
 adapter.webClient)`. vboard never calls the SDK's protected token resolver.
 Static-token adapters can use their public `webClient` directly. An
 async-token adapter without a resolver fails at setup. A connector name needs
-none: vboard builds it. The v0 feedback bot supplies one.
+none: vboard builds it.
 
 With Connect:
 - `botToken` becomes a function that mints a short-lived token per call.

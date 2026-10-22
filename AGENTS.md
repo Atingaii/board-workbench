@@ -64,8 +64,7 @@ reply in an existing thread rather than starting one.
   files go (below): production's Redis keys, a preview's own keys in the same
   Redis, or `sqlite()` at `.a2/dev.db` locally, imported only there. The queue is
   `vercelQueues()` everywhere. On Redis the store holds A2's log and the board's
-  tables (`<prefix>:vboard:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-2`,
-  separate from the v0 feedback bot's (`vboard-2`). A2 0.21 reads what 0.17 to
+  tables (`<prefix>:vboard:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-2`. A2 0.21 reads what 0.17 to
   0.20 wrote under them; work they hadn't finished when 0.21 deployed is dropped.
   Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
@@ -221,48 +220,6 @@ scoped tool supplies repository isolation; namespacing alone is not an ACL.
 Read [the setup skill](skills/configure-factory-board/SKILL.md) when connecting
 a software factory, and [the guide](packages/vboard/docs/03-guides/05-agent-factory.md)
 for the service contract.
-
-## the v0 feedback bot (`apps/v0-feedback`)
-
-vboard as a v0 feedback bot on the `vercel-internal-playground/vboard` project,
-here until it moves to `vercel/v0`: people post v0 feedback in Slack, and v0
-fixes the ones worth fixing and opens a draft PR on `vercel/v0`. The board
-route holds the whole config, `v0.ts` starts v0 chats, `app/api/v0-hook` hears
-back from v0, and the A2 scheduler route re-exports the board's `scheduler`
-(separate because the queue trigger makes its function private).
-
-```bash
-cd apps/v0-feedback
-vercel link --project vboard --scope vercel-internal-playground   # once
-pnpm dev                                                          # the board at /api/board
-VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
-```
-
-- Every environment syncs with the real Slack, so a local or preview board posts
-  there too. `VERCEL_ENV` only picks the store and where files go: production's
-  Redis keys (`vboard/backend-a2/store-redis-http` on the project's Upstash, prefix
-  `vboard-2`), a preview's own keys in the same Redis, or `sqlite()` at
-  `.a2/dev.db` locally, imported only there; files are the project's private Blob
-  store, or locally `.a2/attachments` (`fsBlob()`). The board's tables fill from
-  the log on their own, so a new prefix needs nothing applied. The channels are private, so they're mapped by ID.
-- `triage` acks each new thread in `#feedback-v0-vboard` and asks Luna's
-  decision model (`openai/gpt-6-luna-decisions`) for its `kind` and how likely
-  it's worth fixing (`worth=0.00`–`1.00`). A bug or feature at 0.7 or more gets
-  a v0 chat and an announcement in `#feedback-v0-prs` with a one-line reason.
-  `/api/v0-hook` reads v0's finished reply (with an LLM) and labels the report, writing through the board's handle as `v0-hook`; the
-  `report` watcher (`when: 'enters'`) then replies once in the announcement's
-  thread with the PR, a summary, and the likely owner, mentioned by email.
-- Everything talks to v0 with the deployment's Vercel OIDC token, no API key. The
-  project is git-linked to `vercel/v0`, so each chat works on its own
-  `v0/vboard-<chatId>` branch and `credentialAccess.github` lets its `gh` open
-  the PR as the GitHub App (vercel/v0#30977). The board registers a webhook per
-  chat (vercel/v0#30982). Both are behind v0 flags that are on for Vercel teams.
-  The link would also deploy `vercel/v0` pushes here, so the project's Ignored
-  Build Step is `exit 0`: deploy with `vercel deploy --prod` from the repo root.
-- Production is behind Vercel Authentication. The CLI and v0's webhook get
-  through with the automation bypass (`VERCEL_AUTOMATION_BYPASS_SECRET`), and
-  `/api/v0-hook` also checks `V0_HOOK_KEY`. Tagging the owner in Slack needs the
-  Connect Slack app's `users:read.email` scope; without it the email shows as text.
 
 ## pong (`apps/pong`)
 
