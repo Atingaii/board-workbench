@@ -54,6 +54,8 @@ A new root or reply.
 | `attachments` | `{ id, name, type, size }[]` | (server) its files, as the board stored them. A request names only IDs |
 | `links` | `{ url, message, snapshot, unavailable }[]` | (server) platform messages it links to, each with what it said |
 | `schedule` | `{ id, n }` | (server) set when a schedule posted it: the schedule and which send, from 0 |
+| `blind` | `true` | (server) set when its author couldn't read its channel: where they can't read, it's theirs to edit and delete only then |
+| `importedBy` | `string` | (server) the principal of the sync elsewhere that imported it, whose copy `origin` is: only that sync acts on it. None for the board's own sync's |
 
 ### The rest
 
@@ -69,10 +71,10 @@ thread's events in order on its lane.
 | `reaction.removed` | `id`, `emoji`, `by`, `from` | someone removes their reaction |
 | `labels.changed` | `id`, `set`, `unset`, `by` | labels are set or unset |
 | `thread.synced` | `target`, `cause` (`config` or `request`), `kind` (`channel` or `thread`), `by` | a thread is synced with an external channel (a thread starts there) or thread (it joins) |
-| `message.synced` | `id`, `target`, `external: { thread, message }` | (server) a platform accepted a delivery: the receipt that maps a message to its copy |
-| `message.files_synced` | `id`, `target`, `files` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files |
+| `message.synced` | `id`, `target`, `external: { thread, message }`, `syncedBy` | (server) a platform accepted a delivery: the receipt that maps a message to its copy. `syncedBy` names the sync elsewhere that recorded it, whose copy it is; none for the board's own sync |
+| `message.files_synced` | `id`, `target`, `files`, `syncedBy` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files. Only the sync whose copy it is sets them |
 | `message.sync_failed` | `id`, `target`, `error` | (server) a delivery gave up after its retries |
-| `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar` | an actor writes for the first time or changes its display details, in the same batch as its write |
+| `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host` | an actor writes for the first time or changes its display details, in the same batch as its write. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as. A platform user's changes only through the board's own sync, or one with `sync` in every channel |
 
 - **`by`** is `{ actor, principal, profile, session }`: the actor ID
   (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
@@ -165,14 +167,14 @@ as the tables keep it, for anyone reading the log themselves.
 | Reducer | A2 name | State | Used by |
 | --- | --- | --- | --- |
 | `channelsReducer` | `vboard.channels.v1` | path → `{ path, lastIndex, messages, threads }` | `channels` |
-| `actorsReducer` | `vboard.actors.v2` | `byId`: actor ID → `{ id, kind, handle, name, avatar }`; `byHandle`: lowercased handle → actor IDs; `links`: platform actor → the person it's linked to | mention resolution, `actors`, rendering |
+| `actorsReducer` | `vboard.actors.v2` | `byId`: actor ID → `{ id, kind, handle, name, avatar, host? }`; `byHandle`: lowercased handle → actor IDs; `links`: platform actor → the person it's linked to | mention resolution, `actors`, rendering |
 | `messagesReducer` | `vboard.messages.v5` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | not the board: its tables hold the same messages |
 
 A message, as the tables keep it and `messagesReducer` folds it:
 
 | Field | Meaning |
 | --- | --- |
-| `id`, `channel`, `text`, `re`, `replyTo`, `thread`, `labels`, `mentions`, `by`, `noSync`, `origin`, `from`, `attachments`, `links`, `schedule` | as posted, with edits and label changes applied |
+| `id`, `channel`, `text`, `re`, `replyTo`, `thread`, `labels`, `mentions`, `by`, `noSync`, `origin`, `from`, `attachments`, `links`, `schedule`, `blind` | as posted, with edits and label changes applied |
 | `reactions` | emoji → the actor IDs who reacted |
 | `createdAt`, `editedAt` | ISO times; `editedAt` is null until an edit |
 | `deleted` | true for a tombstone, whose text, reactions, files, and links are cleared |

@@ -192,7 +192,10 @@ comes with a sign-in URL on the board that runs the entry's sync, which it
 prints and opens (`--no-open` doesn't); a sign-in that isn't an http or
 https URL is an error, and nothing opens. Open it only yourself, since whoever
 signs in links their account to you. Otherwise, or with `--code`, it prints the
-code to post from that account. It waits up to 10 minutes for the link to show
+code to post from that account. An entry is signed in for by the sync that
+holds its key: the board's own, or the one board elsewhere that registered it.
+One that two boards elsewhere registered has no sign-in, and the code links
+where you post it through either. It waits up to 10 minutes for the link to show
 up in `vb identity`; `--no-wait` returns once it has printed.
 `unlink` takes a handle or actor ID from the list. Only people link, and only
 their own accounts. Your coding agent offers once to link them for you; see

@@ -261,12 +261,15 @@ The backends vboard ships:
   verified. Its `discovery` for its own handle reads the other board's. With
   one, its board is a gateway: it verifies and limits its own callers, and
   each acts on the other board as this deployment, never vouching for a
-  person, with the caller's handle as its profile (`<principal>+ada`, a label)
-  and its access as `x-board-scope`, so the other board grants only what both
-  allow. A caller's post IDs are under its own principal, `me` is answered
-  here, and what's the project's own there by principal answers 403:
-  `identity`, `edit`, `delete`, `schedule`, `cancelSchedule`, the
-  registration's methods, and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
+  person, with the caller's handle as its profile (`<principal>+ada`, a label,
+  numbered `fix-2` when it's one of this board's watchers' IDs, since a
+  watcher's own writes never wake it) and its access as `x-board-scope`, so
+  the other board grants only what both allow. A caller's post IDs are under
+  its own principal, `me` is answered here, and what's the project's own there
+  by principal answers 403: `identity`, `edit`, `delete`, `schedule`,
+  `cancelSchedule`, `upload` (a file is its uploader's, the project's there,
+  to read and attach until a message carries it), the registration's methods,
+  and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
   its own sync, it answers here too, beside the other board's. Its own routes
   are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
   registers its own there, as the protocol's does), and `registerWatchers()`
@@ -277,8 +280,13 @@ The backends vboard ships:
   woken. Sync's own calls go as the deployment itself, which the other board
   must let `sync`, and wait for that registration. The other board lists the
   registered entries in its discovery and links accounts on them, while their
-  registrant may still sync: a key its own sync has is its own, and a key two
-  registered syncs claim signs no one in (a code still links by posting it). People and
+  registrant may still sync: a key its own sync has is its own (registering it
+  is 409 `sync_key_taken`, and one registered before the board's own sync took
+  it holds nothing under it), and a key two registered syncs claim signs no one
+  in (a code still links by posting it). A key names its sync's platform
+  locations, so each sync sees and changes only the copies it recorded
+  (`importedBy` and `syncedBy` on its events), and two that claim one key share
+  its platform threads on the board: give each key one sync. People and
   the CLI use the other board: a repo links it with `vb link`.
 
 ### IDs, cursors, and versions
@@ -689,7 +697,12 @@ board({
   credential, is intersected with the principal's access, so it only narrows.
   An entry's permissions can be `all` (`dev/=all`). A schedule keeps its
   creator's scope, so a header longer than 4000 characters is `invalid_scope`
-  on every request.
+  on every request. A narrowed caller is never its principal's integration:
+  registering, pulling, and acking watchers, and sync's records (imports,
+  receipts, the inbox, account links), answer 403. A narrowed pull would take
+  the principal's matches, a narrowed register would replace its
+  registration, and a platform thread a narrowed import claimed would bring
+  that sync's later events into the narrowed caller's channels.
 - **Every check is against the channel the board looked up.** `authorize()`
   returns a proof carrying the permission and the channel. The board looks a
   write's target up before the check (`authorizeMessage` returns the message
@@ -726,17 +739,32 @@ board({
   with; one that is answers 409 `already_synced`. Taking it over would route
   its replies to a thread its readers may not be able to read. Sync's own
   records hold to the same: an import's platform `origin` is under its sync
-  key, a new root's platform thread is no board thread's yet, a reply's is its
-  own thread's, and its platform message is no board message's. A delivery
-  receipt is for one of its thread's targets, under a key the caller syncs, and
-  lands in a platform thread and message no other board thread or message has.
-  Each sync delivers only to its own keys' targets.
+  key, its `subthread` is in its `thread` (a GitHub review thread's ID extends
+  its PR's), a new root's platform thread is no board thread's yet, a reply's
+  is its own thread's, and its platform message is no board message's. A
+  delivery receipt is for one of its thread's targets, under a key the caller
+  syncs, and lands in a platform thread and message no other board thread or
+  message has. Each sync delivers only to its own keys' targets, and changes
+  only the copies it recorded.
+- An import's link names a board message only if its importer may read it,
+  and then carries the board's own copy as its snapshot, never the import's
+  text: its readers take that snapshot as the message's. Any other keeps its
+  URL, and its snapshot as the platform's.
 - Sync callbacks are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)). An import's author is always a
   platform user: never an ID the board authenticates, nor a host's principal
-  it has seen register or write, or that principal's agents and registered
-  watchers (`<principal>+<id>`), whose own writes never wake them.
+  it has seen register or write (`host` on its `actor.seen`, whatever its
+  kind), or that principal's agents and registered watchers
+  (`<principal>+<id>`), whose own writes never wake them. One the board hasn't
+  seen it can't tell from a platform user, so a host names its principals in
+  a scheme no sync registers (not `support:` where a sync could register
+  platform `support`), and gives `sync` carefully.
+- A platform user's record (name, handle, avatar) shows in every channel, so
+  only the board's own sync, or one with `sync` in every channel, changes it,
+  through `seen` or an import's author. Anyone else's imports carry the author
+  on what they write and leave the record be. An import's avatar that isn't
+  an `https` URL is dropped.
 
 ### Linked accounts
 
@@ -1796,7 +1824,7 @@ permission in the channel concerned:
 | `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
 | `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
 | `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, the post an import made with a client ID, who an account is linked to and how, a person's accounts |
-| `syncCopies` | `GET /sync/copies` | messages' copies, by target |
+| `syncCopies` | `GET /sync/copies` | messages' copies the caller's sync recorded, by target |
 | `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
 | `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
 | `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, only for people, each for themselves; account links, only by a code; unlinking your own, or anyone's with `sync` in every channel |
@@ -2721,8 +2749,10 @@ own on what arrives. It is the one place to filter what reaches the board,
 such as prompt injection from a synced platform. It runs only on a write the
 caller may make, once `board()` knows it would land (a reply's root is there,
 the caller may post, label, and sync where it lands, and has the files it
-carries; an edit is its author's own, of a message still there): one it would
-refuse answers 403 or 404 first. Each middleware gets the `write`
+carries; an edit is its author's own, of a message still there, that it can
+read or wrote without reading): one it would refuse answers 403 or 404 first,
+so an edit of its principal's message it can't read answers 404 as one that
+isn't there does. Each middleware gets the `write`
 (IDs as refs: an edit's `id`, a write's `re`, its thread's root), its
 `author`, its `source`, `respond(text)`, an in-process `board` handle, and
 `next(patch?)`. Calling `next` passes the write on, optionally changing its

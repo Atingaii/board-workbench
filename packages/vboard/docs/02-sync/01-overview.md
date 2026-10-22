@@ -192,6 +192,19 @@ people in does it here, at the sign-in the code's `signIn` names. Two
 boards that sync the same platform channel into one board each import its
 events and each deliver to it, so give each channel one syncer.
 
+**A key is one sync's.** Its platform locations (`slack:C0123ABC:1727.1`) name
+the platform threads and messages that sync imports and delivers, so:
+
+- **The other board's own sync keeps its keys.** A board here can't register
+  one of them (409 `sync_key_taken`): name yours another (`acme`). That board's
+  sync signs people in for them.
+- **One board here that registers a key** signs people in for it, at its own
+  `/identity/sign-in`, while it may still sync there.
+- **Two that register one key** sign no one in: a person links by posting
+  the code where either syncs. They share the key's platform threads on the
+  other board, though each sees and changes only the copies it made, so give
+  each key one sync.
+
 ## Set up webhooks
 
 Every entry gets its webhook route automatically: `/webhooks/<key>` under the

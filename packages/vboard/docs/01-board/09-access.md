@@ -133,12 +133,15 @@ team's board sees the project, labeled with who it was: Ada via support.
 - **It never vouches for a person.** Each call goes with the project's
   credentials, with the caller's handle as its profile (`ada`, shown as
   `support/ada`), a label under the project and never who it is there, and its
-  access as [`x-board-scope`](#narrowing-a-token).
+  access as [`x-board-scope`](#narrowing-a-token). A handle that's one of this
+  board's watchers' IDs gets a number (`fix-2`), since a watcher's own writes
+  never wake it.
 - **What's the project's own there, its callers can't do.** The team's board
-  sees one principal, so editing, deleting, and scheduling, which go by it,
-  and the project's registration, sync, and links answer 403. Posts, replies,
-  reactions, labels, uploads, and reads go through. A post's `id` is its
-  caller's own.
+  sees one principal, so editing, deleting, scheduling, and uploading, which
+  go by it (a file is its uploader's until a message carries it), and the
+  project's registration, sync, and links answer 403. Posts, replies,
+  reactions, labels, and reads go through, files in messages a caller can read
+  included. A post's `id` is its caller's own.
 - **`GET /me` answers who the caller is here,** as this board verified it.
 
 ## A host's own verifier
@@ -210,6 +213,13 @@ write.
   function matches a host's IDs, like `support:customer:99`. One that no rule
   matches is refused with 403. One whose `expiresAt` has passed is refused,
   and a schedule it made is canceled `revoked`.
+- **Name your principals in a scheme no sync registers.** A sync writes as
+  the users of the platforms it registers, `support:…` for a platform named
+  `support`, and the board tells a host's principal from them only once that
+  principal has written or registered watchers. So if a sync could register
+  platform `support`, `support:customer:99` is one of its users until that
+  customer first writes. Give `sync` carefully: see
+  [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 - **To reject, throw an `HttpError` or return or throw a `Response`.** The
   board sends that response as is. Anything else thrown is a 500, so turn a
   bad credential into a 401 yourself.
@@ -313,8 +323,11 @@ through the binding's `handle(caller)`, so the middleware sees it.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
   there as any Slack, GitHub, or WhatsApp user it names, which is what a board
-  on `http()` that syncs needs on the board it uses. Give it only to the
-  deployment that runs the sync: see [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
+  on `http()` that syncs needs on the board it uses. Who those users are (name,
+  handle, avatar) shows in every channel, so only the board's own sync, or one
+  with `sync` in every channel, changes that: anyone else's imports name their
+  author and leave the record be. Give it only to the deployment that runs the
+  sync: see [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 - **`sync` attaches only a platform thread no other board thread has.** Taking
   one over would send its replies to a channel its readers may not be in, so
   it's a 409 with `already_synced`. A caller that reads the other thread's
@@ -401,6 +414,13 @@ nothing by sending one. Each entry is a pattern and its permissions, or
 `all`: `dev/=all;ci/=read`. A header the board can't read, or one longer
 than 4000 characters, is a 400 with `invalid_scope`, and the message says what
 to write.
+
+A narrowed caller is never its principal's integration. Registering,
+pulling, and acking watchers, and sync's records (imports, receipts, the
+inbox, and linking accounts), answer 403: they're its project's, with the
+token it narrowed. A narrowed pull would take its project's matches, and an
+import could claim a platform thread whose later events its project's sync
+would bring into the narrowed caller's channels.
 
 ## Schedules
 
