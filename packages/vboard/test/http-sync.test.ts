@@ -5,7 +5,7 @@ import { vercelProject } from '../src/access/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { slack } from '../src/sync/slack.ts'
 import { withUserTokens, type UserTokens } from '../src/sync/users.ts'
-import { fakePlatform } from './sync-fixtures.ts'
+import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -200,6 +200,35 @@ describe('sync on a board on http()', () => {
     await webhook({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'the password is hunter2', user: 'U_ADA' })
     await vi.waitFor(async () => expect((await read(julian, 'firehose')).map((m) => m.text)).toEqual(['the password is']))
     expect(sources).toEqual([{ kind: 'sync', key: 'slack', platform: 'slack', channel: 'slack:C1', thread: 'slack:C1:100' }])
+  })
+
+  it("does nothing with its own credentials for a request it doesn't answer", async () => {
+    const lookupByEmail = vi.fn(async () => ({ user: { id: 'U_ADA', name: 'ada', profile: { display_name: 'ada', real_name: 'Ada' } } }))
+    const conversations = { list: vi.fn(async () => ({ channels: [] })), info: vi.fn(async () => ({})), join: vi.fn(async () => ({})) }
+    const slackClient = { conversations, users: { info: async () => ({}), lookupByEmail } }
+    const s = fakePlatform('slack', withSlackClient(slackClient, false))
+    let project: ReturnType<typeof board>
+    const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const request = new Request(input, init)
+      return request.url.startsWith(BOARD_URL) ? team.fetch(request) : project.fetch(request)
+    }
+    const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })] })
+    project = board({
+      backend: http(BOARD_URL, { fetch: bearer(route, supportToken) }),
+      url: SUPPORT_URL,
+      sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never, channels: { C1: 'firehose' } }) },
+    })
+    // Anyone, with any token: the project's board answers only wake-ups and webhooks.
+    const anyone = caller((request) => project.fetch(new Request(request.url.replace(BOARD_URL, SUPPORT_URL), request)), await supportToken())
+    for (const [method, path, body] of [
+      ['POST', '/messages', { channel: 'firehose', text: 'cc @[ada@vercel.com]', sync: ['slack:#general'] }],
+      ['POST', '/schedules', { channel: 'firehose', text: 'cc @[ada@vercel.com]', in: '1h' }],
+      ['GET', '/inbox/slack?channel=%23general', undefined],
+    ] as const)
+      expect((await anyone(method, path, body)).status, `${method} ${path}`).toBe(404)
+    expect([lookupByEmail, conversations.list, conversations.info, conversations.join].map((fn) => fn.mock.calls.length)).toEqual([0, 0, 0, 0])
+    // Nor did the team's board hear of Ada from it.
+    expect(((await (await julianOn(team.fetch))('GET', '/actors')).body.actors as { id: string }[]).map((actor) => actor.id)).not.toContain('slack:user:U_ADA')
   })
 
   it("delivers to its own platforms beside the team board's own sync, each to its own targets", async () => {
