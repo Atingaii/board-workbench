@@ -2059,7 +2059,10 @@ dead-letters and holds up its thread's lane.
   post, react, edit, or delete. It then records `message.synced` as a receipt
   (`syncReceipt`), so later edits and reactions can find the platform's copy.
   On a2() the subscription runs on the `vboard-sync` consumer, and a receipt
-  is that consumer's own append.
+  is that consumer's own append. A post or an edit renders the message as it
+  is when it goes out, read again then: one that goes late (a backlog, a
+  retry) sends what its author has since edited, and nothing they deleted.
+  Each sync delivers only to its own keys' targets.
 - **Attachments go where a platform takes them.** Slack gets the files
   themselves: the text posts first, and its receipt is recorded, then the files
   upload into the same thread as a message of their own, and

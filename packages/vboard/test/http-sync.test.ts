@@ -170,8 +170,12 @@ describe('sync on a board on http()', () => {
     expect(seen).toEqual(['export is broken'])
     const labeled = ((await julian('GET', '/events?after=0')).body.events as { type: string; actor?: { id: string } }[]).find((event) => event.type === 'labels.changed')
     expect(labeled?.actor?.id).toBe('slack:user:U_ADA')
-    // Written on the board as Ada, the reply goes back to her Slack thread, as one a person wrote would.
-    await vi.waitFor(() => expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([['slack:C1:100', JSON.stringify({ markdown: '**U_ADA**: Thanks! Tracking it.' })]]))
+    // Written on the board as Ada, the reply goes back to her Slack thread, as one a person wrote would, as it is now.
+    await vi.waitFor(() => {
+      expect(s.posts.map((post) => post.threadId)).toEqual(['slack:C1:100'])
+      const shown = s.edits.filter((edit) => edit.messageId === s.posts[0]!.id).at(-1)?.text ?? s.posts[0]!.text
+      expect(shown).toBe(JSON.stringify({ markdown: '**U_ADA**: Thanks! Tracking it now.' }))
+    })
   })
 
   it("runs the team board's middleware once on a retried post from its own code, however it would answer again", async () => {

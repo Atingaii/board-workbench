@@ -1060,12 +1060,15 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     message.origin?.thread === target || (message.from !== null && keyOf(target) === message.from)
 
   async function deliverPost(event: Extract<SyncEvent, { type: 'message.posted' }>, attempt: number) {
-    const { message } = event
-    if (!message) return
-    if (message.re === null) return configure(message)
+    if (!event.message) return
+    if (event.message.re === null) return configure(event.message)
     if (event.payload.noSync) return
     const synced = await syncOf(event.payload.thread)
     if (!synced || synced.targets.length === 0) return
+    // As it is now, not as it was posted: a delivery can go out late (a backlog, a retry), and what
+    // its author has since edited goes as edited, and what they deleted doesn't go at all.
+    const message = await messageOf(event.message.id)
+    if (!message || message.deleted) return
     const actors = await actorsNow()
     const failures: Failure[] = []
     for (const target of synced.targets) {
@@ -1086,7 +1089,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   async function deliverChange(event: Extract<SyncEvent, { type: 'message.edited' | 'message.deleted' | 'reaction.added' | 'reaction.removed' }>) {
     const copies = (await copiesOf([event.payload.id]))[event.payload.id] ?? {}
     if (Object.keys(copies).length === 0) return
-    const message = event.message
+    // An edit renders the message as it is now, so one that goes out late sends nothing its author
+    // has since changed or deleted: their later edit or delete is on its way too.
+    const message = event.type === 'message.edited' ? await messageOf(event.payload.id) : event.message
+    if (event.type === 'message.edited' && (!message || message.deleted)) return
     const actors = await actorsNow()
     for (const [target, copy] of Object.entries(copies)) {
       if (!ours(target) || (event.payload.from !== null && keyOf(target) === event.payload.from)) continue

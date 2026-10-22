@@ -430,6 +430,37 @@ describe('sync', () => {
     error.mockRestore()
   })
 
+  it('delivers a reply, and an edit, as the message is when it goes out: never text its author took back', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { board, s } = setup()
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'incident' })).body.message
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    // Slack is down for a while, so the thread's deliveries back up behind the first.
+    const post = s.adapter.postMessage.bind(s.adapter)
+    let down = true
+    s.adapter.postMessage = async (threadId, message) => {
+      if (down) throw Object.assign(new Error('service_unavailable'), { data: { error: 'service_unavailable' } })
+      return post(threadId, message)
+    }
+    await julian('POST', '/messages', { re: root.id, text: 'looking' })
+    const edited = (await julian('POST', '/messages', { re: root.id, text: 'the password is hunter2' })).body.message
+    await julian('POST', `/messages/${edited.id}/edit`, { text: 'the password is in the vault' })
+    const deleted = (await julian('POST', '/messages', { re: root.id, text: 'and the key is swordfish' })).body.message
+    await julian('POST', `/messages/${deleted.id}/delete`, {})
+    down = false
+    await vi.waitFor(async () => {
+      await board.skipHold(board.servers[0]!, 'board')
+      await board.servers[0]!.drain('board')
+      expect(s.posts.map((p) => p.text)).toHaveLength(2)
+    })
+    const sent = JSON.stringify([s.posts, s.edits, s.deletes])
+    expect(sent).not.toContain('hunter2')
+    expect(sent).not.toContain('swordfish')
+    expect(s.posts.map((p) => JSON.parse(p.text).markdown)).toEqual(['**julian**: looking', '**julian**: the password is in the vault'])
+    error.mockRestore()
+  })
+
   it('uploads a text file Slack would call binary under a name it previews, and keeps its own name on the board', async () => {
     const { board, s, webhook } = setup()
     const token = await personToken()
