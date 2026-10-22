@@ -28,7 +28,7 @@ export type BoardOptions = {
   sync?: Record<string, SyncProvider>
   /** The board's public URL, which every token's audience must equal. Inferred from requests otherwise. */
   url?: string
-  /** The mount path, e.g. `/api/board`. Inferred from requests otherwise. */
+  /** The mount path, e.g. `/api/board`. Inferred from requests otherwise: the shallowest one they show. */
   basePath?: string
   /** SSE streams close after this long, before the platform's limit; clients reconnect. */
   streamMaxMs?: number

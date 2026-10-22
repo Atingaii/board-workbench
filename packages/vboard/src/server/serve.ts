@@ -555,7 +555,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       const match = route(request.method, url.pathname)
       if (!match) throw notFound(`no route: ${request.method} ${url.pathname}`)
       const { target } = match
-      if (!injected && !match.root) state.learned = match.base
+      // The mount, as requests show it. Every request reaches the handler under it, so one can only make it
+      // look deeper (`/api/board/x/messages/1`): a mount replaces the one learned only when it's above it.
+      if (!injected && !match.root && (state.learned === null || state.learned.startsWith(`${match.base}/`))) state.learned = match.base
       const boardUrl = (options.url ?? `${url.origin}${match.base}`).replace(/\/+$/, '')
 
       if (target.kind === 'board' && target.name === 'webhook') {

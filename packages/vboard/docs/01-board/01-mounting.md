@@ -91,7 +91,7 @@ token, works out the actor, and applies its [`access`](./09-access.md).
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack({…}) }`. See [Sync](../02-sync/01-overview.md) |
 | `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
-| `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise |
+| `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise: a request can only make it look deeper than it is (`/api/board/x/messages/1`), so the board keeps the shallowest it's seen |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |
 
 `a2()` takes what it keeps here, and who may use it:
