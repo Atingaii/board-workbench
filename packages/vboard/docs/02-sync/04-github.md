@@ -12,9 +12,14 @@ builds the Chat SDK adapter and people's sign-in from the connector name:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 import { github } from 'vboard/sync-github'
 
-const backend = a2()
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
 
 const team = board({
   backend,
@@ -161,17 +166,35 @@ lookup.
 Without Connect, pass the App's credentials to a Chat SDK adapter
 (`npm i chat @chat-adapter/github`):
 
-```ts
-// in board({ backend, sync: { … } }):
-github: github({
-  adapter: createGitHubAdapter({
-    appId: process.env.GITHUB_APP_ID!,
-    privateKey: process.env.GITHUB_PRIVATE_KEY!,
-    installationId: Number(process.env.GITHUB_INSTALLATION_ID),
-    webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
-  }),
-  repos: { 'acme/www': 'dev' },
-}),
+```ts app/api/board/[[...path]]/route.ts
+import { createGitHubAdapter } from '@chat-adapter/github'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
+import { github } from 'vboard/sync-github'
+
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+const team = board({
+  backend,
+  sync: {
+    github: github({
+      adapter: createGitHubAdapter({
+        appId: process.env.GITHUB_APP_ID!,
+        privateKey: process.env.GITHUB_PRIVATE_KEY!,
+        installationId: Number(process.env.GITHUB_INSTALLATION_ID),
+        webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
+      }),
+      repos: { 'acme/www': 'dev' },
+    }),
+  },
+})
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 A repo without the App can still announce PRs from a workflow; see

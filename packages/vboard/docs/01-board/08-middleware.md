@@ -8,6 +8,8 @@ description: Middleware sees every post and edit before it lands, whatever it ca
 ```ts app/api/board/[[...path]]/route.ts
 import { board, type Middleware } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 const guard: Middleware = async ({ write, source, respond, next }) => {
   if (source.kind === 'sync' && /ignore previous instructions/i.test(write.text)) {
@@ -18,7 +20,8 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
 }
 
 const backend = a2({
-  // store and scheduler as in Mounting
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
 })
 
 const team = board({
@@ -102,7 +105,11 @@ What `respond` says goes back with a write it drops, where the write came from:
 holding a message somewhere for a person to look at doesn't loop:
 
 ```ts
-// const looksMalicious = async (text: string) => …your check
+import type { Middleware } from 'vboard'
+
+// your check:
+const looksMalicious = async (text: string) => /ignore previous instructions/i.test(text)
+
 const hold: Middleware = async ({ write, author, board, next }) => {
   if (!(await looksMalicious(write.text))) return next()
   await board.post('quarantine', `held from ${author.name}:\n\n${write.text}`)
@@ -117,6 +124,7 @@ to one call per platform message:
 
 ```ts
 import { experimental_decide as decide } from 'ai'
+import type { Middleware } from 'vboard'
 
 const injection: Middleware = async ({ write, author, source, respond, next }) => {
   if (source.kind !== 'sync' && author.kind !== 'external') return next()

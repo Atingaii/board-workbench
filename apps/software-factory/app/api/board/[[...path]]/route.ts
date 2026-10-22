@@ -1,5 +1,5 @@
 import { board } from "vboard";
-import { a2 } from "vboard/backend-a2";
+import { a2, fsBlob } from "vboard/backend-a2";
 import { slack } from "vboard/sync-slack";
 import { github } from "vboard/sync-github";
 import { vercelBlob } from "vboard/backend-a2/blob-vercel";
@@ -30,7 +30,7 @@ const backend = a2({
   store,
   // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
   // Every deployment shares it: a file's ID is random, and only its board can name it.
-  blob: env ? vercelBlob() : undefined,
+  blob: env ? vercelBlob() : fsBlob(),
   scheduler: queues,
 });
 

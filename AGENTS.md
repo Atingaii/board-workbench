@@ -15,8 +15,10 @@ pnpm test           # vitest: unit, in-process server, and CLI end to end
 CI runs `pnpm check` on every PR and on `main` (`.github/workflows/check.yml`);
 its `check` job is the status a PR needs before it can land.
 
-Tests use A2's memory store and a local test issuer (`test/harness.ts`). Auth
-runs real `jose` verification against an injected JWKS; there is no bypass.
+Tests pass their pieces like any board (`packages/vboard/test/harness.ts`):
+`memory()` for the store, `memoryBlob()` for files, no scheduler unless a test
+passes one, and a local test issuer. Auth runs real `jose` verification against
+an injected JWKS; there is no bypass.
 
 ## release it
 
@@ -58,10 +60,11 @@ root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
 reply in an existing thread rather than starting one.
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
-  board posts there too. `VERCEL_ENV` only picks the store: production's Redis keys,
-  a preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. On
-  Redis the store holds A2's log and the board's tables (`<prefix>:vboard:*`),
-  which fill from the log on their own. The Redis namespace is `vboard-factory-2`,
+  board posts there too. `VERCEL_ENV` only picks the store (`a2.ts`) and where
+  files go (below): production's Redis keys, a preview's own keys in the same
+  Redis, or `sqlite()` at `.a2/dev.db` locally, imported only there. The queue is
+  `vercelQueues()` everywhere. On Redis the store holds A2's log and the board's
+  tables (`<prefix>:vboard:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-2`,
   separate from the v0 feedback bot's (`vboard-2`). A2 0.21 reads what 0.17 to
   0.20 wrote under them; work they hadn't finished when 0.21 deployed is dropped.
   Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
@@ -165,7 +168,7 @@ reply in an existing thread rather than starting one.
   `check` also runs on `pi/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
-  they're files in `.a2/attachments`. Pi attaches a screenshot to the reply
+  they're files in `.a2/attachments` (`fsBlob()`). Pi attaches a screenshot to the reply
   that links its PR when the change is visible (a captioned video, for a flow),
   never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
@@ -178,8 +181,8 @@ reply in an existing thread rather than starting one.
   `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
   every turn (add a new file to `PI_FILES` in `agent.ts`). `sitrep` is how Pi
   does a recap that moves work forward. A schedule like `vb schedule dev
-  ":sitrep: Morning recap" --label kind=task --label sitrep=morning` posts a
-  bare root that a fresh Pi picks up, so the schedule text stays a title and
+  ":sitrep: Morning recap" --at <9am> --every 1d --label kind=task --label
+  sitrep=morning` posts a bare root that a fresh Pi picks up, so the schedule text stays a title and
   the skill holds the how. A run finds the last recap by its `sitrep` label. `verify-vboard`
   tests vboard itself: it builds this checkout, a git ref in its own worktree
   (`origin/main`, to reproduce a bug before fixing it), or an npm version,
@@ -236,11 +239,12 @@ VBOARD_URL=https://vboard.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
 - Every environment syncs with the real Slack, so a local or preview board posts
-  there too. `VERCEL_ENV` only picks the store: production's Redis keys
-  (`vboard/backend-a2/store-redis-http` on the project's Upstash, prefix `vboard-2`), a
-  preview's own keys in the same Redis, or SQLite at `.a2/dev.db` locally. The
-  board's tables fill from the log on their own, so a new prefix needs nothing
-  applied. The channels are private, so they're mapped by ID.
+  there too. `VERCEL_ENV` only picks the store and where files go: production's
+  Redis keys (`vboard/backend-a2/store-redis-http` on the project's Upstash, prefix
+  `vboard-2`), a preview's own keys in the same Redis, or `sqlite()` at
+  `.a2/dev.db` locally, imported only there; files are the project's private Blob
+  store, or locally `.a2/attachments` (`fsBlob()`). The board's tables fill from
+  the log on their own, so a new prefix needs nothing applied. The channels are private, so they're mapped by ID.
 - `triage` acks each new thread in `#feedback-v0-vboard` and asks Luna's
   decision model (`openai/gpt-6-luna-decisions`) for its `kind` and how likely
   it's worth fixing (`worth=0.00`–`1.00`). A bug or feature at 0.7 or more gets
@@ -314,29 +318,30 @@ grayscale and Geist Mono; it reads the docs from its installed `vboard`.
   and under a `## FAQ`, each `###` question folds into a `<details>`.
 - **Pages link by relative file path** (`../02-sync/03-slack.md#files`), so they
   read the same on GitHub and in `node_modules`. The site turns them into URLs,
-  and a link to no page fails the build; `test/docs.test.mjs` checks anchors too.
+  and a link to no page fails the build; `apps/software-factory/test/docs.test.mjs`
+  checks anchors too.
 - **Filename prefixes order the sidebar** and are stripped from URLs:
   `02-sync/03-slack.md` is `/sync/slack`, in the group "Sync".
 - **A2's voice:** present tense, as if it ships today; short sentences; no
   em-dashes, hype, or filler; "vboard" lowercase. Samples are paste-complete,
   every live line is real API, and userland is commented out. The docs describe
-  the code: where SPEC.md and the code disagree (cursors aren't built), the code
+  the code: where SPEC.md and the code disagree (read cursors aren't built), the code
   wins. A change people will notice updates its page.
 
 ## the inspector (`vb inspect`, `src/inspect/`)
 
 A local web UI for any board, reading and writing as the CLI's identity. Check it
-with `agent-browser` against `vb inspect --no-open`; try writes against a local
-board (`apps/software-factory` with `pnpm dev`), since production syncs to Slack
-and GitHub.
+with `agent-browser` against `vb inspect --no-open`; try writes against
+`vb serve`, which syncs nothing: the factory's boards, a local `pnpm dev`
+included, post to Slack and GitHub.
 
 - **The page is just another handle.** `server.ts` serves the page, its
   bundle, and `/board/*`, a proxy that adds your credentials; the page is
   `board({ backend: http(proxy, { fetch }) })`, from the default builds, its
   `fetch` sending the per-run token. The page needs no inspector-specific API; if
   it wants something, add it to the board's API.
-- **State lives in `app/store.ts`, pure and tested.** Views merge by the log
-  index they reflect (an older view never replaces a newer one); your writes are
+- **State lives in `app/store.ts`, pure and tested.** Views merge by their
+  `version` (an older view never replaces a newer one); your writes are
   overlays until the stream confirms them. Components render from it.
 - **The proxy acts as you, so it trusts nothing but its own page.** It binds
   127.0.0.1, rejects any `Host` that isn't its own (DNS rebinding), requires the
@@ -392,8 +397,12 @@ caller (`authenticate`, `oidcTokens()` from `vboard/access` by default),
 applies `access`, runs the `middleware`, and calls the backend with the caller
 it verified (`{ identity, origin }`), which the backend trusts because only
 `board()` makes one. Nothing with side effects runs for a request before
-`access` allows it. `a2()` is the log and its engine (`store`, `scheduler`,
-`blob`); what it does outside requests asks `board()`'s policy through the
+`access` allows it. `a2()` is the log and its engine, the same in every
+environment: a `store` (SQLite at `.a2/dev.db` when none is passed, which
+serverless can't open), and a `scheduler` and `blob` only if they're passed.
+Without a scheduler, its consumers run in the request that wrote and scheduling
+answers 501 `no_scheduler`; without a blob store, it keeps no files (501
+`no_files`). What it does outside requests asks `board()`'s policy through the
 binding (`accessNow`), and what it writes for someone (a schedule's send) goes
 through the binding's handle, so the middleware sees every write once. A board
 on `http()` with no `access` answers only wake-ups and webhooks, so a repo

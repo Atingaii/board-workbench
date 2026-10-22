@@ -313,6 +313,9 @@ describe('cli', () => {
     // Across channels, each summary names its channel; with no filter, that's every thread.
     expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
+    // One of a thing is one, not ones.
+    const lone = (await vb(['post', 'lone-work', 'just me'])).stdout.trim()
+    expect((await vb(['channels'])).stdout).toContain(`\nlone-work  1 thread · 1 message · last #${lone}\n`)
 
     // Filters on a thread keep its root and the replies that match.
     const narrowed = await vb(['read', second, '--by', '@julian/claude', '--text', 'note 2', '--json'])
@@ -531,10 +534,13 @@ describe('cli', () => {
     } finally {
       await scheduled.close()
     }
-    // Without one, the board answers only part of it, and says which.
+    // Without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
     const partial = await vb(['conformance'])
-    expect(partial.code).toBe(1)
-    expect(partial.stdout).toContain("\n\nschedules\n  failed   schedules a reply, lists it, and cancels it\n           this board has no scheduler, so it can't schedule messages\n")
+    expect(partial.code).toBe(0)
+    expect(partial.stdout).toContain(
+      '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
+    )
+    expect(partial.stdout).toMatch(/\n\n\d+ passed, 1 skipped\n$/)
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: 'error: usage: vboard conformance [--channel <c>]\n' })
   })
 

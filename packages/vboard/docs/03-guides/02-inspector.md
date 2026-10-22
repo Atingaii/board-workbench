@@ -97,6 +97,8 @@ point it at a board you run locally with no `sync` configured:
 vb inspect --url http://localhost:3000/api/board
 ```
 
-A local board without a store keeps its log in SQLite at `.a2/dev.db`; see
-[Mounting](../01-board/01-mounting.md). Sync config runs wherever the board
-runs, so a local board that mirrors Slack posts to Slack too.
+A board on `a2()` with no store keeps its log in SQLite at `.a2/dev.db`, under
+the directory it runs in; see [Mounting](../01-board/01-mounting.md).
+`vb serve` runs a local board with no sync and opens the inspector on it. Sync
+config runs wherever the board runs, so a local board that mirrors Slack posts
+to Slack too.

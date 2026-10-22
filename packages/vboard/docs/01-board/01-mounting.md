@@ -12,14 +12,18 @@ npm i vboard
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const team = board({ backend: a2() })
+export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
 export const GET = team.fetch, POST = team.fetch
 ```
 
 That's a board. It answers at `/api/board`, and the CLI points at it with
 `VBOARD_URL` or `vb link`. `fetch` is its one handler; Next.js wants it under
-each method's name. Call `board()` once, at module scope. A host that
+each method's name. `a2()` keeps the board in the store you give it, or in
+SQLite at `.a2/dev.db` without one, which a serverless function can't write:
+see [Without a store](#without-a-store). Call `board()` once, at module scope.
+A host that
 serves many teams' boards creates one per team instead, and caches them: see
 [A host's own verifier](./09-access.md#a-hosts-own-verifier).
 
@@ -33,7 +37,7 @@ own people can't all read, say), mount a second route.
 
 | Backend | What it does |
 | --- | --- |
-| `a2({ store, … })` | Keeps the board in this deployment, on A2's log: its store, scheduler, and attachments |
+| `a2({ store, … })` | Keeps the board in this deployment, on A2's log: its store, and a scheduler and attachments if you give them |
 | `http(url)` | Uses the board at `url`, which keeps the log. This project reads and writes it as itself |
 | your own | Any object that answers the protocol: see [A backend of your own](#a-backend-of-your-own) |
 
@@ -103,15 +107,15 @@ any backend:
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise: a request can only make it look deeper than it is (`/api/board/x/messages/1`), so the board keeps the shallowest it's seen |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |
 
-`a2()` takes what it keeps here, and what runs it:
+`a2()` takes what it keeps here, and what runs it. It reads nothing from the
+environment: a board is what you pass, the same in development, tests, and
+production.
 
 | Option | What it does |
 | --- | --- |
-| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`. Omitted: SQLite in development, memory in tests. See [Database](./02-database.md) |
-| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`, with an optional `prefix` to share one store between boards. Omitted: files in `.a2/attachments` in development, memory in tests |
-| `scheduler` | What runs sync, watchers, retries, and scheduled messages: `vercelQueues()` from `vboard/backend-a2/scheduler-vercel`, or `qstash()` from `vboard/backend-a2/scheduler-qstash`. Omitted: one in this process in development, its tasks in memory, and none in tests |
-
-In production, `store`, `scheduler`, and `blob` are required, so every board on `a2()` answers the whole protocol. A board missing one answers every request with 500 `not_configured`, naming what's missing. It says so on its first request rather than when the route loads, since a build loads it without its runtime environment.
+| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`. See [Database](./02-database.md). Default: SQLite at `.a2/dev.db` in the working directory, everywhere. See [Without a store](#without-a-store) |
+| `scheduler` | The board's clock, for retries, leases, wake-ups, and scheduled messages: `vercelQueues()` from `vboard/backend-a2/scheduler-vercel`, `qstash()` from `vboard/backend-a2/scheduler-qstash`, or `localScheduler()` from `vboard/backend-a2/scheduler-local`. See [Without a scheduler](#without-a-scheduler) |
+| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`, with an optional `prefix` to share one store between boards, or `fsBlob(dir)` and `memoryBlob()` from `vboard/backend-a2`. See [Without a blob store](#without-a-blob-store) |
 
 `http(url, { fetch })` takes the other board's URL, and how requests reach it
 with credentials it recognizes:
@@ -184,24 +188,97 @@ platform webhooks all call them.
 The scheduler serves every A2 server behind the board: the log, sync's inbox,
 watchers, and schedules. To share one scheduler with A2 servers of your own,
 pass the same scheduler to `a2()` and to them, export the backend's `servers`
-from the board's route (`export const { scheduler, servers } = backend`), and
-hand them to its handler yourself:
+from the board's route, and hand them to its handler yourself:
 
 ```ts lib/queue.ts
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 
-// One scheduler for the board (`board({ backend: a2({ store, scheduler: queue }) })`) and your own A2 servers.
+// One scheduler for the board and your own A2 servers.
 export const queue = vercelQueues({ topic: 'vboard' })
 ```
 
-```ts
-// app/api/a2/scheduler/route.ts, with the queue shared:
+```ts app/api/board/[[...path]]/route.ts
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
+import { queue } from '@/lib/queue'
+
+const backend = a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }), scheduler: queue })
+
+export const team = board({ backend })
+export const GET = team.fetch, POST = team.fetch
+export const { servers } = backend
+```
+
+```ts app/api/a2/scheduler/route.ts
 import { queue } from '@/lib/queue'
 import { servers } from '@/app/api/board/[[...path]]/route'
 // import { ordersServer } from '@/server/orders'   // yours, created with the same queue
 
 export const POST = queue.handler(...servers /*, ordersServer */)
 ```
+
+## A dev server
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from 'vboard'
+import { a2, fsBlob } from 'vboard/backend-a2'
+import { localScheduler } from 'vboard/backend-a2/scheduler-local'
+
+// SQLite at .a2/dev.db, files in .a2/attachments, and timers in this process.
+export const team = board({ backend: a2({ scheduler: localScheduler(), blob: fsBlob() }) })
+export const GET = team.fetch, POST = team.fetch
+```
+
+`localScheduler()` keeps its timers in the process, and a restart drops the
+pending ones. It's for development, `vb serve`, tests, and long-running
+servers, never serverless functions, which stop between requests: there, use
+`vercelQueues()` or `qstash()`. `vb serve` runs this setup under `.vboard`.
+
+## Without a store
+
+A board on `a2()` with no `store` keeps its log and tables in SQLite at
+`.a2/dev.db`, relative to the working directory, in every environment. A file
+on disk suits development and a single long-running server, and survives
+restarts.
+
+A serverless function can't write there: a Vercel deployment's files are
+read-only outside `/tmp`. Every request to such a board answers 500
+`no_store`, ``can't open SQLite at .a2/dev.db: this filesystem isn't writable here, so pass a store to a2()``,
+and nothing stands in for it in memory. Pass `postgres()`, `redis()`, or
+`redisHttp()` there. Don't point `sqlite({ path })` at `/tmp`: each instance
+would keep a board of its own, gone when the instance is.
+
+## Without a scheduler
+
+A board on `a2()` with no `scheduler` still runs everything that follows a
+write: the tables it reads, [watchers](./06-watchers.md), and
+[sync](../02-sync/01-overview.md)'s deliveries and imports run in the request
+that wrote, as A2's consumers. What needs a clock works like this:
+
+- **Scheduling refuses.** `POST /schedules`, `schedule()`, and `vb schedule`
+  answer 501 `no_scheduler`:
+  ``this board has no scheduler: pass `scheduler` to `a2()` to send later``.
+  `vb conformance` reports the schedules check as not kept here.
+- **A failure waits for the next write.** A watcher run or a delivery that
+  throws is tried again when the next event reaches it, not on a clock, and
+  reads never wake it.
+- **So does what runs out.** A pulled match whose lease ran out goes to the
+  next pull, and a board on `http()` that a wake-up didn't reach is woken by
+  the next match after its wait.
+
+That suits a tool or a script's own board. A production board with watchers or
+sync takes a scheduler, so a failure is retried on a clock and nothing waits
+for traffic.
+
+## Without a blob store
+
+A board on `a2()` with no `blob` keeps no files. `POST /attachments`, a post,
+schedule, or import that carries `attachments`, and a download answer 501
+`no_files`: ``this board keeps no files: pass `blob` to `a2()` ``. Sync brings a
+platform's files over as links to where they live, one line each, and the rest
+of the board works. `vb conformance` reports the attachments check as not kept
+here.
 
 ## The handle
 
@@ -312,8 +389,9 @@ The shortest one is another backend with a method changed:
 ```ts app/api/board/[[...path]]/route.ts
 import { board, HttpError, type Backend } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-const kept = a2()
+const kept = a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) })
 
 // a2()'s board, except that its messages are never deleted.
 const backend: Backend = {
@@ -387,7 +465,7 @@ curl https://www.example.com/api/board
 
 ```json
 {
-  "version": "0.5.2",
+  "version": "0.14.0",
   "url": "https://www.example.com/api/board",
   "audience": "https://www.example.com/api/board",
   "team_id": "team_a1b2c3",
@@ -405,36 +483,24 @@ for the project Vercel says the board's host is a deployment of, so a board
 must be served from its own project's deployments or domains (or localhost).
 See [Identity](./03-identity.md#from-your-terminal).
 
-## Defaults by environment
-
-What `a2()` uses when you leave an option out:
-
-| Option | Development | Tests | Production |
-| --- | --- | --- | --- |
-| `store` | SQLite at `.a2/dev.db` | memory | an error at startup |
-| `blob` | files in `.a2/attachments` | memory | none: uploads answer `no_blob_store`, and the rest of the board works |
-| `scheduler` | none | none | none |
-
-Development state survives restarts. Sync and watchers need a scheduler in
-production. [Scheduled messages](./07-schedules.md) need one everywhere: without
-it, scheduling answers 501.
-
 ## Production checklist
 
-- **A store.** `postgres()`, with its tables applied: see
-  [Database](./02-database.md#postgres). A board without one doesn't start.
+- **A store.** `postgres()`, with its tables applied (see
+  [Database](./02-database.md#postgres)), or Redis. The default SQLite file
+  can't open on Vercel.
 - **A blob store,** if anyone attaches files: `blob: vercelBlob()`.
-- **A scheduler,** if you use sync, watchers, or scheduled messages, mounted in
-  [its own route](#the-scheduler-route) with its queue trigger.
+- **A scheduler,** if you use sync, watchers, or scheduled messages:
+  `vercelQueues()`, mounted in [its own route](#the-scheduler-route) with its
+  queue trigger.
 - **A long enough function.** Live tails hold an SSE stream open for
   `streamMaxMs` (280 seconds by default). Set `maxDuration` to 300 on the
   board's route, or lower `streamMaxMs` below your limit.
 - **Deployment Protection.** If Vercel Authentication protects the
-  deployment, the CLI says so:
-  `error: <url> is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (…)`.
-  Set `VERCEL_AUTOMATION_BYPASS_SECRET` to the project's Protection Bypass for
-  Automation secret; the CLI and a handle in Node send it as `x-vercel-protection-bypass`.
-  Webhooks need a way through too; Vercel Connect forwards them through
-  protection.
+  deployment, the CLI and a handle in Node get through with your
+  `vercel login`, finding the project's Protection Bypass for Automation and
+  sending it as `x-vercel-protection-bypass`. Elsewhere, set
+  `VERCEL_AUTOMATION_BYPASS_SECRET` to it. When neither gets through, the CLI
+  says so and names where the secret lives. Webhooks need a way through too;
+  Vercel Connect forwards them through protection.
 - **Access.** Access to the board is access to its Vercel project: everyone
   who should post needs it. See [Identity](./03-identity.md).

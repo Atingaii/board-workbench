@@ -6,7 +6,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
-import { a2, type A2Options } from '../src/backend-a2/index.ts'
+import { a2, memoryBlob, type A2Options } from '../src/backend-a2/index.ts'
 import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
@@ -59,7 +59,7 @@ export function mount(options: MountOptions) {
     ...(!rest.authenticate && auth ? { authenticate: oidcTokens(auth) } : {}),
     ...('url' in options ? { url } : {}),
   })
-  // Read when a test asks: a board missing a piece in production builds none of them.
+  // Read when a test asks.
   const lazy = (read: () => unknown) => ({ get: read, enumerable: true })
   return Object.defineProperties(Object.assign(created, { backend, scheduler: backend.scheduler }), {
     servers: lazy(() => backend.servers),
@@ -68,12 +68,16 @@ export function mount(options: MountOptions) {
   }) as typeof created & { backend: typeof backend; scheduler: typeof backend.scheduler } & Pick<typeof backend, 'servers' | 'session' | 'store'>
 }
 
-/** A board on a memory store whose tokens come from a local test issuer. */
+/**
+ * A board on a memory store, with its files in memory, whose tokens come from a local test issuer.
+ * It has no scheduler unless a test passes one, and `blob: undefined` keeps no files.
+ */
 export function testBoard(options: MountOptions = {}) {
   const clock = testClock()
   const store = memory({ clock })
   const created = mount({
     store,
+    blob: memoryBlob(),
     project: { id: PROJECT_ID, teamId: TEAM_ID },
     auth: testAuth,
     ...options,
@@ -91,7 +95,7 @@ export function testBoard(options: MountOptions = {}) {
     const sessions = [`${server.contract.name}\u001f${session}`, 'vboard\u001fboard']
     await vi.waitFor(async () => {
       for (const at of sessions) {
-        const cursors = await store.log!.cursors(at)
+        const cursors = await store.log.cursors(at)
         expect(cursors.filter((cursor) => cursor.claimHolder !== null)).toEqual([])
       }
     })

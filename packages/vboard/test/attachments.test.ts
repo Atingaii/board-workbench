@@ -100,14 +100,5 @@ describe('attachments', () => {
     )
     expect(chunked.status).toBe(413)
     expect(sent).toBeLessThanOrEqual(6 * 1024 * 1024)
-
-    vi.stubEnv('NODE_ENV', 'production')
-    try {
-      // A production board needs somewhere to keep files, as every board answers the whole protocol.
-      const { client: production } = await setup()
-      await expect(production.upload({ data: PNG, name: 'shot.png' })).rejects.toMatchObject({ status: 500, code: 'not_configured', message: expect.stringContaining('blob') })
-    } finally {
-      vi.unstubAllEnvs()
-    }
   })
 })

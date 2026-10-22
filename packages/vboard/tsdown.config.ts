@@ -19,6 +19,7 @@ export default defineConfig([
       'backend-a2/store-memory': 'src/store/memory.ts',
       'backend-a2/scheduler-vercel': 'src/scheduler/vercel.ts',
       'backend-a2/scheduler-qstash': 'src/scheduler/qstash.ts',
+      'backend-a2/scheduler-local': 'src/scheduler/local.ts',
       'backend-http': 'src/backend-http/index.default.ts',
       'backend-http.node': 'src/backend-http/index.ts',
       sync: 'src/sync/index.ts',

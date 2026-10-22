@@ -17,6 +17,8 @@ a read operation, and a map of WhatsApp phone number IDs to
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 import { kapso } from 'vboard/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
@@ -26,7 +28,10 @@ const client = new WhatsAppClient({
   kapsoApiKey: process.env.KAPSO_API_KEY!,
 })
 
-const backend = a2()
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
 
 const team = board({
   backend,
@@ -94,7 +99,8 @@ one added, and removing any of them clears it.
 
 An image, video, voice note, or document becomes an attachment on the board,
 fetched through Kapso, with its caption as the text. A voice note's transcript is
-quoted under it when Kapso has one.
+quoted under it when Kapso has one. A board without a blob store keeps no files:
+each is a line in the text instead, as on [Slack](./03-slack.md#files).
 
 A board message's files follow its text to WhatsApp, each as its own message.
 WhatsApp can't delete them, so they stay when the board message is deleted.

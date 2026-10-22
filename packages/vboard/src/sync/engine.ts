@@ -50,8 +50,23 @@ const clampText = (raw: string, files = false) => {
 }
 
 /** A platform file the board couldn't bring over gets a line in the text instead. */
-const fileNote = (file: ExternalFile, why: string) =>
-  `📎 ${file.name ?? 'a file'}${file.size !== undefined ? ` (${fileSize(file.size)})` : ''} didn't come over: ${why}`
+const fileNote = (file: ExternalFile, why: string, name = file.name ?? 'a file') =>
+  `📎 ${name}${file.size !== undefined ? ` (${fileSize(file.size)})` : ''} didn't come over: ${why}`
+
+/** What a board that keeps no files answers for every file route. */
+const keepsNoFiles = (error: unknown) => error instanceof HttpError && error.code === 'no_files'
+
+/**
+ * A platform file on a board that keeps no files: a link to where it lives on the platform, which
+ * its readers there can open, or its name when the platform gave no URL.
+ */
+const fileLink = (file: ExternalFile) => {
+  const name = file.name ?? 'a file'
+  if (!file.url || !/^https?:\/\//.test(file.url)) return fileNote(file, 'this board keeps no files')
+  const label = name.replace(/[[\]\\]/g, (char) => `\\${char}`)
+  const url = file.url.replace(/[ ()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+  return fileNote(file, 'this board keeps no files', `[${label}](${url})`)
+}
 
 /** A platform message's text with its file notes after it. */
 const withNotes = (text: string, notes: string[]) =>
@@ -389,17 +404,17 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /**
    * A platform message's files, onto the board: each is fetched through its
    * adapter (Chat SDK's `rehydrateAttachment`, so any platform that has it works)
-   * and uploaded. A file that can't come over (too big, no blob store, the
-   * platform refused) becomes a line in the text; a failed fetch retries the
-   * message a few times first.
+   * and uploaded. A file that can't come over (too big, the platform refused)
+   * becomes a line in the text, and on a board that keeps no files, a line that
+   * links it where it lives; a failed fetch retries the message a few times first.
    */
   async function importFiles(platform: SyncProvider, files: ExternalFile[], attempt: number) {
     const attachments: Attachment[] = []
     const notes: string[] = []
-    let noBlob = false
+    let noFiles = false
     for (const file of files.slice(0, ATTACHMENTS_PER_MESSAGE_MAX)) {
-      if (noBlob) {
-        notes.push(fileNote(file, 'this board has no blob store'))
+      if (noFiles) {
+        notes.push(fileLink(file))
         continue
       }
       if (file.size !== undefined && file.size > ATTACHMENT_BYTES_MAX) {
@@ -432,9 +447,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       try {
         attachments.push((await call('upload', { data, name, type: file.mimeType || typeOf(name) })).attachment)
       } catch (error) {
-        if (!(error instanceof HttpError && error.code === 'no_blob_store')) throw error
-        noBlob = true
-        notes.push(fileNote(file, 'this board has no blob store'))
+        if (!keepsNoFiles(error)) throw error
+        noFiles = true
+        notes.push(fileLink(file))
       }
     }
     for (const file of files.slice(ATTACHMENTS_PER_MESSAGE_MAX))
@@ -899,7 +914,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         sentId = sent.message
         files = sent.files
       } catch (error) {
-        if (!platform.refusesFiles(error)) throw error
+        // A platform that won't take them, or a board that no longer keeps them: the text says they were there.
+        if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error
         body = renderFor(target, message, actors, true)
         sentId = (await platform.post(native(place), 'thread', body)).message
         files = null
@@ -955,7 +971,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       ids = (await uploadMessageFiles(message, target, copy.thread)).files
     } catch (error) {
       // Retried, and if it gives up, the `failed` receipt says it was the files: the text is there.
-      if (!platform.refusesFiles(error)) throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
+      if (!platform.refusesFiles(error) && !keepsNoFiles(error))
+        throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
       await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, true)).catch((edit: unknown) =>
@@ -1017,13 +1034,12 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
             }
             return platform.post(native(target), 'channel', body)
           }
-          const files = await messageFiles(root)
           try {
-            const sent = await platform.post(native(target), 'channel', { ...body, files })
+            const sent = await platform.post(native(target), 'channel', { ...body, files: await messageFiles(root) })
             uploaded = sent.files ?? []
             return sent
           } catch (error) {
-            if (!platform.refusesFiles(error)) throw error
+            if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error
             uploaded = null
             return platform.post(native(target), 'channel', renderFor(target, root, actors, true))
           }

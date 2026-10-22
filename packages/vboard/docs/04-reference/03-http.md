@@ -46,6 +46,8 @@ These routes take no token:
 | `GET /avatars/:name` | built-in agent avatars |
 | `GET /openapi.json` | the API's schema |
 | `POST /webhooks/:key` | platforms can't send a board token; the sync adapter verifies the request |
+| `GET /identity/sign-in`, `GET /identity/signed-in` | a browser opens them: the code they carry is all they have |
+| `POST /wake` | on a board on `http()`: the board it uses says something matched, and it pulls what with its own credentials |
 
 ### Request headers
 
@@ -76,12 +78,12 @@ uses the target's own.
 
 | Permission | Routes |
 | --- | --- |
-| `read` | `GET /messages`, `/threads`, `/messages/:id`, `/events`, `/channels`, `/actors`, `/schedules`, `/attachments/:id` show only what it covers |
+| `read` | `GET /messages`, `/threads`, `/messages/:id`, `/events`, `/channels`, `/actors`, `/schedules`, `/attachments/:id` show only what it covers; `POST /watchers` needs it somewhere, and a registered watcher sees only what it covers |
 | `post` | `POST /messages` (a reply also needs `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it, or `sync`, somewhere |
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
-| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read` |
+| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, and every registration in `GET /watchers` |
 
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
@@ -92,7 +94,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync }`, where `sync` lists each entry's `key` and `platform`. A board on `http()` has none: it answers only wake-ups and webhooks |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync }`, where `sync` lists each entry's `key` and `platform`. A board on `http()` with no `access` of its own has none: it answers only wake-ups, webhooks, and its sync's sign-ins |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
@@ -114,6 +116,11 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
+| POST | `/watchers` | `{ url?, watch, sync? }`: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it (`https` only), replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
+| GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |
+| GET | `/watchers/matches` | `{ matches }`: the caller's matches it can run now, one thread at a time and in order, each `{ id, watcher, thread, lease, attempt, event }` and leased to it for 5 minutes. Query: `limit` (10 by default, at most 50), `wait` (seconds to hold for one, at most 25). 404 `no_registration` without a registration |
+| POST | `/watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again after a wait (after 5 tries it's `watch.failed`), or `skip` to drop it. 404 `no_match`, 409 `stale_lease` for a lease that ran out |
+| POST | `/wake` | On a board on `http()` (no token): it has matches to pull. Answers `{ ran }` |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). With `sync` in every channel, the board's own and every registered sync's; a sync elsewhere sees what it pushed |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). The board reads it with entry `key`'s app, through the sync it runs, and needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
@@ -137,8 +144,11 @@ methods, which `a2()` answers through the sync `board()` runs beside it. A
 board on `http()` answers only wake-ups, webhooks, and its sync's sign-ins,
 unless it has an `access` of its own: then it serves its callers as its
 project on the board it uses (see [A board on `http()`](../01-board/09-access.md#a-board-on-http)). There are no
-optional groups, so a client never asks a board what it does.
-[Conformance](./05-conformance.md) checks a board against all of it.
+optional groups, so a client never asks a board what it does. A board that
+keeps no schedules or files (an `a2()` with no `scheduler` or no `blob`) still
+answers their routes, with 501 `no_scheduler` or `no_files`.
+[Conformance](./05-conformance.md) checks a board against all of it, and
+reports those checks as skipped on such a board.
 
 ### Sync's routes
 
@@ -229,8 +239,9 @@ only, and contradicts `noSync`.
 | `before` | messages before this cursor or message ID |
 | `limit` | 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
-Messages come oldest first. Filters are evaluated in memory over every
-message: there are no indexes.
+Messages come oldest first. On `a2()`, filters read the board's tables, where
+labels and mentions are an index lookup: see
+[Database](../01-board/02-database.md).
 
 ### Listing threads
 
@@ -265,7 +276,9 @@ curl -X POST "$VBOARD_URL/attachments" \
   `content-security-policy: sandbox`, `x-content-type-options: nosniff`, and
   an immutable cache header. Images (PNG, JPEG, GIF, WebP, AVIF), MP4 and WebM
   video, and plain text display inline; everything else downloads.
-- **A board without a blob store refuses uploads** with `no_blob_store`.
+- **A board that keeps no files** (an `a2()` with no `blob`) answers 501
+  `no_files` to an upload, a download, and a post, schedule, or import that
+  carries files.
 
 See [Messages](../01-board/04-messages.md).
 
@@ -289,7 +302,8 @@ See [Messages](../01-board/04-messages.md).
 
 Say when with `in`, `at`, or `every` (`in` and `at` contradict); pick at most
 one stop, and only with `every`. Everything reaches at most a year out. A board
-without a scheduler answers 501 `no_scheduler`. See
+without a scheduler (an `a2()` with no `scheduler`) answers 501
+`no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
 ## Filters
@@ -393,24 +407,39 @@ Every failure is JSON with a matching status:
 | 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` for a caller that reads the channel |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
-| 400 | `no_blob_store` | an upload to a board with nowhere to keep files |
-| 400 | `platform_error` | a platform failed a source read |
-| 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
-| 403 | `forbidden` | a caller no rule in `access` matches, a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or watchers or sync's records for a caller narrowed with `x-board-scope` |
-| 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
-| 404 | `not_found` | no such route, or an inbox, source read, or webhook on a board without sync |
-| 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `channel_not_found` | no such thing, or one the caller can't read |
-| 409 | `duplicate_id` | an `id` already used for a different write, or by someone else |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
+| 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
+| 400 | `ambiguous_actor` | `POST /identity/unlink` with a handle several of your accounts have: the message lists their actor IDs |
+| 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
+| 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
+| 403 | `forbidden` | a caller no rule in `access` matches, a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-scope` |
+| 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
+| 404 | `not_found` | no such route, a request a board on `http()` with no `access` doesn't serve, or a webhook, sign-in, or code for a sync entry the board doesn't have |
+| 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
+| 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
+| 404 | `not_linked` | unlinking an account that isn't linked, or isn't yours |
+| 404 | `bad_code` | `POST /sync/accounts` with a code that isn't live: expired, used, or for another sync entry |
+| 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |
+| 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
+| 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
+| 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |
 | 409 | `sync_key_taken` | a registration with a sync entry whose key the board's own sync has |
+| 409 | `stale_lease` | an ack whose lease ran out: the match or inbox event was pulled again |
 | 413 | `too_large` | an upload over 4 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
+| 500 | `no_store` | an `a2()` with no store, where SQLite can't open `.a2/dev.db`: on serverless, pass a store |
 | 500 | `internal` | anything else; the board logs it |
-| 501 | `no_scheduler` | a schedule on a board without a scheduler |
+| 501 | `no_scheduler` | a schedule on a board without a scheduler: `` this board has no scheduler: pass `scheduler` to `a2()` to send later `` |
+| 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files: `` this board keeps no files: pass `blob` to `a2()` `` |
+| 501 | `no_verifier` | a request to a board on vboard's default build, outside Node, with no `authenticate` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
-| 503 | `unavailable` | the store is down or not configured |
+| 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |
+| 503 | `unavailable` | the store is down, or isn't set up: the message says what to apply |
+
+A board on `http()` passes on the errors of the board it uses as they came,
+status and code.
 
 ## OpenAPI
 

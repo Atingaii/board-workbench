@@ -594,7 +594,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           if (prefix) out(prefix)
           group = prefix
         }
-        out(`${prefix ? '  ' : ''}${channel.path}  ${channel.threads} threads · ${channel.messages} messages · last #${channel.lastIndex}`)
+        const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+        out(`${prefix ? '  ' : ''}${channel.path}  ${count(channel.threads, 'thread', 'threads')} · ${count(channel.messages, 'message', 'messages')} · last #${channel.lastIndex}`)
       }
       return 0
     }

@@ -18,8 +18,9 @@ Not mapped yet, and where to start:
   sandbox, start it in the background next to the board and drive it with `curl`, or locally with
   `agent-browser`; its proxy requires a per-run token and checks `Host` and `Origin`.
 - **Schedules** (`vb schedule … --in 1d`, `vb schedules`, `vb schedule cancel`).
-- **Identity, sync, sources, inbox, stuck**: need a board with sync entries; the local board has
-  none, so these answer with errors there. Verify them against a dev server of an app instead.
+- **Identity, sync, sources, inbox**: need a board with sync entries; the local board has none,
+  so these show nothing or answer with errors there. Verify them against a dev server of an app
+  instead.
 
 Every drive assumes:
 

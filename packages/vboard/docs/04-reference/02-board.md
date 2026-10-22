@@ -24,6 +24,9 @@ where the board lives:
 | none, or `http(url)` | Whoever its `fetch`'s credentials say, with the profile `VBOARD_AS` or the coding agent it runs in picks |
 | `a2()` | The board's own code: `vboard:client` |
 
+The short samples below act on that `team`, and on `msg`, the message
+[`post`](#post) returns.
+
 `vboard` has two builds, picked by export condition, and so does
 `vboard/backend-http`:
 
@@ -136,7 +139,8 @@ await team.post('errors-www', {
 | `attachments` | Files from `upload`, or their IDs, at most 10 |
 
 `noSync` and `sync` together are rejected. A retry with the same `id` doesn't
-post twice; a retry whose write differs from the first fails with
+post twice: it gets back the post that landed, whatever its text and labels
+say. The same `id` for a post in another channel or thread fails with
 `duplicate_id`. The `id` is the handle's own, so no one else can post with it
 first: over HTTP it goes as `key:<principal>:…`, derived from it and the
 profile, which the board takes only from that principal, and on `a2()` the
@@ -204,7 +208,9 @@ download(id: string, opts?: { signal?: AbortSignal }): Promise<Response>
 `upload` stores one file (at most 4 MB) and returns
 `{ id, name, type, size }`, as the board recorded them. The type comes from
 `type`, the `Blob`, or the name's extension. `download` returns the board's
-`Response`: the bytes, with the file's `content-type`.
+`Response`: the bytes, with the file's `content-type`. A board that keeps no
+files (an `a2()` with no `blob`) fails both, and a post that carries files,
+with 501 `no_files`.
 
 ```ts
 // anywhere in Node:
@@ -274,8 +280,9 @@ await team.cancelSchedule(s.id)
 `schedules` lists pending schedules, oldest first (`all` adds done and
 canceled ones); `re` is any message in a thread. A schedule's creator may
 cancel it, and so may `manage` in its channel; `canceled` is false when it was
-already done or canceled. It needs a board
-with a scheduler. See [Scheduled messages](../01-board/07-schedules.md).
+already done or canceled. A board without a scheduler (an `a2()` with no
+`scheduler`) fails `schedule` with 501 `no_scheduler`. See
+[Scheduled messages](../01-board/07-schedules.md).
 
 ## Reading
 
@@ -354,13 +361,15 @@ the other board's, which `http()` reads for its handle.
 
 ```ts
 identity(): Promise<IdentityView>  // { principal, links, unlinked, cursor }
+unlinkAccount(account: string): Promise<{ ok: true; actor: string }>
 ```
 
 `links` are the Slack and GitHub accounts linked to you. `unlinked` names the
 sync entries you haven't linked yet, such as `['github']`. Boards older than it
 leave it out. Link one with `syncCode(key)`, below, or `vb identity link <key>`
 (see [the CLI](./01-cli.md#identity)): `identity()` shows the link once it's
-made.
+made. `unlinkAccount` unlinks one of yours, by actor ID or handle, and answers
+the actor it unlinked: 404 `not_linked` when none of yours matches.
 
 ### inbox and readSource
 
@@ -401,6 +410,24 @@ uses them through its backend, so you need them only to sync a board yourself.
 Each needs [`sync`](./03-http.md#what-sync-grants) where it lands, but
 `syncCode`, which is for people: a code to post from the account, and
 `signIn`, when the entry signs people in, the sign-in that carries it.
+
+### Registered watchers
+
+```ts
+register(input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: { key: string; platform: string; signIn?: boolean }[] }): Promise<RegistrationView>
+watchers(): Promise<RegistrationView[]>
+matches(opts?: { limit?: number; wait?: number; signal?: AbortSignal }): Promise<MatchView[]>
+ack(id: string, body: { lease: string; error?: string; skip?: boolean }): Promise<{ ok: true }>
+```
+
+What a board on `http()` does on the board it uses, one method each:
+`register` replaces the caller's registration (its watchers, at most 32, its
+sync entries, and where to wake it); `matches` pulls what they matched, each leased to the caller
+for 5 minutes; `ack` says how one went (done, an `error` to try again, or
+`skip`). `watchers()` lists the caller's own registration, and every one for
+`manage` in every channel. `board()` does all of it for its watchers, so you
+need them only to run watchers yourself. See
+[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
 
 ## Live
 
@@ -462,8 +489,9 @@ response as the board sent it, errors included. `as` acts as another profile
 for one request. It's what `vb inspect`'s proxy uses.
 
 `team.url` is this board's own URL once it knows it: `url`, or on Vercel its
-domain and mount. A handle on a board elsewhere has none of its own; its
-`discovery()` names the other board's.
+domain and mount. Until then, as in a script, it's `http://in-process.board`,
+which only the handle reaches. A handle on `http()` finds the board it uses in
+`discovery()`.
 
 ## Errors
 
@@ -484,12 +512,15 @@ try {
 }
 ```
 
-The handle raises these itself, before the board answers. `status` is 0
-when there was no HTTP response.
+The handle raises these itself, before the board answers. `board()` throws
+`no_board` and `invalid_config` as it's made, and `wait` throws
+`invalid_duration`, each with `status` 0. A call that never reaches the board
+fails with the status its URL answered, or 502.
 
 | Code | When |
 | --- | --- |
-| `no_board` | no URL to use, or nothing answers discovery there |
+| `no_board` | no URL to use, or no board answers discovery there |
+| `unreachable` | nothing answers at the board's URL |
 | `wrong_audience` | the board's discovery names another URL: use that one |
 | `no_project` | the board doesn't know its Vercel project, so the handle can't mint a token for it |
 | `not_logged_in` | no Vercel login to mint a token: run `vercel login` |
@@ -497,13 +528,13 @@ when there was no HTTP response.
 | `wrong_project` | the board's host is a deployment of a project other than the one its discovery names, so the handle mints no token for it |
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
-| `ambiguous_agent` | several agent environments are detected: pick a `profile` |
+| `ambiguous_agent` | the environment shows several coding agents at once: `as(null)` acts as yourself |
 | `invalid_config` | the project link isn't a valid board URL |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 
-A response that isn't the board's JSON error becomes `http_error`. The board's
-own codes are in the [HTTP API](./03-http.md#errors).
+An answer that isn't the board's JSON error becomes `remote_error`, with
+status 502. The board's own codes are in the [HTTP API](./03-http.md#errors).
 
 `duration('30m')` is exported too: it turns a duration into milliseconds.
 
@@ -511,6 +542,15 @@ own codes are in the [HTTP API](./03-http.md#errors).
 
 The handle in the board's route is what your own server code acts through: a
 webhook receiver, a cron job. Export it next to the handler:
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
+
+export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
+export const GET = team.fetch, POST = team.fetch
+```
 
 ```ts app/api/deploys/route.ts
 import { team } from '@/app/api/board/[[...path]]/route'

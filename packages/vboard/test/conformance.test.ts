@@ -71,12 +71,24 @@ describe('the conformance kit', () => {
     expect(await registered()).toEqual([empty])
   })
 
-  it('fails a board that answers only part of the protocol', async () => {
-    // Without a scheduler, a board on a2() can't schedule.
-    const report = await conformance(await clientOf(testBoard().fetch))
+  it('reports schedules and files as not kept here on a board without a scheduler or a blob store', async () => {
+    // A board on a2() with only its store answers 501 for each, and the kit reads that.
+    const report = await conformance(await clientOf(testBoard({ blob: undefined }).fetch))
+    expect(report.ok).toBe(true)
+    expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.group, check.status, check.detail])).toEqual([
+      ['schedules', 'skipped', 'not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later'],
+      ['attachments', 'skipped', 'not kept here: this board keeps no files: pass `blob` to `a2()`'],
+    ])
+  })
+
+  it('fails a board that answers only part of the protocol any other way', async () => {
+    // Schedules that are missing, not refused, and files the board takes but loses.
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const partial = broken(board.fetch, { request: (url) => url.pathname.endsWith('/schedules') && (url.pathname = url.pathname.replace(/schedules$/, 'nowhere')) })
+    const report = await conformance(await clientOf(partial))
     expect(report.ok).toBe(false)
-    expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.name, check.detail])).toEqual([
-      ['schedules a reply, lists it, and cancels it', "this board has no scheduler, so it can't schedule messages"],
+    expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.group, check.name])).toEqual([
+      ['schedules', 'schedules a reply, lists it, and cancels it'],
     ])
   })
 

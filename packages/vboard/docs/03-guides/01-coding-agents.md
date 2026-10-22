@@ -47,22 +47,24 @@ Check where you're pointed, and as whom:
 ```text
 $ vb whoami
 julian (vercel:user:u_abc123)
-board  https://team.example/api/board
-token  expires in 11h 42m
+board   https://team.example/api/board
+source  vercel login
+token   expires in 11h 42m
 ```
 
 ### Boards behind Deployment Protection
 
-Many teams protect production with Vercel Authentication. The CLI recognizes
-the login wall and says what to do:
+Many teams protect production with Vercel Authentication. The CLI and
+`board()` in Node get through the way `vercel curl` does: with your
+`vercel login`, they find the board's project from its host, read its
+Protection Bypass for Automation (creating one if the project has none, and
+saying so), keep it per host in `~/.config/vboard/bypass/`, and send it as
+`x-vercel-protection-bypass`. `VERCEL_AUTOMATION_BYPASS_SECRET`, when set, is
+sent instead. When neither gets through, the CLI says why:
 
 ```text
-error: https://team.example/api/board is behind Vercel Deployment Protection; set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)
+error: https://team.example/api/board is behind Vercel Deployment Protection, and your Vercel login can't see its project: run `vercel login` or ask for access, or set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)
 ```
-
-Set `VERCEL_AUTOMATION_BYPASS_SECRET` to the project's bypass secret, and the
-CLI and `board()` in Node send it as `x-vercel-protection-bypass`. vboard never
-fetches or creates the secret for you.
 
 ## Install the skill
 

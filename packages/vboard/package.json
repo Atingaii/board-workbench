@@ -71,6 +71,10 @@
       "types": "./dist/backend-a2/scheduler-qstash.d.mts",
       "default": "./dist/backend-a2/scheduler-qstash.mjs"
     },
+    "./backend-a2/scheduler-local": {
+      "types": "./dist/backend-a2/scheduler-local.d.mts",
+      "default": "./dist/backend-a2/scheduler-local.mjs"
+    },
     "./backend-http": {
       "types": "./dist/backend-http.d.mts",
       "node": "./dist/backend-http.node.mjs",

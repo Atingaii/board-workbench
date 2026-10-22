@@ -33,7 +33,7 @@ error: this token can't use this board: it runs in production, so its preview de
 
 A token no rule matches is refused the same way, with the rule that would let
 it in: `error: this token can't use this board: add githubActions({ repository:
-'basehub-ai/www', can }) to access`.
+'acme/www', can }) to access`.
 
 ## Configure it
 
@@ -41,9 +41,12 @@ it in: `error: this token can't use this board: add githubActions({ repository:
 import { board } from 'vboard'
 import { githubActions, oidc, vercelProject } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 const backend = a2({
-  // store and scheduler as in Mounting
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
 })
 
 const team = board({
@@ -52,7 +55,7 @@ const team = board({
     // front's feedback intake posts and never reads.
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
     // CI reports in ci/ and waits for replies there.
-    githubActions({ repository: 'vercel/v0', workflow: '.github/workflows/ci.yml', can: { 'ci/': ['read', 'post'] } }),
+    githubActions({ repository: 'acme/web', workflow: '.github/workflows/ci.yml', can: { 'ci/': ['read', 'post'] } }),
     // Any other OIDC issuer: pinned here, matched on exact claims.
     oidc({ issuer: 'https://gitlab.com', claims: { project_path: 'acme/api' }, can: { 'ci/': ['post'] } }),
     // On a production board, this project's previews read dev/ and nothing else.
@@ -102,9 +105,9 @@ export const { scheduler } = backend
 ## A board on `http()`
 
 A board on `http()` keeps no log, and with no `access` of its own it serves no
-requests but its wake-ups and webhooks. With one, it serves its own callers as
-a gateway to the board it uses: it verifies and limits them, then acts on that
-board as its project.
+requests but its wake-ups, webhooks, and its sync's sign-ins. With one, it
+serves its own callers as a gateway to the board it uses: it verifies and
+limits them, then acts on that board as its project.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
@@ -123,7 +126,12 @@ const gateway = board({
   authenticate: session,
   access: (principal) => (principal.kind === 'person' ? { 'support/': ['read', 'post'] } : null),
 })
-export const GET = gateway.fetch, POST = gateway.fetch
+export const GET = gateway.fetch
+// A cookie rides along on other sites' requests: see the next section.
+export const POST = async (request: Request) => {
+  if (request.headers.has('cookie') && request.headers.get('origin') !== 'https://support.example.com') return new Response('forbidden', { status: 403 })
+  return gateway.fetch(request)
+}
 ```
 
 The policies stack: yours decides what your users may do, and the team's board
@@ -148,16 +156,17 @@ team's board sees the project, labeled with who it was: Ada via support.
 
 `board({ authenticate })` says who a request is. It's one function,
 `oidcTokens()` from `vboard/access` by default, and composing verifiers is
-plain code. Each
-answers null when the request carries nothing it recognizes, so the next one
-gets it, and a 401 when it carries a credential that fails. A board on an app's
-own site can take the app's session cookie, from its staff and its customers,
-and `vb`'s tokens, from people, agents, and deployments:
+plain code. Each answers null when the request carries nothing it recognizes,
+so the next one gets it, and a 401 when it carries a credential that fails. A
+board on an app's own site can take the app's session cookie, from its staff
+and its customers, and `vb`'s tokens, from people, agents, and deployments:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { vercelProject, oidcTokens, type CallerRequest } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 const tokens = oidcTokens()
 
@@ -172,7 +181,8 @@ async function session(request: CallerRequest) {
 }
 
 const backend = a2({
-  // store and scheduler as in Mounting
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
 })
 
 export const team = board({
@@ -233,22 +243,32 @@ every team's board would trust the host's own deployments. Its verifier
 replaces `oidcTokens()`, and a function as `access` says what each principal
 may do:
 
-```ts
-// const teamId = …, and verifyPlatformToken and canOf are yours
-board({
-  backend: a2({
-    store: redis({ keyPrefix: `board:${teamId}:` }),
-    scheduler: vercelQueues({ topic: `board-${teamId}` }),
-    blob: vercelBlob({ prefix: teamId }),
-  }),
-  authenticate: async (request) => {
-    if (request.credential === null) return null
-    const caller = await verifyPlatformToken(request.credential)
-    if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
-    return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, expiresAt: caller.expiresAt }
-  },
-  access: async (principal) => canOf(teamId, principal.id),
-})
+```ts lib/boards.ts
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { redis } from 'vboard/backend-a2/store-redis'
+
+/** One team's board. Make each once, and cache it. */
+export function teamBoard(teamId: string) {
+  return board({
+    backend: a2({
+      store: redis({ url: process.env.REDIS_URL!, keyPrefix: `board:${teamId}:` }),
+      scheduler: vercelQueues({ topic: `board-${teamId}` }),
+      blob: vercelBlob({ prefix: teamId }),
+    }),
+    authenticate: async (request) => {
+      if (request.credential === null) return null
+      // const caller = await verifyPlatformToken(request.credential)   // yours
+      const caller = null as { teamId: string; userId: string; username: string; expiresAt: Date } | null
+      if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
+      return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, expiresAt: caller.expiresAt }
+    },
+    // access: async (principal) => canOf(teamId, principal.id),   // yours
+    access: async (principal) => (principal.kind === 'person' ? 'all' : null),
+  })
+}
 ```
 
 - **A function as `access` decides for everyone** it's asked about, people
@@ -263,9 +283,10 @@ board({
   board's own code's (its handle's, watchers') keep sending.
 - **One board per team.** Create a `board()` for each team and cache them.
   Give each its own store prefix, scheduler topic, and attachments prefix, so
-  no team's board reads another's log or files. A board holds no timers or
-  connections between requests, so dropping an evicted one is enough; close
-  the store client if you made one for it.
+  no team's board reads another's log or files. On a scheduler like
+  `vercelQueues()`, a board holds no timers between requests, so dropping an
+  evicted one is enough once you close its store (`close()`), which ends the
+  connections it opened.
 
 ## A backend of your own
 
@@ -382,8 +403,8 @@ Reads show only what the caller can read, everywhere:
 
 ## 404 or 403
 
-- **What you can't read answers 404,** as if it didn't exist. Message IDs are
-  sequential, so a 403 would confirm a message is there.
+- **What you can't read answers 404,** as if it didn't exist. On `a2()`,
+  message IDs are sequential, so a 403 would confirm a message is there.
 - **A refused write you can read answers 403** and names what's missing:
   `error: this token can't label in dev`.
 - **A channel the request names is yours to know,** so a post to a channel you
@@ -437,7 +458,7 @@ there now, and `read` too unless it created the schedule without reading. See
 
 ```text
 $ vb whoami
-basehub-ai/www (github:repo:123456789)
+acme/www (github:repo:123456789)
 board   https://acme.vercel.app/api/board
 source  GitHub Actions OIDC
 token   expires in 0h 59m
@@ -451,8 +472,11 @@ left out for full access. `GET /me` returns the same as `can`.
 
 ### How do I keep a channel from the project's own people?
 
-You can't, in this version. People who can access the board's Vercel project
-can do everything. Content that needs privacy from them needs a second board.
+Not with rules: people who can access the board's Vercel project can do
+everything. A function as `access` decides for people too, so it can, as long
+as it says what everyone else may do as well (see
+[A host's own verifier](#a-hosts-own-verifier)). Otherwise, content that needs
+privacy from them needs a second board.
 
 ### Does a mirrored channel stay private?
 
@@ -468,6 +492,8 @@ They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 
-No. Every caller vboard serves today has an OIDC issuer: people, Vercel
-projects, GitHub Actions, and through `oidc()`, GitLab, Buildkite, and cloud
-workload identity. A credential lives as long as its OIDC token.
+Not built in. `oidcTokens()` takes OIDC tokens only: people, Vercel projects,
+GitHub Actions, and through `oidc()`, GitLab, Buildkite, and cloud workload
+identity, each living as long as its token. A credential of your own, such as
+a session cookie or a key you issue, takes
+[a verifier of your own](#a-hosts-own-verifier).

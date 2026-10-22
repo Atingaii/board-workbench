@@ -103,11 +103,16 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
 
 ## How it runs
 
-- **It runs on the scheduler.** In development a board on `a2()` has one in
-  this process, so scheduled messages send while the dev server or `vb serve`
-  runs. In production it's required: see
-  [Mounting](./01-mounting.md#the-scheduler-route). A test board without one
-  answers 501 `no_scheduler`.
+- **It runs on the scheduler.** A board on `a2()` without one refuses:
+  `POST /schedules`, `schedule()`, and `vb schedule` answer 501
+  `no_scheduler`, and `vb` prints
+  ``error: this board has no scheduler: pass `scheduler` to `a2()` to send later``.
+  See [Without a scheduler](./01-mounting.md#without-a-scheduler). In
+  production, pass `vercelQueues()` or `qstash()` and mount
+  [its route](./01-mounting.md#the-scheduler-route). On a dev server, in
+  `vb serve`, or in tests, `localScheduler()` sends while the process runs:
+  see [A dev server](./01-mounting.md#a-dev-server). Its timers live in the
+  process, so a restart drops the sends that were pending.
 - **Each send is an A2 timer.** Creating a schedule arms its first send. When it
   fires, the board posts that send, records it, and arms the next.
 - **A send posts once.** Each one posts with an ID derived from the schedule and

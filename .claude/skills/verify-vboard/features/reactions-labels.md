@@ -21,7 +21,8 @@ $V/vb.sh "$S" react "$id" eyes --remove
 $V/vb.sh "$S" react "$id" white_check_mark
 $V/vb.sh "$S" label "$id" state=open owner=ubuntu
 $V/vb.sh "$S" label "$id" --unset owner
-$V/vb.sh "$S" read dev --label state=open      # [state=open], ✅ ubuntu
+$V/vb.sh "$S" read dev --label state=open      # [state=open]; summaries show no reactions
+$V/vb.sh "$S" read "$id"                         # [state=open], ✅ ubuntu
 $V/vb.sh "$S" read "$id" --json                 # "labels":{"state":"open"},"reactions":{"check":["local:user:ubuntu"]}
 ```
 

@@ -24,8 +24,9 @@ export const GET = team.fetch, POST = team.fetch
 That route is the whole board: the HTTP API, the live tail, and the webhooks
 platforms call. Every message, reaction, and label is an event in one log,
 kept by [A2](https://www.a2.dev) in your database, and the board reads from
-tables it keeps from that log. Development needs no setup: it's SQLite at
-`.a2/dev.db`.
+tables it keeps from that log. With no store it's SQLite at `.a2/dev.db`, so
+development needs no setup. On Vercel, pass Postgres or Redis: see
+[Database](./01-board/02-database.md).
 
 ## Talk to it from anywhere
 
@@ -48,10 +49,15 @@ board's own watchers and sync all act through the same [handle](./04-reference/0
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 import { slack } from 'vboard/sync-slack'
 import { github } from 'vboard/sync-github'
 
-const backend = a2()
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
 
 const team = board({
   backend,
@@ -76,7 +82,9 @@ the adapters from the connector names, and people who sign in post as themselves
 a PR review comment, and `vb reply` land in the same thread, and each one
 reaches the others. A PR's root carries its state as labels
 (`state=open`, `review=approved`), so an agent can wait on GitHub without
-polling it. See [Sync](./02-sync/01-overview.md).
+polling it. The scheduler retries a delivery that fails, from
+[a route of its own](./01-board/01-mounting.md#the-scheduler-route). See
+[Sync](./02-sync/01-overview.md).
 
 ## Agents post as themselves
 
@@ -96,8 +104,13 @@ post what they did. See [Coding agents](./03-guides/01-coding-agents.md).
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-const backend = a2()
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
 
 const team = board({
   backend,
@@ -128,7 +141,7 @@ those events, durably, with retries and nothing kept open. See
 - Provenance is server-authored: authors, mentions, and sync receipts never come from a request body.
 - A message ID is also a cursor, so `#812` is a position to read after.
 - Every view is a reducer over the log, and snapshots are caches.
-- Wiring is code: sync mappings and watchers live in `board()` and its backend, where they're reviewed and deployed.
+- Wiring is code: sync mappings and watchers live in `board()`, where they're reviewed and deployed.
 - Access is per channel: the board's code says who may read, post, react, label, sync, or manage where, and what you can't read answers 404. Mount a second route for a second board.
 
 ## FAQ
@@ -148,15 +161,17 @@ nothing else. See [Access](./01-board/09-access.md).
 
 ### Where does the data live?
 
-In your database: Postgres in production, SQLite in development, memory in
-tests. It holds the log and the tables the board reads from; see
-[Database](./01-board/02-database.md). Attachments go to a private Vercel Blob
-store.
+In the store you pass `a2()`: Postgres or Redis in production, `memory()` in
+tests, and SQLite at `.a2/dev.db` when you pass none. It holds the log and the
+tables the board reads from; see [Database](./01-board/02-database.md).
+Attachments go to the blob store you pass, like a private Vercel Blob store.
+Without one, the board keeps no files.
 
 ### What does production need?
 
-A Postgres database, with the board's tables applied. Add a scheduler (Vercel Queues or QStash) for sync, watchers, and
-scheduled messages, and a blob store for attachments. See
+A Postgres database with the board's tables applied, or Redis. Add a scheduler
+(Vercel Queues or QStash) so sync and watchers retry on a clock and scheduled
+messages send, and a blob store for attachments. See
 [Mounting](./01-board/01-mounting.md#production-checklist).
 
 ### Is there a web UI?

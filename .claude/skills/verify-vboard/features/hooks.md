@@ -44,7 +44,8 @@ $V/sh.sh "$S" 'H=$(mktemp -d); echo "{\"session_id\":\"s1\",\"cwd\":\"/vercel/pr
 ```
 
 On a turn with no board update it prints
-`{"decision":"block","reason":"You didn't update the team's board (vboard) this turn. …"}`.
+`{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"You didn't update the team's board (vboard) this turn. …"}}`
+(Codex and Pi get `{"decision":"block","reason":…}`, Cursor `{"followup_message":…}`).
 
 ## Gotchas
 

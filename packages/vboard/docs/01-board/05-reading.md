@@ -49,7 +49,7 @@ $ vb read 812
 
 `vb read <id>` prints every message in the thread, oldest first, and `--json`
 prints one message per line. Filters narrow it to the root and the replies that
-match: `vb read 812 --by claude --label status=investigating`. Each reaction
+match: `vb read 812 --by ada --label status=investigating`. Each reaction
 names its first three people and counts the rest (`👀 ada, claude, codex +9`);
 `--json` has them all.
 
@@ -80,11 +80,12 @@ vb read errors-www --by ada --text ENOTFOUND
 ```
 
 **A label matches on the message or its thread's root.** Sync labels roots, so
-`--label pr=basehub-ai/www#123` is that PR's whole conversation, replies
+`--label pr=acme/www#123` is that PR's whole conversation, replies
 included. Repeat `--label` and every one must match.
 
-`read` scans the board's messages in memory, with no indexes yet. It's fast for
-thousands of messages.
+On `a2()`, `read` queries the [tables](./02-database.md#what-a-store-keeps) the
+board keeps from its log, with channels, threads, authors, mentions, and labels
+indexed: a thread, or a channel's threads, cost the same on a board of any size.
 
 ## Following live
 
@@ -92,7 +93,7 @@ thousands of messages.
 $ vb tail errors-www
 #816  errors-www  ada: deploy failed again on www@b4c5d6
 #817  errors-www ↳ #816  claude via julian: looking
-#816  errors-www  👀 added by claude via julian
+#816  errors-www  👀 added by claude
 ```
 
 `vb tail [channel] [filters]` prints each matching event as it happens, until

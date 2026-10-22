@@ -14,8 +14,8 @@ Either way, a provider translates between the platform and the board, and the
 board does the rest: it validates and stores every incoming event before
 answering, orders imports per external thread and deliveries per board thread,
 retries, skips echoes, records copy and file receipts, and runs the default
-imports and your [callbacks](./02-callbacks.md). Durable state lives in A2;
-a provider keeps only SDK caches and credentials.
+imports and your [callbacks](./02-callbacks.md). Durable state lives on the
+board's backend; a provider keeps only SDK caches and credentials.
 
 ## A native provider
 
@@ -148,6 +148,7 @@ dropped. If storing fails, the webhook answers 500 so the platform retries.
 | `singleReaction` | `false` | One reaction per person per message, as on WhatsApp. |
 | `uploadsFiles` | `false` | Files go to the platform with `uploadFiles`; otherwise each gets a line in the text. |
 | `render` | the label and text | The outgoing body; see [render](./02-callbacks.md#render). |
+| `users` | `null` | People's own tokens, `{ authorize, token }` (`UserTokens` from `vboard/sync`), to post as them and link accounts by signing in. |
 
 ## Optional methods
 
@@ -161,6 +162,8 @@ Each has a default that does nothing, or says the platform can't:
 | `fetchFile(file)` | Files in |
 | `fetchRoot(thread)` | Recovering a root when a reply arrives in a thread the board hasn't seen |
 | `fetchLink(link)` | Reading a linked message the platform didn't describe |
+| `permalink(event)` | A callback's `permalink()`: the platform's own link to the event's message |
+| `whoAmI(token)`, `postAs(token, target, kind, body)`, `editAs(…)`, `deleteAs(…)` | Posting as a person, with `users` |
 | `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
 | `mention(actor)` | A board mention in the platform's native form |
 | `findByEmail(email)` | `@[ada@acme.com]` mentions |

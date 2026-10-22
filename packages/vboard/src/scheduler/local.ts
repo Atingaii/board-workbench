@@ -10,10 +10,11 @@ import {
 const MAX_DELAY = 2 ** 31 - 1
 
 /**
- * A scheduler in this process, for development and `vb serve`: each task runs at its time on a
- * timer, so consumers, retries, and scheduled messages work with nothing else running. Tasks
- * live in memory, and a restart drops the pending ones: production takes a queue, `vercelQueues()`
- * or `qstash()`.
+ * A scheduler in this process (`vboard/backend-a2/scheduler-local`): each task runs at its time on
+ * a timer, so retries, leases, wake-ups, and scheduled messages work with nothing else running.
+ * Its timers live in the process, and a restart drops the pending ones, so it's for development,
+ * `vb serve`, tests, and long-running servers, never serverless functions, which stop between
+ * requests: there, use `vercelQueues()` or `qstash()`.
  */
 export function localScheduler(): A2Scheduler {
   let servers: readonly DrainableServer[] = []
