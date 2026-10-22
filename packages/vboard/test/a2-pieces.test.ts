@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -37,6 +37,23 @@ function bare(env: string) {
 
 afterEach(() => vi.unstubAllEnvs())
 
+/**
+ * Whether a directory chmodded to 555 refuses this process a write: not for root, nor for a process
+ * that may override file permissions (`CAP_DAC_OVERRIDE`), as some CI containers run.
+ */
+function readOnlyHolds(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), 'vboard-probe-'))
+  chmodSync(dir, 0o555)
+  try {
+    writeFileSync(join(dir, 'probe'), '')
+    return false
+  } catch {
+    return true
+  } finally {
+    chmodSync(dir, 0o755)
+  }
+}
+
 describe('a2() with no store', () => {
   /** Runs `body` with the working directory at a new temporary directory, prepared by `setup`. */
   async function inDir(body: (dir: string) => Promise<void>, setup: (dir: string) => Promise<void> = async () => {}) {
@@ -74,7 +91,7 @@ describe('a2() with no store', () => {
       await chmod(join(dir, '.a2'), 0o555)
     },
   }
-  it.skipIf(process.getuid?.() === 0).each(Object.entries(readOnly))('says what to pass on every request where SQLite can\'t open: %s', async (_, setup) => {
+  it.skipIf(!readOnlyHolds()).each(Object.entries(readOnly))('says what to pass on every request where SQLite can\'t open: %s', async (_, setup) => {
     vi.stubEnv('NODE_ENV', 'production')
     await inDir(async (dir) => {
       const board = testBoard({ store: undefined })
