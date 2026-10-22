@@ -259,6 +259,24 @@ describe('a function among the access rules', () => {
     expect((await as('support:user:7')).status).toBe(200)
   })
 
+  it("keeps a sync from writing as a host's principal that wrote, or its profiles, though it registered nothing", async () => {
+    const tenant = supportBoard((fn) => [vercelProject({ project: 'prj_sync', can: 'all' }), fn], customers)
+    // Two of the host's external principals write, one as a profile of its own, and neither registers anything.
+    const write = (cookie: string, headers: Record<string, string> = {}) =>
+      tenant.fetch(new Request(`${BOARD_URL}/messages`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', ...headers }, body: JSON.stringify({ channel: 'support/billing', text: 'refund please' }) }))
+    expect((await write('session=customer-42')).status).toBe(201)
+    expect((await write('session=customer-43', { 'x-board-profile': 'helper' })).status).toBe(201)
+    const sync = caller(tenant.fetch, await deploymentToken('sync', 'prj_sync'))
+    expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'support', platform: 'support' }] })).status).toBe(200)
+    const as = (id: string) => sync('POST', '/sync/imports', { op: 'post', author: { id, handle: 'x', name: 'X', avatar: null, isBot: false }, from: 'support', channel: 'support/billing', text: `as ${id}` })
+    for (const id of ['support:customer:42', 'support:customer:43+helper']) {
+      const denied = await as(id)
+      expect([denied.status, denied.body.error?.message], id).toEqual([403, `${id} is someone this board signs in, not a platform user: sync can't write as them`])
+    }
+    // One the board has never seen is what the access page says to keep out of a sync's reach: an ID scheme no sync registers.
+    expect((await as('support:customer:44')).status).toBe(200)
+  })
+
   it('leaves a principal to the next rule when it returns undefined', async () => {
     const asked: string[] = []
     const passes: RuleFunction = (principal) => void asked.push(principal.id)

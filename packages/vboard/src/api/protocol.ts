@@ -104,6 +104,7 @@ export type Protocol = {
   syncReceipt: { input: Input<typeof SyncReceiptBody>; output: { ok: true; attached?: boolean } }
   syncThread: { input: { thread: string }; output: SyncThreadView }
   syncFind: { input: Input<typeof SyncFindQuery>; output: SyncFindView }
+  /** Messages' copies on platforms that the caller's sync recorded, by target: another sync's never show. */
   syncCopies: { input: Input<typeof SyncCopiesQuery>; output: SyncCopiesView }
   syncRoots: { input: Input<typeof SyncRootsQuery>; output: { roots: MessageView[] } }
   /** Platform events into the caller's inbox, deduplicated by their platform IDs. */

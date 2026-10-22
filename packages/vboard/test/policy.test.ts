@@ -75,22 +75,53 @@ describe('a board on http() with an access of its own', () => {
    * session cookie and gives each what `can` says. The team's board lets the project read and post
    * in support/ and read dev.
    */
-  function gateway(can: Record<string, Can>) {
+  function gateway(can: Record<string, Can>, watch: Record<string, Watcher> = {}) {
     const remote = testBoard({ access: [vercelProject({ project: 'prj_support', can: { 'support/': ['read', 'post'], dev: ['read'] } })] })
     let project: ReturnType<typeof board>
     const { seen, fetch } = team(remote, () => project)
     const users: Record<string, HostPrincipal> = {
       'session=ada': { id: 'app:user:ada', kind: 'person', handle: 'ada.lovelace' },
       'session=root': { id: 'app:user:root', kind: 'person', handle: 'julian' },
+      'session=fix': { id: 'app:user:fix', kind: 'person', handle: 'Fix' },
     }
+    const backend = http(BOARD_URL, { fetch })
     project = board({
-      backend: http(BOARD_URL, { fetch }),
+      backend,
       url: SUPPORT_URL,
       authenticate: (request) => users[request.headers.get('cookie') ?? ''] ?? null,
       access: (principal) => can[principal.id] ?? null,
+      watch,
     })
-    return { remote, project, seen, as: (cookie: string | null) => withCookie(project.fetch, cookie) }
+    return { remote, project, backend, seen, as: (cookie: string | null) => withCookie(project.fetch, cookie) }
   }
+
+  it("never labels a caller with its own watchers' profiles, so a caller's write still wakes them", async () => {
+    const fix: Watcher = { tail: 'support/', run: () => {} }
+    const { remote, backend, as } = gateway({ 'app:user:fix': { 'support/': ['read', 'post'] } }, { fix })
+    await backend.registerWatchers()
+    // A caller whose handle is the watcher's ID: on the team's board, the watcher's writes are by `<project>+fix`.
+    const posted = await as('session=fix')('POST', '/messages', { channel: 'support/billing', text: 'my invoice is wrong' })
+    expect(posted.body.message.by).toMatchObject({ actor: `${SUPPORT}+fix-2`, profile: 'fix-2' })
+    const queue = remote.servers.at(-1)!.session(`watch:@${SUPPORT}`)
+    await vi.waitFor(async () =>
+      expect((await queue.history()).flatMap((event) => (event.type === 'watch.matched' ? [(event.payload as { watcher?: string }).watcher] : []))).toEqual(['fix']),
+    )
+  })
+
+  it("doesn't upload for its callers: on the board it uses, a file is the project's until a message carries it", async () => {
+    const { remote, project, seen } = gateway({ 'app:user:ada': { 'support/': ['read', 'post'] } })
+    const julian = await julianOn(remote.fetch)
+    const upload = (fetch: (request: Request) => Promise<Response>, url: string, headers: Record<string, string>) =>
+      fetch(new Request(`${url}/attachments`, { method: 'POST', headers: { 'content-type': 'text/plain', ...headers }, body: 'the invoice' }))
+    const refused = await upload(project.fetch, SUPPORT_URL, { cookie: 'session=ada' })
+    expect([refused.status, ((await refused.json()) as { error: { code: string } }).error.code]).toEqual([403, 'forbidden'])
+    expect(seen.filter((request) => new URL(request.url).pathname.endsWith('/attachments'))).toEqual([])
+    // A file in a message she can read is hers to download, as any reader's.
+    const { attachment } = (await (await upload(remote.fetch, BOARD_URL, { authorization: `Bearer ${await personToken()}` })).json()) as { attachment: { id: string } }
+    await julian('POST', '/messages', { channel: 'support/billing', text: 'the invoice', attachments: [attachment.id] })
+    const download = await project.fetch(new Request(`${SUPPORT_URL}/attachments/${attachment.id}`, { headers: { cookie: 'session=ada' } }))
+    expect([download.status, await download.text()]).toEqual([200, 'the invoice'])
+  })
 
   it('serves its callers within it, as its project on the board it uses, labeled with who they are', async () => {
     const { remote, seen, as } = gateway({ 'app:user:ada': { 'support/': ['read', 'post'] } })

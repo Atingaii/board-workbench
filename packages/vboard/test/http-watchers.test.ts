@@ -22,7 +22,10 @@ vi.mock('@vercel/oidc', async (original) => ({ ...(await original<typeof import(
  * The team's board on a2(), and v0's board on http() using it, calling each other in-process:
  * the team's board wakes v0's at `<V0_URL>/wake`, and v0's pulls and writes back over HTTP.
  */
-function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercelProject>[0]['can'] = 'all') {
+type Can = Parameters<typeof vercelProject>[0]['can']
+
+/** v0's access on the team's board: what `can` says, or what it says at each call, which a test changes. */
+function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null) = 'all') {
   const queue = fakeQueue()
   const woken: string[] = []
   /** Each wake-up's headers, as the board sent them. */
@@ -37,7 +40,10 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
   }
   const remote = testBoard({
     scheduler: queue.scheduler,
-    access: [vercelProject({ project: 'prj_v0', can }), vercelProject({ project: 'prj_marketing', can: 'all' })],
+    access: [
+      typeof can === 'function' ? (principal: { id: string }) => (principal.id === V0 ? can() : undefined) : vercelProject({ project: 'prj_v0', can }),
+      vercelProject({ project: 'prj_marketing', can: 'all' }),
+    ],
     transport: {
       post: (url, init) => {
         woken.push(url)
@@ -372,8 +378,8 @@ describe('a wake-up through Deployment Protection', () => {
 })
 
 /** The queue as v0 sees it through the API, registered without a URL so nothing wakes it. */
-async function queued(tail = 'feedback') {
-  const t = team()
+async function queued(tail = 'feedback', can: Can | (() => Can | null) = 'all') {
+  const t = team({}, can)
   const v0 = caller(t.remote.fetch, await v0Token())
   expect((await v0('POST', '/watchers', { watch: { fix: { tail } } })).status).toBe(200)
   const julian = await julianOn(t.remote.fetch)
@@ -468,21 +474,43 @@ describe('pulling matches', () => {
   })
 
   it("drops a match its registrant can't read anymore", async () => {
-    const { t, julian, pull } = await queued()
+    let can: Can = 'all'
+    const { t, julian, pull } = await queued('feedback', () => can)
     await julian('POST', '/messages', { channel: 'feedback', text: 'meant for v0' })
     const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
     await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
-    // A token narrowed to another channel since: the match is skipped, not handed out.
-    expect(await pull({ 'x-board-scope': 'other=read' })).toEqual([])
-    expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.skipped')
+    // The team's access took feedback away since: the match is skipped, not handed out.
+    can = { other: ['read'] }
     expect(await pull()).toEqual([])
+    expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.skipped')
+    can = 'all'
+    expect(await pull()).toEqual([])
+  })
+
+  it('refuses a caller narrowed with x-board-scope, which leaves its registration and matches as they were', async () => {
+    const { t, v0, julian, pull, ack } = await queued()
+    await julian('POST', '/messages', { channel: 'feedback', text: 'meant for v0' })
+    const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
+    await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
+    const narrowed = caller(t.remote.fetch, await v0Token(), { 'x-board-scope': 'other=read' })
+    const refusal = { status: 403, body: { error: { code: 'forbidden', message: "this token is narrowed with x-board-scope: registering and running watchers is its project's job" } } }
+    // Its pull would have dropped the match it can't read, and its register replaced v0's whole registration.
+    expect(await narrowed('GET', '/watchers/matches')).toEqual(refusal)
+    expect(await narrowed('POST', '/watchers', { watch: {} })).toEqual(refusal)
+    expect((await queue.history()).map((event: { type: string }) => event.type)).not.toContain('watch.skipped')
+    expect((await v0('GET', '/watchers')).body.watchers.map((found: { watch: object }) => Object.keys(found.watch))).toEqual([['fix']])
+    const [match] = await pull()
+    expect(match!.event.message.text).toBe('meant for v0')
+    expect(await narrowed('POST', `/watchers/matches/${match!.id}/ack`, { lease: match!.lease })).toEqual(refusal)
+    expect((await ack(match!)).status).toBe(200)
   })
 
   it('shows what a match links to only as its puller may read it now', async () => {
     // A Slack message in feedback links to one in security, which v0 could read when it matched.
     const s = fakePlatform('slack')
+    let can: Can = 'all'
     const remote = testBoard({
-      access: [vercelProject({ project: 'prj_v0', can: 'all' }), vercelProject({ project: 'prj_sync', can: 'all' })],
+      access: [(principal) => (principal.id === V0 ? can : undefined), vercelProject({ project: 'prj_sync', can: 'all' })],
       sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'feedback', C2: 'security' } }) },
     })
     const webhook = (body: unknown) =>
@@ -504,9 +532,9 @@ describe('pulling matches', () => {
     expect((await sync('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'feedback', text: `see ${permalink}`, links })).status).toBe(200)
     const queue = remote.servers.at(-1)!.session(`watch:@${V0}`)
     await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
-    // Narrowed to feedback since, it still gets the match, but nothing of the message in security.
-    const narrowed = caller(remote.fetch, await v0Token(), { 'x-board-scope': 'feedback=read' })
-    const [match] = (await narrowed('GET', '/watchers/matches')).body.matches
+    // Down to feedback since, it still gets the match, but nothing of the message in security.
+    can = { feedback: ['read'] }
+    const [match] = (await v0('GET', '/watchers/matches')).body.matches
     expect(match.event.message.text).toContain(permalink)
     // In the message it matched, and in its event's own payload.
     expect(match.event.message.links).toEqual([{ url: permalink, message: null, snapshot: null, unavailable: 'not_readable' }])

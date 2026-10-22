@@ -60,6 +60,29 @@ describe('middleware', () => {
     expect(seen).toEqual([])
   })
 
+  it("answers an edit of its principal's message it can't read as one that isn't there, before it runs", async () => {
+    const seen: string[] = []
+    const noEdits: Middleware = async ({ write, respond, next }) => {
+      if (write.kind !== 'edit') return next()
+      seen.push(write.text)
+      await respond('no edits')
+    }
+    const board = testBoard({ middleware: [noEdits] })
+    // Julian wrote it where he reads; the same principal narrowed to posting there didn't, so it isn't its to change.
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    const plan = (await julian('POST', '/messages', { channel: 'secret', text: 'the plan' })).body.message
+    const writeOnly = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-scope': 'secret=post' })
+    const there = await writeOnly('POST', `/messages/${plan.id}/edit`, { text: 'changed' })
+    const absent = await writeOnly('POST', '/messages/999/edit', { text: 'changed' })
+    expect([there.status, there.body.error.code]).toEqual([404, 'message_not_found'])
+    expect([absent.status, absent.body.error.code]).toEqual([404, 'message_not_found'])
+    expect(seen).toEqual([])
+    // One it wrote without reading is its own: the middleware sees its edit.
+    const blind = (await writeOnly('POST', '/messages', { channel: 'secret', text: 'from the sandbox' })).body.message
+    expect((await writeOnly('POST', `/messages/${blind.id}/edit`, { text: 'changed' })).status).toBe(422)
+    expect(seen).toEqual(['changed'])
+  })
+
   it('drops an edit, keeping the text the message had', async () => {
     const board = testBoard({ middleware: [guard] })
     const julian = await person(board)

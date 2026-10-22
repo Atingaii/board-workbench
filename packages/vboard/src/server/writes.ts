@@ -55,6 +55,17 @@ export type WriteOrigin = {
   config?: SyncTarget[]
 }
 
+/**
+ * The `actor.seen` a write carries, or null: who its author is, as the board's record of them
+ * says, unless the board knows that already. A platform user's record is board-wide, so a write
+ * whose identity doesn't keep it (`records: false`) leaves it as it is. A host's principal and its
+ * profiles are recorded as the host's, which sync never writes as.
+ */
+function seenFor(identity: Identity, actors: ActorsState) {
+  if (identity.records === false) return null
+  return actorSeen(identity.actor, actors, identity.principal.facts?.issuer === 'host')
+}
+
 /** The actors a write can mention: the ones the board knows, plus the ones an email named. */
 const knownWith = (actors: ActorsState, found: Actor[]): ActorsState =>
   found.length === 0 ? actors : { ...actors, byId: { ...actors.byId, ...Object.fromEntries(found.map((a) => [a.id, a])) } }
@@ -183,6 +194,8 @@ export type PostInput = WriteOrigin & {
   links?: Link[]
   /** The schedule send that posts it. */
   schedule?: { id: number; n: number }
+  /** The principal of the sync elsewhere that imports it, whose copy its `origin` is. */
+  importedBy?: string | undefined
 }
 
 /**
@@ -279,7 +292,7 @@ async function commitPost(
     }
   }
 
-  const seen = actorSeen(identity.actor, actors)
+  const seen = seenFor(identity, actors)
   // Emails sync knows are mentions by now: board() resolved them. The rest are plain text.
   const { text, found } = await withEmailMentions(input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
@@ -319,6 +332,7 @@ async function commitPost(
         ...(input.links?.length ? { links: input.links } : {}),
         ...(input.schedule ? { schedule: input.schedule } : {}),
         ...(identity.principal.access.readable(channel!) ? {} : { blind: true as const }),
+        ...(input.importedBy !== undefined ? { importedBy: input.importedBy } : {}),
       },
     },
     ...synced,
@@ -420,7 +434,7 @@ export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ 
 
 async function commitEdit(ctx: WriteContext, input: EditInput, message: Message): Promise<{ unknownMentions?: string[] }> {
   const { state: actors } = await ctx.session.state(actorsReducer)
-  const seen = actorSeen(input.identity.actor, actors)
+  const seen = seenFor(input.identity, actors)
   const { text, found } = await withEmailMentions(input.text)
   const named = found.map((actor) => actorSeen(actor, actors)).filter((event) => event !== null)
   const { mentions, unknown } = resolveMentions(
@@ -480,7 +494,7 @@ export async function writeReaction(
   const message = spent(input.authorized, 'react')
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
-  const seen = actorSeen(input.identity.actor, actors)
+  const seen = seenFor(input.identity, actors)
   await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
     type: input.remove ? 'reaction.removed' : 'reaction.added',
     payload: {
@@ -500,7 +514,7 @@ export async function writeLabels(
   const message = spent(input.authorized, 'label')
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
-  const seen = actorSeen(input.identity.actor, actors)
+  const seen = seenFor(input.identity, actors)
   await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
     type: 'labels.changed',
     payload: {

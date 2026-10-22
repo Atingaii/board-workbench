@@ -87,8 +87,11 @@ function isAvatarUrl(value: string): boolean {
   }
 }
 
-/** An `actor.seen` event, or null when the board already knows these details. */
-export function actorSeen(seen: Actor, known: ActorsState) {
+/**
+ * An `actor.seen` event, or null when the board already knows these details. `host`: the actor is
+ * a host's principal or one of its profiles, which the board records once.
+ */
+export function actorSeen(seen: Actor, known: ActorsState, host = false) {
   const existing = known.byId[seen.id]
   // Platforms don't always send an avatar (GitHub comments via Chat SDK omit it,
   // its webhooks include it): a missing one keeps the avatar the board knows.
@@ -98,7 +101,8 @@ export function actorSeen(seen: Actor, known: ActorsState) {
     existing.kind === actor.kind &&
     existing.handle === actor.handle &&
     existing.name === actor.name &&
-    existing.avatar === actor.avatar
+    existing.avatar === actor.avatar &&
+    (!host || existing.host)
   )
     return null
   return {
@@ -110,6 +114,7 @@ export function actorSeen(seen: Actor, known: ActorsState) {
       handle: toStorable(actor.handle),
       name: toStorable(actor.name),
       avatar: actor.avatar,
+      ...(host ? { host: true as const } : {}),
     },
   }
 }

@@ -67,6 +67,16 @@ export const actorKind = (kind: z.infer<typeof SeenActorKind>): ActorKind => (ki
 
 export const Handle = z.string().min(1).max(128).refine(storable, 'handle has a NUL character or a lone surrogate')
 
+/** A platform user's avatar as the board keeps it: an https URL, or none. Anything else shows nowhere. */
+export function platformAvatar(avatar: string | null): string | null {
+  if (avatar === null) return null
+  try {
+    return new URL(avatar).protocol === 'https:' ? avatar : null
+  } catch {
+    return null
+  }
+}
+
 export const Author = z.object({
   actor: ActorId,
   principal: z.string().min(1),

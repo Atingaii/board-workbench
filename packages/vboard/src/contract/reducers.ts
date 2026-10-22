@@ -33,7 +33,10 @@ export type Message = {
   links: Link[]
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: number; n: number }
-  /** Set when its author couldn't read its channel, as `authorizeOwn` checks. Views leave it out. */
+  /**
+   * Set when its author couldn't read its channel, as `authorizeOwn` checks: where they can't read,
+   * it's theirs to edit and delete only then. Its event's payload says so too.
+   */
   blind?: true
   /** The index of the last event that changed it. Folds from before it existed leave it out. */
   version?: number
@@ -213,6 +216,8 @@ export type Actor = {
   handle: string
   name: string
   avatar: string | null
+  /** A host's principal, or one of its profiles: once it's seen as one, it stays one. Views leave it out. */
+  host?: true
 }
 
 /** A platform actor proved to be a principal (`actor.linked`). */
@@ -248,7 +253,7 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
     return state
   }
   if (event.type !== 'actor.seen') return state
-  const { actor, kind, handle, name, avatar } = event.payload
+  const { actor, kind, handle, name, avatar, host } = event.payload
   const previous = state.byId[actor]
   if (previous) {
     const key = previous.handle.toLowerCase()
@@ -256,7 +261,7 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
     if (remaining.length > 0) state.byHandle[key] = remaining
     else delete state.byHandle[key]
   }
-  state.byId[actor] = { id: actor, kind: actorKind(kind), handle, name, avatar }
+  state.byId[actor] = { id: actor, kind: actorKind(kind), handle, name, avatar, ...(host || previous?.host ? { host: true as const } : {}) }
   const key = handle.toLowerCase()
   const ids = (state.byHandle[key] ??= [])
   if (!ids.includes(actor)) ids.push(actor)
@@ -272,7 +277,8 @@ export const actorsReducer = reducer({
 /** A copy of a board message on a platform. */
 /** `files`: the platform's IDs for the message's files, or null when it refused them; unset until they're sent. */
 /** `asUser`: posted with its author's own token, so editing or deleting it needs that token too. */
-export type ExternalCopy = { thread: string; message: string; files?: string[] | null; asUser?: true }
+/** `by`: the principal of the sync elsewhere that recorded it, whose copy it is to change; none for the board's own sync's. */
+export type ExternalCopy = { thread: string; message: string; files?: string[] | null; asUser?: true; by?: string }
 
 export type SyncedThread = {
   root: number
@@ -320,7 +326,7 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
         state.byExternalThread[origin.thread] = payload.thread
       }
       const precise = origin.subthread ?? origin.thread
-      ;(state.copies[event.index] ??= {})[origin.thread] = { thread: precise, message: origin.message }
+      ;(state.copies[event.index] ??= {})[origin.thread] = { thread: precise, message: origin.message, ...(payload.importedBy ? { by: payload.importedBy } : {}) }
       state.byExternalMessage[externalMessageKey(precise, origin.message)] = event.index
       return state
     }
@@ -336,13 +342,14 @@ export function foldSync(state: SyncState, event: BoardEvent): SyncState {
       return state
     }
     case 'message.files_synced': {
+      // Only the sync whose copy it is says what its files are there.
       const copy = state.copies[event.payload.id]?.[event.payload.target]
-      if (copy) copy.files = event.payload.files
+      if (copy && copy.by === event.payload.syncedBy) copy.files = event.payload.files
       return state
     }
     case 'message.synced': {
-      const { id, target, external } = event.payload
-      ;(state.copies[id] ??= {})[target] = { ...external }
+      const { id, target, external, syncedBy } = event.payload
+      ;(state.copies[id] ??= {})[target] = { ...external, ...(syncedBy ? { by: syncedBy } : {}) }
       state.byExternalMessage[externalMessageKey(external.thread, external.message)] = id
       const thread = state.threads[event.payload.thread]
       if (thread && thread.root === id && (thread.kinds?.[target] ?? (isThreadTarget(target) ? 'thread' : 'channel')) === 'channel') {

@@ -102,9 +102,10 @@ export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.
 
 /** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
 export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
-  const { blind: _blind, version, schedule, ...shown } = message
+  const { blind, version, schedule, ...shown } = message
   return {
     ...shown,
+    ...(blind ? { blind } : {}),
     id: ref(message.id),
     re: message.re === null ? null : ref(message.re),
     replyTo: message.replyTo === null ? null : ref(message.replyTo),

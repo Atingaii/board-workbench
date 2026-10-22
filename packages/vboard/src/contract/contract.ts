@@ -97,6 +97,11 @@ export const boardContract = contract({
        * from before channel access have none: everyone read everything then.
        */
       blind: z.literal(true).optional(),
+      /**
+       * (server) The principal of the sync elsewhere that imported it, whose copy `origin` names:
+       * that sync's to act on. None for the board's own sync, or a write on the board.
+       */
+      importedBy: ActorId.optional(),
     }),
     /** A message's links changed: an edit linked something new, or the platform sent what a link says. */
     'message.linked': z.object({ id: MessageId, thread: ThreadKey, links: z.array(Link).max(LINKS_PER_MESSAGE_MAX), by: Author, from: From }),
@@ -137,6 +142,11 @@ export const boardContract = contract({
         /** Posted with its author's own platform token, so it shows as them. Older receipts have none. */
         asUser: z.literal(true).optional(),
       }),
+      /**
+       * (server) The principal of the sync elsewhere that recorded it: its copy is that sync's to
+       * change. None for the board's own sync.
+       */
+      syncedBy: ActorId.optional(),
     }),
     /**
      * Board message `id`'s files reached `target` after its text: `files` are the
@@ -148,6 +158,8 @@ export const boardContract = contract({
       thread: ThreadKey,
       target: ExternalTarget,
       files: z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable(),
+      /** (server) As on `message.synced`: only the sync that recorded the copy sets its files. */
+      syncedBy: ActorId.optional(),
     }),
     /** A delivery that gave up: board message `id` didn't reach `target`, and `error` says why. */
     'message.sync_failed': z.object({
@@ -162,6 +174,11 @@ export const boardContract = contract({
       handle: Handle,
       name: z.string().min(1).max(128).refine(storable, 'name has a NUL character or a lone surrogate'),
       avatar: z.string().url().nullable(),
+      /**
+       * (server) A principal a host's `authenticate` made, or one of its profiles: someone the board
+       * signs in, whatever its ID or kind, so sync never writes as it. Others have none.
+       */
+      host: z.literal(true).optional(),
     }),
     /**
      * A platform actor (`slack:user:U0456`) is the same person as a principal

@@ -252,7 +252,7 @@ describe('links', () => {
     const s = fakePlatform('slack')
     const board = testBoard({
       sync: { slack: slack({ adapter: s.adapter, channels: { C2: 'security' } }) },
-      access: [vercelProject({ project: 'prj_sync', can: { open: 'all' } })],
+      access: [vercelProject({ project: 'prj_sync', can: { open: 'all', security: ['read'] } })],
     })
     const webhook = (body: unknown) =>
       board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
@@ -262,7 +262,8 @@ describe('links', () => {
     await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=security')).body.messages).toHaveLength(1))
     const [linked] = (await julian('GET', '/messages?channel=security')).body.messages
     // A link to it with its snapshot, in a channel others read: a board's sync no longer makes one
-    // across channels, but a log can hold one from before, and a sync elsewhere can import one.
+    // across channels, but a log can hold one from before, and a sync elsewhere that reads it can
+    // import one.
     const permalink = `https://acme.slack.com/archives/C2/p${secret.replace('.', '')}`
     const sync = caller(board.fetch, await deploymentToken('sync', 'prj_sync'))
     expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)

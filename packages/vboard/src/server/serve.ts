@@ -374,12 +374,16 @@ export async function createServe(context: BoardContext): Promise<Serve> {
 
   /**
    * The caller's own message, still there, where it may post: what an edit of it changes. One it
-   * can't read may still be its own, written there without reading, as board()'s own code finds it.
+   * can't read may still be its own, as board()'s own code finds it, only if it was written there
+   * without reading too: one its principal wrote where it reads (a repo's workflows share one) is
+   * as missing to it as one that isn't there.
    */
   async function ownMessage(caller: Caller, id: string, signal: AbortSignal): Promise<MessageView | null> {
     const access = accessOf(caller)
-    const message = (await lookup(caller, id, signal)) ?? (access !== null ? await lookup(OWN, id, signal) : null)
+    const readable = await lookup(caller, id, signal)
+    const message = readable ?? (access !== null ? await lookup(OWN, id, signal) : null)
     if (!message || message.deleted || (access && !access.can('post', message.channel))) return null
+    if (!readable && !message.blind) return null
     return message.by.principal === (await whoIs(caller, signal)).principal ? message : null
   }
 
@@ -446,7 +450,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     const send = (patched: Protocol['syncImport']['input']) => backend.syncImport(caller, patched, signal)
     if (middleware.length === 0 || caller.origin.via?.kind === 'middleware' || (body.op !== 'post' && body.op !== 'edit')) return send(body)
     const access = accessOf(caller)
-    if (access && !access.anywhere('sync')) return send(body)
+    // One that can't import goes as it came, for the backend to say why: no sync, or narrowed with x-board-scope.
+    if (access && (!access.anywhere('sync') || ('identity' in caller && caller.identity.principal.scope !== undefined))) return send(body)
     const dropped = async (commit: () => Promise<Protocol['syncImport']['output']>) => {
       try {
         return await commit()
