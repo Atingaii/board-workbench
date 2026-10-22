@@ -21,7 +21,7 @@ export type RowOptions = {
   now: number
   known: KnownLabels
   /** Opens a message's thread; unset inside the thread itself. */
-  openThread?: (id: number) => void
+  openThread?: (id: string) => void
   /** Shown after the author, e.g. "in #prs" in the activity view. */
   context?: (m: MessageView) => ReactNode
   /** A root's replies, summarized under it. */

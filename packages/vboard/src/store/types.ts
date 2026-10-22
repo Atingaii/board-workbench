@@ -74,7 +74,7 @@ export interface MessageTables {
 
 /**
  * Where a board keeps everything: its A2 log, and the tables it reads from.
- * Create one with `postgres()`, `sqlite()`, or `memory()` from `vboard/store-*`.
+ * Create one with `postgres()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`.
  */
 export type BoardStore = {
   /** The board's A2 store; undefined leaves the choice to A2's defaults. */

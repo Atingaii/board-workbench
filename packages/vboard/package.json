@@ -20,39 +20,62 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",
+      "node": "./dist/index.node.mjs",
       "default": "./dist/index.mjs"
     },
-    "./client": {
-      "node": {
-        "types": "./dist/client.node.d.mts",
-        "default": "./dist/client.node.mjs"
-      },
-      "default": {
-        "types": "./dist/client.d.mts",
-        "default": "./dist/client.mjs"
-      }
+    "./access": {
+      "types": "./dist/access.d.mts",
+      "default": "./dist/access.mjs"
     },
-    "./adapter-slack": {
-      "types": "./dist/adapter-slack.d.mts",
-      "default": "./dist/adapter-slack.mjs"
+    "./conformance": {
+      "types": "./dist/conformance.d.mts",
+      "default": "./dist/conformance.mjs"
     },
-    "./adapter-github": {
-      "types": "./dist/adapter-github.d.mts",
-      "default": "./dist/adapter-github.mjs"
+    "./backend-a2": {
+      "types": "./dist/backend-a2.d.mts",
+      "default": "./dist/backend-a2.mjs"
     },
-    "./adapter-kapso": {
-      "types": "./dist/adapter-kapso.d.mts",
-      "default": "./dist/adapter-kapso.mjs"
+    "./backend-a2/contract": {
+      "types": "./dist/backend-a2/contract.d.mts",
+      "default": "./dist/backend-a2/contract.mjs"
     },
-    "./adapter-vercel-blob": {
-      "types": "./dist/adapter-vercel-blob.d.mts",
-      "default": "./dist/adapter-vercel-blob.mjs"
+    "./backend-a2/blob-vercel": {
+      "types": "./dist/backend-a2/blob-vercel.d.mts",
+      "default": "./dist/backend-a2/blob-vercel.mjs"
     },
-    "./contract": {
-      "types": "./dist/contract.d.mts",
-      "default": "./dist/contract.mjs"
+    "./backend-a2/store-postgres": {
+      "types": "./dist/backend-a2/store-postgres.d.mts",
+      "default": "./dist/backend-a2/store-postgres.mjs"
     },
-    "./package.json": "./package.json",
+    "./backend-a2/store-redis": {
+      "types": "./dist/backend-a2/store-redis.d.mts",
+      "default": "./dist/backend-a2/store-redis.mjs"
+    },
+    "./backend-a2/store-redis-http": {
+      "types": "./dist/backend-a2/store-redis-http.d.mts",
+      "default": "./dist/backend-a2/store-redis-http.mjs"
+    },
+    "./backend-a2/store-sqlite": {
+      "types": "./dist/backend-a2/store-sqlite.d.mts",
+      "default": "./dist/backend-a2/store-sqlite.mjs"
+    },
+    "./backend-a2/store-memory": {
+      "types": "./dist/backend-a2/store-memory.d.mts",
+      "default": "./dist/backend-a2/store-memory.mjs"
+    },
+    "./backend-a2/scheduler-vercel": {
+      "types": "./dist/backend-a2/scheduler-vercel.d.mts",
+      "default": "./dist/backend-a2/scheduler-vercel.mjs"
+    },
+    "./backend-a2/scheduler-qstash": {
+      "types": "./dist/backend-a2/scheduler-qstash.d.mts",
+      "default": "./dist/backend-a2/scheduler-qstash.mjs"
+    },
+    "./backend-http": {
+      "types": "./dist/backend-http.d.mts",
+      "node": "./dist/backend-http.node.mjs",
+      "default": "./dist/backend-http.mjs"
+    },
     "./sync": {
       "types": "./dist/sync.d.mts",
       "default": "./dist/sync.mjs"
@@ -61,34 +84,19 @@
       "types": "./dist/sync.chat.d.mts",
       "default": "./dist/sync.chat.mjs"
     },
-    "./store-postgres": {
-      "types": "./dist/store-postgres.d.mts",
-      "default": "./dist/store-postgres.mjs"
+    "./sync-slack": {
+      "types": "./dist/sync-slack.d.mts",
+      "default": "./dist/sync-slack.mjs"
     },
-    "./store-redis": {
-      "types": "./dist/store-redis.d.mts",
-      "default": "./dist/store-redis.mjs"
+    "./sync-github": {
+      "types": "./dist/sync-github.d.mts",
+      "default": "./dist/sync-github.mjs"
     },
-    "./store-redis-http": {
-      "types": "./dist/store-redis-http.d.mts",
-      "default": "./dist/store-redis-http.mjs"
+    "./sync-kapso": {
+      "types": "./dist/sync-kapso.d.mts",
+      "default": "./dist/sync-kapso.mjs"
     },
-    "./store-sqlite": {
-      "types": "./dist/store-sqlite.d.mts",
-      "default": "./dist/store-sqlite.mjs"
-    },
-    "./store-memory": {
-      "types": "./dist/store-memory.d.mts",
-      "default": "./dist/store-memory.mjs"
-    },
-    "./scheduler-vercel": {
-      "types": "./dist/scheduler-vercel.d.mts",
-      "default": "./dist/scheduler-vercel.mjs"
-    },
-    "./scheduler-qstash": {
-      "types": "./dist/scheduler-qstash.d.mts",
-      "default": "./dist/scheduler-qstash.mjs"
-    }
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsdown && node scripts/schema.ts",

@@ -78,16 +78,16 @@ test("CI must have passed `check` on the head", () => {
 
 function event(over = {}) {
   return {
-    index: 90,
+    cursor: "90",
     type: "labels.changed",
     payload: {
-      id: 59,
+      id: "59",
       set: { land: "yes", "land.why": "fixes the bug", "land.sha": "abc123" },
       unset: [],
       by: { actor: `${PI}+pi`, principal: PI, profile: "pi", session: "thread-59" },
     },
     message: {
-      id: 59,
+      id: "59",
       re: null,
       labels: { pr: "vercel-labs/vboard#53", land: "yes", "land.why": "fixes the bug", "land.sha": "abc123" },
     },
@@ -128,7 +128,7 @@ const routes = (files = [file("apps/a.ts")]) => ({
 test("the watcher labels the PR thread with its decision and merges nothing", async () => {
   const h = harness(routes());
   await h.run();
-  assert.deepEqual(h.labels, [{ id: 59, set: { autoland: "would", "autoland.why": "outside vboard core" } }]);
+  assert.deepEqual(h.labels, [{ id: "59", set: { autoland: "would", "autoland.why": "outside vboard core" } }]);
   assert.equal(h.requests.length, 4);
   assert.ok(h.requests.every((url) => !url.includes("/merge")));
 });
@@ -165,7 +165,7 @@ test("the watcher ignores other labels, replies, and other repos", async () => {
   const h = harness(routes());
   await h.run(event({ payload: { ...event().payload, set: { kind: "bug" } } }));
   await h.run(event({ type: "message.posted" }));
-  await h.run(event({ message: { ...event().message, re: 12 } }));
+  await h.run(event({ message: { ...event().message, re: "12" } }));
   await h.run(event({ message: { ...event().message, labels: { ...event().message.labels, pr: "vercel/v0#1" } } }));
   assert.deepEqual(h.labels, []);
   assert.deepEqual(h.requests, []);
@@ -184,14 +184,14 @@ const withVerdict = (autoland) => event({ message: { ...event().message, labels:
 test("a PR that would land gets :stamp-hammer: on its root", async () => {
   const h = harness(routes());
   await h.run();
-  assert.deepEqual(h.reactions, [{ id: 59, emoji: "stamp-hammer", remove: false }]);
+  assert.deepEqual(h.reactions, [{ id: "59", emoji: "stamp-hammer", remove: false }]);
 });
 
 test("the stamp comes off when the verdict flips to no", async () => {
   const h = harness(routes([file("packages/vboard/src/a.ts"), file(".changeset/x.md", "added")]));
   await h.run(withVerdict("would"));
   assert.deepEqual(h.labels[0].set.autoland, "no");
-  assert.deepEqual(h.reactions, [{ id: 59, emoji: "stamp-hammer", remove: true }]);
+  assert.deepEqual(h.reactions, [{ id: "59", emoji: "stamp-hammer", remove: true }]);
 });
 
 test("the stamp is left alone when the verdict doesn't change", async () => {

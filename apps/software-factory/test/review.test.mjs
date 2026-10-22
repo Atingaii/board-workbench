@@ -24,7 +24,7 @@ test("reviewStarts: no other event starts a review", () => {
   assert.equal(reviewStarts(relabel({ state: "merged" })), false);
   assert.equal(reviewStarts(relabel({ land: "yes" })), false);
   // A reply, even one relabeled state=open, isn't the PR.
-  const reply = { re: 170, labels: {} };
+  const reply = { re: "170", labels: {} };
   assert.equal(reviewStarts({ type: "message.posted", payload: {}, message: reply }), false);
   assert.equal(reviewStarts({ type: "labels.changed", payload: { set: { state: "open" }, unset: [] }, message: reply }), false);
   assert.equal(reviewStarts({ type: "reaction.added", payload: {}, message: root("open") }), false);
@@ -38,12 +38,12 @@ test("isDraft: only state=draft", () => {
 });
 
 test("asksPi: a reply in a draft wakes Pi only when it asks Pi", () => {
-  assert.equal(asksPi(170, "@pi can you look at the failing test?"), true);
-  assert.equal(asksPi(170, "Pi, review this before I mark it ready"), true);
-  assert.equal(asksPi(170, "thoughts, pi?"), true);
-  assert.equal(asksPi(170, `${piName(170)} please rebase`), true);
-  assert.equal(asksPi(170, "still working on this, will mark ready soon"), false);
+  assert.equal(asksPi("170", "@pi can you look at the failing test?"), true);
+  assert.equal(asksPi("170", "Pi, review this before I mark it ready"), true);
+  assert.equal(asksPi("170", "thoughts, pi?"), true);
+  assert.equal(asksPi("170", `${piName("170")} please rebase`), true);
+  assert.equal(asksPi("170", "still working on this, will mark ready soon"), false);
   // Words and names that contain "pi" aren't Pi.
-  assert.equal(asksPi(170, "the api route picks the wrong pipeline"), false);
-  assert.equal(asksPi(170, "see pi-pr.yml and the pi/170 branch"), false);
+  assert.equal(asksPi("170", "the api route picks the wrong pipeline"), false);
+  assert.equal(asksPi("170", "see pi-pr.yml and the pi/170 branch"), false);
 });

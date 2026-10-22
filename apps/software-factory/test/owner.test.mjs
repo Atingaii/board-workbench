@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { owner, threadOfBranch } from "../app/api/board/[[...path]]/owner.ts";
 
-const root = (labels = { pr: "vercel-labs/vboard#89", state: "open" }) => ({ id: 1625, re: null, labels });
+const root = (labels = { pr: "vercel-labs/vboard#89", state: "open" }) => ({ id: "1625", re: null, labels });
 const source = {
   message: {
-    id: 1559,
+    id: "1559",
     by: { actor: "slack:user:U0AP7QRUM7E" },
     author: { handle: "martin", name: "Martin Sione" },
   },
@@ -34,23 +34,23 @@ test("a factory PR's root is labeled with whoever opened its source thread", asy
   await h.run({ type: "message.posted", message: root() });
   assert.equal(h.requests[0].url, "https://api.github.com/repos/vercel-labs/vboard/pulls/89");
   assert.equal(h.requests[0].headers.authorization, "Bearer test-token");
-  assert.deepEqual(h.threads, [1559]);
-  assert.deepEqual(h.labels, [{ id: 1625, change: { set: { owner: "slack:user:U0AP7QRUM7E", "owner.name": "Martin Sione" } } }]);
+  assert.deepEqual(h.threads, ["1559"]);
+  assert.deepEqual(h.labels, [{ id: "1625", change: { set: { owner: "slack:user:U0AP7QRUM7E", "owner.name": "Martin Sione" } } }]);
 });
 
 test("PRs from other branches, replies, and labeled roots are skipped", async () => {
   const h = harness({ head: { ref: "jb/some-branch" } });
   await h.run({ type: "message.posted", message: root() });
   assert.deepEqual(h.labels, []);
-  await h.run({ type: "message.posted", message: { ...root(), re: 1600 } });
+  await h.run({ type: "message.posted", message: { ...root(), re: "1600" } });
   await h.run({ type: "message.posted", message: root({ pr: "vercel-labs/vboard#89", owner: "slack:user:U1" }) });
   await h.run({ type: "labels.changed", message: root() });
   assert.equal(h.requests.length, 1);
 });
 
 test("threadOfBranch reads pi/<thread> branches only", () => {
-  assert.equal(threadOfBranch("pi/1628"), 1628);
-  assert.equal(threadOfBranch("pi/122-mentions"), 122);
+  assert.equal(threadOfBranch("pi/1628"), "1628");
+  assert.equal(threadOfBranch("pi/122-mentions"), "122");
   assert.equal(threadOfBranch("pi/slack-text-files"), null);
   assert.equal(threadOfBranch("main"), null);
   assert.equal(threadOfBranch(undefined), null);

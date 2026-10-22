@@ -44,7 +44,7 @@ export const scheduled = (message: { schedule?: unknown }) => message.schedule !
  * leaves it alone. Null for anything else.
  */
 export function scheduledThread(message: {
-  re: number | null;
+  re: string | null;
   labels: Record<string, string>;
   schedule?: unknown;
 }): PiKind | null {

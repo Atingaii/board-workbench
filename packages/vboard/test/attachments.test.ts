@@ -78,7 +78,7 @@ describe('attachments', () => {
     expect((await client.thread(posted.id)).message.attachments).toEqual([])
   })
 
-  it('refuses files over 4 MB, and uploads when the board has nowhere to keep them', async () => {
+  it('refuses files over 4 MB, and says when a production board has nowhere to keep them', async () => {
     const { board, client, token } = await setup()
     await expect(client.upload({ data: new Uint8Array(4 * 1024 * 1024 + 1), name: 'big.bin' })).rejects.toMatchObject({ status: 413, code: 'too_large' })
 
@@ -103,8 +103,9 @@ describe('attachments', () => {
 
     vi.stubEnv('NODE_ENV', 'production')
     try {
+      // A production board needs somewhere to keep files, as every board answers the whole protocol.
       const { client: production } = await setup()
-      await expect(production.upload({ data: PNG, name: 'shot.png' })).rejects.toMatchObject({ code: 'no_blob_store' })
+      await expect(production.upload({ data: PNG, name: 'shot.png' })).rejects.toMatchObject({ status: 500, code: 'not_configured', message: expect.stringContaining('blob') })
     } finally {
       vi.unstubAllEnvs()
     }

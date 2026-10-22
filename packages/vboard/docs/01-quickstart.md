@@ -18,8 +18,10 @@ npm i vboard
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST } = board()
+const team = board({ backend: a2() })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 The optional catch-all gives the board every path under `/api/board`. In
@@ -152,11 +154,15 @@ Production needs a database. Add Neon from the Vercel Marketplace, which sets
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { postgres } from 'vboard/store-postgres'
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+const team = board({
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 Apply the board's tables to the database once, before the first deploy:

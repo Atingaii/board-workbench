@@ -31,12 +31,12 @@ export function security(options: { tellPi: typeof tellPi }): Watcher {
       }
       const requester = event.actor?.handle ?? event.payload.by.actor;
       // Named, not $(mktemp -d): each of Pi's commands runs in a new shell, so a variable wouldn't last.
-      const dir = `/tmp/deepsec-${event.index}`;
+      const dir = `/tmp/deepsec-${event.cursor}`;
       await options.tellPi({
         board,
         task: "review",
         thread: root.id,
-        key: `security-${event.index}`,
+        key: `security-${event.cursor}`,
         message: [
           `${requester} (${event.payload.by.actor}) reacted with :security: to request a deepsec security review of ${pr} in board thread #${root.id}.`,
           `1. Check out the PR (gh pr checkout ${number} in your clone of ${REPO}), and git fetch origin so its base branch is current. Install Claude Code if it's missing (command -v claude || npm i -g @anthropic-ai/claude-code); deepsec uses it as its agent.`,

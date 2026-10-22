@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { githubActions, vercelProject } from '../src/server/index.ts'
+import { githubActions, vercelProject } from '../src/access/index.ts'
 import {
   BOARD_URL,
   caller,
@@ -25,19 +25,19 @@ describe('discovery', () => {
 })
 
 describe('scheduler', () => {
-  it("is the scheduler's callback for every server behind the board", () => {
-    const callback = async () => new Response(null, { status: 204 })
+  it("is the scheduler's callback for every server behind the board", async () => {
+    const answer = new Response(null, { status: 204 })
     let mounted: readonly unknown[] = []
     const board = testBoard({
       scheduler: {
         schedule: async () => {},
         handler: (...servers) => {
           mounted = servers
-          return callback
+          return async () => answer
         },
       },
     })
-    expect(board.scheduler).toBe(callback)
+    expect(await board.scheduler(new Request(`${BOARD_URL}/a2/scheduler`, { method: 'POST' }))).toBe(answer)
     expect(mounted).toEqual(board.servers)
   })
 
@@ -45,6 +45,30 @@ describe('scheduler', () => {
     const response = await testBoard().scheduler(new Request(`${BOARD_URL}/a2/scheduler`, { method: 'POST' }))
     expect(response.status).toBe(404)
     expect(await response.json()).toMatchObject({ error: { message: 'this board has no scheduler' } })
+  })
+
+  it('runs in this process in development, so scheduled messages work with nothing else running', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    try {
+      const julian = caller(testBoard().fetch, await personToken())
+      const { body } = await julian('POST', '/messages', { channel: 'dev', text: 'deploy failed' })
+      const scheduled = await julian('POST', '/schedules', { re: body.message.id, text: 'still broken?', in: '1d' })
+      expect(scheduled).toMatchObject({ status: 201, body: { schedule: { state: 'pending' } } })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('says on first use what a production board is missing, without failing when the route loads', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      // A build loads the route with NODE_ENV=production and none of its runtime environment.
+      const board = testBoard({ store: undefined })
+      const response = await caller(board.fetch, await personToken())('GET', '/me')
+      expect(response).toMatchObject({ status: 500, body: { error: { code: 'not_configured', message: expect.stringMatching(/^a2\(\) needs store, scheduler and blob in production: /) } } })
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 
@@ -166,7 +190,8 @@ describe('messages', () => {
 
     const channels = await julian('GET', '/channels')
     expect(channels.body.channels).toEqual([
-      { path: 'errors-www', lastIndex: nested.body.message.id, messages: 3, threads: 1 },
+      // A channel's last index is a2's own count, which a decimal ID happens to equal.
+      { path: 'errors-www', lastIndex: Number(nested.body.message.id), messages: 3, threads: 1 },
     ])
   })
 
@@ -360,6 +385,32 @@ describe('events', () => {
     controller.abort()
     await reader.cancel()
   })
+
+  it('resumes a stream where Last-Event-ID says, and answers a bad cursor before streaming', async () => {
+    const { fetch } = testBoard()
+    const token = await personToken()
+    const julian = caller(fetch, token)
+    const one = (await julian('POST', '/messages', { channel: 'x', text: 'one' })).body.message
+    await julian('POST', '/messages', { channel: 'x', text: 'two' })
+    const controller = new AbortController()
+    const response = await fetch(
+      new Request(`${BOARD_URL}/events`, {
+        headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'last-event-id': one.id },
+        signal: controller.signal,
+      }),
+    )
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    let text = ''
+    while (!text.includes('"text":"two"')) text += decoder.decode((await reader.read()).value)
+    expect(text).not.toContain('"text":"one"')
+    controller.abort()
+    await reader.cancel()
+
+    const bad = await fetch(new Request(`${BOARD_URL}/events?after=nope`, { headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream' } }))
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toMatchObject({ error: { code: 'invalid_cursor' } })
+  })
 })
 
 describe('writes', () => {
@@ -383,5 +434,26 @@ describe('writes', () => {
       edit: await reads(() => julian('POST', `/messages/${id}/edit`, { text: 'root, edited' })),
       root: await reads(() => julian('POST', '/messages', { channel: 'dev', text: 'another' })),
     }).toEqual({ react: 1, label: 1, reply: 1, edit: 1, root: 0 })
+  })
+})
+
+describe('its URL', () => {
+  it("learns its mount from requests, and none that only makes the path look longer moves it", async () => {
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('VERCEL_URL', 'board-abc.vercel.app')
+    try {
+      const board = testBoard({ url: undefined })
+      const at = (path: string, token?: string) =>
+        board.fetch(new Request(`https://board-abc.vercel.app${path}`, token ? { headers: { authorization: `Bearer ${token}` } } : {}))
+      // No one's request first: the handler is mounted at /api/board, so this one's path only looks deeper.
+      expect((await at('/api/board/x/messages/1')).status).toBe(401)
+      await at('/api/board/me', await personToken('u_julian', 'https://board-abc.vercel.app/api/board'))
+      expect(board.url).toBe('https://board-abc.vercel.app/api/board')
+      // Nor after: wherever it says the mount is, it stays where requests show it is.
+      expect((await at('/api/board/elsewhere/deeper/messages/1')).status).toBe(401)
+      expect(board.url).toBe('https://board-abc.vercel.app/api/board')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

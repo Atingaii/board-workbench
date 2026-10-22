@@ -16,7 +16,7 @@ instead.
 
 ## Where tokens come from
 
-The CLI and the Node SDK find a token themselves. The first match wins:
+The CLI and `board()` in Node find a token themselves. The first match wins:
 
 | Where | How | Principal |
 | --- | --- | --- |
@@ -25,24 +25,34 @@ The CLI and the Node SDK find a token themselves. The first match wins:
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your `vercel login`, minted for the board's project and exchanged for its audience | `vercel:user:<user_id>` |
 
-Every token the CLI and the Node SDK get is for the URL they send it to. When
+Every token the CLI and a handle in Node get is for the URL they send it to. When
 discovery there names another URL, they get no token and fail with
 `wrong_audience`: use the URL the error names. So a board can't claim to be
 another one and collect tokens it could replay there.
 
-Other runtimes pass `url` and `token` to `createClient` themselves; see the
-[client reference](../04-reference/02-client.md).
+Other runtimes bring their own credentials in `http(url, { fetch })`: a page,
+its own session, which the board's `board({ authenticate })` recognizes. See the
+[handle reference](../04-reference/02-board.md).
 
 ### From your terminal
 
-There's no login command. The CLI reads the board's discovery document, asks
-Vercel for a development token for the board's project with your Vercel CLI
-login, and exchanges it for one whose audience is the URL it talks to. It caches
-the result in `~/.config/vboard/tokens` (or under `$XDG_CONFIG_HOME`) for its
-12-hour life.
+There's no login command. The CLI reads the board's discovery document, which
+names the board's project. With your Vercel CLI login, it asks Vercel which
+project the board's host is a deployment of: a deployment URL, a branch alias,
+or a domain. When the two agree, it asks Vercel for a development token for that
+project and exchanges it for one whose audience is the URL it talks to. It
+caches the result in `~/.config/vboard/tokens` (or under `$XDG_CONFIG_HOME`) for
+its 12-hour life.
 
 Vercel only mints that token for accounts that can access the project, so
 **access to the board is access to its Vercel project**.
+
+Discovery is the board's word, and any board can name any project you can
+access. A development token for your project would get past Deployment
+Protection wherever Trusted Sources trust that project, whatever its audience.
+So the CLI mints only for the project Vercel finds behind the host. A board on
+localhost runs on your machine, and Vercel has no host to ask about, so it
+mints for the project that board names.
 
 ```text
 $ vb whoami
@@ -56,13 +66,25 @@ When it can't, it says what fixes it:
 
 ```text
 error: not signed in to Vercel: run `vercel login`
+error: your Vercel login can't see the project www.example.com belongs to: run `vercel login` or ask for access to it
 error: your Vercel account can't access this board's project: ask for access to it
+```
+
+When the board's host is another project's deployment, it gets no token:
+
+```text
+error: the board at https://www.example.com/api/board says its project is prj_abc123, but it's a deployment of prj_def456, so vb won't sign in to it
 ```
 
 ## How the board verifies
 
+`board()` verifies each request before its backend sees it, with its
+`authenticate`: `oidcTokens()` from `vboard/access` by default, the OIDC tokens
+made out to this board. It verifies a token once and keeps who it is until the
+token expires, so a live stream doesn't verify each time it polls.
+
 - **Vercel tokens** are verified with `jose` against the team issuer's keys.
-  The board knows its own project from the `project` option,
+  `board()` knows its own project from its `project` option,
   `VERCEL_PROJECT_ID`, or `.vercel/project.json`. A `development` token from
   it is a person and must carry `user_id`. Any other environment is the
   deployment itself: in the environment the board runs in, it can do
@@ -72,9 +94,10 @@ error: your Vercel account can't access this board's project: ask for access to 
 - **GitHub Actions tokens, other Vercel projects, and other issuers** are
   accepted only when they match a rule in [`access`](./09-access.md), which
   also says what they may do in each channel.
-- **Tests** point verification at a local issuer with the `auth` option. It
-  still runs real verification against a real key set; no environment
-  variable turns it off.
+- **Tests** point verification at a local issuer:
+  `board({ authenticate: oidcTokens({ vercel: { issuer, jwks } }) })`. It still
+  runs real verification against a real key set; no environment variable
+  turns it off.
 
 ## Principals, profiles, and actors
 
@@ -87,7 +110,7 @@ A **principal** is who holds the credential. It's a readable string:
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
 | `slack:user:U0456`, `github:user:583231` | a platform user, arriving through [sync](../02-sync/01-overview.md) |
-| `vboard:watch:triage`, `vboard:client:deploys` | the board's own [watchers](./06-watchers.md) and [in-process clients](./01-mounting.md#the-in-process-client) |
+| `vboard:watch:triage`, `vboard:client`, `vboard:client:deploys` | the board's own [watchers](./06-watchers.md) and [handle](./01-mounting.md#the-handle), with `as()`'s profile |
 
 A **profile** is a named identity within a principal: an agent acting for a
 person. An **actor** is what a message is attributed to: the principal alone,
@@ -96,8 +119,9 @@ or `principal+profile`, like `vercel:user:u_abc123+claude`. It shows as
 
 ### Profiles
 
-Pick one with `--as <name>` (or `VBOARD_AS`) in the CLI, and `profile` in the
-SDK. Coding agents are detected and pick their own:
+Pick one with `--as <name>` (or `VBOARD_AS`) in the CLI, and `as(name)` on a
+[handle](../04-reference/02-board.md#as). Coding agents are detected and pick
+their own:
 
 | Environment | Profile |
 | --- | --- |
@@ -131,14 +155,18 @@ Machines outside the board's project need a rule in `access`, and the rule
 says what they may do in each channel:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board, githubActions, vercelProject } from 'vboard'
+import { board } from 'vboard'
+import { githubActions, vercelProject } from 'vboard/access'
+import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST } = board({
+const team = board({
+  backend: a2(),
   access: [
     vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
     githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
   ],
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 - **A project name without `team` means the board's own team.** Names are only
@@ -170,8 +198,8 @@ for other issuers, and what a caller sees.
   what they can't read answers 404.
 - **Only the principal that wrote a message can edit or delete it.** A person
   can edit their own profiles' messages.
-- **Raw platform data needs `manage` in every channel.** `vb inbox`, `vb
-  stuck`, and `vb sources … read` refuse anyone else.
+- **Raw platform data needs more than reading.** `vb inbox` needs `sync` in
+  every channel, and a source read needs `manage` in every channel.
 
 ## Handles
 
@@ -198,7 +226,9 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   way out of an ambiguous handle.
 - **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
   even someone the board hasn't seen. The board stores the exact actor, so it
-  renders natively. An email no platform knows stays plain text.
+  renders natively. An email no platform knows stays plain text. A writer that
+  can't read the channel gets back what it wrote, and never sees who an email
+  turned out to be.
 - **Mentions in inline code or code blocks don't count.**
 - **A handle no one has stays plain text.** The write goes through, notifying
   no one for it, and `vb` warns: `warning: @x matches no one on the board, so

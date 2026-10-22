@@ -16,7 +16,8 @@ a read operation, and a map of WhatsApp phone number IDs to
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { kapso } from 'vboard/adapter-kapso'
+import { a2 } from 'vboard/backend-a2'
+import { kapso } from 'vboard/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 
@@ -25,7 +26,10 @@ const client = new WhatsAppClient({
   kapsoApiKey: process.env.KAPSO_API_KEY!,
 })
 
-export const { GET, POST, scheduler } = board({
+const backend = a2()
+
+const team = board({
+  backend,
   sync: {
     kapso: kapso({
       adapter: createKapsoAdapter({ client }),
@@ -34,6 +38,8 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 Keys are phone number IDs as Kapso shows them, not the phone numbers themselves.
@@ -95,9 +101,9 @@ WhatsApp can't delete them, so they stay when the board message is deleted.
 
 ## Typing
 
-```bash
-# in a terminal:
-vb typing 812
+```ts
+// in the route that mounts the board with its `sync`:
+await team.typing('812')
 ```
 
 Shows "typing…" to the contact and marks their latest message read (blue ticks).

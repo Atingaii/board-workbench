@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  ActorId,
   AttachmentId,
   ATTACHMENTS_PER_MESSAGE_MAX,
   ChannelPath,
@@ -7,15 +8,21 @@ import {
   LabelKey,
   Labels,
   MESSAGE_TEXT_MAX,
-  MessageId,
   MessageText,
+  platformAvatar,
   storable,
 } from '../contract/schemas.ts'
-import type { BoardEvent } from '../contract/contract.ts'
-import type { Actor, Channel, Message } from '../contract/reducers.ts'
+import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/contract.ts'
+import type { BoardEvent, Link } from '../contract/contract.ts'
+import type { Actor, Channel, ExternalCopy, Message } from '../contract/reducers.ts'
 import type { AccessSummary } from '../server/access.ts'
 
-const id = z.coerce.number().int().positive()
+/**
+ * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
+ * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals.
+ */
+export const Ref = z.string().min(1).max(128)
+const id = Ref
 const repeated = z
   .union([z.string(), z.array(z.string())])
   .transform((value) => (Array.isArray(value) ? value : [value]))
@@ -32,6 +39,9 @@ const LabelFilter = z
     return at === -1 ? ([value, null] as const) : ([value.slice(0, at), value.slice(at + 1).split('|')] as const)
   })
 
+/** A sync target as the board that syncs it resolved it: a platform channel to start a thread in, or a thread to join. */
+export const ResolvedSyncTarget = z.object({ target: ExternalTarget, kind: z.enum(['channel', 'thread']) })
+
 /** Shared by `/messages` and `/events`. */
 export const Filters = z.object({
   channel: z.string().optional(),
@@ -46,19 +56,19 @@ export const Filters = z.object({
 })
 
 export const MessagesQuery = Filters.extend({
-  after: z.coerce.number().int().nonnegative().optional(),
+  after: Ref.optional(),
   before: id.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
 /** `limit` counts threads: each thread with a matching message, by its latest reply. */
 export const ThreadsQuery = Filters.extend({
-  after: z.coerce.number().int().nonnegative().optional(),
+  after: Ref.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
 
 export const EventsQuery = Filters.extend({
-  after: z.coerce.number().int().nonnegative().optional(),
+  after: Ref.optional(),
   wait: z.coerce.number().min(0).max(300).optional(),
   all: z.coerce.boolean().optional(),
 })
@@ -66,13 +76,16 @@ export const EventsQuery = Filters.extend({
 export const PostBody = z
   .object({
     channel: ChannelPath.optional(),
-    re: MessageId.optional(),
+    re: Ref.optional(),
     /** May be empty when the message has attachments. */
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
-    /** External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. */
-    sync: z.array(z.string().min(3).max(300)).max(10).optional(),
+    /**
+     * External targets a new thread starts with: `slack:#incidents`, `github:owner/repo:12`. The
+     * board that syncs a target resolves it to `{ target, kind }`, which a board elsewhere takes as is.
+     */
+    sync: z.array(z.union([z.string().min(3).max(300), ResolvedSyncTarget])).max(10).optional(),
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
@@ -101,7 +114,7 @@ const Instant = z.string().datetime({ offset: true })
 export const ScheduleBody = z
   .object({
     channel: ChannelPath.optional(),
-    re: MessageId.optional(),
+    re: Ref.optional(),
     text: z.string().max(MESSAGE_TEXT_MAX).default(''),
     labels: Labels.optional(),
     noSync: z.boolean().optional(),
@@ -146,13 +159,42 @@ export const InboxQuery = z.object({
   channel: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 })
-/** A stuck event to retry (with a fresh 10 tries) or skip (so its thread goes on), as `vb stuck` lists it. */
-export const RedriveBody = z.object({
-  session: z.string().min(1).max(300),
-  index: z.number().int().min(1),
-  /** The consumer it's stuck for; without one, every consumer stuck on it. */
-  consumer: z.string().min(1).max(200).optional(),
-  action: z.enum(['retry', 'skip']),
+/** How many watchers one registration holds: the board matches every event against every tail. */
+export const REGISTERED_WATCHERS_MAX = 32
+
+/** What a board on `http()` registers with the board it uses: its watchers' tails, and where to wake it. */
+export const RegisterBody = z.object({
+  /** Without one, the board pulls on its own instead of being woken. */
+  url: z
+    .string()
+    .url()
+    .max(500)
+    .refine((url) => /^https:\/\//.test(url), 'wake-ups go over https')
+    .transform((url) => url.replace(/\/+$/, ''))
+    .nullable()
+    .optional(),
+  // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
+  watch: z
+    .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
+    .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
+  /**
+   * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
+   * where it may sync, and the board lists the entries and links accounts on them.
+   */
+  sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().default(false) })).max(32).optional(),
+})
+
+/** A pull of the caller's matches: at most `limit`, waiting up to `wait` seconds for one. */
+export const MatchesQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  wait: z.coerce.number().min(0).max(25).optional(),
+})
+
+/** How a pulled match went: its lease, and an error to try again, or `skip` to drop it. */
+export const AckBody = z.object({
+  lease: z.string().min(1).max(64),
+  error: z.string().min(1).max(500).optional(),
+  skip: z.boolean().optional(),
 })
 
 /**
@@ -164,14 +206,133 @@ export const SourceReadQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
 })
 
-export const IdentityLinkBody = z.object({
-  /** The sync entry whose account to link, e.g. `slack`. */
-  sync: z.string().min(1).max(64),
-  /** `code` even when the entry can sign people in. */
+export const IdentityUnlinkBody = z.object({ actor: z.string().min(1).max(256) })
+
+/** A sync entry's key: `slack`, `github`. */
+const SyncKey = z.string().min(1).max(64)
+
+/** A platform message an import changes, by its platform thread and ID; without a message, the root of the board thread the platform thread belongs to. */
+const ImportOrigin = z.object({ thread: ExternalTarget, message: z.string().min(1).max(300).optional() })
+
+/** A link as an import carries it: a board message it names is a ref. */
+const ImportLink = LinkSchema.extend({ message: Ref.nullable() })
+
+/**
+ * A platform user, as sync names them to the board. Their avatar shows wherever they do, so one
+ * that isn't an https URL is dropped, never refused: the write lands without it.
+ */
+const PlatformUser = ExternalAuthor.extend({ avatar: z.string().nullable().transform(platformAvatar) })
+
+/**
+ * Who wrote it on the platform, and the sync key it came through: null for a write a sync callback
+ * makes as that user, which syncs out to every platform like one written on the board.
+ */
+const Imported = { author: PlatformUser, from: SyncKey.nullable() }
+
+/**
+ * Where the platform event an import comes from is: its sync entry, platform channel, and thread.
+ * The middleware is told, and answers there when it drops the write.
+ */
+const ImportSource = z.object({ key: SyncKey, channel: ExternalTarget, thread: ExternalTarget })
+
+/** The message a change is about: by its platform IDs (`origin`), or by its board ID (`message`), one or the other. */
+const Changed = { origin: ImportOrigin.optional(), message: Ref.optional() }
+
+/**
+ * A platform's write, as its platform author, with where it came from: only a caller with `sync` in
+ * the channel it lands in may make one. Posts are idempotent by `id`, derived from the platform
+ * event; every other op finds the message it changes from its `origin`.
+ */
+export const SyncImportBody = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('post'),
+    ...Imported,
+    /** Where it is on the platform. Null for a write a sync callback makes itself. */
+    origin: Origin.nullable().default(null),
+    source: ImportSource.optional(),
+    channel: ChannelPath.optional(),
+    re: Ref.optional(),
+    text: z.string().max(MESSAGE_TEXT_MAX).default(''),
+    labels: Labels.optional(),
+    noSync: z.boolean().optional(),
+    attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
+    id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+  }),
+  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional() }),
+  z.object({ op: z.literal('delete'), ...Imported, ...Changed }),
+  z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
+  z.object({ op: z.literal('labels'), ...Imported, ...Changed, set: Labels.optional(), unset: z.array(LabelKey).optional() }),
+  z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
+  /** A platform user the board should know, for a mention of them: `@[ada@vercel.com]` found on Slack. */
+  z.object({ op: z.literal('seen'), author: PlatformUser }),
+])
+
+const PlatformFiles = z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable()
+
+/** What sync did on a platform, about a board message: it landed, its files did, it gave up, or its thread syncs with a target. */
+export const SyncReceiptBody = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('message'),
+    message: Ref,
+    target: ExternalTarget,
+    external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300), asUser: z.literal(true).optional() }),
+    /** Its files, when they went with it: the platform's IDs, or null when it refused them. */
+    files: PlatformFiles.optional(),
+  }),
+  z.object({ kind: z.literal('files'), message: Ref, target: ExternalTarget, files: PlatformFiles }),
+  z.object({ kind: z.literal('failed'), message: Ref, target: ExternalTarget, error: z.string().min(1).max(500) }),
+  z.object({
+    kind: z.literal('thread'),
+    /** Any message in the thread. */
+    message: Ref,
+    target: ExternalTarget,
+    /** A channel to start a thread in, or a thread to join. */
+    targetKind: z.enum(['channel', 'thread']),
+    cause: z.enum(['config', 'request']),
+  }),
+])
+
+/** What sync looks up by platform ID: a thread or message, who an account is, and a person's accounts. */
+export const SyncFindQuery = z.object({
+  /** A live one-time code: who it was issued to, for a sign-in that carries it. */
+  code: z.string().min(1).max(64).optional(),
+  /** The post the caller's sync imported with this client ID. */
+  post: z.string().min(1).max(200).optional(),
+  thread: ExternalTarget.optional(),
+  /** With `thread`: the platform message in it. */
+  message: z.string().min(1).max(300).optional(),
+  account: ActorId.optional(),
+  person: ActorId.optional(),
+})
+export const SyncCopiesQuery = z.object({ message: repeated.pipe(z.array(Ref).min(1).max(100)) })
+/** A person's own roots since `since`, in epoch milliseconds. */
+export const SyncRootsQuery = z.object({ by: ActorId, since: z.coerce.number().int().nonnegative() })
+
+/** Platform events for a sync key's inbox, each with the platform's own ID for it, which dedupes it. */
+export const InboxPushBody = z.object({
+  events: z.array(z.object({ id: z.string().min(1).max(300), event: ExternalEvent, raw: z.unknown() })).min(1).max(50),
+})
+export const InboxNextQuery = z.object({ limit: z.coerce.number().int().min(1).max(50).optional() })
+export const InboxAckBody = z.object({ lease: z.string().min(1).max(64), error: z.string().min(1).max(500).optional() })
+
+/** A one-time code for linking an account on sync entry `sync`: a person's own, for themselves. */
+export const SyncCodeBody = z.object({ sync: SyncKey })
+/**
+ * A platform account, linked to whoever a code was issued to: one posted from the account, or
+ * carried through its sign-in. `message` is the platform message that posted it.
+ */
+export const SyncAccountBody = z.object({
+  sync: SyncKey,
+  account: PlatformUser,
+  code: z.string().min(1).max(64),
+  message: z.string().max(1024).optional(),
+  /** `consent` when the code came through the account's own sign-in, so the board posts as them. */
   method: z.enum(['code', 'consent']).optional(),
 })
-export const IdentityCheckBody = z.object({ sync: z.string().min(1).max(64) })
-export const IdentityUnlinkBody = z.object({ actor: z.string().min(1).max(256) })
+/** A sign-in that carries a code, on the board whose sync runs the entry. */
+export const SignInQuery = z.object({ sync: SyncKey, code: z.string().min(1).max(64) })
+export const SyncUnlinkBody = z.object({ account: ActorId })
 
 export const EditBody = z.object({ text: MessageText })
 export const DeleteBody = z.object({}).optional()
@@ -185,6 +346,10 @@ export const LabelBody = z
   })
 
 export type FiltersInput = z.input<typeof Filters>
+export type SyncImportInput = z.input<typeof SyncImportBody>
+export type SyncReceiptInput = z.input<typeof SyncReceiptBody>
+export type SyncFindInput = z.input<typeof SyncFindQuery>
+export type SyncAccountInput = z.input<typeof SyncAccountBody>
 export type MessagesQueryInput = z.input<typeof MessagesQuery>
 export type ThreadsQueryInput = z.input<typeof ThreadsQuery>
 export type EventsQueryInput = z.input<typeof EventsQuery>
@@ -196,10 +361,10 @@ export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
 export type ScheduleView = {
-  id: number
+  id: string
   channel: string
   /** The thread it replies in, or null when each send starts a new thread in `channel`. */
-  re: number | null
+  re: string | null
   text: string
   labels: Record<string, string>
   noSync: boolean
@@ -214,7 +379,7 @@ export type ScheduleView = {
   /** When the next send is due; null once it's done or canceled. */
   next: string | null
   /** The last message it posted. */
-  last: number | null
+  last: string | null
   state: 'pending' | 'done' | 'canceled'
   canceled: { by: { actor: string; principal: string; profile: string | null; session: string | null }; reason: 'canceled' | 'thread_deleted' | 'dropped' | 'revoked' } | null
   by: { actor: string; principal: string; profile: string | null; session: string | null }
@@ -230,16 +395,44 @@ export type PersonView = { id: string; handle: string; name: string; avatar: str
  * `person` is who a linked platform account belongs to.
  */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'> & { person?: PersonView }
-export type MessageView = Message & { author: ActorView | null }
+/** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
+export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version'> & {
+  id: string
+  /** The thread's root, or null for a root. */
+  re: string | null
+  /** The exact message replied to, when it isn't the root. */
+  replyTo: string | null
+  /** Grows with each change to this message: of two views of it, the one with the higher version is newer. */
+  version: number
+  links: LinkView[]
+  /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
+  schedule?: { id: string; n: number }
+  author: ActorView | null
+}
+
+/** A link in a message: a board message it names is a ref. */
+export type LinkView = Omit<Link, 'message'> & { message: string | null }
+
+/** An event's payload as clients see it: message IDs are refs. */
+type PayloadView<P> = {
+  [K in keyof P]: K extends 'id' | 're' | 'replyTo'
+    ? P[K] extends number ? string : P[K] extends number | null ? string | null : P[K]
+    : K extends 'links'
+      ? LinkView[]
+      : K extends 'schedule'
+        ? P[K] extends undefined ? undefined : { id: string; n: number } | Exclude<P[K], object>
+        : P[K]
+}
 
 /** A board event as subscribers get it. Checking `type` narrows `payload` to that event's. */
 export type BoardEventView = BoardEvent extends infer E
   ? E extends { type: infer T; payload: infer P }
     ? {
-        index: number
+        /** Where this event is in the board's order: pass it as `after` to read on from here. */
+        cursor: string
         type: T
         createdAt: string
-        payload: P
+        payload: PayloadView<P>
         /** The message the event concerns, as it is after the event. */
         message?: MessageView
         /** Who did it, for events with an author: a reaction's reactor, a label's setter. */
@@ -256,6 +449,33 @@ export type Discovery = {
   project_id: string | null
   /** The board's sync entries: `key` names its webhook and inbox, `platform` is e.g. `slack`. */
   sync: { key: string; platform: string }[]
+}
+
+/** Watchers a board on `http()` registered here: one registration per principal. */
+export type RegistrationView = {
+  /** The principal that registered. Its watchers write as it, with their IDs as profiles. */
+  owner: string
+  /** Where it's woken: `<url>/wake`. `null` when it pulls on its own. */
+  url: string | null
+  watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
+  /** Its sync entries. With any, its sync gets every event it delivers to platforms, as matches of watcher `@sync`. */
+  sync: { key: string; platform: string; signIn: boolean }[]
+  /** Every wake-up carries it, so the board can tell its registration is stale. */
+  hash: string
+}
+
+/** One match, leased to the registrant that pulled it. */
+export type MatchView = {
+  /** The match's ID, which its watcher's writes derive their IDs from. */
+  id: string
+  watcher: string
+  thread: string
+  /** Acks name it. A lease that ran out is someone else's next try. */
+  lease: string
+  /** How many tries came before this one. */
+  attempt: number
+  /** The event, as `vb tail --json` prints it, as the registrant may see it. */
+  event: BoardEventView
 }
 
 export type Me = {
@@ -279,31 +499,57 @@ export type IdentityView = {
   links: LinkedAccount[]
   /** The sync entries you haven't linked an account on. Boards older than it leave it out. */
   unlinked?: string[]
-  cursor: number
+  cursor: string
 }
 /**
- * How to prove an account is yours: post `code` from it anywhere the board syncs
- * before `expiresAt`, or open `url` (the platform's sign-in) and approve.
+ * How to prove an account is yours: post `code` from it anywhere the board syncs before
+ * `expiresAt`, or, when the entry signs people in, open `signIn` and approve: it carries the code.
  */
-export type IdentityChallenge =
-  | { method: 'code'; sync: string; platform: string; code: string; expiresAt: string }
-  | { method: 'consent'; sync: string; platform: string; url: string }
-/** After a sign-in: the account it linked, or null while it hasn't happened. */
-export type IdentityCheck = { linked: LinkedAccount | null }
+export type SyncCodeView = { code: string; expiresAt: string; signIn?: string }
+
+/** A thread's sync: its root, where it lives, its targets, and the platform thread it is on each. */
+export type SyncThreadView = { thread: string; root: string; channel: string; targets: string[]; external: Record<string, string> }
+/** What a platform ID is on the board. Each answers only when it was asked. */
+export type SyncFindView = {
+  /** The board thread a platform thread belongs to. */
+  thread: string | null
+  /** The board message a platform message is a copy of, or came in as. */
+  message: string | null
+  /** Who a platform account is linked to, and how. */
+  person: { id: string; method: 'code' | 'consent' } | null
+  /** The platform accounts linked to a person, and how. */
+  accounts: { id: string; method: 'code' | 'consent' }[]
+  /** Who a live code was issued to. */
+  holder: string | null
+}
+/** A message's copies, by target: where it went, or came from, on each platform. */
+export type SyncCopiesView = { copies: Record<string, Record<string, ExternalCopy>> }
+/** A platform event pulled from the caller's inbox, leased to it until it acks. */
+export type InboxItem = {
+  id: string
+  key: string
+  /** The platform thread: its events come one at a time, in order. */
+  thread: string
+  lease: string
+  /** How many tries came before this one. */
+  attempt: number
+  event: z.infer<typeof ExternalEvent>
+  raw: unknown
+}
 
 export type ChannelView = Channel
-export type MessagesPage = { messages: MessageView[]; cursor: number }
+export type MessagesPage = { messages: MessageView[]; cursor: string }
 export type ThreadView = {
   message: MessageView
   replies: MessageView[]
-  cursor: number
+  cursor: string
   /** The pending schedules that reply in this thread. Boards older than schedules leave it out. */
   schedules?: ScheduleView[]
 }
 /** A thread at a glance: its root, how many replies it has, and the latest one (null when none). Deleted replies don't count. */
 export type ThreadSummaryView = { message: MessageView; replies: number; last: MessageView | null }
-export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: number }
-export type EventsPage = { events: BoardEventView[]; cursor: number }
+export type ThreadsPage = { threads: ThreadSummaryView[]; cursor: string }
+export type EventsPage = { events: BoardEventView[]; cursor: string }
 
 /** The platform threads that now show typing: those the thread is synced to, minus any that failed. */
 export type TypingResult = { targets: string[] }
@@ -346,35 +592,9 @@ export type InboxEntry = {
   raw: unknown
 }
 
-/**
- * An event that failed 10 times and stopped: A2 dead-lettered it, and nothing after it on its lane
- * (its thread's) runs until it's retried or skipped. As `GET /stuck` returns it.
- */
-export type StuckEvent = {
-  /** The A2 session it's in: `board`, `inbox:<channel>`, `watch:<watcher>`, or `schedules`. */
-  session: string
-  index: number
-  /**
-   * What gave up on it: `vboard-sync` (delivery to platforms), `vboard-watchers`
-   * (matching watchers), `vboard-watch` (running one), `vboard-inbox` (platform
-   * events), `vboard-schedules`, or `vboard-schedule-sends`.
-   */
-  consumer: string
-  type: string
-  lane: string | null
-  /** The board thread it holds up, when there is one, and its root. */
-  thread: string | null
-  root: number | null
-  /** The platform thread, for an inbox event that never reached the board. */
-  external: string | null
-  attempts: number
-  failures: number
-  error: string | null
-  failedAt: string
-}
-
 /** The route table: method, path, and the schemas that validate input. */
 export const routes = {
+  /** Where the board is, its project, and the sync entries it links accounts on. No token. */
   discovery: { method: 'GET', path: '/' },
   me: { method: 'GET', path: '/me' },
   channels: { method: 'GET', path: '/channels' },
@@ -388,21 +608,45 @@ export const routes = {
   delete: { method: 'POST', path: '/messages/:id/delete', body: DeleteBody },
   react: { method: 'POST', path: '/messages/:id/reactions', body: ReactBody },
   label: { method: 'POST', path: '/messages/:id/labels', body: LabelBody },
+  /** Attaches the thread to a sync target, recording a `thread` receipt: needs `sync` where the thread is. */
   sync: { method: 'POST', path: '/messages/:id/sync', body: SyncBody },
-  /** Ephemeral: shows typing in the thread's synced platform threads, and writes nothing to the log. */
+  /** Ephemeral: shows typing in the thread's synced platform threads, and writes nothing to the log. Needs `post` where the thread is. */
   typing: { method: 'POST', path: '/messages/:id/typing', body: TypingBody },
   /** Posts a message later, as the caller: needs a scheduler. */
   schedule: { method: 'POST', path: '/schedules', body: ScheduleBody },
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
+  /** The caller's own post with the client ID it gave: what `POST /messages` answered, for telling a retry before posting. */
+  posted: { method: 'GET', path: '/posts/:id' },
+  /** Raw platform events in a sync key's inbox, newest first: the caller's own, and the board's with `sync` everywhere. */
   inbox: { method: 'GET', path: '/inbox/:key', query: InboxQuery },
-  /** Events that stopped their thread: full access only. */
-  stuck: { method: 'GET', path: '/stuck' },
-  /** Retries or skips one of them: full access only. */
-  redrive: { method: 'POST', path: '/stuck/redrive', body: RedriveBody },
-  /** Reads a platform channel or thread on demand, without syncing or storing it. Full access only. */
-  sourceRead: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },
+  /** Pushes platform events into the caller's inbox for a sync key, deduplicated by their platform IDs. */
+  inboxPush: { method: 'POST', path: '/inbox/:key', body: InboxPushBody },
+  /** The caller's next inbox events, leased to it, one platform thread at a time and in order. */
+  inboxNext: { method: 'GET', path: '/inbox/:key/next', query: InboxNextQuery },
+  /** How one went: done, or an error to try it again. */
+  inboxAck: { method: 'POST', path: '/inbox/:key/:id/ack', body: InboxAckBody },
+  /** A platform's write, as its platform author: `sync` where it lands. */
+  syncImport: { method: 'POST', path: '/sync/imports', body: SyncImportBody },
+  /** What sync did on a platform: a delivery, its files, a failure, or a thread's new target. */
+  syncReceipt: { method: 'POST', path: '/sync/receipts', body: SyncReceiptBody },
+  /** A board thread's sync, by its key. */
+  syncThread: { method: 'GET', path: '/sync/threads/:thread' },
+  /** What platform IDs are on the board. */
+  syncFind: { method: 'GET', path: '/sync/find', query: SyncFindQuery },
+  /** Messages' copies on platforms. */
+  syncCopies: { method: 'GET', path: '/sync/copies', query: SyncCopiesQuery },
+  /** A person's recent roots, for telling their own platform copies from new messages. */
+  syncRoots: { method: 'GET', path: '/sync/roots', query: SyncRootsQuery },
+  /** A one-time code for linking a platform account. */
+  syncCode: { method: 'POST', path: '/sync/codes', body: SyncCodeBody },
+  /** Links a platform account, by a code or for a person. */
+  syncAccount: { method: 'POST', path: '/sync/accounts', body: SyncAccountBody },
+  /** Unlinks a platform account. */
+  syncUnlink: { method: 'POST', path: '/sync/accounts/unlink', body: SyncUnlinkBody },
+  /** Reads a platform channel or thread on demand, where that sync runs, without syncing or storing it. Full access only. */
+  readSource: { method: 'GET', path: '/sources/:key/read', query: SourceReadQuery },
   webhook: { method: 'POST', path: '/webhooks/:key' },
   events: { method: 'GET', path: '/events', query: EventsQuery },
   avatar: { method: 'GET', path: '/avatars/:name' },
@@ -412,11 +656,20 @@ export const routes = {
   openapi: { method: 'GET', path: '/openapi.json' },
   /** Your linked platform accounts. */
   identity: { method: 'GET', path: '/identity' },
-  /** Starts linking a platform account: a one-time code to post from it, or a sign-in URL. */
-  identityLink: { method: 'POST', path: '/identity/link', body: IdentityLinkBody },
-  /** Finishes a sign-in: links the account it authorized, once it has. */
-  identityCheck: { method: 'POST', path: '/identity/check', body: IdentityCheckBody },
+  /** Starts a sign-in that carries a code (no token), on the board that runs the entry's sync. */
+  signIn: { method: 'GET', path: '/identity/sign-in', query: SignInQuery },
+  /** Where a sign-in comes back (no token): links the account it authorized to the code's person. */
+  signedIn: { method: 'GET', path: '/identity/signed-in', query: SignInQuery },
   identityUnlink: { method: 'POST', path: '/identity/unlink', body: IdentityUnlinkBody },
+  /** Watchers registered by boards on `http()`: every one to `manage` everywhere, the caller's own to anyone else. */
+  watchers: { method: 'GET', path: '/watchers' },
+  /** Registers the caller's watchers, replacing its last registration. On a board on `http()`, registers its own, with no body or token. */
+  register: { method: 'POST', path: '/watchers', body: RegisterBody },
+  /** The caller's matches it can run now, each leased to it until it acks. */
+  matches: { method: 'GET', path: '/watchers/matches', query: MatchesQuery },
+  ack: { method: 'POST', path: '/watchers/matches/:id/ack', body: AckBody },
+  /** On a board on `http()`: something matched. No body, no token: the board pulls what. */
+  wake: { method: 'POST', path: '/wake' },
 } as const
 
 export type RouteName = keyof typeof routes

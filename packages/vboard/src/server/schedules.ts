@@ -10,13 +10,14 @@ import {
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
-import type { Principal } from './auth.ts'
+import type { Granted, Known, Principal } from './auth.ts'
 import { actorsReducer, type ActorsState } from '../contract/reducers.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { resolveMentions } from './actors.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
-import { authorizePost, deploymentIdentity, writePost, type Identity, type WriteContext } from './writes.ts'
+import { authorizePost, deploymentIdentity, type Identity, type WriteContext, type WriteOrigin } from './writes.ts'
 import { DroppedError } from './middleware.ts'
+import { indexOf, ref } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
@@ -130,7 +131,7 @@ export function nextSend(schedule: Pick<Schedule, 'every' | 'until' | 'times'>, 
  * schedule is its own only if it was created without reading too, so a
  * principal ID shared with a caller that reads doesn't reach that caller's.
  */
-export const createdBy = (schedule: Schedule, principal: Pick<Principal, 'id' | 'access'>) =>
+export const createdBy = (schedule: Schedule, principal: Pick<Granted, 'id' | 'access'>) =>
   schedule.as.principal.id === principal.id &&
   principal.access.can('post', schedule.channel) &&
   (schedule.blind || principal.access.readable(schedule.channel))
@@ -138,9 +139,9 @@ export const createdBy = (schedule: Schedule, principal: Pick<Principal, 'id' | 
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
   return {
-    id: schedule.id,
+    id: ref(schedule.id),
     channel: schedule.channel,
-    re: schedule.re,
+    re: schedule.re === null ? null : ref(schedule.re),
     text: schedule.text,
     labels: { ...schedule.labels },
     noSync: schedule.noSync,
@@ -151,7 +152,7 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
     times: schedule.times,
     sent: schedule.sent,
     next: schedule.next === null ? null : new Date(schedule.next).toISOString(),
-    last: schedule.last,
+    last: schedule.last === null ? null : ref(schedule.last),
     state: schedule.canceled ? 'canceled' : schedule.next === null ? 'done' : 'pending',
     canceled: schedule.canceled,
     by: schedule.as.author,
@@ -163,7 +164,14 @@ export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleV
 const SYSTEM = deploymentIdentity('vboard:schedule', 'schedule')
 
 /** The board's `accessNow`: a stored creator's access under the rules as they are now, or null. */
-type AccessNow = (principal: Pick<Principal, 'id' | 'kind' | 'facts' | 'scope'>) => Promise<Access | null>
+type AccessNow = (principal: Known) => Promise<Access | null>
+
+/** A send, as the board posts it for its creator: a post's input, with `re` as a ref. Throws `DroppedError` when the middleware drops it. */
+type Send = (
+  identity: Identity,
+  origin: WriteOrigin,
+  input: { channel?: string; re?: string; id: string; text: string; labels: Labels; noSync: boolean; attachments?: string[] },
+) => Promise<{ id: string }>
 
 /** A refusal (a 403, or a 404 for a thread the creator can no longer read) as null; anything else still throws. */
 const refused = (error: unknown): null => {
@@ -178,6 +186,8 @@ const refused = (error: unknown): null => {
 export function createSchedules(options: { store?: A2Store | undefined; scheduler?: A2Scheduler | undefined }) {
   let writes: WriteContext | null = null
   let accessNow: AccessNow | null = null
+  /** Posts as `identity`, through what every post does: the middleware too. */
+  let send: Send | null = null
 
   /** Arms send `n`, due at `at`: the whole way, or one hop toward it. */
   async function arm(ctx: ConsumerContext<ScheduleEvents>, name: string, id: number, n: number, at: number) {
@@ -186,7 +196,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
   }
 
   async function due(ctx: ConsumerContext<ScheduleEvents, 'schedule.due'>) {
-    if (!writes || !accessNow) throw new Error('schedules used before the board bound them')
+    if (!writes || !accessNow || !send) throw new Error('schedules used before the board bound them')
     const { id, n, at } = ctx.event.payload
     const { state } = await ctx.session.state(schedulesReducer)
     const schedule = state.byId[id]
@@ -213,25 +223,20 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       await ctx.session.append('ended', { type: 'schedule.canceled', payload: { id, by: SYSTEM.author, reason: 'revoked' } })
       return
     }
-    // A retry after the post landed gets the same event ID, so A2 hands back the message it already posted.
+    // A retry after the post landed gets the same event ID, so the board hands back the message it already posted.
+    // The send is marked as the schedule's, and a handle that's ambiguous since it was checked stays plain text.
+    const input = {
+      ...(schedule.re === null ? { channel: schedule.channel } : { re: ref(schedule.re) }),
+      id: await idempotentId('vboard-schedule', String(id), String(n)),
+      text: schedule.text,
+      labels: schedule.labels,
+      noSync: schedule.noSync,
+      ...(schedule.attachments.length ? { attachments: schedule.attachments.map((file) => file.id) } : {}),
+    }
     let posted: number
     try {
-      posted = (
-      await writePost(writes, {
-        via: { kind: 'schedule', id },
-        identity: { ...schedule.as, principal: { ...schedule.as.principal, access } },
-        proofs,
-        id: await idempotentId('vboard-schedule', String(id), String(n)),
-        ...(schedule.re === null ? { channel: schedule.channel } : { re: schedule.re }),
-        text: schedule.text,
-        labels: schedule.labels,
-        noSync: schedule.noSync,
-        ...(schedule.attachments.length ? { attachments: schedule.attachments } : {}),
-        schedule: { id, n },
-        // Checked when it was scheduled; a handle that's ambiguous since stays plain text.
-        lenientMentions: true,
-      })
-    ).id
+      const sent = await send({ ...schedule.as, principal: { ...schedule.as.principal, access } }, { via: { kind: 'schedule', id }, schedule: { id, n } }, input)
+      posted = indexOf(sent.id)!
     } catch (error) {
       if (!(error instanceof DroppedError)) throw error
       // Its text never changes, so the middleware would drop every send after this one too.
@@ -315,9 +320,10 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
     server,
     session,
     catchUp,
-    bind: (binding: { writes: WriteContext; accessNow: AccessNow }) => {
+    bind: (binding: { writes: WriteContext; accessNow: AccessNow; send: Send }) => {
       writes = binding.writes
       accessNow = binding.accessNow
+      send = binding.send
     },
     list,
     /** The pending schedules that reply in the thread rooted at `root`. */
@@ -325,7 +331,8 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
 
     async create(
       identity: Identity,
-      body: ScheduleBodyOutput,
+      /** The body, with `re` as the log index it names. */
+      body: Omit<ScheduleBodyOutput, 're'> & { re?: number | undefined },
       attachments: Attachment[],
     ): Promise<{ schedule: ScheduleView; unknownMentions?: string[] }> {
       if (!writes) throw new Error('schedules used before the board bound them')

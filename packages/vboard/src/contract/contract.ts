@@ -14,6 +14,7 @@ import {
   MessageId,
   MessageText,
   MESSAGE_TEXT_MAX,
+  RemoteWatcherId,
   SCOPE_MAX,
   storable,
 } from './schemas.ts'
@@ -96,6 +97,11 @@ export const boardContract = contract({
        * from before channel access have none: everyone read everything then.
        */
       blind: z.literal(true).optional(),
+      /**
+       * (server) The principal of the sync elsewhere that imported it, whose copy `origin` names:
+       * that sync's to act on. None for the board's own sync, or a write on the board.
+       */
+      importedBy: ActorId.optional(),
     }),
     /** A message's links changed: an edit linked something new, or the platform sent what a link says. */
     'message.linked': z.object({ id: MessageId, thread: ThreadKey, links: z.array(Link).max(LINKS_PER_MESSAGE_MAX), by: Author, from: From }),
@@ -136,6 +142,11 @@ export const boardContract = contract({
         /** Posted with its author's own platform token, so it shows as them. Older receipts have none. */
         asUser: z.literal(true).optional(),
       }),
+      /**
+       * (server) The principal of the sync elsewhere that recorded it: its copy is that sync's to
+       * change. None for the board's own sync.
+       */
+      syncedBy: ActorId.optional(),
     }),
     /**
      * Board message `id`'s files reached `target` after its text: `files` are the
@@ -147,6 +158,8 @@ export const boardContract = contract({
       thread: ThreadKey,
       target: ExternalTarget,
       files: z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable(),
+      /** (server) As on `message.synced`: only the sync that recorded the copy sets its files. */
+      syncedBy: ActorId.optional(),
     }),
     /** A delivery that gave up: board message `id` didn't reach `target`, and `error` says why. */
     'message.sync_failed': z.object({
@@ -161,6 +174,11 @@ export const boardContract = contract({
       handle: Handle,
       name: z.string().min(1).max(128).refine(storable, 'name has a NUL character or a lone surrogate'),
       avatar: z.string().url().nullable(),
+      /**
+       * (server) A principal a host's `authenticate` made, or one of its profiles: someone the board
+       * signs in, whatever its ID or kind, so sync never writes as it. Others have none.
+       */
+      host: z.literal(true).optional(),
     }),
     /**
      * A platform actor (`slack:user:U0456`) is the same person as a principal
@@ -184,7 +202,7 @@ export type BoardEvents = typeof boardContract.events
 export type BoardEvent = ContractEvent<BoardEvents>
 export type Origin = z.infer<typeof Origin>
 
-const ExternalAuthor = z.object({
+export const ExternalAuthor = z.object({
   /** The platform principal, e.g. `slack:user:U0456`. */
   id: z.string().min(1),
   handle: z.string().min(1),
@@ -291,6 +309,8 @@ export const inboxContract = contract({
       event: ExternalEvent,
       raw: z.unknown(),
     }),
+    /** An inbox got its first event: session `inboxes` lists them, so a sync key's inbox lists every channel's. */
+    'inbox.opened': z.object({ channel: ExternalTarget }),
   },
 })
 
@@ -300,29 +320,126 @@ export type InboxEvent = ContractEvent<InboxEvents>
 /** `inbox:slack:C0123ABC`: the inbox session for one external channel. */
 export const inboxSession = (channel: string) => `inbox:${channel}`
 
+/** The session that lists the inboxes: one `inbox.opened` each. */
+export const INBOXES_SESSION = 'inboxes'
+
 /** What watchers matched, outside the board log: one session per watcher, so each fails on its own. */
+const MatchId = z.string().min(1).max(200)
+const LeaseId = z.string().min(1).max(64)
+/** What a queue keeps in order: a board thread's key, or a platform thread for an inbox. */
+const QueueLane = z.string().min(1).max(300).refine(storable, 'lane has a NUL character or a lone surrogate')
+
 export const watchContract = contract({
   name: 'vboard-watch',
   events: {
     'watch.matched': z.object({
-      thread: ThreadKey,
-      /** The board event, as `vb tail --json` prints it. */
+      /** The board thread, or for an inbox the platform thread: each one's matches go one at a time. */
+      thread: QueueLane,
+      /** The board event, as `vb tail --json` prints it, as the watcher may see it, or a platform event for an inbox. */
       event: z.unknown(),
+      /** A registered watcher's ID: its registrant's session holds all of its watchers' matches. */
+      watcher: RemoteWatcherId.optional(),
+      /** The registrant's sync, which gets every event it delivers to platforms. */
+      sync: z.literal(true).optional(),
+      /** A platform event the registrant pushed to its inbox for this sync key, to pull back and import. */
+      inbox: z.string().min(1).max(64).optional(),
     }),
     /** The watcher gave up on one match: `run` kept failing, and the thread's later events go on without it. */
     'watch.failed': z.object({
       /** The `watch.matched` event's ID. */
-      matched: z.string().min(1).max(200),
-      thread: ThreadKey,
+      matched: MatchId,
+      thread: QueueLane,
       error: z.string().min(1).max(500),
     }),
+    /** A registrant pulled a match: it's theirs to run until `until`, or until they ack it. */
+    'watch.leased': z.object({ matched: MatchId, lease: LeaseId, until: z.number().int().nonnegative() }),
+    /** The registrant ran it: done, or an error to try again after `retryAt`. A stale lease's ack changes nothing. */
+    'watch.acked': z.object({
+      matched: MatchId,
+      lease: LeaseId,
+      error: z.string().min(1).max(500).optional(),
+      retryAt: z.number().int().nonnegative().optional(),
+    }),
+    /** A lease ran out with no ack: a try that didn't finish. */
+    'watch.expired': z.object({ matched: MatchId, lease: LeaseId }),
+    /** A match's wait after an error is over: it can be pulled again. */
+    'watch.retry': z.object({ matched: MatchId }),
+    /** A match its registrant can't have anymore: it may not read it, or the watcher is gone. */
+    'watch.skipped': z.object({ matched: MatchId, reason: z.string().min(1).max(200) }),
+    /** A sweep is set for `at`: one timer for every lease that runs out before it, or a wake-up to try again. */
+    'watch.armed': z.object({ at: z.number().int().nonnegative() }),
+    /** A timer: an error's wait is over (`matched`), or a sweep (`sweep`). Its consumer decides what it still means. */
+    'watch.due': z.object({ matched: MatchId.optional(), retry: z.boolean().optional(), sweep: z.number().int().nonnegative().optional() }),
+    /** A wake-up didn't get there, `failures` in a row: nothing wakes the registrant again before `until`. */
+    'watch.unreachable': z.object({
+      failures: z.number().int().positive(),
+      until: z.number().int().nonnegative(),
+      /** Its answer's status, or the error. */
+      why: z.string().min(1).max(200),
+    }),
+    /** The registrant's board answered a wake-up, pulled, or registered: its next match wakes it. */
+    'watch.reachable': z.object({ by: z.enum(['wake', 'pull', 'registration']) }),
   },
 })
 
 export type WatchEvents = typeof watchContract.events
 
-/** `watch:triage`: the session for one watcher. */
+/** `watch:triage`: the session for one watcher, or `watch:@<principal>` for everything a registrant registered. */
 export const watchSession = (id: string) => `watch:${id}`
+
+/**
+ * A principal as the board keeps it, to work out its access again later under
+ * the rules as they are then: who it is, and the token facts rules match on.
+ */
+export const StoredPrincipal = z.object({
+  id: z.string().min(1),
+  kind: z.enum(['person', 'deployment', 'workflow', 'external']),
+  handle: Handle,
+  facts: z
+    .object({
+      issuer: z.enum(['vercel', 'github', 'oidc', 'host']),
+      iss: z.string().max(1000),
+      claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
+      /** The board's own Vercel team, as the board knew it when it verified the token. */
+      team: z.string().max(200).optional(),
+    })
+    .optional(),
+  scope: z.string().max(SCOPE_MAX).optional(),
+})
+
+/** A watcher as a board on `http()` registers it: its tail, and when it runs. */
+export const WatcherSpec = z.object({
+  tail: z.string().max(1000),
+  when: z.enum(['matches', 'enters']),
+})
+
+/**
+ * Watchers that boards on `http()` registered with this one, outside the board
+ * log: one session, `registry`. Each principal has one registration, and its
+ * newest replaces the last.
+ */
+export const registryContract = contract({
+  name: 'vboard-registry',
+  events: {
+    'watchers.registered': z.object({
+      /** The principal that registered, which its watchers' writes are by, with their IDs as profiles. */
+      owner: z.string().min(1).max(200),
+      /** It, to work out what it may read at each match: a watcher sees only what its registrant can. */
+      principal: StoredPrincipal,
+      /** Where to wake it: `<url>/wake`. Without one, it pulls on its own. */
+      url: z.string().url().max(500).nullable(),
+      watch: z.record(RemoteWatcherId, WatcherSpec),
+      /** Its sync entries: with any, its sync subscribes too, to every post, change, and thread sync where it may sync. Older registrations have none. */
+      sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean() })).max(32).optional(),
+      /** `watchersHash(watch)`, which every wake-up carries so the board can tell it's stale. */
+      hash: z.string().min(1).max(100),
+    }),
+  },
+})
+
+export type RegistryEvents = typeof registryContract.events
+
+export const REGISTRY_SESSION = 'registry'
 
 /** Epoch milliseconds. */
 const Millis = z.number().int().nonnegative()
@@ -335,21 +452,7 @@ const Millis = z.number().int().nonnegative()
  */
 export const ScheduleIdentity = z.object({
   author: Author,
-  principal: z.object({
-    id: z.string().min(1),
-    kind: z.enum(['person', 'deployment', 'workflow', 'external']),
-    handle: Handle,
-    facts: z
-      .object({
-        issuer: z.enum(['vercel', 'github', 'oidc', 'host']),
-        iss: z.string().max(1000),
-        claims: z.record(z.string(), z.union([z.string().max(1000), z.number(), z.boolean()])),
-        /** The board's own Vercel team, as the board knew it when it verified the token. */
-        team: z.string().max(200).optional(),
-      })
-      .optional(),
-    scope: z.string().max(SCOPE_MAX).optional(),
-  }),
+  principal: StoredPrincipal,
   actor: z.object({ id: ActorId, kind: SeenActorKind, handle: Handle, name: z.string().min(1).max(128), avatar: z.string().nullable() }),
 })
 

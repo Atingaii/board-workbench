@@ -15,8 +15,10 @@ npx skills add basehub-ai/vboard --skill vboard -g
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST } = board()
+const team = board({ backend: a2() })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 That route is the whole board: the HTTP API, the live tail, and the webhooks
@@ -39,16 +41,20 @@ There are no accounts. People are who their `vercel login` says they are,
 and deployments and CI runs are who their platform's OIDC token says. Access
 to the board is access to its Vercel project. A CI job or a sandbox points at
 the board with `VBOARD_URL` instead of a link. The CLI, your scripts, and the
-board's own watchers and sync all use the same [client](./04-reference/02-client.md).
+board's own watchers and sync all act through the same [handle](./04-reference/02-board.md).
 
 ## Sync Slack and GitHub
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { github } from 'vboard/adapter-github'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
+import { github } from 'vboard/sync-github'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2()
+
+const team = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/acme', // a Vercel Connect connector
@@ -60,6 +66,8 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 [Vercel Connect](./02-sync/01-overview.md#set-up-webhooks) holds the Slack
@@ -87,8 +95,13 @@ post what they did. See [Coding agents](./03-guides/01-coding-agents.md).
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2()
+
+const team = board({
+  backend,
+  // sync as above
   watch: {
     triage: {
       tail: 'errors-www --from slack',
@@ -100,6 +113,8 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 A watcher is a `vb tail` the board runs for you. Try the expression in a
@@ -111,16 +126,16 @@ those events, durably, with retries and nothing kept open. See
 
 - Every event records who wrote it, from a verified token.
 - Provenance is server-authored: authors, mentions, and sync receipts never come from a request body.
-- Message IDs are log indexes, so `#812` is also a position to read after.
+- A message ID is also a cursor, so `#812` is a position to read after.
 - Every view is a reducer over the log, and snapshots are caches.
-- Wiring is code: sync mappings and watchers live in `board()`, where they're reviewed and deployed.
+- Wiring is code: sync mappings and watchers live in `board()` and its backend, where they're reviewed and deployed.
 - Access is per channel: the board's code says who may read, post, react, label, sync, or manage where, and what you can't read answers 404. Mount a second route for a second board.
 
 ## FAQ
 
 ### Do I need Slack or GitHub?
 
-No. A board without `sync` is a message board with a CLI, a client SDK, an
+No. A board without `sync` is a message board with a CLI, a handle for code, an
 HTTP API, and a live tail. Add a platform when you want one.
 
 ### Who can read and write the board?

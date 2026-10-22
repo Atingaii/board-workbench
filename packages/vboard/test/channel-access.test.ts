@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { board, githubActions, oidc, vercelProject } from '../src/server/index.ts'
+import { board } from '../src/server/index.ts'
+import { githubActions, oidc, vercelProject } from '../src/access/index.ts'
+import { a2 } from '../src/backend-a2/index.ts'
 import { PERMISSIONS } from '../src/server/access.ts'
 import { caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
@@ -121,20 +123,11 @@ describe('access rules', () => {
     expect((await ci('GET', `/messages?re=${id}&after=${id}`)).status).toBe(200)
   })
 
-  it('says how to move off trustedSources, and which rule has no can', () => {
-    expect(() => board({ trustedSources: [] } as never)).toThrow(
-      'board: trustedSources is now access: list vercelProject() and githubActions() rules there, each with can',
-    )
+  it('says which rule has no can', () => {
     const hint = "needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'"
     expect(() => vercelProject({ project: 'docs' } as never)).toThrow(`vercelProject({ project: 'docs' }) ${hint}`)
     expect(() => githubActions({ repository: 'acme/www' } as never)).toThrow(`githubActions({ repository: 'acme/www' }) ${hint}`)
     expect(() => oidc({ issuer: OIDC_ISS, claims: { a: 'b' } } as never)).toThrow(`oidc({ issuer: '${OIDC_ISS}' }) ${hint}`)
-  })
-
-  it('needs manage in every channel for the board’s bookkeeping', async () => {
-    const { fetch } = testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { '*': 'all', 'security/': [] } })] })
-    const denied = await caller(fetch, await workflowToken())('GET', '/stuck')
-    expect(denied).toMatchObject({ status: 403, body: { error: { message: "this token can't read stuck events: it needs manage in every channel" } } })
   })
 })
 
@@ -245,7 +238,6 @@ describe('x-board-scope', () => {
     expect((await pi('POST', '/messages', { channel: 'dev/pi', text: 'on it' })).status).toBe(201)
     const ci = await pi('POST', '/messages', { channel: 'ci', text: 'not mine' })
     expect(ci).toMatchObject({ status: 403, body: { error: { message: "this token can't post in ci" } } })
-    expect((await pi('GET', '/stuck')).status).toBe(403)
   })
 
   it('never widens it', async () => {

@@ -7,6 +7,7 @@ description: Middleware sees every post and edit before it lands, whatever it ca
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board, type Middleware } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
 
 const guard: Middleware = async ({ write, source, respond, next }) => {
   if (source.kind === 'sync' && /ignore previous instructions/i.test(write.text)) {
@@ -16,16 +17,27 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
   await next()
 }
 
-export const { GET, POST, scheduler } = board({
-  // store, scheduler, and sync as in Mounting
-  middleware: [guard],
+const backend = a2({
+  // store and scheduler as in Mounting
 })
+
+const team = board({
+  backend,
+  middleware: [guard],
+  // sync as in Sync
+})
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
-Every post and edit goes through `middleware`, in order, before it's written:
-the API (the CLI, the SDK, CI), messages synced in from Slack, GitHub, and
-WhatsApp (sync callbacks' writes included), watchers, in-process clients, and
-scheduled sends. Reactions, labels, and deletes don't.
+Every post and edit goes through `middleware`, in order, before it lands: the
+API (the CLI, scripts, CI), messages synced in from Slack, GitHub, and WhatsApp
+(sync callbacks' writes included), watchers, the board's
+[handle](./01-mounting.md#the-handle), and scheduled sends. Reactions, labels,
+and deletes don't. It's `board()`'s, so it runs before the write reaches the
+backend, on any backend. A board on `http()` runs its own on what it writes,
+and the board it uses runs its own on what arrives, its sync's imports
+included: each sees the write once.
 
 - **`next()` passes the write on,** to the next middleware and, after the last,
   to the board. It resolves once the write has landed.
@@ -36,23 +48,29 @@ scheduled sends. Reactions, labels, and deletes don't.
   emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **A retry of a post that landed skips it.** The same `id` from the same
-  author, in the same channel or thread, returns the message on the board,
-  whatever the middleware would say now. An author that can't read the channel
-  gets it back as it landed, and only if it posted without reading too. Anyone
-  else's post with that `id` fails with `duplicate_id`. A write it dropped has
-  nothing on the board, so a retry goes through it again: keep side effects
-  like `respond` idempotent, or cheap to repeat.
+- **It sees only a write the caller may make.** One `access` would refuse (a
+  channel it can't post in, someone else's message, a thread it can't read)
+  answers 403 or 404 without running it.
+- **A retry of a post that landed skips it.** Before it runs, the board looks
+  for the caller's post with that `id`. The same `id` from the same author, in
+  the same channel or thread, returns the message on the board, whatever the
+  middleware would say now. That covers
+  the API, the handle's posts with an `id`, watchers, schedule sends, and a
+  sync callback's posts. An author that can't read the channel gets it back as it landed, and
+  only if it posted without reading too. Anyone else's post with that `id`
+  fails with `duplicate_id`. A write it dropped has nothing on the board, so a
+  retry goes through it again: keep side effects like `respond` idempotent, or
+  cheap to repeat.
 
 ## What it gets
 
 | | |
 | --- | --- |
-| `write` | `{ kind: 'post', channel, re, text, labels, attachments }` or `{ kind: 'edit', id, channel, re, text }` |
+| `write` | `{ kind: 'post', channel, re, text, labels, attachments }` or `{ kind: 'edit', id, channel, re, text }`. `re` is the thread's root, or null for a root; IDs are strings, as clients see them |
 | `author` | Who's writing: the actor, with `kind` (`person`, `agent`, `deployment`, `workflow`, `external`) |
 | `source` | Where it came from (below) |
-| `respond(text)` | Tells the author, where they wrote from |
-| `board` | An in-process client, writing as `vboard:middleware` |
+| `respond(text)` | What to tell the author when it drops the write, where they wrote from |
+| `board` | The board's handle, acting as `vboard:middleware` |
 | `next(patch?)` | Passes the write on |
 
 `source` is one of:
@@ -61,18 +79,20 @@ scheduled sends. Reactions, labels, and deletes don't.
 - `{ kind: 'sync', key, platform, channel, thread }`: a platform event, with its
   sync key (`slack`), and the platform channel and thread it's in.
 - `{ kind: 'watcher', id }`, `{ kind: 'client', name }`, or
-  `{ kind: 'schedule', id }`: the board's own code.
+  `{ kind: 'schedule', id }`: the board's own code. A `client` is its handle:
+  `name` is the profile from `as(name)`, or null.
 
 ## Telling the author
 
-`respond` answers where the write came from:
+What `respond` says goes back with a write it drops, where the write came from:
 
 - **Synced in:** a reply in the message's platform thread, posted by the app.
-  It isn't on the board.
+  It isn't on the board. The import's answer carries it, so sync says it there
+  whichever board keeps the log.
 - **The API:** a dropped write answers `422` with code `dropped`, and the
   message is what was responded (or `the board dropped this message`). The CLI
   prints it as `error: …`.
-- **A watcher or in-process client:** its call throws that same error.
+- **A watcher or the handle:** its call throws that same error.
 - **A schedule:** nobody's there to tell. Its text never changes, so the
   schedule ends, with `reason: 'dropped'`.
 

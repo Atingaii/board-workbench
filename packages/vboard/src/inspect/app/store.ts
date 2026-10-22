@@ -17,7 +17,7 @@ export type Op =
 export type Pending = {
   key: string
   channel: string
-  re: number | null
+  re: string | null
   text: string
   noSync: boolean
   labels: Record<string, string>
@@ -31,15 +31,13 @@ export type State = {
   me: Me | null
   discovery: Discovery | null
   channels: Record<string, ChannelView>
-  /** Messages as the board last showed them. */
-  messages: Record<number, MessageView>
-  /** The log index each message's view reflects; older views never replace newer ones. */
-  asOf: Record<number, number>
-  ops: Record<number, { id: string; op: Op }[]>
+  /** Messages as the board last showed them, by ID. Of two views of one, the higher `version` wins. */
+  messages: Record<string, MessageView>
+  ops: Record<string, { id: string; op: Op }[]>
   pending: Pending[]
   actors: Record<string, ActorView>
-  /** The stream's position. */
-  cursor: number
+  /** The stream's position: the last event's cursor, to resume from. */
+  cursor: string | null
   live: 'connecting' | 'live' | 'reconnecting'
 }
 
@@ -48,11 +46,10 @@ export const initialState: State = {
   discovery: null,
   channels: {},
   messages: {},
-  asOf: {},
   ops: {},
   pending: [],
   actors: {},
-  cursor: 0,
+  cursor: null,
   live: 'connecting',
 }
 
@@ -98,19 +95,14 @@ export function apply(message: MessageView, op: Op, me: string, now: string): Me
   }
 }
 
-/** Takes in message views that reflect log index `asOf`, keeping whichever is newer. */
-export function merge(state: State, views: MessageView[], asOf: number): State {
+/** Takes in message views, keeping whichever of each is newer: an older view never replaces a newer one. */
+export function merge(state: State, views: MessageView[]): State {
   let messages = state.messages
-  let marks = state.asOf
   let ops = state.ops
   for (const view of views) {
-    if ((marks[view.id] ?? -1) > asOf) continue
-    if (messages === state.messages) {
-      messages = { ...messages }
-      marks = { ...marks }
-    }
+    if ((messages[view.id]?.version ?? -1) > view.version) continue
+    if (messages === state.messages) messages = { ...messages }
     messages[view.id] = view
-    marks[view.id] = asOf
     const waiting = ops[view.id]
     if (waiting && state.me) {
       const left = waiting.filter(({ op }) => !confirms(view, op, state.me!.actor))
@@ -121,7 +113,7 @@ export function merge(state: State, views: MessageView[], asOf: number): State {
       }
     }
   }
-  return messages === state.messages && ops === state.ops ? state : { ...state, messages, asOf: marks, ops }
+  return messages === state.messages && ops === state.ops ? state : { ...state, messages, ops }
 }
 
 /**
@@ -138,20 +130,21 @@ function landed(state: State, message: MessageView): Pending | undefined {
 
 /** Folds one live event in: the message it concerns, channel counts, and actor details. */
 export function applyEvent(state: State, event: BoardEventView): State {
-  let next = event.message ? merge(state, [event.message], event.index) : state
+  let next = event.message ? merge(state, [event.message]) : state
   if (event.type === 'message.posted' && event.message) {
     const post = landed(next, event.message)
     if (post) next = { ...next, pending: next.pending.filter((p) => p !== post) }
     const { channel, re } = event.message
     const known = next.channels[channel]
-    if (!known || known.lastIndex < event.index)
+    // A new message's version is where it landed, as a channel's `lastIndex` is.
+    if (!known || known.lastIndex < event.message.version)
       next = {
         ...next,
         channels: {
           ...next.channels,
           [channel]: {
             path: channel,
-            lastIndex: event.index,
+            lastIndex: event.message.version,
             messages: (known?.messages ?? 0) + 1,
             threads: (known?.threads ?? 0) + (re === null ? 1 : 0),
           },
@@ -162,14 +155,15 @@ export function applyEvent(state: State, event: BoardEventView): State {
     const { actor, kind, handle, name, avatar } = event.payload
     next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar } } }
   }
-  return event.index > next.cursor ? { ...next, cursor: event.index } : next
+  // The stream comes in order, so the last event's cursor is where to resume.
+  return { ...next, cursor: event.cursor }
 }
 
-export function addOp(state: State, message: number, id: string, op: Op): State {
+export function addOp(state: State, message: string, id: string, op: Op): State {
   return { ...state, ops: { ...state.ops, [message]: [...(state.ops[message] ?? []), { id, op }] } }
 }
 
-export function dropOp(state: State, message: number, id: string): State {
+export function dropOp(state: State, message: string, id: string): State {
   const left = (state.ops[message] ?? []).filter((entry) => entry.id !== id)
   const ops = { ...state.ops }
   if (left.length > 0) ops[message] = left
@@ -178,7 +172,7 @@ export function dropOp(state: State, message: number, id: string): State {
 }
 
 /** A message as this page shows it: the board's view, your pending changes, and fresh author details. */
-export function shown(state: State, id: number, now = new Date().toISOString()): MessageView | undefined {
+export function shown(state: State, id: string, now = new Date().toISOString()): MessageView | undefined {
   const message = state.messages[id]
   if (!message) return undefined
   let out = message
@@ -189,33 +183,40 @@ export function shown(state: State, id: number, now = new Date().toISOString()):
 
 export type Thread = { root: MessageView; replies: MessageView[]; pending: Pending[] }
 
+/**
+ * Messages in the order they were written: by when, and between two in the same millisecond, by
+ * ID, digits compared as numbers. IDs are the board's to choose, so this is only a tiebreak.
+ */
+export const byWritten = (a: Pick<MessageView, 'createdAt' | 'id'>, b: Pick<MessageView, 'createdAt' | 'id'>) =>
+  a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id.localeCompare(b.id, undefined, { numeric: true })
+
 /** A channel's threads, oldest first, from the messages loaded so far. */
 export function channelThreads(state: State, channel: string): { threads: Thread[]; pending: Pending[] } {
   const roots: MessageView[] = []
-  const replies = new Map<number, MessageView[]>()
+  const replies = new Map<string, MessageView[]>()
   for (const message of Object.values(state.messages)) {
     if (message.channel !== channel) continue
     const view = shown(state, message.id)!
     if (message.re === null) roots.push(view)
     else replies.set(message.re, [...(replies.get(message.re) ?? []), view])
   }
-  roots.sort((a, b) => a.id - b.id)
+  roots.sort(byWritten)
   return {
     threads: roots.map((root) => ({
       root,
-      replies: (replies.get(root.id) ?? []).sort((a, b) => a.id - b.id),
+      replies: (replies.get(root.id) ?? []).sort(byWritten),
       pending: state.pending.filter((post) => post.re === root.id),
     })),
     pending: state.pending.filter((post) => post.channel === channel && post.re === null),
   }
 }
 
-export function thread(state: State, root: number): Thread | null {
+export function thread(state: State, root: string): Thread | null {
   const view = shown(state, root)
   if (!view) return null
   const replies = Object.values(state.messages)
     .filter((message) => message.re === root)
-    .sort((a, b) => a.id - b.id)
+    .sort(byWritten)
     .map((message) => shown(state, message.id)!)
   return { root: view, replies, pending: state.pending.filter((post) => post.re === root) }
 }
@@ -224,7 +225,7 @@ export function thread(state: State, root: number): Thread | null {
 export function recent(state: State, limit = 200, keep: (m: MessageView) => boolean = () => true): MessageView[] {
   return Object.values(state.messages)
     .filter(keep)
-    .sort((a, b) => b.id - a.id)
+    .sort((a, b) => byWritten(b, a))
     .slice(0, limit)
     .reverse()
     .map((message) => shown(state, message.id)!)

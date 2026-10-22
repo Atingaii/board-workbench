@@ -1,26 +1,26 @@
-import type { BoardClient } from '../client/client.ts'
+import type { Board } from './board.ts'
 import type { Actor } from '../contract/reducers.ts'
 import { z } from 'zod'
 import { Labels, MESSAGE_TEXT_MAX, type Attachment } from '../contract/schemas.ts'
 import { HttpError } from './errors.ts'
 
-/** Where a write came from. */
+/** Where a write came from, as the middleware sees it. */
 export type WriteSource =
   /** The HTTP API: the CLI, the SDK, scripts, CI. */
   | { kind: 'api' }
   /** A synced platform's event, or a sync callback's own writes. `thread` is the platform thread. */
   | { kind: 'sync'; key: string; platform: string; channel: string; thread: string }
-  /** An in-process client from `board(...).client(name)`. */
-  | { kind: 'client'; name: string }
+  /** The board's handle in this deployment: `team.post(…)`, or `team.as(name).post(…)`. `name` is null for the handle itself. */
+  | { kind: 'client'; name: string | null }
   /** A watcher's in-process client. */
   | { kind: 'watcher'; id: string }
   /** A scheduled message's send. */
   | { kind: 'schedule'; id: number }
 
-/** The message a write would put on the board. */
+/** The message a write would put on the board. `re` is its thread's root, and IDs are as clients see them. */
 export type Write =
-  | { kind: 'post'; channel: string; re: number | null; text: string; labels: Labels; attachments: readonly Attachment[] }
-  | { kind: 'edit'; id: number; channel: string; re: number | null; text: string }
+  | { kind: 'post'; channel: string; re: string | null; text: string; labels: Labels; attachments: readonly Attachment[] }
+  | { kind: 'edit'; id: string; channel: string; re: string | null; text: string }
 
 /** What `next` may change before the write lands. Labels apply to posts only. */
 export type WritePatch = { text?: string; labels?: Labels }
@@ -31,12 +31,12 @@ export type MiddlewareContext = {
   author: Readonly<Actor>
   source: Readonly<WriteSource>
   /**
-   * Tells whoever wrote it, where they wrote it from: a reply in their platform
-   * thread for sync, the error message the API answers with otherwise.
+   * What to tell whoever wrote it when the write is dropped, where they wrote it from: a reply in
+   * their platform thread for sync, the error the API answers with otherwise.
    */
   respond(text: string): Promise<void>
-  /** Writes as `vboard:middleware`. Its writes skip the middleware. */
-  board: BoardClient
+  /** The board, acting as `vboard:middleware`. Its writes skip the middleware. */
+  board: Board
   /**
    * Hands the write to the next middleware, and after the last one, to the board.
    * Not calling it drops the write, and so does emptying a write that has no files.
@@ -48,8 +48,11 @@ export type Middleware = (context: MiddlewareContext) => unknown
 
 /** A write the middleware didn't let through: the API answers 422 with what it responded. */
 export class DroppedError extends HttpError {
-  constructor(message: string) {
-    super(422, 'dropped', message)
+  /** What the middleware responded, in order: none when it dropped the write without a word. */
+  readonly responses: readonly string[]
+  constructor(responses: readonly string[]) {
+    super(422, 'dropped', responses.join('\n') || 'the board dropped this message')
+    this.responses = responses
   }
 }
 
@@ -63,7 +66,7 @@ export const MIDDLEWARE_ACTOR = 'vboard:middleware'
  */
 export async function runMiddleware<W extends Write, T>(
   middleware: readonly Middleware[],
-  input: { write: W; author: Actor; source: WriteSource; board: () => BoardClient; respond?: (text: string) => Promise<void> },
+  input: { write: W; author: Actor; source: WriteSource; board: () => Board },
   commit: (write: W) => Promise<T>,
 ): Promise<T> {
   const responses: string[] = []
@@ -83,7 +86,6 @@ export async function runMiddleware<W extends Write, T>(
       board: input.board(),
       respond: async (text) => {
         responses.push(text)
-        await input.respond?.(text)
       },
       next: (patch = {}) => {
         if (next) throw new Error('next() was already called')
@@ -100,6 +102,6 @@ export async function runMiddleware<W extends Write, T>(
     if (next) await next
   }
   await step(0, input.write)
-  if (!committed) throw new DroppedError(responses.join('\n') || 'the board dropped this message')
+  if (!committed) throw new DroppedError(responses)
   return (committed as { value: T }).value
 }

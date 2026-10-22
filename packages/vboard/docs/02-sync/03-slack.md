@@ -11,9 +11,13 @@ connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), 
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2()
+
+const team = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/acme',
@@ -24,6 +28,8 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 From the connector name, vboard builds the Chat SDK adapter, the Web API client it
@@ -44,7 +50,7 @@ Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
 (`npm i chat @chat-adapter/slack`):
 
 ```ts
-// in board({ sync: { … } }):
+// in board({ backend, sync: { … } }):
 slack: slack({
   adapter: createSlackAdapter({
     botToken: process.env.SLACK_BOT_TOKEN!,
@@ -79,7 +85,7 @@ most once a minute, while the other channels sync.
   `users:read.email`). See [mentions](../01-board/03-identity.md).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.
-- **Typing:** `vb typing 812 "running tests…"` sets the thread's status in Slack,
+- **Typing:** `team.typing('812', 'running tests…')`, or `vb typing 812 running tests…`, sets the thread's status in Slack,
   under the thread, until the app posts or about two minutes pass. The status is
   at most 100 characters; without one, Slack shows "Typing…".
 
@@ -132,8 +138,10 @@ the file's own name.
 A Slack permalink in a message becomes one of the message's links; its text stays
 as written. `vb read` and `vb inspect` quote each one under the message.
 
-- A link to a message the board has (it was synced, either way) is that board
-  message, `#812`, with a snapshot of it.
+- A link to a message the board has (it was synced, either way) in the same
+  board channel is that board message, `#812`, with a snapshot of it. One in
+  another channel isn't: the link's readers may not read that channel, so its
+  snapshot comes from Slack, as below.
 - Otherwise the snapshot comes from Slack's unfurl, which checks that the poster
   can see the linked message.
 - With no unfurl yet, the board reads the message itself, but only from a public
@@ -148,21 +156,24 @@ linked, not copied.
 
 ## Read on demand
 
-An agent can read a Slack channel the board doesn't sync, for research or a
-reference, without syncing it:
+The board that runs a Slack entry can read a channel it doesn't sync, for
+research or a reference, without syncing it. Only that board has the app to
+read with, so ask it: its own code, through its handle, `vb sources slack read`
+on the board you link, or a request to its `GET /sources/slack/read?target=…`.
+A board that doesn't run the entry answers 404 `not_synced_here`.
 
-```bash
-# in a terminal:
-vb sources slack read '#general'                    # newest 50, shown oldest first
-vb sources slack read C0123ABC --limit 20
-vb sources slack read C0123ABC:1727000000.123456    # a thread; a reply's ts reads its whole thread
-vb sources slack read 'https://acme.slack.com/archives/C0123ABC/p1727000000123456'
+```ts
+// in the route that mounts the board with `sync: { slack }`:
+const recent = await team.readSource('slack', '#general')                          // newest 50, oldest first
+await team.readSource('slack', 'C0123ABC', { limit: 20 })
+await team.readSource('slack', 'C0123ABC:1727000000.123456')                       // a thread; a reply's ts reads its whole thread
+await team.readSource('slack', 'https://acme.slack.com/archives/C0123ABC/p1727000000123456')
 ```
 
 It reads only public channels the app is already in, and never joins one. Nothing
-is stored, and reading a channel doesn't make the board listen to it. It needs
-`manage` in every channel, like `vb inbox`, since the app's token reads more than the caller
-might.
+is stored, and reading a channel doesn't make the board listen to it. A request
+needs `manage` in every channel, since the app's token reads more than the
+caller might.
 
 | Answer | Why |
 | --- | --- |

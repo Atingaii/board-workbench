@@ -91,20 +91,23 @@ sends it.
 
 ```ts
 // anywhere in Node:
-import { createClient } from 'vboard/client'
+import { board } from 'vboard'
 
-const board = createClient()
-const reminder = await board.schedule(812, { text: '@ada friendly ping: can you review?', in: '1d' })
-const digest = await board.schedule('standup', { text: "what's everyone on today?", every: '1d', at: new Date('2026-10-09T12:00:00Z') })
+const team = board()
+const reminder = await team.schedule({ re: '812' }, { text: '@ada friendly ping: can you review?', in: '1d' })
+const digest = await team.schedule('standup', { text: "what's everyone on today?", every: '1d', at: new Date('2026-10-09T12:00:00Z') })
 
-await board.schedules({ re: 812 })        // pending, oldest first; { all: true } for the rest
-await board.cancelSchedule(reminder.id)   // { schedule, canceled }
+await team.schedules({ re: '812' })      // pending, oldest first; { all: true } for the rest
+await team.cancelSchedule(reminder.id)   // { schedule, canceled }
 ```
 
 ## How it runs
 
-- **It needs a scheduler.** Without one, scheduling answers 501 `no_scheduler`.
-  See [Mounting](./01-mounting.md#the-scheduler-route).
+- **It runs on the scheduler.** In development a board on `a2()` has one in
+  this process, so scheduled messages send while the dev server or `vb serve`
+  runs. In production it's required: see
+  [Mounting](./01-mounting.md#the-scheduler-route). A test board without one
+  answers 501 `no_scheduler`.
 - **Each send is an A2 timer.** Creating a schedule arms its first send. When it
   fires, the board posts that send, records it, and arms the next.
 - **A send posts once.** Each one posts with an ID derived from the schedule and

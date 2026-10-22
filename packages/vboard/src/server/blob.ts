@@ -6,7 +6,7 @@ import { badRequest, HttpError, notFound } from './errors.ts'
 
 /**
  * Where attachments' bytes live. The board writes each file once, under a key
- * it chose, and never overwrites it; `vercelBlob()` from `vboard/adapter-vercel-blob` is the
+ * it chose, and never overwrites it; `vercelBlob()` from `vboard/backend-a2/blob-vercel` is the
  * production one.
  */
 export type BlobStore = {
@@ -52,9 +52,6 @@ export function defaultBlob(): BlobStore | null {
 
 const dataKey = (id: string) => `vboard/attachments/${id}`
 const metaKey = (id: string) => `vboard/attachments/${id}.json`
-
-/** Shown inline only when a browser can't run it: everything else downloads. */
-const INLINE = /^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm)|text\/plain)$/
 
 /** `shot.png`, as the board stores a name: no paths, no control characters. */
 function fileName(name: string | null): string {
@@ -129,25 +126,10 @@ export async function readAttachmentData(blob: BlobStore | null, id: string): Pr
   return bytes(found.data)
 }
 
-/**
- * The file, sandboxed: it can't run as a page on the board's origin, and only
- * types a browser can't execute display inline.
- */
-export async function attachmentResponse(blob: BlobStore | null, attachment: AttachmentType): Promise<Response> {
-  const { id } = attachment
-  const found = await blob!.get(dataKey(id))
+/** An attachment's bytes as the store keeps them, a stream or the bytes, for board() to serve. */
+export async function attachmentBody(blob: BlobStore | null, id: string): Promise<ReadableStream<Uint8Array> | Uint8Array> {
+  if (!blob) throw noBlob()
+  const found = await blob.get(dataKey(id))
   if (!found) throw attachmentNotFound(id)
-  const disposition = INLINE.test(attachment.type) ? 'inline' : 'attachment'
-  const body = found.data instanceof Uint8Array ? new Blob([found.data as Uint8Array<ArrayBuffer>]) : found.data
-  return new Response(body, {
-    headers: {
-      'content-type': attachment.type,
-      'content-length': String(attachment.size),
-      'content-disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
-      'content-security-policy': "sandbox; default-src 'none'",
-      'x-content-type-options': 'nosniff',
-      // An ID's bytes never change.
-      'cache-control': 'private, max-age=31536000, immutable',
-    },
-  })
+  return found.data
 }

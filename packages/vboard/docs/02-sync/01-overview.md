@@ -11,14 +11,20 @@ is delivered to every one of those external threads except the one it came from.
 Replies, reactions, edits, and deletes follow the same path.
 
 ```text
-inbound   Slack ─▶ /webhooks/slack ─▶ inbox ─▶ vboard-inbox ─▶ board: message.posted
-outbound  vb reply ─▶ message.posted ─▶ vboard-sync ─▶ Slack ─▶ message.synced
-attach    vb sync ─▶ thread.synced ─▶ vboard-sync ─▶ Slack (root + backfill)
+inbound   Slack ─▶ /webhooks/slack ─▶ inbox ─▶ import ─▶ board: message.posted
+outbound  vb reply ─▶ message.posted ─▶ sync ─▶ Slack ─▶ receipt: message.synced
+attach    vb sync ─▶ receipt: thread.synced ─▶ sync ─▶ Slack (root + backfill)
 ```
 
 Sync is configured per platform, keyed by the platform's own things: Slack
 channels, GitHub repos, WhatsApp numbers. Each key maps to a board channel (a
 two-way mirror) or to a function that handles inbound events however you like.
+
+Sync runs in `board()`, wherever the board lives. It keeps its records on the
+backend through routes every backend answers: imports as platform authors,
+delivery receipts, lookups by platform ID, and an inbox of platform events. So
+it works the same on `a2()` and on a board on `http()`: see
+[On a board elsewhere](#on-a-board-elsewhere).
 
 ## Configure it
 
@@ -26,14 +32,19 @@ Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { github } from 'vboard/adapter-github'
-import { vercelQueues } from 'vboard/scheduler-vercel'
-import { postgres } from 'vboard/store-postgres'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
+import { github } from 'vboard/sync-github'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
   scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+const team = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/acme', // a Vercel Connect connector
@@ -50,11 +61,13 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
-Sync runs as two A2 consumers, `vboard-inbox` in and `vboard-sync` out, so
-production needs the scheduler for their retries. Mount the
-`scheduler` the board returns in a route of its own, outside the board's catch-all:
+On `a2()`, sync runs on two A2 consumers, `vboard-inbox` in and `vboard-sync`
+out, so production needs the scheduler for their retries. Mount the
+backend's `scheduler` in a route of its own, outside the board's catch-all:
 
 ```ts app/api/a2/scheduler/route.ts
 export { scheduler as POST } from '@/app/api/board/[[...path]]/route'
@@ -105,9 +118,10 @@ Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
    (it becomes a reply, reaction, edit, or delete) or when its channel is in
    config (it goes to the mirror or your function). Everything else is ignored,
    even in channels the bot belongs to.
-4. **Targets are resolved once,** when a root is appended. They're written as
-   `thread.synced` events in the same batch, so a deploy that changes mappings
-   affects new threads only.
+4. **Targets are resolved once,** when a root is posted. A root posted through
+   this board lands with them, as `thread.synced` events in the same batch; one
+   written straight on the board it uses gets them when sync sees it. Either
+   way, a deploy that changes mappings affects new threads only.
 5. **Attaching.** `vb sync <id> <target>` attaches an existing thread. A channel
    target gets the root and a backfill of every reply, in order. A thread target
    joins an existing external thread and receives only what's written after.
@@ -136,8 +150,60 @@ vb sync 812 github:acme/www:123                                # join PR #123's 
 
 `--no-sync` keeps a message on the board: a root with it starts no threads in
 mirrored channels, and a reply with it isn't delivered. `--sync` and `--no-sync`
-together are a usage error. The SDK takes `sync: [...]` and `noSync: true`; see
-the [client reference](../04-reference/02-client.md).
+together are a usage error. A handle's `post` takes `sync: [...]` and
+`noSync: true`; see the [handle reference](../04-reference/02-board.md).
+
+## On a board elsewhere
+
+A board on [`http()`](../01-board/01-mounting.md#backends) keeps nothing, and
+its sync still runs here:
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from 'vboard'
+import { http } from 'vboard/backend-http'
+import { slack } from 'vboard/sync-slack'
+
+const team = board({
+  backend: http('https://board.example.com/api/board'),
+  sync: {
+    slack: slack({ adapter: 'slack/acme', channels: { '#support': 'support' } }),
+  },
+})
+export const GET = team.fetch, POST = team.fetch
+```
+
+- **Webhooks land here.** The adapter verifies each one, and sync pushes the
+  event to this deployment's inbox on the other board, then pulls it back and
+  imports it there, in order per platform thread.
+- **What the other board's channels say goes out from here.** This board
+  subscribes for sync beside its watchers, and the other board wakes it when
+  there's something to deliver, as it does for [watchers](../01-board/06-watchers.md#on-a-board-on-http).
+  Receipts land on the other board.
+- **The other board must let this deployment `sync`** in the channels it syncs,
+  and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
+  in its `board({ access })`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
+
+A [callback](./02-callbacks.md)'s writes land on the other board as the
+platform user, and its reads are this deployment's. This board registers its
+entries there, so the other board lists them and links accounts on them. People
+link the other board, so `vb identity link slack` gets its code there; this
+board's sync redeems it when it comes in from Slack, and an entry that signs
+people in does it here, at the sign-in the code's `signIn` names. Two
+boards that sync the same platform channel into one board each import its
+events and each deliver to it, so give each channel one syncer.
+
+**A key is one sync's.** Its platform locations (`slack:C0123ABC:1727.1`) name
+the platform threads and messages that sync imports and delivers, so:
+
+- **The other board's own sync keeps its keys.** A board here can't register
+  one of them (409 `sync_key_taken`): name yours another (`acme`). That board's
+  sync signs people in for them.
+- **One board here that registers a key** signs people in for it, at its own
+  `/identity/sign-in`, while it may still sync there.
+- **Two that register one key** sign no one in: a person links by posting
+  the code where either syncs. They share the key's platform threads on the
+  other board, though each sees and changes only the copies it made, so give
+  each key one sync.
 
 ## Set up webhooks
 
@@ -189,15 +255,17 @@ channel's inbox.
 
 ## Typing
 
-```bash
-# in a terminal:
-vb typing 812 "running tests…"
+```ts
+// anywhere with a handle on the board, the CLI included (`vb typing 812 running tests…`):
+await team.typing('812', 'running tests…')
 ```
 
-Shows typing in every platform thread the board thread is synced to. Slack shows
-the status under the thread, WhatsApp shows "typing…" and marks the latest inbound
-message read, and GitHub has no typing. Nothing is written to the log. It needs
-`post` and `read` in the thread's channel.
+Shows typing in every platform thread the board thread is synced to, through
+the sync the board that keeps the log runs beside it, so `vb typing` on the
+board you link shows it there. A board on `http()` also shows it through its
+own sync. Slack shows the status under the thread, WhatsApp shows "typing…" and
+marks the latest inbound message read, and GitHub has no typing. Nothing is
+written to the log. It needs `post` and `read` in the thread's channel.
 
 ## Debug it
 
@@ -207,10 +275,11 @@ vb sources                              # the board's sync entries and their pla
 vb inbox slack                          # raw platform events, newest first: did Slack send it?
 vb inbox slack '#errors-www' --limit 5
 vb tail --from slack --all              # board events from Slack, delivery receipts included
-vb sources slack read '#general'        # read a channel the board doesn't sync
 ```
 
-`vb inbox` and `vb sources … read` need `manage` in every channel, since raw
-events span all of them: see [Access](../01-board/09-access.md).
+`vb inbox` needs `sync` in every channel for the board's own inbox, and every
+registered sync's, since raw events span all of them. It shows a sync elsewhere
+only what it pushed.
+To read a channel the board doesn't sync, see [Read on demand](./03-slack.md#read-on-demand).
 Each raw event lives in an inbox session per external channel, outside the board
 log; see [the log](../04-reference/04-log.md).

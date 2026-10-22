@@ -5,7 +5,7 @@ import { extension } from "../app/api/board/[[...path]]/agent.ts";
 
 function event() {
   return {
-    index: 88,
+    cursor: "88",
     type: "reaction.added",
     actor: { id: "slack:user:U123", handle: "sam" },
     payload: {
@@ -14,7 +14,7 @@ function event() {
       by: { actor: "slack:user:U123", principal: "slack:user:U123" },
     },
     message: {
-      id: 59,
+      id: "59",
       re: null,
       labels: { pr: "vercel-labs/vboard#53", state: "open" },
       by: { actor: "github:user:40034115", principal: "github:user:40034115" },
@@ -45,7 +45,7 @@ test(":security: on a PR root asks Pi for a deepsec review of the diff, for any 
     assert.equal(h.notifications.length, 1);
     const n = h.notifications[0];
     assert.equal(n.task, "review");
-    assert.equal(n.thread, 59);
+    assert.equal(n.thread, "59");
     assert.equal(n.key, "security-88");
     assert.ok(n.message.includes(`(slack:user:${user}) reacted with :security:`));
     assert.ok(n.message.includes("vercel-labs/vboard#53"));
@@ -77,7 +77,7 @@ for (const [name, change] of [
     await h.run(input);
     assert.deepEqual(h.notifications, []);
     assert.equal(h.replies.length, 1);
-    assert.equal(h.replies[0].id, 59);
+    assert.equal(h.replies[0].id, "59");
     assert.ok(h.replies[0].text.includes("works on PR threads"));
   });
 }
@@ -126,7 +126,7 @@ test("a message late in a sandbox session extends it to a full turn, and an earl
 test("runs deepsec in a worktree named for the event, and attaches its files by full path", async () => {
   // A shell variable doesn't outlive one of Pi's commands, and its commands don't keep their cwd.
   const input = event();
-  input.index = 91;
+  input.cursor = "91";
   const g = harness();
   await g.run(input);
   const m = g.notifications[0].message;

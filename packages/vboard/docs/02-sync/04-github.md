@@ -11,9 +11,13 @@ builds the Chat SDK adapter and people's sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { github } from 'vboard/adapter-github'
+import { a2 } from 'vboard/backend-a2'
+import { github } from 'vboard/sync-github'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2()
+
+const team = board({
+  backend,
   sync: {
     github: github({
       adapter: 'github/acme',
@@ -25,6 +29,8 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 A value is a board channel or a [function](./02-callbacks.md) for the repo's PRs
@@ -156,7 +162,7 @@ Without Connect, pass the App's credentials to a Chat SDK adapter
 (`npm i chat @chat-adapter/github`):
 
 ```ts
-// in board({ sync: { … } }):
+// in board({ backend, sync: { … } }):
 github: github({
   adapter: createGitHubAdapter({
     appId: process.env.GITHUB_APP_ID!,

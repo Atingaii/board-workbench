@@ -11,23 +11,28 @@ npm i vboard pg
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { postgres } from 'vboard/store-postgres'
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+const team = board({
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 | Store | From | For |
 | --- | --- | --- |
-| `postgres({ connectionString })` | `vboard/store-postgres` | production; needs `pg` |
-| `redis({ url })` | `vboard/store-redis` | production, on Redis over TCP; needs `ioredis` |
-| `redisHttp({ url, token })` | `vboard/store-redis-http` | production, on Upstash's REST API; needs nothing |
-| `sqlite({ path })` | `vboard/store-sqlite` | development and `vb serve`; `path` defaults to `.a2/dev.db` |
-| `memory({ clock })` | `vboard/store-memory` | tests |
+| `postgres({ connectionString })` | `vboard/backend-a2/store-postgres` | production; needs `pg` |
+| `redis({ url })` | `vboard/backend-a2/store-redis` | production, on Redis over TCP; needs `ioredis` |
+| `redisHttp({ url, token })` | `vboard/backend-a2/store-redis-http` | production, on Upstash's REST API; needs nothing |
+| `sqlite({ path })` | `vboard/backend-a2/store-sqlite` | development and `vb serve`; `path` defaults to `.a2/dev.db` |
+| `memory({ clock })` | `vboard/backend-a2/store-memory` | tests |
 
 Leave `store` out and the board picks for you: SQLite at `.a2/dev.db` in
-development, memory in tests. In production it doesn't start without one.
+development, memory in tests. In production it's required: see
+[Mounting](./01-mounting.md#options).
 
 ## What a store keeps
 
@@ -115,11 +120,15 @@ npm i vboard ioredis
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { redis } from 'vboard/store-redis'
+import { a2 } from 'vboard/backend-a2'
+import { redis } from 'vboard/backend-a2/store-redis'
 
-export const { GET, POST } = board({
-  store: redis({ url: process.env.REDIS_URL! }),
+const team = board({
+  backend: a2({
+    store: redis({ url: process.env.REDIS_URL! }),
+  }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 On Upstash, or anywhere a function can't keep a connection open, use its REST
@@ -127,11 +136,15 @@ API instead. It needs no package:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { redisHttp } from 'vboard/store-redis-http'
+import { a2 } from 'vboard/backend-a2'
+import { redisHttp } from 'vboard/backend-a2/store-redis-http'
 
-export const { GET, POST } = board({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+const team = board({
+  backend: a2({
+    store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN! }),
+  }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 There's nothing to apply: the keys appear as the board writes them. Each write
@@ -194,5 +207,5 @@ of its own for its transaction.
 ### What runs the tables?
 
 An A2 consumer named `vboard-tables`, on the board's log. If it ever stops on
-an event, `vb stuck` lists it first. Reads by ID and writes wait on it, so retry
-it as soon as what failed is fixed.
+an event, A2 dead-letters it, and reads by ID and writes wait on it: retry it
+through A2, on the backend's `servers`, as soon as what failed is fixed.

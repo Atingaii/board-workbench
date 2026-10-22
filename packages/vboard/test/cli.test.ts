@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/server/index.ts'
+import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
+import { fakeQueue } from './queue.ts'
 
 useBoard()
 
@@ -34,6 +35,19 @@ describe('cli', () => {
     expect((await vb(['link', url], local, undefined, root)).code).toBe(0)
     expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules\n.vboard/\n')
   }, 20_000)
+
+  it("shows a message's control characters as pictures, so they never drive the terminal, and keeps them as they are in --json", async () => {
+    // A retitle, a screen clear, and a carriage return that would write over the line.
+    const text = 'look \u001b]0;pwned\u0007\u001b[2Jhere\r\nand\rthere \u009b31m'
+    const { id } = JSON.parse((await vb(['post', 'terminal', '--json', '--', text])).stdout)
+    for (const read of [await vb(['read', 'terminal']), await vb(['read', id])]) {
+      expect(read.code).toBe(0)
+      expect(read.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/)
+      expect(read.stdout).toContain('look ␛]0;pwned␇␛[2Jhere')
+    }
+    expect((await vb(['read', id])).stdout).toContain('and␍there \ufffd31m')
+    expect(JSON.parse((await vb(['read', id, '--json'])).stdout.trim().split('\n')[0]!).text).toBe(text)
+  })
 
   it('links a directory without Git in place', async () => {
     const root = await tmp('vboard-link-')
@@ -127,7 +141,7 @@ describe('cli', () => {
     try {
       const root = await tmp('vboard-link-')
       expect(await vb(['link', `${missing.origin}/api/board`], {}, undefined, root)).toEqual({
-        code: 1, stdout: '', stderr: 'error: 404 Not Found\n',
+        code: 1, stdout: '', stderr: `error: no board at ${missing.origin}/api/board (404)\n`,
       })
     } finally {
       await missing.close()
@@ -265,7 +279,7 @@ describe('cli', () => {
     const id = (await vb(['post', 'post-replies', 'export is broken'])).stdout.trim()
     const reply = await vb(['post', id, 'fixed in a1b2c3', '--label', 'step=fix', '--json'])
     expect(reply.code).toBe(0)
-    expect(JSON.parse(reply.stdout)).toMatchObject({ re: Number(id), channel: 'post-replies', text: 'fixed in a1b2c3', labels: { step: 'fix' } })
+    expect(JSON.parse(reply.stdout)).toMatchObject({ re: id, channel: 'post-replies', text: 'fixed in a1b2c3', labels: { step: 'fix' } })
     expect((await vb(['post', `#${id}`, 'and deployed'])).code).toBe(0)
     const lines = (await vb(['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
     expect(lines.map((m: { text: string }) => m.text)).toEqual(['export is broken', 'fixed in a1b2c3', 'and deployed'])
@@ -289,13 +303,13 @@ describe('cli', () => {
 
     const json = await vb(['read', 'open-work', '--json'])
     const lines = json.stdout.trim().split('\n').map((line) => JSON.parse(line))
-    expect(lines.map((t: { message: { id: number }; replies: number; last: { text: string } }) => [t.message.id, t.replies, t.last.text])).toEqual([
-      [Number(second), 3, 'note 3'],
-      [Number(first), 1, 'still flaky'],
+    expect(lines.map((t: { message: { id: string }; replies: number; last: { text: string } }) => [t.message.id, t.replies, t.last.text])).toEqual([
+      [second, 3, 'note 3'],
+      [first, 1, 'still flaky'],
     ])
 
     const open = await vb(['read', 'open-work', '--label', 'state=open', '--json'])
-    expect(open.stdout.trim().split('\n').map((line) => JSON.parse(line).message.id)).toEqual([Number(first)])
+    expect(open.stdout.trim().split('\n').map((line) => JSON.parse(line).message.id)).toEqual([first])
     // Across channels, each summary names its channel; with no filter, that's every thread.
     expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
@@ -473,18 +487,15 @@ describe('cli', () => {
     const misuse = await vb(['sources', 'slack', '#general'])
     expect(misuse.code).toBe(2)
     expect(misuse.stderr).toContain('usage: vboard sources <key> read')
+    // Only the board that runs a sync entry reads its source.
     const unsynced = await vb(['sources', 'slack', 'read', '#general'])
-    expect(unsynced.code).toBe(1)
-    expect(unsynced.stderr).toContain('no sync configured')
+    expect(unsynced).toMatchObject({ code: 1, stderr: "error: this board doesn't run sync entry slack: read it where its sync runs\n" })
   })
 
-  it("says so when the board is older than `sources read`, instead of crashing on its discovery document", async () => {
+  it('says so when the board is older than thread summaries, instead of crashing on its discovery document', async () => {
     // An old board answers any unknown GET with its discovery document, 200.
     const old = await serve(async () => Response.json({ version: '0.4.0', sync: [] }))
     try {
-      const read = await vb(['sources', 'slack', 'read', '#general'], { VBOARD_URL: `${old.origin}/api/board` })
-      expect(read.code).toBe(1)
-      expect(read.stderr).toContain("this board can't read sources yet")
       const threads = await vb(['read', 'errors-www'], { VBOARD_URL: `${old.origin}/api/board` })
       expect(threads).toMatchObject({ code: 1, stderr: OLD_THREADS })
     } finally {
@@ -504,15 +515,38 @@ describe('cli', () => {
     }
   })
 
+  it('checks that the board speaks the protocol, a group at a time', async () => {
+    // The whole protocol, schedules included, so a board with a scheduler.
+    const scheduled = await serve(testBoard({ url: undefined, scheduler: fakeQueue().scheduler }).fetch)
+    const board = `${scheduled.origin}/api/board`
+    const as = { VBOARD_URL: board, VBOARD_TOKEN: await personToken('u_julian', board) }
+    try {
+      const run = await vb(['conformance'], as)
+      expect(run).toMatchObject({ code: 0, stderr: '' })
+      expect(run.stdout).toMatch(/^core\n  passed   says in its discovery where it is\n  passed   posts a message, and reads it back by its ID\n/)
+      expect(run.stdout).toContain('\n\nschedules\n  passed   schedules a reply')
+      expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
+      expect(run.stdout).toMatch(/\n\n\d+ passed\n$/)
+      expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'], as)).stdout)).toMatchObject({ ok: true })
+    } finally {
+      await scheduled.close()
+    }
+    // Without one, the board answers only part of it, and says which.
+    const partial = await vb(['conformance'])
+    expect(partial.code).toBe(1)
+    expect(partial.stdout).toContain("\n\nschedules\n  failed   schedules a reply, lists it, and cancels it\n           this board has no scheduler, so it can't schedule messages\n")
+    expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: 'error: usage: vboard conformance [--channel <c>]\n' })
+  })
+
   it('prints one error line and exits 1 on failure, 2 on misuse', async () => {
     expect(await vb(['read', '99999'])).toMatchObject({ code: 1, stderr: 'error: message not found: #99999\n' })
+    // An ID this board never hands out names what was asked for, not what it was read as.
+    expect(await vb(['read', '#nope'])).toMatchObject({ code: 1, stderr: 'error: message not found: #nope\n' })
+    expect(await vb(['schedule', 'cancel', 'snope'])).toMatchObject({ code: 1, stderr: 'error: schedule not found: snope\n' })
     expect((await vb(['react', '1', 'not an emoji'])).code).toBe(2)
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)
     expect((await vb(['inspect', '--port', 'nope'])).code).toBe(2)
-    expect((await vb(['stuck', 'retry'])).code).toBe(2)
-    expect((await vb(['stuck', 'redo', 'board#1'])).code).toBe(2)
-    expect((await vb(['stuck', 'skip', 'board'])).code).toBe(2)
   })
 
   it('says a removed command is gone whatever flags it carries, and names an unknown option', async () => {
@@ -526,10 +560,11 @@ describe('cli', () => {
     expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
   })
 
-  it("says when nothing is stuck, and when what it's asked to redrive isn't", async () => {
-    expect(await vb(['stuck'])).toMatchObject({ code: 0, stdout: 'nothing is stuck\n' })
-    expect(await vb(['stuck', 'skip', 'board#1'])).toMatchObject({ code: 0, stdout: "board#1 isn't stuck\n" })
-    expect(await vb(['stuck', 'retry', 'nowhere#1'])).toMatchObject({ code: 1, stderr: 'error: no session nowhere on this board\n' })
+  it('says `vb stuck` is gone, and where its dead letters are', async () => {
+    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({
+      code: 2,
+      stderr: "error: `vb stuck` is gone: a board on a2() keeps its dead letters in A2, on the backend's `servers`\n",
+    })
   })
 
   it('serves the inspector until Ctrl-C', async () => {

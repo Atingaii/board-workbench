@@ -1,7 +1,8 @@
 import { board } from "vboard";
-import { slack } from "vboard/adapter-slack";
-import { github } from "vboard/adapter-github";
-import { vercelBlob } from "vboard/adapter-vercel-blob";
+import { a2 } from "vboard/backend-a2";
+import { slack } from "vboard/sync-slack";
+import { github } from "vboard/sync-github";
+import { vercelBlob } from "vboard/backend-a2/blob-vercel";
 import { queues, store } from "./a2";
 import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
@@ -25,13 +26,21 @@ const env = process.env.VERCEL_ENV;
 // SSE streams close just before this, and clients reconnect from their cursor.
 export const maxDuration = 300;
 
-const factory = board({
-  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
+const backend = a2({
   store,
   // Attachments (Pi's proof of work) in the project's private Blob store, `vboard-factory-attachments`.
   // Every deployment shares it: a file's ID is random, and only its board can name it.
   blob: env ? vercelBlob() : undefined,
   scheduler: queues,
+});
+
+const factory = board({
+  backend,
+  // Factories elsewhere that may use this board, by project and team.
+  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
+  // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
+  // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
+  middleware: [guard({ mode: "shadow" })],
   sync: {
     // Connect connectors: vboard builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.
@@ -62,9 +71,6 @@ const factory = board({
       },
     }),
   },
-  // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
-  // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
-  middleware: [guard({ mode: "shadow" })],
   watch: {
     shipit: shipit({ tellPi }),
     // Shadow mode: labels each reviewed factory PR autoland=would|no, and merges nothing.
@@ -195,6 +201,6 @@ const factory = board({
   },
 });
 
-export const { GET, POST } = factory;
+export const GET = factory.fetch, POST = factory.fetch;
 // The board's queue also delivers the refreshes of Pi's tokens.
-export const scheduler = queues.handler(...factory.servers, piTokens.server);
+export const scheduler = queues.handler(...backend.servers, piTokens.server);

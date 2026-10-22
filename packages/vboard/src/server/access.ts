@@ -4,7 +4,7 @@ import { forbidden } from './errors.ts'
 /**
  * What a principal may do in a channel. `read` covers messages, threads,
  * `/events`, and schedules; `post` starts threads and edits your own messages;
- * `manage` is the board's own bookkeeping (inbox, stuck events, sources).
+ * `manage` is the board's own bookkeeping (inbox, sources).
  */
 export const PERMISSIONS = ['read', 'post', 'react', 'label', 'sync', 'manage'] as const
 export type Permission = (typeof PERMISSIONS)[number]
@@ -237,7 +237,7 @@ export function parseScope(header: string): Can {
     if (split < 0) throw new Error(`x-board-scope entry ${entry} needs =: write pattern=permissions, like dev/=read,post`)
     const pattern = entry.slice(0, split).trim()
     const list = entry.slice(split + 1).trim()
-    if (pattern in out) throw new Error(`x-board-scope lists ${pattern} twice`)
+    if (Object.hasOwn(out, pattern)) throw new Error(`x-board-scope lists ${pattern} twice`)
     parsePattern(pattern)
     const permissions = list === '' ? [] : list.split(',').map((permission) => permission.trim())
     if (permissions.length === 1 && permissions[0] === 'all') {

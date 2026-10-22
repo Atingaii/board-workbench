@@ -1,7 +1,13 @@
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
+import { a2, type A2Options } from '../src/backend-a2/index.ts'
+import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
 export const PROJECT_ID = 'prj_board'
@@ -36,16 +42,43 @@ export function testClock() {
   }
 }
 
+/**
+ * board()'s options and a2()'s, side by side, as tests write them. `auth` is `oidcTokens()`'s
+ * options, for board()'s `authenticate`.
+ */
+export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: OidcTokensOptions }
+
+/** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
+export function mount(options: MountOptions) {
+  const { store, scheduler, blob, transport, auth, ...rest } = options
+  const backend = a2({ ...(store ? { store } : {}), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
+  const { url, ...given } = rest
+  const created = board({
+    ...given,
+    backend,
+    ...(!rest.authenticate && auth ? { authenticate: oidcTokens(auth) } : {}),
+    ...('url' in options ? { url } : {}),
+  })
+  // Read when a test asks: a board missing a piece in production builds none of them.
+  const lazy = (read: () => unknown) => ({ get: read, enumerable: true })
+  return Object.defineProperties(Object.assign(created, { backend, scheduler: backend.scheduler }), {
+    servers: lazy(() => backend.servers),
+    session: lazy(() => backend.session),
+    store: lazy(() => backend.store),
+  }) as typeof created & { backend: typeof backend; scheduler: typeof backend.scheduler } & Pick<typeof backend, 'servers' | 'session' | 'store'>
+}
+
 /** A board on a memory store whose tokens come from a local test issuer. */
-export function testBoard(options: Partial<BoardOptions> = {}) {
+export function testBoard(options: MountOptions = {}) {
   const clock = testClock()
   const store = memory({ clock })
-  const created = board({
+  const created = mount({
     store,
-    url: BOARD_URL,
     project: { id: PROJECT_ID, teamId: TEAM_ID },
     auth: testAuth,
     ...options,
+    // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
+    url: 'url' in options ? options.url : BOARD_URL,
   })
   /**
    * Lets a failed event's next attempt run now, once no attempt is running on
@@ -131,6 +164,21 @@ export const workflowToken = (claims: Record<string, unknown> = {}) =>
 export const oidcToken = (claims: Record<string, unknown> = {}, issuer = OIDC_ISS) =>
   sign({ sub: 'project_path:acme/api:ref_type:branch:ref:main', project_path: 'acme/api', ref: 'main', ...claims }, issuer)
 
+/**
+ * A config home where Julian is signed in to each board in `audiences`, as `vercel login` leaves
+ * it: a token cached for each, so the Node client mints none. Pass it as `XDG_CONFIG_HOME`.
+ */
+export async function signedInHome(audiences: string[], userId = 'u_julian') {
+  const home = await mkdtemp(join(tmpdir(), 'vboard-tokens-'))
+  await mkdir(join(home, 'vboard', 'tokens'), { recursive: true })
+  for (const audience of audiences) {
+    const token = await personToken(userId, audience)
+    const file = join(home, 'vboard', 'tokens', `${createHash('sha256').update(audience).digest('hex').slice(0, 32)}.json`)
+    await writeFile(file, JSON.stringify({ token, expiresAt: Date.now() + 3_600_000, handle: 'julian', name: 'Julian', avatar: null }))
+  }
+  return home
+}
+
 /** Calls the board in-process, like a client would over HTTP. */
 export function caller(handler: (request: Request) => Promise<Response>, token: string, headers: Record<string, string> = {}) {
   return async (method: string, path: string, body?: unknown) => {
@@ -148,4 +196,19 @@ export function caller(handler: (request: Request) => Promise<Response>, token: 
     const text = await response.text()
     return { status: response.status, body: text ? JSON.parse(text) : null }
   }
+}
+
+/**
+ * A deployment's own fetch, as `http(url, { fetch })` takes it: `fetch`, with a bearer token on
+ * each request that brings none.
+ */
+export function bearer(
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  token: string | (() => string | Promise<string>),
+): typeof globalThis.fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+    if (!headers.has('authorization')) headers.set('authorization', `Bearer ${typeof token === 'function' ? await token() : token}`)
+    return fetch(input, { ...init, headers })
+  }) as typeof globalThis.fetch
 }

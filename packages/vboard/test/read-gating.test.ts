@@ -3,7 +3,9 @@ import { memory } from '../src/store/memory.ts'
 import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
-import { board as mount, githubActions, vercelProject, type Middleware } from '../src/server/index.ts'
+import { board as mount, type Middleware } from '../src/server/index.ts'
+import { githubActions, vercelProject, oidcTokens } from '../src/access/index.ts'
+import { a2 } from '../src/backend-a2/index.ts'
 import { slack } from '../src/sync/slack.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakePlatform } from './sync-fixtures.ts'
@@ -70,7 +72,9 @@ describe('a write-only source', () => {
   })
 
   it('streams bare cursors and nothing else', async () => {
-    const { board, julian } = await setup()
+    // A stream's cursor moves past what its caller can't see when a page of events ends: here, as it closes.
+    const board = testBoard({ access: [intake], streamMaxMs: 1000 })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const controller = new AbortController()
     const response = await board.fetch(
       new Request(`${BOARD_URL}/events?after=0`, {
@@ -239,24 +243,34 @@ describe('links', () => {
     const link = { url: 'https://slack.test/p1', message: 7, snapshot: { author: 'ada', text: 'the key is…', createdAt: null, files: [] }, unavailable: null }
     const hidden = { url: link.url, message: null, snapshot: null, unavailable: 'not_readable' }
     expect(readableLinks([link], { access: compileAccess({ 'dev/': ['read'] }), channelOf })).toEqual([hidden])
-    expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([link])
+    expect(readableLinks([link], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([{ ...link, message: '7' }])
     // One the reader's lookup doesn't have shows nothing either.
     expect(readableLinks([{ ...link, message: 8 }], { access: compileAccess({ security: ['read'] }), channelOf })).toEqual([hidden])
   })
 
   it('show nothing of it on any route', async () => {
     const s = fakePlatform('slack')
-    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'open', C2: 'security' } }) } })
+    const board = testBoard({
+      sync: { slack: slack({ adapter: s.adapter, channels: { C2: 'security' } }) },
+      access: [vercelProject({ project: 'prj_sync', can: { open: 'all', security: ['read'] } })],
+    })
     const webhook = (body: unknown) =>
       board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
     const julian = caller(board.fetch, await personToken())
     const secret = '1791322095.443859'
     await webhook({ type: 'message', threadId: `slack:C2:${secret}`, id: secret, text: 'the key is hunter2', user: 'U_ADA', name: 'Ada' })
     await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=security')).body.messages).toHaveLength(1))
+    const [linked] = (await julian('GET', '/messages?channel=security')).body.messages
+    // A link to it with its snapshot, in a channel others read: a board's sync no longer makes one
+    // across channels, but a log can hold one from before, and a sync elsewhere that reads it can
+    // import one.
     const permalink = `https://acme.slack.com/archives/C2/p${secret.replace('.', '')}`
-    const ts = '1791322999.000001'
-    await webhook({ type: 'message', threadId: `slack:C1:${ts}`, id: ts, text: `see ${permalink}`, user: 'U_JB', raw: { type: 'message', ts, text: `see <${permalink}>` } })
-    await vi.waitFor(async () => expect((await julian('GET', '/messages?channel=open')).body.messages).toHaveLength(1))
+    const sync = caller(board.fetch, await deploymentToken('sync', 'prj_sync'))
+    expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
+    const snapshot = { author: 'Ada', text: 'the key is hunter2', createdAt: null, files: [] }
+    const author = { id: 'slack:user:U_JB', handle: 'jb', name: 'JB', avatar: null, isBot: false }
+    const imported = await sync('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'open', text: `see ${permalink}`, links: [{ url: permalink, message: linked.id, snapshot, unavailable: null }] })
+    expect(imported.status).toBe(200)
     expect((await julian('GET', '/messages?channel=open')).body.messages[0].links[0].snapshot.text).toBe('the key is hunter2')
 
     const open = caller(board.fetch, await personToken(), { 'x-board-scope': 'open=read' })
@@ -482,7 +496,7 @@ describe('schedules', () => {
         vi.setSystemTime(T0)
         const queue = fakeQueue()
         const board = testBoard({ scheduler: queue.scheduler })
-        if (make === 'client') await board.client('ops').schedule('ops', { text: 'from ops', in: '1h' })
+        if (make === 'client') await board.as('ops').schedule('ops', { text: 'from ops', in: '1h' })
         else expect((await caller(board.fetch, await deploymentToken('board', PROJECT_ID))('POST', '/schedules', { channel: 'ops', text: 'from prod', in: '1h' })).status).toBe(201)
         expect(await sendAndRead(board.fetch, queue), make).toMatchObject({ state: 'done', sent: 1 })
       }
@@ -499,9 +513,9 @@ describe('schedules', () => {
       const store = memory()
       const queue = fakeQueue()
       const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { store, url: BOARD_URL, project: { id: PROJECT_ID }, auth: testAuth, access, scheduler: queue.scheduler }
-      const route = mount(options)
-      mount(options)
+      const options = { access, project: { id: PROJECT_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL }
+      const route = mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
+      mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
       const platform = await deploymentToken('board', PROJECT_ID)
       const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
       expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)

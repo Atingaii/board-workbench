@@ -4,7 +4,7 @@ import { github, prNumber, type GitHubOptions } from "./github.ts";
 /** The board thread a factory PR was built for, from its `pi/<thread>` branch (`pi/1559`, `pi/1559-vercel-logs`). */
 export const threadOfBranch = (ref: unknown) => {
   const match = typeof ref === "string" ? /^pi\/([1-9]\d*)(?:-|$)/.exec(ref) : null;
-  return match ? Number(match[1]) : null;
+  return match ? match[1]! : null;
 };
 
 /**

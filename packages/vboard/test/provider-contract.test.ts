@@ -213,7 +213,7 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
       expect(test.posts[0]).toMatchObject({ target: thread, kind: 'thread' })
       await vi.waitFor(async () => {
         const history = await test.board.servers[0]!.session('board').history()
-        expect(history.filter((event) => event.type === 'message.synced' && event.payload.id === reply.body.message.id)).toHaveLength(1)
+        expect(history.filter((event) => event.type === 'message.synced' && String(event.payload.id) === reply.body.message.id)).toHaveLength(1)
       })
     })
 

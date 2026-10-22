@@ -122,7 +122,10 @@ string, function, and `{ channel, run }` values as the built-in ones.
 | `event(context)` | Builds the typed envelope your callbacks receive, usually `envelope(…)` parsed by an `eventSchema`. |
 
 **IDs.** Incoming locations (`channel`, `thread`, `subthread`) carry the entry's key
-as a prefix: `desk:support:t_812`. Targets handed to `post`, `resolveTarget`, and the
+as a prefix: `desk:support:t_812`. A `subthread` extends its `thread`'s ID
+(`desk:support:t_812:r_3` in `desk:support:t_812`), so `groupThread` returns a
+prefix of the ID it's given: the board refuses an import whose subthread isn't
+in its thread. Targets handed to `post`, `resolveTarget`, and the
 optional methods are native, without it: `support:t_812`. The board records each
 target's `kind` from `resolveTarget`, so it never parses your ID syntax, and a
 channel target on a provider whose `canStartThreads` is false is refused.
@@ -153,12 +156,12 @@ Each has a default that does nothing, or says the platform can't:
 | Method | For |
 | --- | --- |
 | `edit(thread, message, body)`, `delete(thread, message)`, `react(thread, message, emoji, added)` | Changes to messages already delivered |
-| `startTyping(thread, latest, status?)` | `vb typing` |
+| `startTyping(thread, latest, status?)` | `typing(id, status)` on the board that runs the entry |
 | `uploadFiles(thread, files)`, `deleteFiles(ids)`, `refusesFiles(error)` | Files out. `refusesFiles` tells a permanent refusal (notes instead) from a failure worth retrying |
 | `fetchFile(file)` | Files in |
 | `fetchRoot(thread)` | Recovering a root when a reply arrives in a thread the board hasn't seen |
 | `fetchLink(link)` | Reading a linked message the platform didn't describe |
-| `read(target, { limit })` | `vb sources <key> read` |
+| `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
 | `mention(actor)` | A board mention in the platform's native form |
 | `findByEmail(email)` | `@[ada@acme.com]` mentions |
 
@@ -218,5 +221,5 @@ review threads), `channelOf`, `toChatId` and `fromChatId` (ID encodings),
 `markdown` and `author` (reading a message), `context`, `fetchRoot`, `links`,
 `read`, `uploadFiles`, `refusesFiles`, `startTyping`, and `intercept` and `missed`
 (webhook events the adapter doesn't emit). The built-in providers in
-`vboard/adapter-slack`, `vboard/adapter-github`, and `vboard/adapter-kapso` are
+`vboard/sync-slack`, `vboard/sync-github`, and `vboard/sync-kapso` are
 working examples of each.

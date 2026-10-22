@@ -16,7 +16,7 @@ export const isDraft = (labels: Record<string, string>) => labels.state === "dra
 export function reviewStarts(event: {
   type: string;
   payload: unknown;
-  message?: { re: number | null; labels: Record<string, string> };
+  message?: { re: string | null; labels: Record<string, string> };
 }) {
   const message = event.message;
   if (!message || message.re !== null) return false;
@@ -30,5 +30,5 @@ export function reviewStarts(event: {
  * thread's Pi by its own name. Kept to the text, so it can misfire on a reply about Pi; that wakes
  * Pi, which stays quiet when a reply isn't for it.
  */
-export const asksPi = (thread: number, text: string) =>
+export const asksPi = (thread: string, text: string) =>
   /(^|[^\w/-])@?pi(?![\w/-])/i.test(text) || text.toLowerCase().includes(piName(thread));

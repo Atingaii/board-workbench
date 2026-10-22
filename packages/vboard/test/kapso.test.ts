@@ -103,8 +103,8 @@ describe('kapso sync', () => {
     await vi.waitFor(() => expect(images).toHaveLength(1))
     await vi.waitFor(async () => {
       const events = (await call('GET', '/events?after=0&all=true')).body.events
-      expect(events.find((event: { type: string; payload: { id: number } }) => event.type === 'message.synced' && event.payload.id === posted.body.message.id)?.payload.external.message).toBe('wamid.img1')
-      expect(events.find((event: { type: string; payload: { id: number } }) => event.type === 'message.files_synced' && event.payload.id === posted.body.message.id)?.payload.files).toEqual(['wamid.img1'])
+      expect(events.find((event: { type: string; payload: { id: string } }) => event.type === 'message.synced' && event.payload.id === posted.body.message.id)?.payload.external.message).toBe('wamid.img1')
+      expect(events.find((event: { type: string; payload: { id: string } }) => event.type === 'message.files_synced' && event.payload.id === posted.body.message.id)?.payload.files).toEqual(['wamid.img1'])
     })
     expect(texts).toHaveLength(1)
     expect(uploads).toHaveLength(1)

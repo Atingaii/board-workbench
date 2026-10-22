@@ -1,9 +1,11 @@
 import { board, type WatcherContext } from "vboard";
-import { slack } from "vboard/adapter-slack";
+import { a2 } from "vboard/backend-a2";
+import { vercelBlob } from "vboard/backend-a2/blob-vercel";
+import { slack } from "vboard/sync-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { connectSlackAdapter } from "@vercel/connect/chat";
-import { redisHttp } from "vboard/store-redis-http";
-import { vercelQueues } from "vboard/scheduler-vercel";
+import { redisHttp } from "vboard/backend-a2/store-redis-http";
+import { vercelQueues } from "vboard/backend-a2/scheduler-vercel";
 import { experimental_decide as decide, generateText } from "ai";
 import { startV0 } from "./v0";
 
@@ -19,7 +21,7 @@ const slackCredentials = connectSlackAdapter("slack/vboard");
 const slackAdapter = createSlackAdapter(slackCredentials);
 const slackToken = slackCredentials.botToken;
 
-export const { GET, POST, scheduler, client } = board({
+const backend = a2({
   store: env
     ? redisHttp({
         url: process.env.KV_REST_API_URL!,
@@ -30,6 +32,13 @@ export const { GET, POST, scheduler, client } = board({
       })
     : undefined,
   scheduler: vercelQueues({ topic: "vboard" }),
+  // A private Blob store connected to the project. Its credentials are read on the first
+  // upload, so the board serves without one; uploads fail until it's connected.
+  blob: env ? vercelBlob() : undefined,
+});
+
+export const feedback = board({
+  backend,
   sync: {
     slack: slack({
       adapter: slackAdapter,
@@ -50,6 +59,8 @@ export const { GET, POST, scheduler, client } = board({
     report: { tail: "feedback --label v0state=done", when: "enters", run: report },
   },
 });
+export const GET = feedback.fetch, POST = feedback.fetch;
+export const { scheduler } = backend;
 
 /** How sure triage must be that a report is worth fixing before it starts a v0 chat. */
 const WORTH = 0.7;
@@ -106,15 +117,15 @@ async function triage({ event, board }: WatcherContext) {
   const firstLine = message.text.split("\n")[0]!.slice(0, 140);
   const announcement = await board.post("v0-prs", {
     text: `v0 is on a ${kind}: “${quoted(firstLine)}”\n${quoted(reason)}\nhttps://v0.app/chat/${chatId}${message.origin ? `\nsource: ${slackLink(message.origin.thread)}` : ""}`,
-    labels: { source: String(message.id), v0: chatId, kind },
+    labels: { source: message.id, v0: chatId, kind },
   });
-  await board.label(message.id, { set: { announcement: String(announcement.id) } });
+  await board.label(message.id, { set: { announcement: announcement.id } });
 }
 
 /** v0 finished (labelled by /api/v0-hook): reply once in the announcement's thread with what it did. */
 async function report({ event, board }: WatcherContext) {
   const labels = event.message?.labels;
-  const announcement = Number(labels?.announcement);
+  const announcement = labels?.announcement;
   if (!labels || !announcement) return;
   const { pr, owner, summary } = labels;
   const text = [

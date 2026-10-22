@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { routes, type RouteName } from '../src/api/routes.ts'
-import { githubActions } from '../src/server/index.ts'
+import { githubActions } from '../src/access/index.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -17,6 +17,8 @@ type Fixture = {
 type Call = { method: 'GET' | 'POST'; path: string; body?: unknown; status: number; check?: (body: any) => void }
 type Walk = 'public' | ((fixture: Fixture) => Call[])
 
+const SLACK_USER = { id: 'slack:user:U1', handle: 'eve', name: 'Eve', avatar: null, isBot: false }
+
 const nothingFrom = (field: string) => (body: any) => expect(JSON.stringify(body[field])).not.toContain('secret')
 
 const WALK: Record<RouteName, Walk> = {
@@ -25,12 +27,13 @@ const WALK: Record<RouteName, Walk> = {
   avatar: 'public',
   openapi: 'public',
   webhook: 'public',
+  signIn: 'public',
+  signedIn: 'public',
   // About the caller.
   me: () => [{ method: 'GET', path: '/me', status: 200, check: (body) => expect(body.can).toEqual({ open: ['read'] }) }],
   identity: () => [{ method: 'GET', path: '/identity', status: 200 }],
-  identityLink: () => [{ method: 'POST', path: '/identity/link', body: { sync: 'slack' }, status: 404 }],
-  identityCheck: () => [{ method: 'POST', path: '/identity/check', body: { sync: 'slack' }, status: 404 }],
-  identityUnlink: () => [{ method: 'POST', path: '/identity/unlink', body: { actor: '@julian' }, status: 403 }],
+  // Which of the caller's links it names is the backend's to say: none of theirs.
+  identityUnlink: () => [{ method: 'POST', path: '/identity/unlink', body: { actor: '@julian' }, status: 404 }],
   // Lists drop what the caller can't read.
   channels: () => [
     { method: 'GET', path: '/channels', status: 200, check: (body) => expect(body.channels.map((c: any) => c.path)).toEqual(['open']) },
@@ -97,6 +100,11 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
   attachment: ({ secret }) => [{ method: 'GET', path: `/attachments/${secret.file}`, status: 404 }],
+  // Only your own post, by the client ID you gave it.
+  posted: () => [
+    { method: 'GET', path: '/posts/secret-one', status: 404 },
+    { method: 'GET', path: '/posts/nothing', status: 404 },
+  ],
   // Writes: a reply's channel is its root's, so an unreadable root is 404; a channel the request names is 403.
   post: ({ secret, open }) => [
     { method: 'POST', path: '/messages', body: { channel: 'secret', text: 'hi' }, status: 403 },
@@ -112,9 +120,47 @@ const WALK: Record<RouteName, Walk> = {
   upload: () => [{ method: 'POST', path: '/attachments', status: 403 }],
   // The board's own bookkeeping spans every channel.
   inbox: () => [{ method: 'GET', path: '/inbox/slack', status: 403 }],
-  stuck: () => [{ method: 'GET', path: '/stuck', status: 403 }],
-  redrive: () => [{ method: 'POST', path: '/stuck/redrive', body: { session: 'board', index: 1, action: 'skip' }, status: 403 }],
-  sourceRead: () => [{ method: 'GET', path: '/sources/slack/read?target=C0123', status: 403 }],
+  // Only the board that runs a sync entry reads its source: this one runs none.
+  readSource: () => [{ method: 'GET', path: '/sources/slack/read?target=C0123', status: 404 }],
+  // Sync's records: a caller speaks for platform users only where it may sync.
+  syncImport: () => [
+    { method: 'POST', path: '/sync/imports', body: { op: 'post', author: SLACK_USER, from: 'slack', channel: 'secret', text: 'hi' }, status: 403 },
+    { method: 'POST', path: '/sync/imports', body: { op: 'post', author: SLACK_USER, from: 'slack', channel: 'open', text: 'hi' }, status: 403 },
+  ],
+  syncReceipt: ({ secret, open }) => [
+    { method: 'POST', path: '/sync/receipts', body: { kind: 'failed', message: String(secret.root), target: 'slack:C1', error: 'gone' }, status: 404 },
+    { method: 'POST', path: '/sync/receipts', body: { kind: 'thread', message: String(open.root), target: 'slack:C1', targetKind: 'channel', cause: 'request' }, status: 403 },
+  ],
+  syncThread: () => [{ method: 'GET', path: '/sync/threads/t1', status: 403 }],
+  syncFind: () => [{ method: 'GET', path: '/sync/find?thread=slack:C1:1&message=1', status: 403 }],
+  syncCopies: ({ secret }) => [{ method: 'GET', path: `/sync/copies?message=${secret.root}`, status: 403 }],
+  syncRoots: () => [{ method: 'GET', path: '/sync/roots?by=vercel:user:u_keeper&since=0', status: 403 }],
+  inboxPush: () => [
+    {
+      method: 'POST',
+      path: '/inbox/slack',
+      body: { events: [{ id: 'e1', raw: {}, event: { kind: 'message', channel: 'slack:C1', thread: 'slack:C1:1', subthread: null, message: '1', isRoot: true, text: 'hi', context: null, author: SLACK_USER } }] },
+      status: 403,
+    },
+  ],
+  inboxNext: () => [{ method: 'GET', path: '/inbox/slack/next', status: 403 }],
+  inboxAck: () => [{ method: 'POST', path: '/inbox/slack/e1/ack', body: { lease: 'l1' }, status: 403 }],
+  syncCode: () => [
+    { method: 'POST', path: '/sync/codes', body: { sync: 'slack' }, status: 403 },
+    { method: 'POST', path: '/sync/codes', body: { sync: 'slack', person: 'vercel:user:u_keeper' }, status: 403 },
+  ],
+  syncAccount: () => [
+    { method: 'POST', path: '/sync/accounts', body: { sync: 'slack', account: SLACK_USER, code: 'vb-AAAA-BBBB' }, status: 403 },
+    // Only by a code: there's no linking an account to someone by naming them.
+    { method: 'POST', path: '/sync/accounts', body: { sync: 'slack', account: SLACK_USER, person: 'vercel:user:u_keeper' }, status: 400 },
+  ],
+  syncUnlink: () => [{ method: 'POST', path: '/sync/accounts/unlink', body: { account: 'slack:user:U1' }, status: 404 }],
+  // Registered watchers: each sees only what its registrant reads, and pulls only its own.
+  watchers: () => [{ method: 'GET', path: '/watchers', status: 200, check: (body) => expect(body.watchers).toEqual([]) }],
+  register: () => [{ method: 'POST', path: '/watchers', body: { watch: { fix: { tail: 'secret' } } }, status: 200 }],
+  matches: () => [{ method: 'GET', path: '/watchers/matches', status: 200, check: (body) => expect(body.matches).toEqual([]) }],
+  ack: () => [{ method: 'POST', path: '/watchers/matches/m1/ack', body: { lease: 'l1' }, status: 404 }],
+  wake: () => [{ method: 'POST', path: '/wake', status: 404 }],
 }
 
 async function setup() {
@@ -132,7 +178,7 @@ async function setup() {
     }),
   )
   const file = ((await upload.json()) as { attachment: { id: string } }).attachment.id
-  const root = (await keeper('POST', '/messages', { channel: 'secret', text: 'hush @keeper', labels: { private: 'yes' }, attachments: [file] })).body.message.id
+  const root = (await keeper('POST', '/messages', { channel: 'secret', text: 'hush @keeper', labels: { private: 'yes' }, attachments: [file], id: 'secret-one' })).body.message.id
   const reply = (await keeper('POST', '/messages', { re: root, text: 'still hush' })).body.message.id
   await keeper('POST', `/messages/${root}/reactions`, { emoji: 'eyes' })
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id

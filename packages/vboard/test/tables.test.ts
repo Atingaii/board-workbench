@@ -11,6 +11,7 @@ import { redisHttp } from '../src/store/redis-http.ts'
 import { redisTables } from '../src/store/redis-tables.ts'
 import { redis } from '../src/store/redis.ts'
 import { sqliteDb } from '../src/store/sqlite-db.ts'
+import { project } from '../src/store/project.ts'
 import { ddl, sqlTables } from '../src/store/sql.ts'
 import type { BoardStore, MessageTables } from '../src/store/types.ts'
 import { pgliteDb } from './pglite-db.ts'
@@ -40,11 +41,14 @@ const SEEN = [
   { actor: 'vercel:user:u_ada+claude', kind: 'agent', handle: 'ada/claude', name: 'Claude', avatar: null },
   { actor: 'vercel:user:u_bo', kind: 'person', handle: 'bo', name: 'Bo', avatar: null },
   { actor: 'slack:user:U1', kind: 'person', handle: 'sam', name: 'Sam', avatar: null },
+  // Names every object has are handles, channels, and older logs' emoji and label keys like any other.
+  { actor: 'slack:user:U2', kind: 'external', handle: '__proto__', name: 'Proto', avatar: null },
+  { actor: 'slack:user:U3', kind: 'external', handle: 'constructor', name: 'Con', avatar: null },
 ] as const
-const CHANNELS = ['dev', 'dev/sub', 'dev_x', 'ops']
+const CHANNELS = ['dev', 'dev/sub', 'dev_x', 'ops', 'constructor']
 const WORDS = ['PR', '#1', 'fix', 'Bug', 'deploy', 'ÉCLAIR', 'naïve', '100%', 'a_b', 'shipit']
 const FILES = ['f_one', 'f_two', 'f_three', 'f_four']
-const LABELS = [{ kind: 'bug' }, { kind: 'feature' }, { pr: '1' }, { pr: '2' }, { 'tag.x': 'y' }]
+const LABELS: Record<string, string>[] = [{ kind: 'bug' }, { kind: 'feature' }, { pr: '1' }, { pr: '2' }, { 'tag.x': 'y' }, { constructor: 'x' }]
 
 /** A random board history: every event type the messages fold handles, and some it ignores. */
 function history(seed: number, length: number): BoardEvent[] {
@@ -96,9 +100,9 @@ function history(seed: number, length: number): BoardEvent[] {
       const kind = r.pick(['edit', 'delete', 'react', 'unreact', 'labels', 'linked', 'synced', 'synced', 'files', 'failed', 'attach', 'attach'] as const)
       if (kind === 'edit') push('message.edited', { ...base, text: text(), mentions: mentions() })
       else if (kind === 'delete') push('message.deleted', base)
-      else if (kind === 'react') push('reaction.added', { ...base, emoji: r.pick(['eyes', '+1', 'thumbs_up']) })
-      else if (kind === 'unreact') push('reaction.removed', { ...base, emoji: r.pick(['eyes', 'thumbs_up']) })
-      else if (kind === 'labels') push('labels.changed', { id: target.id, thread: target.thread, by: author, set: labels(), unset: r.chance(0.5) ? [r.pick(['kind', 'pr', 'tag.x'])] : [] })
+      else if (kind === 'react') push('reaction.added', { ...base, emoji: r.pick(['eyes', '+1', 'thumbs_up', 'constructor', '__proto__']) })
+      else if (kind === 'unreact') push('reaction.removed', { ...base, emoji: r.pick(['eyes', 'thumbs_up', 'constructor', '__proto__']) })
+      else if (kind === 'labels') push('labels.changed', { id: target.id, thread: target.thread, by: author, set: labels(), unset: r.chance(0.5) ? [r.pick(['kind', 'pr', 'tag.x', 'constructor'])] : [] })
       else if (kind === 'linked') push('message.linked', { ...base, links: [{ url: 'https://example.com', message: null, snapshot: null, unavailable: null }] })
       else if (kind === 'failed') push('message.sync_failed', { id: target.id, thread: target.thread, target: 'slack:C1', error: 'not_in_channel' })
       else if (kind === 'synced') {
@@ -154,6 +158,7 @@ const FILTERS: ParsedFilters[] = [
   { channel: 'dev' },
   { channel: 'dev/' },
   { channel: 'dev_x' },
+  { channel: 'constructor' },
   { by: 'ada' },
   { by: 'ada/claude' },
   { by: 'sam' },
@@ -169,6 +174,7 @@ const FILTERS: ParsedFilters[] = [
   { label: [['kind', ['bug']]] },
   { label: [['kind', ['bug', 'feature']], ['pr', null]] },
   { label: [['tag.x', ['y']]], channel: 'dev/' },
+  { label: [['constructor', null]] },
   { by: 'ada', label: [['pr', ['1']]], text: 'fix' },
 ]
 
@@ -466,6 +472,36 @@ afterAll(async () => {
     await admin.query(`drop database if exists ${database} with (force)`)
     await admin.end()
   }
+})
+
+describe("a message's version", () => {
+  const by = AUTHORS[0]
+  const event = (index: number, type: string, payload: object) =>
+    ({ index, id: `e${index}`, type, createdAt: '2026-10-01T00:00:00.000Z', payload: { id: 5, thread: 'e5', ...payload } }) as unknown as BoardEvent
+  const receipt = (index: number) => event(index, 'message.synced', { target: 'slack:C1', external: { thread: 'slack:C1:5', message: '5.9' } })
+
+  it('is the last event that changed it, and an event that changes nothing writes nothing', () => {
+    const state: MessagesState = { byId: {}, replies: {} }
+    foldMessages(state, { ...event(5, 'message.posted', {}), payload: {
+      channel: 'dev', text: 'hi', re: null, replyTo: null, thread: 'e5', labels: {}, noSync: false, mentions: [], by, origin: null, from: null,
+    } } as BoardEvent)
+    expect(state.byId[5]!.version).toBe(5)
+    const react = event(6, 'reaction.added', { emoji: 'eyes', by, from: null })
+    foldMessages(state, react)
+    expect(state.byId[5]!.version).toBe(6)
+
+    // Most receipts are for a delivery that never failed, and a reaction can come twice.
+    for (const same of [receipt(7), { ...react, index: 8, id: 'e8' }]) {
+      const before = structuredClone(state.byId[5]!)
+      expect(project({ message: before, root: undefined }, same)).toEqual({})
+      foldMessages(state, same)
+      expect(state.byId[5]).toEqual(before)
+    }
+
+    foldMessages(state, event(9, 'message.sync_failed', { target: 'slack:C1', error: 'not_in_channel' }))
+    foldMessages(state, receipt(10))
+    expect(state.byId[5]).toMatchObject({ version: 10, undelivered: {} })
+  })
 })
 
 describe.skipIf(!redisUrl)('the Redis tables', () => {

@@ -65,15 +65,15 @@ test("tokenRefreshes: Pi handed tokens that die mid-session gets new ones before
   scheduler.handler(refreshes.server);
 
   // A message hands Pi tokens with 30 minutes left: before, nothing replaced them.
-  await refreshes.later(1956, { tokensEnd: now + 30 * MIN, sessionEnd: now + SESSION });
+  await refreshes.later("1956", { tokensEnd: now + 30 * MIN, sessionEnd: now + SESSION });
   assert.equal(timers.length, 1);
   assert.equal(timers[0].dueAt, now + 30 * MIN - REFRESH_LEAD_MS);
   // A second message with the same tokens arms the same refresh.
-  await refreshes.later(1956, { tokensEnd: now + 30 * MIN, sessionEnd: now + SESSION + MIN });
+  await refreshes.later("1956", { tokensEnd: now + 30 * MIN, sessionEnd: now + SESSION + MIN });
   assert.equal(timers.length, 1);
 
   await fire();
-  assert.deepEqual(given, [1956]);
+  assert.deepEqual(given, ["1956"]);
   // The new tokens outlive the session: nothing more to do.
   assert.equal(timers.length, 0);
 });
@@ -92,10 +92,10 @@ test("tokenRefreshes: tokens that outlive the session arm nothing, and a stopped
   });
   scheduler.handler(refreshes.server);
 
-  await refreshes.later(7, { tokensEnd: now + 100 * MIN, sessionEnd: now + SESSION });
+  await refreshes.later("7", { tokensEnd: now + 100 * MIN, sessionEnd: now + SESSION });
   assert.equal(timers.length, 0);
 
-  await refreshes.later(7, { tokensEnd: now + 20 * MIN, sessionEnd: now + SESSION });
+  await refreshes.later("7", { tokensEnd: now + 20 * MIN, sessionEnd: now + SESSION });
   await fire();
   assert.equal(calls, 1);
   assert.equal(timers.length, 0);
@@ -116,7 +116,7 @@ test("tokenRefreshes: a refresh that fails says so and doesn't throw, so the thr
       },
     });
     scheduler.handler(refreshes.server);
-    await refreshes.later(7, { tokensEnd: now + 20 * MIN, sessionEnd: now + SESSION });
+    await refreshes.later("7", { tokensEnd: now + 20 * MIN, sessionEnd: now + SESSION });
     await fire();
     assert.equal(timers.length, 0);
     assert.match(logged.join("\n"), /couldn't refresh Pi's tokens on board thread #7/);

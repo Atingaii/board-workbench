@@ -26,7 +26,7 @@ const boardWith = (prs) => {
     queries,
     messages: async (query) => {
       queries.push(query);
-      return { messages: prs.includes(query.label.pr) ? [{ id: 1 }] : [] };
+      return { messages: prs.includes(query.label.pr) ? [{ id: "1" }] : [] };
     },
   };
 };

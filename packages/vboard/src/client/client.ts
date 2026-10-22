@@ -6,16 +6,25 @@ import type {
   EventsPage,
   EventsQueryInput,
   FiltersInput,
-  IdentityChallenge,
-  IdentityCheck,
   IdentityView,
   InboxEntry,
-  StuckEvent,
+  InboxItem,
+  LinkedAccount,
+  SyncAccountInput,
+  SyncCodeView,
+  SyncCopiesView,
+  SyncFindInput,
+  SyncFindView,
+  SyncImportInput,
+  SyncReceiptInput,
+  SyncThreadView,
   SourceRead,
   Me,
+  MatchView,
   MessagesPage,
   MessagesQueryInput,
   MessageView,
+  RegistrationView,
   ScheduleView,
   SchedulesQueryInput,
   ThreadsPage,
@@ -41,7 +50,7 @@ export class BoardError extends Error {
   }
 }
 
-type Resolvable<T> = T | (() => T | Promise<T>)
+export type Resolvable<T> = T | (() => T | Promise<T>)
 const resolve = async <T>(value: Resolvable<T>): Promise<T> =>
   typeof value === 'function' ? await (value as () => T | Promise<T>)() : value
 
@@ -51,8 +60,8 @@ export type ProfileOption = string | { name: string; avatar?: string } | null
 export type ClientOptions = {
   /** The board's URL, e.g. `https://www.example.com/api/board`. */
   url: string
-  /** An OIDC token whose audience is the board's URL, or a function returning one. */
-  token: Resolvable<string>
+  /** An OIDC token whose audience is the board's URL, or a function returning one. Without one, `fetch` brings the credentials. */
+  token?: Resolvable<string>
   profile?: Resolvable<ProfileOption>
   /** Runtime session, recorded on writes and used to scope read cursors. */
   session?: Resolvable<string | null>
@@ -60,8 +69,6 @@ export type ClientOptions = {
   handle?: Resolvable<string | null>
   /** Your display name and avatar, shown when you write as yourself (not as a profile). */
   person?: Resolvable<{ name?: string | null; avatar?: string | null } | null>
-  /** Where the token comes from, in words (`vercel login`, `GitHub Actions OIDC`), for `vb whoami`. */
-  source?: Resolvable<string | null>
   /** Extra headers on every request. */
   headers?: Resolvable<Record<string, string>>
   fetch?: typeof fetch
@@ -137,6 +144,9 @@ export function duration(value: string | number): number {
   return Number(match[1]) * UNITS[match[2] ?? 'ms']!
 }
 
+/** A ref as a path segment: opaque, so it's encoded as it is. */
+const path = (id: string) => encodeURIComponent(id)
+
 function queryString(query: object): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
@@ -175,7 +185,7 @@ export function createBoardClient(options: ClientOptions) {
   async function headers(auth: boolean, as?: ProfileOption): Promise<Record<string, string>> {
     const out: Record<string, string> = { ...(options.headers ? await resolve(options.headers) : {}) }
     if (!auth) return out
-    out.authorization = `Bearer ${await resolve(options.token)}`
+    if (options.token !== undefined) out.authorization = `Bearer ${await resolve(options.token)}`
     const profile = as !== undefined ? as : options.profile === undefined ? null : await resolve(options.profile)
     if (profile !== null) {
       const { name, avatar } = typeof profile === 'string' ? { name: profile, avatar: undefined } : profile
@@ -224,7 +234,7 @@ export function createBoardClient(options: ClientOptions) {
   const filtersQuery = (filters: Filters = {}) => filters
 
   async function poll(
-    query: Filters & { after?: number; wait?: number; all?: boolean } = {},
+    query: Filters & { after?: string; wait?: number; all?: boolean } = {},
     signal?: AbortSignal,
   ): Promise<EventsPage> {
     return call<EventsPage>('GET', `/events${queryString(query)}`, signal ? { signal } : {})
@@ -255,27 +265,19 @@ export function createBoardClient(options: ClientOptions) {
       }),
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
-    /** Which credential this client sends, in words, or null when it was handed a token. A client with no token yet gets one first, which can make requests and fail as a call would. */
-    source: async () => (options.source === undefined ? null : await resolve(options.source)),
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
     actors: async () => (await call<{ actors: (Actor & { person?: ActorView['person'] })[] }>('GET', '/actors')).actors,
 
     /** Your linked platform accounts, and the sync entries you haven't linked (`unlinked`). */
     identity: () => call<IdentityView>('GET', '/identity'),
-    /**
-     * Starts linking your account on sync entry `sync`: a sign-in URL to open
-     * (only you), or a one-time code to post from that account where the board syncs.
-     */
-    linkAccount: (sync: string, opts: { method?: 'code' | 'consent' } = {}) =>
-      call<IdentityChallenge>('POST', '/identity/link', { body: { sync, ...opts } }),
-    /** After a sign-in: the account it linked, or null until you've approved. */
-    checkAccount: async (sync: string) => (await call<IdentityCheck>('POST', '/identity/check', { body: { sync } })).linked,
     /** Unlinks one of your accounts, by actor ID or handle. History keeps its messages as they were. */
     unlinkAccount: (account: string) => call<{ ok: true; actor: string }>('POST', '/identity/unlink', { body: { actor: account } }),
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
       call<MessagesPage>('GET', `/messages${queryString(query)}`),
-    thread: (id: number) => call<ThreadView>('GET', `/messages/${id}`),
+    thread: (id: string) => call<ThreadView>('GET', `/messages/${path(id)}`),
+    /** Your own post with the client ID you gave it, as posting it answered: 404 `post_not_found` when there's none. */
+    posted: async (id: string) => (await call<{ message: MessageView }>('GET', `/posts/${path(id)}`)).message,
     /** Threads with a matching message, one summary each (root, reply count, latest reply), by latest activity. `limit` counts threads. */
     threads: (query: Filters & Omit<ThreadsQueryInput, keyof FiltersInput> = {}) =>
       call<ThreadsPage>('GET', `/threads${queryString(query)}`),
@@ -285,17 +287,17 @@ export function createBoardClient(options: ClientOptions) {
       const { message, unknownMentions } = await call<{ message: MessageView; unknownMentions?: string[] }>('POST', '/messages', { body: { channel, ...messageBody(input) } })
       return written(message, unknownMentions)
     },
-    async reply(id: number, input: string | ReplyOptions): Promise<Written<MessageView>> {
+    async reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>> {
       const { message, unknownMentions } = await call<{ message: MessageView; unknownMentions?: string[] }>('POST', '/messages', { body: { re: id, ...messageBody(input) } })
       return written(message, unknownMentions)
     },
     /**
-     * Posts later, as you: a reply when `target` is a message ID (any message in the
-     * thread), a new thread when it's a channel. Each message it posts carries
+     * Posts later, as you: a new thread when `target` is a channel, a reply when it's
+     * `{ re }`, any message's ID in the thread. Each message it posts carries
      * `schedule: { id, n }`. Needs a board with a scheduler.
      */
-    async schedule(target: number | string, input: ScheduleOptions): Promise<Written<ScheduleView>> {
-      const where = typeof target === 'number' ? { re: target } : { channel: target }
+    async schedule(target: string | { re: string }, input: ScheduleOptions): Promise<Written<ScheduleView>> {
+      const where = typeof target === 'string' ? { channel: target } : { re: target.re }
       const { schedule, unknownMentions } = await call<{ schedule: ScheduleView; unknownMentions?: string[] }>('POST', '/schedules', { body: { ...where, ...scheduleBody(input) } })
       return written(schedule, unknownMentions)
     },
@@ -303,8 +305,8 @@ export function createBoardClient(options: ClientOptions) {
     schedules: async (query: SchedulesQueryInput = {}) =>
       (await call<{ schedules: ScheduleView[] }>('GET', `/schedules${queryString(query)}`)).schedules,
     /** Stops a schedule: yours, or any with manage in its channel. `canceled` is false when it was already done or canceled. */
-    cancelSchedule: (id: number) =>
-      call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${id}/cancel`, { body: {} }),
+    cancelSchedule: (id: string) =>
+      call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
     /** Stores a file on the board, for a post or reply's `attachments`. At most 4 MB. */
     async upload(input: UploadInput): Promise<Attachment> {
       const type = input.type || (input.data instanceof Blob ? input.data.type : '') || typeOf(input.name)
@@ -319,41 +321,43 @@ export function createBoardClient(options: ClientOptions) {
     /** An attachment's bytes, as the board serves them: `content-type` is the file's type. */
     download: (id: string, opts: { signal?: AbortSignal } = {}) =>
       raw('GET', `/attachments/${encodeURIComponent(id)}`, opts.signal ? { signal: opts.signal } : {}),
-    edit: (id: number, text: string) =>
-      call<{ ok: true; unknownMentions?: string[] }>('POST', `/messages/${id}/edit`, { body: { text } }),
-    delete: (id: number) => call<{ ok: true }>('POST', `/messages/${id}/delete`, { body: {} }),
+    edit: (id: string, text: string) =>
+      call<{ ok: true; unknownMentions?: string[] }>('POST', `/messages/${path(id)}/edit`, { body: { text } }),
+    delete: (id: string) => call<{ ok: true }>('POST', `/messages/${path(id)}/delete`, { body: {} }),
     /** `emoji` is a short name, `:name:`, or the character itself. */
-    react: (id: number, emoji: string, opts: { remove?: boolean } = {}) =>
-      call<{ ok: true }>('POST', `/messages/${id}/reactions`, {
+    react: (id: string, emoji: string, opts: { remove?: boolean } = {}) =>
+      call<{ ok: true }>('POST', `/messages/${path(id)}/reactions`, {
         body: { emoji: normalizeEmoji(emoji), ...opts },
       }),
-    label: (id: number, change: { set?: Record<string, string>; unset?: string[] }) =>
-      call<{ ok: true }>('POST', `/messages/${id}/labels`, { body: change }),
+    label: (id: string, change: { set?: Record<string, string>; unset?: string[] }) =>
+      call<{ ok: true }>('POST', `/messages/${path(id)}/labels`, { body: change }),
     /**
      * Shows typing in the platform threads the message's thread is synced to
      * (on WhatsApp, also marking the latest inbound message read). Ephemeral:
      * nothing goes in the log. Answers the external threads that took it.
      * `status` replaces "Typing…" on Slack ("running tests…").
      */
-    typing: async (id: number, status?: string) =>
-      (await call<TypingResult>('POST', `/messages/${id}/typing`, { body: status ? { status } : {} })).targets,
+    typing: async (id: string, status?: string) =>
+      (await call<TypingResult>('POST', `/messages/${path(id)}/typing`, { body: status ? { status } : {} })).targets,
     /** Attaches the message's thread to an external target, backfilling it. Attaching twice is a no-op. */
-    sync: (id: number, target: string) =>
-      call<{ target: string; attached: boolean }>('POST', `/messages/${id}/sync`, { body: { target } }),
+    sync: (id: string, target: string) =>
+      call<{ target: string; attached: boolean }>('POST', `/messages/${path(id)}/sync`, { body: { target } }),
     /** Raw platform events for a sync entry, newest first. */
     inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
       (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
-    /** Events that failed 10 times and stopped their thread, oldest first. Full access only. */
-    stuck: async () => (await call<{ stuck: StuckEvent[] }>('GET', '/stuck')).stuck,
-    /**
-     * Retries a stuck event with a fresh 10 tries, or skips it so its thread goes on, for `consumer`,
-     * or for every consumer it's stuck for. `redriven` is false when it wasn't stuck (anymore). Full
-     * access only.
-     */
-    redrive: (session: string, index: number, action: 'retry' | 'skip', consumer?: string) =>
-      call<{ redriven: boolean }>('POST', '/stuck/redrive', {
-        body: { session, index, action, ...(consumer !== undefined ? { consumer } : {}) },
-      }),
+    /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
+    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: { key: string; platform: string; signIn?: boolean }[] }) =>
+      call<RegistrationView>('POST', '/watchers', { body: input }),
+    /** Registered watchers: every one to `manage` everywhere, the caller's own to anyone else. */
+    watchers: async () => (await call<{ watchers: RegistrationView[] }>('GET', '/watchers')).watchers,
+    /** The caller's matches it can run now, each leased to it until it acks. `wait` holds the request up to that many seconds for one. */
+    matches: async (opts: { limit?: number; wait?: number; signal?: AbortSignal } = {}) => {
+      const { signal, ...query } = opts
+      return (await call<{ matches: MatchView[] }>('GET', `/watchers/matches${queryString(query)}`, signal ? { signal } : {})).matches
+    },
+    /** How a pulled match went: done, an error to try again, or `skip` to drop it. */
+    ack: (id: string, body: { lease: string; error?: string; skip?: boolean }) =>
+      call<{ ok: true }>('POST', `/watchers/matches/${encodeURIComponent(id)}/ack`, { body }),
     /**
      * Reads a platform channel (`#name`, an ID), thread (`C0123:1727000000.123456`),
      * or message permalink on demand, without syncing or storing it. Full access only.
@@ -362,6 +366,44 @@ export function createBoardClient(options: ClientOptions) {
       call<SourceRead>('GET', `/sources/${key}/read${queryString({ target, ...opts })}`),
 
     poll,
+
+    // Sync's records: what a sync running elsewhere reads and writes here. Each needs `sync`
+    // where it lands: the board trusts the caller to speak for platform users there.
+
+    /** A platform's write, as its platform author: idempotent per platform event for a post, found from its origin otherwise. */
+    syncImport: (body: SyncImportInput) => call<{ message: string | null; dropped?: string[] }>('POST', '/sync/imports', { body }),
+    /** What sync did on a platform: a delivery, its files, a failure, or a thread's new target. */
+    syncReceipt: (body: SyncReceiptInput) => call<{ ok: true; attached?: boolean }>('POST', '/sync/receipts', { body }),
+    /** A board thread's sync, by its key. */
+    syncThread: (thread: string) => call<SyncThreadView>('GET', `/sync/threads/${path(thread)}`),
+    /** What platform IDs are on the board: a thread, a message, who an account is, a person's accounts. */
+    syncFind: (query: SyncFindInput, opts: { signal?: AbortSignal } = {}) =>
+      call<SyncFindView>('GET', `/sync/find${queryString(query)}`, opts.signal ? { signal: opts.signal } : {}),
+    /** Messages' copies on platforms, by message and target. */
+    syncCopies: async (messages: string[]) =>
+      (await call<SyncCopiesView>('GET', `/sync/copies?${messages.map((id) => `message=${encodeURIComponent(id)}`).join('&')}`)).copies,
+    /** A person's roots since `since`. */
+    syncRoots: async (by: string, since: Date | number) =>
+      (await call<{ roots: MessageView[] }>('GET', `/sync/roots${queryString({ by, since: since instanceof Date ? since.getTime() : since })}`)).roots,
+    /** Pushes platform events into your inbox for sync key `key`; each platform ID lands once. */
+    inboxPush: (key: string, events: { id: string; event: InboxItem['event']; raw: unknown }[]) =>
+      call<{ ok: true }>('POST', `/inbox/${path(key)}`, { body: { events } }),
+    /** Your next inbox events for `key`, leased to you until you ack them, one platform thread at a time. */
+    inboxNext: async (key: string, opts: { limit?: number } = {}) =>
+      (await call<{ items: InboxItem[] }>('GET', `/inbox/${path(key)}/next${queryString(opts)}`)).items,
+    /** How an inbox event went: done, or an error to try it again. */
+    inboxAck: (key: string, id: string, body: { lease: string; error?: string }) =>
+      call<{ ok: true }>('POST', `/inbox/${path(key)}/${path(id)}/ack`, { body }),
+    /**
+     * A one-time code for linking your account on sync entry `sync`, to post from that account where
+     * the board syncs, and `signIn` when the entry signs people in: open it (only you) and approve.
+     * Only people get one, each for themselves. `identity()` shows the link once it's made.
+     */
+    syncCode: (sync: string) => call<SyncCodeView>('POST', '/sync/codes', { body: { sync } }),
+    /** Links a platform account to whoever a code was issued to: one posted from it, or carried through its sign-in. */
+    syncAccount: (body: SyncAccountInput) => call<{ person: string; link: LinkedAccount }>('POST', '/sync/accounts', { body }),
+    /** Unlinks a platform account: your own, or anyone's with `sync`. */
+    syncUnlink: (account: string) => call<{ ok: true }>('POST', '/sync/accounts/unlink', { body: { account } }),
 
     /** Live events. Reconnects from the last seen index whenever the stream closes. */
     async *events(
@@ -386,7 +428,7 @@ export function createBoardClient(options: ClientOptions) {
         failures = 0
         try {
           for await (const message of parseSse(response.body!, opts.signal)) {
-            if (message.id !== undefined) after = Number(message.id)
+            if (message.id !== undefined) after = message.id
             if (message.event === 'board' && message.data) yield JSON.parse(message.data) as BoardEventView
           }
         } catch (error) {
@@ -398,7 +440,7 @@ export function createBoardClient(options: ClientOptions) {
 
     /** The next matching event after `after` (default: now), or null on timeout. */
     async wait(
-      query: Filters & { after?: number } = {},
+      query: Filters & { after?: string } = {},
       opts: WaitOptions = {},
     ): Promise<BoardEventView | null> {
       const deadline = Date.now() + duration(opts.timeout ?? '30m')
@@ -414,7 +456,7 @@ export function createBoardClient(options: ClientOptions) {
   }
 }
 
-export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, IdentityChallenge, IdentityView, Me, MessagesPage, MessageView, ScheduleView, ThreadsPage, ThreadSummaryView, ThreadView }
+export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, IdentityView, Me, MessagesPage, MessageView, ScheduleView, ThreadsPage, ThreadSummaryView, ThreadView }
 
 async function toError(response: Response): Promise<BoardError> {
   try {

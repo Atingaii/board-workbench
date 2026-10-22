@@ -26,7 +26,7 @@ keeps messages that came from Slack. Each line carries the event and the
 message it concerns, as it is after the event:
 
 ```json
-{ "index": 812, "type": "message.posted", "createdAt": "2026-10-08T14:02:11.000Z", "payload": { "channel": "firehose", "text": "deploy failed on www@a1b2c3: ENOTFOUND db.internal" }, "message": { "id": 812, "re": null, "channel": "firehose", "text": "deploy failed on www@a1b2c3: ENOTFOUND db.internal", "labels": {} } }
+{ "cursor": "812", "type": "message.posted", "createdAt": "2026-10-08T14:02:11.000Z", "payload": { "channel": "firehose", "text": "deploy failed on www@a1b2c3: ENOTFOUND db.internal" }, "message": { "id": "812", "re": null, "channel": "firehose", "text": "deploy failed on www@a1b2c3: ENOTFOUND db.internal", "labels": {} } }
 ```
 
 (Trimmed: events carry the whole message, its author, and more.) A new
@@ -57,14 +57,14 @@ comes back to the board as a reply.
 ### One turn at a time
 
 A turn-based agent can't keep a pipe open. `wait` blocks for the next match,
-prints it, and exits, so each turn handles one event. Message IDs are log
-indexes, so the last index you handled is your place in the log:
+prints it, and exits, so each turn handles one event. Every event carries a
+`cursor`, so the last one you handled is your place on the board:
 
 ```bash
 # triage-turn.sh: one event per run
 last=$(cat .triage-cursor 2>/dev/null)
 next=$(vb wait firehose --from slack ${last:+--after "$last"} --json --timeout 1h) || exit 0
-jq -r '.index' <<<"$next" > .triage-cursor
+jq -r '.cursor' <<<"$next" > .triage-cursor
 
 [ "$(jq -r '.type' <<<"$next")" = "message.posted" ] || exit 0
 [ "$(jq -r '.message.re' <<<"$next")" = "null" ] || exit 0
@@ -76,7 +76,7 @@ reply=$(vb reply "$id" "Thanks! Tracking this with #640.")
 ```
 
 `wait` starts at the newest event unless you pass `--after`. The first run
-starts there; every later run passes the last index it handled, so nothing
+starts there; every later run passes the last cursor it handled, so nothing
 that arrived between turns is missed.
 It exits 124 when the timeout passes; `|| exit 0` treats that as a quiet
 turn.
@@ -103,12 +103,17 @@ print, durably, with retries.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { vercelQueues } from 'vboard/scheduler-vercel'
-import { postgres } from 'vboard/store-postgres'
+import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
   scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+const team = board({
+  backend,
   // sync: { slack: slack({ … }) }, mirroring Slack's #firehose into `firehose`
   watch: {
     triage: {
@@ -126,6 +131,8 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 - **`event` is exactly what `vb tail --json` prints.** Debug a watcher by

@@ -2,18 +2,22 @@
 
 A message board you mount in one route. It has one durable log, verified
 authors, channels and threads, a live tail, and optional two-way sync with Slack,
-GitHub, and WhatsApp (through Kapso). The npm package `vboard` ships the server,
-the client SDK, and the CLI. The API sits under the SDK, and the SDK sits under
-the CLI.
+GitHub, and WhatsApp (through Kapso). The npm package `vboard` ships the board
+(`board()`, whose handle serves it and acts on it), its backends, and the CLI.
+The API sits under the handle, and the handle sits under the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { postgres } from 'vboard/store-postgres' // or store-redis, store-redis-http, store-sqlite
+import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
-export const { GET, POST } = board({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+const team = board({
+  backend: a2({
+    store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  }),
 })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 `store` is one of vboard's stores (see [Reading state](#reading-state)). If you
@@ -21,16 +25,17 @@ omit it, you get SQLite at `.a2/dev.db` in development, memory in tests, and a
 startup error in production.
 
 `blob` is where [attachments](#attachments) live: `vercelBlob()` from
-`vboard/adapter-vercel-blob`, on a private Vercel Blob store connected to the
+`vboard/backend-a2/blob-vercel`, on a private Vercel Blob store connected to the
 project. If you
 omit it, the same rule holds: files under `.a2/attachments` in development,
 memory in tests, and in production every upload is refused (the rest of the
 board works).
 
 ```ts
-import { vercelBlob } from 'vboard/adapter-vercel-blob'
+import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
 
-export const { GET, POST } = board({ store, blob: vercelBlob() })
+const team = board({ backend: a2({ store, blob: vercelBlob() }) })
+export const GET = team.fetch, POST = team.fetch
 ```
 
 ```bash
@@ -73,13 +78,13 @@ vboard post errors-www "deploy failed on a1b2c3"
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
 - **Wiring is code; the log holds facts.** Sync mappings, callbacks, watchers,
-  and access live in `board()` config, where they're reviewed and deployed.
+  and access live in `board()` and its backend's config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
-  read: folds stay global, and filters are per reader. Log indexes still show
-  how busy the board is.
+  read: folds stay global, and filters are per reader. On `a2()`, log indexes
+  still show how busy the board is.
 - **Everything is legible in plain text.** Actor IDs are readable strings, not
-  hashes. Message IDs and cursors are the same numbers. The CLI is a product
-  constraint, not a lesser frontend.
+  hashes. A message ID is also a cursor, and on `a2()` both are plain
+  decimals. The CLI is a product constraint, not a lesser frontend.
 - **The log is the only source of truth.** Every view is an A2 reducer, and
   reducer snapshots are caches. Deleting them is always safe. The MVP has no
   SQL tables and no second data model.
@@ -103,20 +108,297 @@ One package, `vboard`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()` and the access helpers (`vercelProject()`, `githubActions()`, `oidc()`) | server |
-| `vboard/client` | `createClient()`, the typed client, and its types. The `node` build also detects the URL and token (see [Client SDK](#client-sdk)) | isomorphic |
-| `vboard/adapter-slack` | `slack()`, the Slack sync adapter | server |
-| `vboard/adapter-github` | `github()`, the GitHub sync adapter | server |
-| `vboard/adapter-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
-| `vboard/adapter-vercel-blob` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `vboard` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
+| `vboard/access` | Who may use a board: `vercelProject()`, `githubActions()`, `oidc()`, and the permission types | server |
+| `vboard/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
+| `vboard/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
+| `vboard/backend-a2/scheduler-vercel`, `…/scheduler-qstash` | What runs `a2()`'s consumers and timers | server |
+| `vboard/backend-a2/blob-vercel` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `vboard/backend-a2/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
+| `vboard/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
+| `vboard/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
+| `vboard/sync-slack` | `slack()`, the Slack sync adapter | server |
+| `vboard/sync-github` | `github()`, the GitHub sync adapter | server |
+| `vboard/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `vboard/sync` | Shared event schemas, `SyncProvider`, and the trusted callback client | server |
-| `vboard/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
-| bins `vboard`, `vb` | The CLI, built only on `vboard/client`. `vb` is a short alias | Node ≥ 22 |
+| bins `vboard`, `vb` | The CLI, built only on `board()`. `vb` is a short alias | Node ≥ 22 |
 
-Sync adapters are named for the Chat SDK adapter they take: `adapter-kapso`
-takes `@kapso/chat-adapter`, which leaves `adapter-whatsapp` for
+A backend's own pieces live under its path, and everything that works with any
+backend lives at the top. Sync adapters are named for the Chat SDK adapter they
+take: `sync-kapso` takes `@kapso/chat-adapter`, which leaves `sync-whatsapp` for
 `@chat-adapter/whatsapp`, Meta's own, whose threads are contacts rather than
 conversations.
+
+### Backends
+
+`board({ backend, authenticate, access, middleware, project, watch, sync, url,
+basePath, streamMaxMs })` mounts a board on a backend, which says where the
+board lives. `board()` owns the HTTP and the policy on every backend: it routes
+each request, validates it with the schemas in `src/api/routes.ts`, checks the
+shape of its `x-board-*` claims, verifies its caller with `authenticate`
+(`oidcTokens()` from `vboard/access` by default), works out the actor (the
+principal plus its claimed profile, `vercel:user:u_123+claude`), applies
+`access`, runs the [middleware](#middleware), maps errors, and serves
+`/avatars/:name`, `/openapi.json`, discovery, and SSE. It calls the backend's
+method of the same name as the route with the caller it verified. Nothing with
+side effects runs for a request before `access` allows it: it resolves a sync
+target on a platform (which can join a Slack channel), looks up an email,
+records who that is, reads an upload, or runs the middleware only for a caller
+that may (`post`, and `sync` for targets, where the write lands). A request it
+may not goes to the backend as it came, which refuses it. It keeps verified
+token principals by credential until they expire, and each request's principal
+for the request's life, and works out what a stream's caller may do again for
+each page. What it returns is [the handle](#the-handle), whose `fetch` is that
+one handler (`export const GET = team.fetch, POST = team.fetch`). TypeScript
+rejects an option on the call it doesn't belong to; nothing checks at runtime.
+
+- **A backend is a plain object** (`Backend` in `src/server/backend.ts`): one
+  async method per protocol method (`Protocol` in `src/api/protocol.ts`), each
+  `(caller, input, signal)`, plus `routes`, `keeps`, and `bind`. `board()`
+  only ever calls these: it verifies and decides, and the backend stores,
+  honoring what each caller may do. `typing` and `readSource` are methods too,
+  and so is `discovery`, which a handle asks: a request's discovery is
+  `board()`'s, the URL it reached and the project tokens are minted for, with
+  the sync entries a backend that keeps the board lists. `input` is what the route's schema parsed; the output is what the route
+  answers, 201 for `post`, `schedule`, and `upload`. `attachment` answers the
+  file's record and bytes, and `board()` serves them with the headers that keep
+  a file from running as a page. A method throws `HttpError` for a status and
+  code of its own.
+- **A caller** is `{ identity, origin }`, one `board()` verified:
+  `identity.principal` (who it is, with its `access`, narrowed by the `scope`
+  it sent), `identity.author` (the author record its writes carry), and
+  `identity.actor` (the actor it writes as). It's a request's
+  (`origin.via.kind` is `api`), or for work a backend does outside requests,
+  the one it's done for: a schedule's creator at its send (`schedule`). A
+  backend trusts it as it is, since only `board()` makes one, in process, and
+  every method honors its access. Or `{ self, origin }`, this deployment's own
+  code: the handle (`origin.via.kind` is `client`, and `self` the profile from
+  `as()`, or null), a watcher (`watcher`), the middleware's handle
+  (`middleware`), or sync (`engine`); who `self` is on its board, each backend
+  says. Claims are labels under the verified principal, never security.
+  `origin` is in-process only: board() sets `config` (the targets a new root's
+  channel syncs with), and no request carries it.
+- **`routes`** are a backend's own, beside the protocol. `board()` verifies
+  nothing for them: a request's `caller` is null, and the route checks what it
+  needs. One at a protocol route's path takes its place.
+- **`keeps`** says whether the board lives in the backend. One that keeps it
+  (`a2()`) takes `board()`'s defaults when `access` is left out (people, and
+  the board's own deployments in its environment); one that doesn't
+  (`http()`) serves no request then but wake-ups and webhooks, and verifies
+  none.
+- **`bind(binding)`** is called once, when `board()` is created, before any
+  request, and does no I/O. It's what background work needs from the board:
+  `subscriptions` (each watcher's tail, and sync's at `@sync`, which gets every
+  post, change, and thread sync) with `run(id, event, { trigger, attempt })`;
+  sync's inbound, `receive(key, event, { id, attempt })` for a backend that
+  delivers what sync pushed in-process, and `pull()` for one that queues it;
+  `sync` (board()'s sync entries); `readSource(key, target, limit)` and
+  `typing(messages, status)`, what only board()'s sync can do, which a backend
+  answers those methods through; `accessNow(principal)`, board()'s policy for
+  a principal the backend stored (a schedule's creator at each send, a
+  registrant at each event and pull, the syncs that link accounts), null once
+  it may do nothing; `project()`, the board's Vercel project; `handle(caller)`,
+  a handle through board(), as a verified caller (a schedule's creator, whose
+  posts keep their IDs) or its own code, so what a backend writes for someone
+  goes through the middleware; and `url()`, the board's own URL once it's
+  known.
+- **Sync runs in `board()`,** on every backend (see [Sync](#sync)). Sync's
+  adapters, webhooks (`/webhooks/:key`, no token), `/messages/:id/sync`,
+  `/identity/sign-in` and `/signed-in` (no token), and `/identity/unlink` are
+  `board()`'s routes; sync reads and writes only through the protocol, as its
+  own caller. `readSource` and `typing` are protocol methods: a2() answers
+  them through the binding, so they work from the CLI against the board that
+  runs the sync, and a board that runs no such entry answers 404
+  `not_synced_here` for a source read.
+- **SSE is built from `events`,** the long-poll: `board()` loops it, sends each
+  event with `id: <its cursor>`, and a bare `id:` when a page's cursor moved
+  past its last event. It honors `Last-Event-ID` when `after` is absent, pings
+  every 15 seconds, and closes at `streamMaxMs`.
+
+The backends vboard ships:
+
+- **`a2({ store, scheduler, blob })`** keeps the board in this deployment, on
+  A2's log, and is the backend object itself: the log and its engine. It
+  builds its A2 servers when `board()` binds it; a store connects when it's
+  first used. Everything else in this spec describes it. It trusts the callers
+  `board()` verified, and what it does outside requests that needs the policy,
+  it asks `board()` through the binding: each event's access for registered
+  watchers, each pull's, a schedule's send-time re-check and revocation, and
+  which registered syncs may still link accounts. A schedule's send goes
+  through `board()`, as its creator, on the binding's handle, so the
+  middleware sees it. A verified caller writes as its actor; `{ self }` writes as `vboard:client` from the handle,
+  `vboard:client:<profile>` from `as(profile)`, `vboard:watch:<id>` from a
+  watcher, `vboard:middleware` from the middleware's handle, and `vboard:sync`
+  from sync. Its extras are `scheduler`
+  (the scheduler's callback, for its own route: `export const { scheduler } =
+  backend`), `servers`, and, for tests and tools, `session` and `store`. It
+  has no routes of its own. Its dead letters are A2's, on its `servers`. It
+  delivers sync's
+  subscription in-process, on the `vboard-sync` consumer's thread lanes, and
+  what sync pushes to its inbox on `vboard-inbox`'s platform-thread lanes, so
+  both keep A2's retries and dead letters. It takes no `sync`, `authenticate`,
+  `access`, `middleware`, or `project`: TypeScript flags them there.
+- **`http(url?, { fetch? })`** uses the board at `url` (in Node, the one the
+  environment points at by default), which keeps the log: its methods call it
+  through `fetch`, which brings the credentials. In Node the default `fetch`
+  adds what `vb` uses: a token from `VBOARD_TOKEN`, a local board's token
+  file, GitHub Actions or Vercel OIDC, then `vercel login` (reading the other
+  board's discovery to mint for its project), your handle, and the Deployment
+  Protection handling; in a browser it's `fetch`, sending the page's own
+  session, which the other board's `authenticate` recognizes. Its board's
+  middleware runs on what it writes, and the other board's after. A `{ self }` caller
+  writes there as this deployment with `self` as its profile (the handle's
+  own with the profile `VBOARD_AS` or the agent picks), and a post whose ID
+  `board()` derived (from a watcher's trigger, or from the handle's `id` and
+  profile) gets `key:<principal>:<sha256 of that ID>`. Any board takes a
+  `key:` ID only in exactly that shape from that principal (`key:`, its ID,
+  `:`, and 32 hex characters, since one principal's ID can be the start of
+  another's), so the same `id` never posts
+  twice and no one can post with one first (and `posted`, a retry's lookup,
+  asks for the same). Without an `access` on its board, it answers only
+  wake-ups and webhooks, and its sync's sign-ins: a request, discovery
+  included, answers 404 `<url> answers only wake-ups and webhooks`, and none is
+  verified. Its `discovery` for its own handle reads the other board's. With
+  one, its board is a gateway: it verifies and limits its own callers, and
+  each acts on the other board as this deployment, never vouching for a
+  person, with the caller's handle as its profile (`<principal>+ada`, a label,
+  numbered `fix-2` when it's one of this board's watchers' IDs, since a
+  watcher's own writes never wake it) and its access as `x-board-scope`, so
+  the other board grants only what both allow. A caller's post IDs are under
+  its own principal, `me` is answered here, and what's the project's own there
+  by principal answers 403: `identity`, `edit`, `delete`, `schedule`,
+  `cancelSchedule`, `upload` (a file is its uploader's, the project's there,
+  to read and attach until a message carries it), the registration's methods,
+  and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
+  its own sync, it answers here too, beside the other board's. Its own routes
+  are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
+  registers its own there, as the protocol's does), and `registerWatchers()`
+  registers this board's now. Its watchers run here, on what the other board matches for them
+  (below), and so does its sync: it registers its sync entries (`sync: [{ key,
+  platform, signIn }]`), pulls what to deliver as matches of watcher `@sync`,
+  and pulls back what it pushed to its inbox after each webhook and when it's
+  woken. Sync's own calls go as the deployment itself, which the other board
+  must let `sync`, and wait for that registration. The other board lists the
+  registered entries in its discovery and links accounts on them, while their
+  registrant may still sync: a key its own sync has is its own (registering it
+  is 409 `sync_key_taken`, and one registered before the board's own sync took
+  it holds nothing under it), and a key two registered syncs claim signs no one
+  in (a code still links by posting it). A key names its sync's platform
+  locations, so each sync sees and changes only the copies it recorded
+  (`importedBy` and `syncedBy` on its events), and two that claim one key share
+  its platform threads on the board: give each key one sync. People and
+  the CLI use the other board: a repo links it with `vb link`.
+
+### IDs, cursors, and versions
+
+The backend picks them; the protocol only says their shape:
+
+- **Message IDs, schedule IDs, and cursors are opaque strings** of 1 to 128
+  characters (`Ref` in `src/api/routes.ts`). Clients compare them for equality
+  and pass them back as they got them; they never parse them, count with them,
+  or order by them. Payload IDs in event views (`id`, `re`, `replyTo`, a
+  schedule's `id`, a link's `message`) are strings too.
+- **A message ID works as a cursor.** `after` and `before` take either; one the
+  board can't read as a cursor answers 400 `invalid_cursor`. Every read reports
+  `cursor`, and every event view carries its own `cursor` (SSE's `id:`).
+- **Every message view has `version`,** a number that grows with each change to
+  the message: of two views of one message, the higher `version` is newer.
+- **On `a2()` they're decimal log indexes.** A message's ID is the index of
+  its `message.posted` event (`"812"`), and a schedule's the index of its
+  `schedule.created` event in session `schedules`. A cursor is the index a read
+  reflects, or an event's own, and a version is the index of the last event
+  that changed the message. The log and the tables keep numbers; only views are
+  strings. The CLI shows them as `#812` and `s12`.
+
+### The protocol and conformance
+
+- **Every board answers the whole protocol:** discovery, `/me`, `/channels`,
+  `/actors`, `/identity`, `/messages`, `/threads`, posting, editing, deleting,
+  reacting, labeling, typing, schedules, attachments, registered watchers, and
+  `/events`. There are no optional groups, and discovery lists none.
+- **`vboard/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
+  at a time in the report (`core`, `schedules`, `attachments`, `watchers`). It
+  writes to one channel, every post kept on the board and labeled with the
+  run, and deletes what it posted. `vb conformance` runs it as the CLI's
+  identity and exits 1 when a check fails. vboard's own tests run it against
+  `a2()`, against a board without a scheduler (which fails `schedules`), and
+  against boards broken on purpose, so the kit and the backend can't drift
+  apart unnoticed.
+
+### Watchers over `http()`
+
+The board that keeps the log matches the tails; the board on `http()` runs
+`run`. Nothing is pushed but a wake-up with nothing in it:
+
+| Route, on the board with the log | What |
+| --- | --- |
+| `POST /watchers` | `{ url?, watch, sync? }`: registers the caller's watchers and sync entries, replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries; at most 32 watchers; `url` must be `https`, and without one the caller pulls on its own |
+| `GET /watchers` | Every registration to `manage` in every channel, the caller's own to anyone else |
+| `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
+| `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |
+
+| Route, on the board on `http()` | What |
+| --- | --- |
+| `POST /watchers` | Registers its own watchers with the other board, now. No body, no token |
+| `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left |
+
+- **Registrations** live in `vboard-registry`, session `registry`, one per
+  principal with its token facts, so its access is worked out again at each
+  match under the rules as they are then. A board on `http()` registers on
+  its first use (a method call or one of its routes) if it knows its URL, on
+  `POST /watchers`, and on a wake-up with a stale hash; creating it does no
+  I/O. Its URL is `board()`'s `url()`: `url`, or on Vercel its production
+  domain (a preview's own URL there) under the mount path a request showed,
+  never a request's `Host`.
+- **Matching** is `vboard-watchers`, as for config watchers. A registered
+  watcher sees what its registrant may read, as `/events` shows it, and its
+  writes (`<principal>+<id>`) never wake it. One event's matches for one
+  registrant are one append, to `watch:@<principal>` in `vboard-watch`.
+- **The queue** is a reducer over that session: one queue per watcher and
+  thread, of which only the oldest is handed out, so a thread's matches run in
+  order. Pulling leases it (`watch.leased`, an ID derived from the match and
+  its try, so two pulls at once lease it once); acking ends it
+  (`watch.acked`). What one pull changes is one append, and one read after it
+  tells which leases are its own. An error waits 1 second, doubling to 30, by
+  its own A2 timer (`watch.due`). A lease that runs out (`watch.expired`)
+  counts as a try. After 5 tries it's `watch.failed`, and the thread goes on.
+  A pull drops what the registrant can't read anymore (`watch.skipped`).
+- **Sweeps** stand in for a timer per lease: a registrant has at most one A2
+  timer a minute (`watch.armed`, then `watch.due` with `sweep`), set on the
+  minute after a pull's leases run out, or after a wake-up that didn't get
+  there. A sweep wakes the registrant if anything is free to pull: a lease
+  whose time has passed counts, and the pull records it.
+- **Wake-ups** go to `<url>/wake` from `vboard-wake`, one at a time per
+  registrant (its lane is `wake` in the registrant's session), and only when
+  something is free to pull. The board woken pulls until nothing's left, so a
+  burst of matches wakes it once. `https` to a public address only, checked as
+  it connects, with no redirects and no event; the board woken trusts nothing
+  in it. A run that keeps throwing (the store is down) stops after three
+  tries and leaves the wake-up to the next match or sweep, so the lane never
+  dead-letters.
+- **A wake-up that doesn't get there** (an error, or an answer that isn't
+  2xx) is `watch.unreachable` in the registrant's session, with how many
+  failed in a row and when the next may go: a minute, doubling to an hour
+  (`wakeBackoff`). Until then a match only queues, and the sweep armed for
+  that time wakes it. `watch.reachable` ends the wait: a wake-up that gets
+  there, a pull, or a registration (`POST /watchers`, changed or not, since a
+  new deployment registers on its first use). The board logs the first
+  failure and the second, when the back-off starts, and not the rest.
+- **Through Deployment Protection:** a wake-up carries no credential, ever:
+  no OIDC token and no `VERCEL_AUTOMATION_BYPASS_SECRET`. A registrant behind
+  Deployment Protection lets `POST /wake` through itself (a public
+  production domain, or a Deployment Protection Exception for the domain it
+  registers). Credentials sent with wake-ups would go to whatever URL a
+  registrant chose, and Trusted Sources checks no audience on a Vercel
+  project's entry, so the board sends none. Waking projects through their
+  protection is the platform's to do, the way Connect forwards webhooks.
+- **A board that can't be woken** (no `https` URL, as on a dev server)
+  registers with no `url` and pulls on its own from its first use, each pull
+  held open until something matches. One on Vercel registers its deployment's
+  URL and never pulls on its own, since a function doesn't outlive its
+  request: behind Deployment Protection, its wake-ups get through only where
+  its project lets `POST /wake` through (a public production domain, or a
+  Deployment Protection Exception).
 
 ### Install
 
@@ -133,15 +415,15 @@ with `npx vboard`.
 **Dependencies:**
 
 - **Regular dependency: `experimental-a2`.** vboard owns it: you import your
-  store and scheduler from vboard (`vboard/store-postgres`,
-  `vboard/scheduler-vercel`), so they're always the copy vboard uses.
+  store and scheduler from vboard (`vboard/backend-a2/store-postgres`,
+  `vboard/backend-a2/scheduler-vercel`), so they're always the copy vboard uses.
 - **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`.**
-  Loaded only by `vboard/store-postgres`, `vboard/store-redis`,
-  `vboard/scheduler-vercel`, and `vboard/scheduler-qstash`.
-  `vboard/store-redis-http` needs none: it speaks Upstash's REST API.
+  Loaded only by `vboard/backend-a2/store-postgres`, `vboard/backend-a2/store-redis`,
+  `vboard/backend-a2/scheduler-vercel`, and `vboard/backend-a2/scheduler-qstash`.
+  `vboard/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
 - **Peers, optional: `chat`, `@chat-adapter/slack`, `@chat-adapter/github`,
-  `@kapso/chat-adapter`.** They are loaded only by `vboard/adapter-slack`,
-  `vboard/adapter-github`, and `vboard/adapter-kapso`. Your adapters
+  `@kapso/chat-adapter`.** They are loaded only by `vboard/sync-slack`,
+  `vboard/sync-github`, and `vboard/sync-kapso`. Your adapters
   must match the `chat` version that vboard builds its Chat instances with.
 - **Installed by you, optionally: `@vercel/connect`.** You don't install a Chat
   SDK state adapter, because vboard backs Chat SDK's state with the A2 store
@@ -156,11 +438,12 @@ with `npx vboard`.
   typed client (types are inferred, with no codegen), and `GET /openapi.json`
   via `z.toJSONSchema`.
 - **The router is hand-rolled over the Fetch API.** It is about 100 lines with
-  no framework. `board()` returns fetch handlers, so it runs in a Next.js route,
-  a Vercel function, or any fetch runtime. A2 already speaks Standard Schema,
+  no framework. The handle's `fetch` is the handler, so it runs in a Next.js
+  route, a Vercel function, or any fetch runtime. A2 already speaks Standard Schema,
   so the contract and the API share validators.
 - **Only GET and POST are used.** The mount is always
-  `export const { GET, POST }`, and every mutation is a POST to a resource path.
+  `export const GET = team.fetch, POST = team.fetch`, and every mutation is a
+  POST to a resource path.
 - **A2's `server.fetch` is never exposed.** All writes go through the board API
   so that `by` and the other provenance fields stay server-authored.
 
@@ -179,8 +462,8 @@ discovery), so a token sent to one board can't be replayed anywhere else. That
 includes another board mounted on the same origin. The one exception is `/webhooks/:name`, which is authenticated
 by the platform adapter (see [Sync](#sync)).
 
-In Node, the client finds a token in this order, and the first match wins.
-Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
+In Node, a handle finds a token in this order, and the first match wins.
+Other runtimes bring credentials in `http(url, { fetch })` (see [The handle](#the-handle)).
 
 | Where | How | Principal |
 | --- | --- | --- |
@@ -188,11 +471,11 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
 | A local board (`vb serve`) | the token file it writes for its URL, only for loopback URLs | `local:user:<os user>` |
 | GitHub Actions | `ACTIONS_ID_TOKEN_REQUEST_URL`, with audience set to the board URL (needs `permissions: id-token: write`) | `github:repo:<repository_id>` |
 | A Vercel deployment | `@vercel/oidc` `getVercelOidcToken({ audience })` | `vercel:project:<project_id>:<env>` |
-| A local terminal | `@vercel/oidc` `refreshToken({ project, team })` with the board's IDs, then an exchange for the board's audience | `vercel:user:<user_id>` |
+| A local terminal | your Vercel CLI login mints a development token for the project the board's host is a deployment of, then an exchange for the board's audience | `vercel:user:<user_id>` |
 
-- **Local minting uses the Vercel CLI login.** `refreshToken` reads the CLI
-  credentials, or calls `vercel project token <id>` when they're in the
-  keyring. It then calls `api.vercel.com/v1/projects/<id>/token` and caches the
+- **Local minting uses the Vercel CLI login.** With the CLI's credentials
+  (`getVercelToken`) the client calls `api.vercel.com/v1/projects/<id>/token`,
+  or `vercel project token <id>` when they're in the keyring, and caches the
   result. Vercel only mints this token for accounts that can access the
   project, so **access to the board equals access to its Vercel project**.
 - **The `user_id` claim identifies the person.** On development tokens it holds
@@ -206,6 +489,19 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   mints and sends nothing and fails with `wrong_audience`, naming the board's
   URL. Otherwise a board could claim another board's audience and project, and
   replay the token it's sent there.
+- **Nor its project.** Any board can name any project the person can access,
+  and Deployment Protection's Trusted Sources ignore `aud`, so a development
+  token for that project could be replayed past the protection of deployments
+  that trust it. Before minting, the client asks Vercel with the person's login
+  which project the board URL's host is a deployment of (`findProject`, as for
+  the bypass below: `/v13/deployments/<host>`, which resolves deployment URLs,
+  branch aliases, and domains, then `/now/aliases/<host>`, in their scope and
+  then each team). It mints for that project and its owner, and only when it's
+  the one discovery names: otherwise `wrong_project`, or `no_access` when
+  Vercel finds nothing there for the person, and discovery's `team_id` plays no
+  part. A loopback host has nothing to look up: a board there runs on the
+  person's machine (`next dev`), so the client mints for the project and team
+  it names.
 - **Deployment protection:** hosted Vercel clients send their audience-bound
   OIDC token in `x-vercel-trusted-oidc-idp-token` for the edge and in
   `Authorization` for the board. Discovery uses an explicit `token` or
@@ -213,12 +509,15 @@ Other runtimes pass `token` explicitly (see [Client SDK](#client-sdk)).
   board URL as audience. Local person clients do not add the trusted-OIDC
   header. Configure Deployment Protection Trusted
   Sources for the calling project and environment separately from the board's
-  `access` rules. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence for
-  every client, including hosted callers, without requiring runtime OIDC for
-  discovery. Without it, hosted clients fail with setup guidance when edge
-  trust is missing and never read or create a saved bypass. Both OIDC headers
-  are stripped on cross-origin redirects.
-  The Node client sends an explicit secret in `x-vercel-protection-bypass`.
+  `access` rules. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence, without
+  requiring runtime OIDC for discovery. On Vercel it's a system variable holding
+  the deployment's own project's secret, so a hosted client sends it only to the
+  deployment's own hosts (`VERCEL_URL`, `VERCEL_BRANCH_URL`,
+  `VERCEL_PROJECT_PRODUCTION_URL`) and falls back to OIDC when it's rejected.
+  Every other board gets OIDC and never sees the secret. Otherwise, hosted
+  clients fail with setup guidance when edge trust is missing and never read or
+  create a saved bypass. Both OIDC headers are stripped on cross-origin redirects.
+  A handle in Node sends an explicit secret in `x-vercel-protection-bypass`.
   For local people without that variable, when a board
   answers with Vercel Authentication's wall, it does what `vercel curl` does:
   with your Vercel login it resolves the board's host to its project
@@ -245,7 +544,8 @@ talking to.
     (`https://oidc.vercel.com/<team>`).
   - `aud` must be the board's URL.
   - The board knows its own project: `project_id` is compared to
-    `VERCEL_PROJECT_ID`, or to `board({ project })` in local development.
+    `VERCEL_PROJECT_ID`, `board({ project })`, or `.vercel/project.json` in local
+    development.
   - A `development` token from it is a person and must carry `user_id`. Any
     other environment is the deployment itself. The one the board runs in
     (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
@@ -257,21 +557,45 @@ talking to.
   A GitHub token is accepted only if it matches an `access` rule.
 - **Tokens from other Vercel projects** are accepted only if they match an
   `access` rule.
+- **Who verifies, who decides: `board()`.** `board({ authenticate })` says who
+  the caller is, from the request's credential, claims, audience, and headers,
+  and `board({ access })` holds the rules below, past its defaults (people, its
+  own deployments in its environment, and its own code get everything), and
+  works access out for each request and, through the binding, for each
+  principal its backend stored (a schedule's creator, a registrant) under the
+  rules as they are then. A principal carries its token's claims and its
+  `x-board-scope`, never what it may do. The backend gets the caller verified.
+- **`authenticate` is one function,** `oidcTokens()` from `vboard/access` by
+  default, and verifiers compose in plain code: each answers null when the
+  request carries nothing it recognizes and a 401 when its credential fails,
+  so `async (request) => (await staff(request)) ?? (await tokens(request))`
+  takes an app's session cookie and `vb`'s tokens. What `oidcTokens()` made
+  stands as it is; anything else is a host's principal, checked for shape
+  (`hostPrincipal()`), with its `expiresAt` kept. A host's principals get what
+  their kind does, under the rules or the host's function as `access`: a
+  `person` is a full member (everything), so the verifier decides who counts
+  as one, and anyone else, `external` included, gets what a function among
+  the rules gives it, since no token rule matches a host's IDs; a board
+  whose verifier is `oidcTokens()` alone takes none, so schedules a host's
+  principals made before it switched are revoked. A verifier gets the request
+  with `board`, what the board knows that verifying needs (its project, and
+  its rules' OIDC issuers). A route that takes a cookie checks `Origin` on its
+  writes in userland, since a cookie rides along on other sites' requests.
 - **Any other issuer** is trusted only when an `oidc()` rule names it, pinned
-  in code as an https URL. The board fetches keys only for issuers a rule
-  names, and a rule matches exact claims, at least one. Its principal is
+  in code as an https URL: board() hands its rules' issuers to its verifier. The
+  board fetches keys only for issuers a rule names, and a rule matches exact claims, at least one. Its principal is
   `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
   percent-encoded (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at
   the first `:`. Two rules whose issuers would name the same principals
   (`https://ci.test/a` and `https://ci.test/a/`) are an error at boot.
-- **Tests** pass `board({ issuers })` in code, which points verification at a
-  local test issuer. Verification still runs `jose` against a real JWKS, and
+- **Tests** pass `board({ authenticate: oidcTokens(testIssuers) })` in code,
+  which points verification at a local test issuer. Verification still runs `jose` against a real JWKS, and
   there's no bypass reachable through env. Local development needs no bypass
   either, because development tokens are real.
 
 ```ts
 board({
-  store: postgres(),
+  backend: a2({ store: postgres() }),
   access: [
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
     githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
@@ -313,7 +637,7 @@ board({
   Principals name the platform identity, so they don't include sync keys.
 - **Profile:** an optional named identity within a principal, with an avatar.
   It's Just Chat's delegated profile, slimmed down.
-  - **Selection:** `profile: 'claude'` in the SDK, `--as claude` in the CLI.
+  - **Selection:** `team.as('claude')` on a handle, `--as claude` in the CLI.
   - **Detection:** agent environments are detected automatically:
     `CLAUDECODE`/`CLAUDE_CODE_SESSION_ID` (claude), `CODEX_THREAD_ID` (codex),
     `GROK_SESSION_ID` (grok), `CURSOR_AGENT=1` (cursor), and `PI_CODING_AGENT`/`AI_AGENT=pi` with
@@ -343,7 +667,11 @@ board({
 
 **Authorization in v1:**
 
-- The first `access` rule matching a token decides. `can` is `'all'`, a list
+- The first `access` rule that matches decides: a token's rule by its
+  claims, or a function of the principal, which answers a `can`, null for
+  nothing, or undefined for the next rule. A function is never asked about a
+  person or the board's own deployments in its environment, so it can't take
+  the defaults away; one function as `access` decides for everyone. `can` is `'all'`, a list
   (`['post']` means `{ '*': ['post'] }`), or a map from channel pattern to
   permissions. A pattern is `*`, a channel (`feedback`), or a channel and its
   subtree (`feedback/`); any other `*` is a config error that says what to
@@ -359,17 +687,22 @@ board({
   | `react` | add and remove reactions | `read` |
   | `label` | set and unset labels, including labels on a post | `read` |
   | `sync` | attach a thread to an external thread, including `sync` on a post | `read` |
-  | `manage` | cancel anyone's schedule in the channel; in every channel, the inbox, stuck events, redrive, and source reads | everything |
+  | `manage` | cancel anyone's schedule in the channel; in every channel, source reads | everything |
 
 - A reply needs `post` and `read` in its root's channel: addressing a thread
   you can't read would confirm it exists.
 - People, the board's own deployments in its environment, and the board's own code (watchers, sync,
-  middleware, `board.client()`, schedules' system writes) can do everything.
+  middleware, the handle, schedules' system writes) can do everything.
 - `x-board-scope: dev/=read,post;ci/=read`, set by a proxy that holds the
   credential, is intersected with the principal's access, so it only narrows.
   An entry's permissions can be `all` (`dev/=all`). A schedule keeps its
   creator's scope, so a header longer than 4000 characters is `invalid_scope`
-  on every request.
+  on every request. A narrowed caller is never its principal's integration:
+  registering, pulling, and acking watchers, and sync's records (imports,
+  receipts, the inbox, account links), answer 403. A narrowed pull would take
+  the principal's matches, a narrowed register would replace its
+  registration, and a platform thread a narrowed import claimed would bring
+  that sync's later events into the narrowed caller's channels.
 - **Every check is against the channel the board looked up.** `authorize()`
   returns a proof carrying the permission and the channel. The board looks a
   write's target up before the check (`authorizeMessage` returns the message
@@ -384,11 +717,13 @@ board({
   `/schedules`, and `/actors` drop what you can't read. An event about no
   message (`actor.*`, `thread.synced`) reaches only a caller that reads every
   channel. Links to an unreadable board message lose their snapshot when read.
-- **A write doesn't answer what a read wouldn't.** A post in a channel its
-  caller can't read comes back with the text it sent and no mentions: the
-  board resolves handles and emails to actor IDs, which `/actors` hides from
-  that caller. The board stores the resolved text and mentions, so they still
-  notify. Nor does it list the handles that matched no one
+- **A write doesn't answer what a read wouldn't.** A post or a schedule in a
+  channel its caller can't read comes back with the text it sent and no
+  mentions: the board resolves handles and emails to actor IDs, which
+  `/actors` hides from that caller. The board stores the resolved text and
+  mentions, so they still notify. Where that caller reads its post again
+  (`GET /posts/:id`) or lists its schedules, each exact mention but of itself
+  shows as `@…`. Nor does it list the handles that matched no one
   (`unknownMentions`), which would say which ones exist: a known and an
   unknown handle answer alike. Still, an ambiguous handle fails (without
   candidates) and an `@[actor-id]` the board doesn't know is `unknown_mention`
@@ -402,10 +737,34 @@ board({
   only posts in `ci/` can't touch what a workflow that reads `ci/` wrote.
 - `sync` attaches only an external thread no other board thread is synced
   with; one that is answers 409 `already_synced`. Taking it over would route
-  its replies to a thread its readers may not be able to read.
+  its replies to a thread its readers may not be able to read. Sync's own
+  records hold to the same: an import's platform `origin` is under its sync
+  key, its `subthread` is in its `thread` (a GitHub review thread's ID extends
+  its PR's), a new root's platform thread is no board thread's yet, a reply's
+  is its own thread's, and its platform message is no board message's. A
+  delivery receipt is for one of its thread's targets, under a key the caller
+  syncs, and lands in a platform thread and message no other board thread or
+  message has. Each sync delivers only to its own keys' targets, and changes
+  only the copies it recorded.
+- An import's link names a board message only if its importer may read it,
+  and then carries the board's own copy as its snapshot, never the import's
+  text: its readers take that snapshot as the message's. Any other keeps its
+  URL, and its snapshot as the platform's.
 - Sync callbacks are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
-  [Inbound handling](#inbound-handling)).
+  [Inbound handling](#inbound-handling)). An import's author is always a
+  platform user: never an ID the board authenticates, nor a host's principal
+  it has seen register or write (`host` on its `actor.seen`, whatever its
+  kind), or that principal's agents and registered watchers
+  (`<principal>+<id>`), whose own writes never wake them. One the board hasn't
+  seen it can't tell from a platform user, so a host names its principals in
+  a scheme no sync registers (not `support:` where a sync could register
+  platform `support`), and gives `sync` carefully.
+- A platform user's record (name, handle, avatar) shows in every channel, so
+  only the board's own sync, or one with `sync` in every channel, changes it,
+  through `seen` or an import's author. Anyone else's imports carry the author
+  on what they write and leave the record be. An import's avatar that isn't
+  an `https` URL is dropped.
 
 ### Linked accounts
 
@@ -431,11 +790,27 @@ only their own accounts.
      just a message.
   2. **Signing in.** When an entry can sign people in (a Connect connector, or
      an adapter with `withUserTokens`, see [Posting as people](#posting-as-people)),
-     `vb identity link slack` prints a sign-in URL for your principal. Only you
-     should open it: whoever completes it binds *their* account to you. Once
-     you approve, the board asks for your token, asks the platform whose it is
-     (Slack's `auth.test`, GitHub's `GET /user`), and links that account
-     (`method: 'consent'`).
+     `vb identity link slack` prints a sign-in URL for your principal: the
+     `signIn` that `POST /sync/codes` answers with the code, on the board that
+     runs the entry's sync (`/identity/sign-in?sync&code`). Only you should open
+     it: whoever completes it binds *their* account to you. Once you approve,
+     the board asks for your token, asks the platform whose it is (Slack's
+     `auth.test`, GitHub's `GET /user`), and at `/identity/signed-in` links that
+     account (`method: 'consent'`) by the code. The CLI watches `GET /identity`
+     for the link.
+- **Codes, only for people, each for themselves, from the board that keeps the
+  log.** `POST /sync/codes` issues one to the person asking, and nothing names
+  someone else: a sync can only redeem `{ account, code }` with a code a person
+  handed it, by posting it or by carrying it through a sign-in. On a board
+  whose sync runs elsewhere (a project on `http()`), the board that keeps the
+  log knows the entry from the project's registration, issues the code, and
+  for a sign-in names the project's `/identity/sign-in?sync&code` as its
+  `signIn`. The board's own entries sign in at its own, the same way. Which
+  entries a person hasn't linked, `GET /identity` says (`unlinked`), from the
+  same list.
+  The project looks up whose code it is (`syncFind`'s `code`), sends them to the
+  platform as them, and at `/identity/signed-in` redeems the code with the
+  account they approved.
 - **What follows the link:**
   - **`--by <person>`** matches everyone they are: their own actor, their
     agents (`julian/claude`, by `by.principal`), and every linked account. A
@@ -517,8 +892,8 @@ only their own accounts.
 | Board | implicit; one per mount | none |
 | Actor | the principal plus an optional profile | folded from `actor.seen` |
 | Channel | a path: `errors-www`, `www/production` | created by the first post, local or synced; the path never changes |
-| Message | its log index (`#812`) | posted, then edited or deleted (tombstoned) |
-| Thread | the index of its root message | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
+| Message | its ID, an opaque string (`#812`); on `a2()`, its log index | posted, then edited or deleted (tombstoned) |
+| Thread | its root message's ID | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
 | Attachment | 128 random bits, base64url | uploaded once, then carried by one or more messages; never changes |
@@ -526,9 +901,11 @@ only their own accounts.
 - **Channel paths** are one or more segments matching
   `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters in total. Prefixes
   are display groups.
-- **Message IDs are the log index of the `message.posted` event.** They're
-  short, stable, unique within the board, and double as cursors. Other events
-  also consume indexes, so message IDs have gaps.
+- **Message IDs are opaque strings** (see
+  [IDs, cursors, and versions](#ids-cursors-and-versions)). They're stable,
+  unique within the board, and double as cursors. On `a2()` each is the log
+  index of its `message.posted` event; other events also consume indexes, so
+  IDs have gaps.
 - **Replies:** a client replies to any message with `re: <id>`. The server stores
   the thread root as `re` and the original target as `replyTo` when the two
   differ. Platforms that have sub-threads use `replyTo` (see
@@ -546,6 +923,11 @@ only their own accounts.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` (up to 64 characters); values are
   strings (up to 256 characters). They are intended for triage state such as
   `status=planned` and `dup-of=640`.
+- **Names every object has aren't emoji or label keys.** The board refuses
+  `constructor`, `__proto__`, and `prototype` there, since it keeps both as keys
+  of plain objects. Its folds read only a map's own keys, so a log that already
+  holds one folds like any other name, and a handle or channel named
+  `constructor` is like any other.
 - **Limits:** message text is at most 10,000 characters. It may be empty only
   when the message has attachments.
 - **Text is markdown (GFM).** Sync stores what platforms send as markdown:
@@ -671,6 +1053,8 @@ export const schedulesContract = contract({
 })
 ```
 
+- **IDs in the log are numbers.** `MessageId` and a schedule's `id` are log
+  indexes; views show them, and every cursor, as decimal strings.
 - **The board log holds only board facts.** Bookkeeping lives in side
   contracts: read cursors in `vboard-cursors` (see [Cursors](#cursors)), raw
   platform events in `vboard-inbox`, watcher matches in `vboard-watch` (see
@@ -681,7 +1065,8 @@ export const schedulesContract = contract({
     The same `id` from another author, or on a different write, answers 409
     `duplicate_id`. The API refuses UUIDv8s: `idempotentId` derives the board's
     own IDs in that shape, and they're guessable, so a caller can't take one
-    first.
+    first. It refuses `sync:` IDs on a post for the same reason: an import
+    from a sync elsewhere lands as `sync:<principal>:<sha256 of its ID>`.
   - `external.received` uses the platform's event or message ID as its event
     ID. A2 event IDs are unique across the whole store, so platform retries do
     nothing.
@@ -709,7 +1094,11 @@ with an external target. It's the only way the log says so.
 - **Where it comes from:**
   - **At creation.** A root's targets, from the config mirror (`cause:
     'config'`) or from `--sync` (`cause: 'request'`), are appended as
-    `thread.synced` events in the same batch as the root's `message.posted`.
+    `thread.synced` events in the same batch as the root's `message.posted`,
+    when the root comes through the `board()` that syncs them. A root written
+    straight on a board that another one's sync uses gets its config targets
+    from that sync when its subscription delivers the root, as a `thread`
+    receipt.
   - **Later.** `vb sync <id> <target>`, `board.sync()`, or a watcher passing
     `sync:` appends one on its own, recording who did it.
 - **How the outbound consumer acts on it:**
@@ -782,14 +1171,15 @@ it records the external-to-board direction.
 Sync needs a scheduler, either `experimental-a2/scheduler-vercel` or
 `experimental-a2/scheduler-qstash`. A board without sync needs a store and
 nothing else.
-- **Pass the scheduler to `board()`, and mount the `scheduler` it returns in its
-  own route:** `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
+- **Pass the scheduler to `a2()`, and mount the backend's `scheduler` in its
+  own route:** `export const { scheduler } = backend` in the board's route, then
+  `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
   It serves the board server and the inbox server. To share one scheduler with
-  other A2 servers, `board()` also returns `servers` for `scheduler.handler(...)`.
+  other A2 servers, the backend also has `servers` for `scheduler.handler(...)`.
 - **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
   its function private, and the board's routes must stay public.
 
-### Stuck events
+### Dead letters
 
 An event whose consumer keeps throwing is dead-lettered for that consumer after
 10 tries, and a dead letter stops that consumer's lane: nothing after it in that
@@ -797,30 +1187,9 @@ thread runs for that consumer. Other consumers on the same session keep their
 own place, so a stuck delivery doesn't stop the watchers, and the reverse. Sync
 and watchers avoid it where they can (`message.sync_failed`, `watch.failed`),
 but some causes are outside the board: a blob store that's down while files
-come in, a bug. Those need a person.
-
-- **`vb stuck`** (`GET /stuck`) lists every dead letter in the sessions that
-  run consumers on lanes: `board`, the inboxes, each watcher's, and `schedules`,
-  each with the consumer it's stuck for (`vboard-sync`, `vboard-watchers`,
-  `vboard-inbox`, `vboard-watch`, `vboard-schedules`, `vboard-schedule-sends`).
-  Inboxes are found from the mapped channels and from the threads synced
-  anywhere else, through the provider's `inboxChannel` (a Chat SDK provider
-  works it out from the thread; another provider without one only has its
-  mapped channels looked at). Each entry has the board thread it holds up and
-  its root, when there is one; an inbound event that never reached the board
-  has only its platform thread (`external`).
-- **`vb stuck retry`** (`POST /stuck/redrive`, `action: 'retry'`) runs the event
-  again with a fresh 10 tries, and the lane's later events follow it. It acts for
-  the `consumer` given, or for every consumer the event is stuck for. For a
-  cause that's been fixed: a deploy, a store that's back.
-- **`vb stuck skip`** marks it done without running it, and the lane goes on.
-- Both are A2's `session.redrive({ consumer, index })`, one atomic store
-  operation per consumer; an event that
-  isn't stuck (anymore) is a no-op, `{ redriven: false }`. The redrive is
-  logged with who asked, not written to the board log: it's bookkeeping, not a
-  board fact.
-- Everything here needs `manage` in every channel, like the inbox: errors can hold raw
-  platform data.
+come in, a bug. Those need a person, through A2: the backend's `servers` reach
+each session's `deadLetters()` and `redrive()`. vboard has no route or command
+for them.
 
 ## Reading state
 
@@ -878,9 +1247,9 @@ state is folded from the log by A2 reducers.
   lookups, flat in the board's size. Other lists stop at a page, so a rare
   match or `/threads` with filters beyond a channel reads further.
 
-**Store support:** `vboard/store-postgres`, `vboard/store-redis` (TCP), or
-`vboard/store-redis-http` (Upstash REST) in production, `vboard/store-sqlite` in
-development and `vb serve`, `vboard/store-memory` in tests. Each holds A2's log
+**Store support:** `vboard/backend-a2/store-postgres`, `vboard/backend-a2/store-redis` (TCP), or
+`vboard/backend-a2/store-redis-http` (Upstash REST) in production, `vboard/backend-a2/store-sqlite` in
+development and `vb serve`, `vboard/backend-a2/store-memory` in tests. Each holds A2's log
 and the tables in one database. Postgres gets its tables from
 `sql/postgres/schema.sql`, A2's then vboard's, applied before deploying; Redis
 and SQLite need nothing applied.
@@ -910,7 +1279,7 @@ in throwaway sandboxes don't lose their place.
   acknowledges it after it has handled the results. That makes delivery
   at-least-once: a reader that dies before acknowledging sees those messages
   again. The CLI acknowledges after printing.
-- **Explicit `after: N` never moves a cursor.** Historical reads don't count as
+- **An explicit `after` never moves a cursor.** Historical reads don't count as
   reading.
 - **Filters inside a scope don't change what counts as seen.** Messages that a
   label filter skips are still behind the cursor once it's acknowledged.
@@ -923,7 +1292,7 @@ status.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, and `sync` (each entry's `key` and `platform`) |
+| GET | `/` | Discovery (unauthenticated): `team_id`, `project_id`, `issuer`, `audience`, `version`, `sync` (each entry's `key` and `platform`). A board on `http()` has none |
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | Channels with `last_index`, `messages`, and their mirrored external channels |
@@ -941,14 +1310,12 @@ status.
 | POST | `/messages/:id/sync` | `{ target }`: attach the message's thread to an external target and backfill it |
 | POST | `/messages/:id/typing` | `{ status? }`: show typing in the platform threads the message's thread is synced to. Answers `{ targets }`, the external threads that took it. Writes nothing to the log |
 | GET | `/events` | The event feed: SSE when `Accept: text/event-stream`, otherwise a JSON long-poll with `wait=<s>`. Takes the same filters as `/messages`, plus `after` and `all` |
-| GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `manage` in every channel |
-| GET | `/stuck` | Events that failed 10 times and stopped their thread (see [Stuck events](#stuck-events)). Needs `manage` in every channel |
-| POST | `/stuck/redrive` | `{ session, index, action: 'retry' \| 'skip', consumer? }`: retries one with a fresh 10 tries, or skips it, for `consumer` or every consumer it's stuck for. Needs `manage` in every channel |
+| GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `sync` in every channel for the board's own inbox |
 | GET | `/cursors` | The caller's cursors, for this session |
-| POST | `/cursors` | `{ scope, index }`: acknowledge reading up to `index` |
+| POST | `/cursors` | `{ scope, cursor }`: acknowledge reading up to `cursor` |
 | GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
-| POST | `/identity/link` | `{ sync, method?: 'code' \| 'consent' }`: start linking your account on that sync entry. Answers `{ method: 'consent', url }` when it can sign you in, otherwise `{ method: 'code', code, expiresAt }`. People only |
-| POST | `/identity/check` | `{ sync }`: after a sign-in, link the account it authorized. Answers `{ linked }`, null until you've approved |
+| GET | `/identity/sign-in` | `?sync&code`: on the board that runs the entry's sync, sends a person to the platform's sign-in for it, carrying a code the board that keeps the log issued (`POST /sync/codes` names it as `signIn`). Takes no board token |
+| GET | `/identity/signed-in` | `?sync&code`: where that sign-in comes back; links the account it authorized to whoever the code was issued to. Takes no board token |
 | POST | `/identity/unlink` | `{ actor }`: an actor ID or handle among your linked accounts |
 | POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
 | GET | `/openapi.json` | Generated from the route table |
@@ -957,6 +1324,9 @@ status.
 - `channel=www/` (with a trailing slash) matches a whole subtree.
 - `mentions=me` resolves to the caller's actor.
 - `label=status=open` may be repeated; repeated labels are combined with AND.
+- `after` and `before` take a cursor or a message ID, as opaque strings (see
+  [IDs, cursors, and versions](#ids-cursors-and-versions)). A bad one is 400
+  `invalid_cursor`.
 - `since=last` reads from the caller's stored cursor for the scope (see
   [Cursors](#cursors)). It works on `/messages` and `/events`.
 - The profile is sent as `x-board-profile`, `x-board-avatar`, and
@@ -965,7 +1335,8 @@ status.
   [Authorization](#principals-profiles-actors)). It never widens it.
 
 **Event feed:**
-- SSE frames carry `id: <index>`, so `Last-Event-ID` resumes exactly where the
+- Each event is `{ cursor, type, createdAt, payload, message?, actor? }`.
+  SSE frames carry `id: <cursor>`, so `Last-Event-ID` resumes exactly where the
   client left off.
 - The server closes a stream before the platform's time limit, and the client
   reconnects.
@@ -975,59 +1346,94 @@ status.
   matched the filter either **before or after** the change, so a subscriber sees
   messages both entering and leaving its view.
 
-## Client SDK
+## The handle
+
+`board()` returns the handle on a board: it serves the board, and its methods
+act on it as the board's caller.
 
 ```ts
-import { createClient } from 'vboard/client'
+import { board } from 'vboard'
 
-const board = createClient()   // Node: URL from VBOARD_URL, token detected
+const team = board()   // Node: http() to the board VBOARD_URL, the link, or `vb use` names, token detected
 
-const claude = createClient({ profile: 'claude' })   // posts as "claude via julian", built-in avatar
-const bot = createClient({ profile: { name: 'deploy-bot', avatar: 'https://example.com/bot.png' } })
+const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
+const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
 
-const msg = await board.post('errors-www', 'deploy failed')   // or { text, labels, sync, noSync, id }
-await board.reply(msg.id, 'rolled back to d4e5f6')
-await board.react(msg.id, 'eyes')
-await board.label(msg.id, { set: { status: 'investigating' } })
-await board.sync(msg.id, 'slack:#incidents')                  // escalate this thread
-await board.typing(msg.id, 'running tests…')                 // "typing…" where it's synced (Slack shows the status); nothing in the log
+const msg = await team.post('errors-www', 'deploy failed')   // or { text, labels, sync, noSync, id }
+await team.reply(msg.id, 'rolled back to d4e5f6')
+await team.react(msg.id, 'eyes')
+await team.label(msg.id, { set: { status: 'investigating' } })
+await team.sync(msg.id, 'slack:#incidents')                  // escalate this thread
+await team.typing(msg.id, 'running tests…')                 // "typing…" where it's synced (Slack shows the status); nothing in the log
 
-const shot = await board.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
-await board.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
-const file = await board.download(shot.id)                     // a Response: the bytes, typed
+const shot = await team.upload({ data: png, name: 'after.png' })   // a Blob or bytes; type from the Blob or the name
+await team.reply(msg.id, { text: 'fixed, see after', attachments: [shot] })
+const file = await team.download(shot.id)                     // a Response: the bytes, typed
 
-const page = await board.messages({ channel: 'errors-www', after: 800, limit: 50 })
-const open = await board.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
+const page = await team.messages({ channel: 'errors-www', after: msg.id, limit: 50 })
+const open = await team.threads({ channel: 'errors-www', label: { status: 'open' } })   // { threads: [{ message, replies, last }], cursor }
 
-const unread = await board.messages({ channel: 'firehose-www', since: 'last' })
+const unread = await team.messages({ channel: 'firehose-www', since: 'last' })
 // … handle unread.messages …
 await unread.ack()                                            // move my cursor to unread.cursor
 
-for await (const event of board.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
-const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // resolves null on timeout
+for await (const event of team.events({ channel: 'errors-www', after: page.cursor })) { /* … */ }
+const reply = await team.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // resolves null on timeout
 ```
 
-- **`url` and `token` are optional in Node.** The `node` export condition of
-  `vboard/client` finds the URL from `VBOARD_URL`, the project link, or the
-  global default (see [Configuration](#configuration)), then the token order in
-  [Tokens](#tokens). In browser and edge builds there's no detection, so you
-  pass both: `createClient({ url, token: () => … })`. `token` is any function
-  that returns an OIDC JWT.
-- **`profile`** is a name or `{ name, avatar }`. Detected agents fill it in
-  automatically unless you pass `profile: null`, which is the SDK's `--human`.
+- **Every call goes through `board()`, which calls the backend's methods.**
+  Nothing reaches around them: the backend stores, and decides what the caller
+  may do.
+- **Who it acts as depends on the backend.** Over `http()` it's whoever its
+  `fetch`'s credentials say, with the profile `VBOARD_AS` or the detected agent picks and that
+  agent's session; `as(profile)` acts with another (`<principal>+<profile>`),
+  and `as(null)` as yourself, outside any session, which is the CLI's
+  `--human`. On `a2()` it's the board's own code, in-process, with no URL or
+  token: `vboard:client`, and `vboard:client:<profile>` with `as(profile)`, so
+  its writes wake watchers and sync like anyone's.
+- **`board()` with no backend is `http()` to the board the environment points
+  at.** The `node` export condition of `vboard` and `vboard/backend-http`
+  finds the URL from `VBOARD_URL`, the project link, or the global default
+  (see [Configuration](#configuration)), and its default `fetch` sends a token
+  in the order in [Tokens](#tokens), through Deployment Protection. The default
+  build, for browsers, finds nothing: `board({ backend: http(url) })`, whose
+  `fetch` sends the page's own session (a cookie, say), which the board's
+  `board({ authenticate })` recognizes. A browser never gets a token of the deployment's.
+- **Nothing on the way to a handle over HTTP needs Node.** `board()`'s
+  pipeline (routing, validation, serving) runs in a browser, IDs hash with
+  WebCrypto, and finding the board and its credentials lives in the `node`
+  build. The default build verifies no tokens by itself: `oidcTokens()` and
+  finding the board's project load in the `node` build, the first time a board
+  serves, so a board serving requests outside Node passes `authenticate` and
+  `project`.
+  Watchers and sync run in either build: the sync engine loads when a board
+  with sync entries first needs it, and it, `SyncProvider`, and the tail
+  parser import nothing from Node (the Chat SDK adapters do: Slack, GitHub,
+  and Kapso stay on servers). Its IDs are A2's `idempotentId`, byte for byte.
+  A board with no URL of its own can't be woken, so it pulls. A test bundles
+  `board` and `http` for a browser, with and without a `SyncProvider` of its
+  own, and finds no Node import, and the inspector's page is built that way.
+- **Live events loop the backend's long-poll:** `events()` asks for the page
+  after its last cursor, each waiting up to 25 seconds, on every backend. SSE
+  is for requests to a board.
+- **A post's `id` makes it idempotent, and it's the handle's own.** On `a2()`
+  the handle derives a UUIDv8 from the `id` and its profile, which no request
+  may post with; over `http()` it goes as `key:<principal>:<hash>`, which a
+  board takes only from that principal. A retry with the same `id` posts once,
+  and `posted(id)` finds it. This replaces `client(name, { key })`: the same
+  delivery's `id` on each post does what its key did.
 - `post(channel, input)` and `reply(id, input)` accept a string or an object.
-- **This is the only client.** The CLI is built on it, and sync callbacks and
-  watchers receive it as `board`.
-- **On the server, `board()` returns it in-process as `client(name, { key })`,**
-  for your own routes: a webhook receiver, a cron job. It needs no URL or token
-  and writes as `vboard:client:<name>`, so its writes wake watchers and sync
-  like anyone's. With a `key`, such as a webhook delivery's ID, its posts are
-  idempotent: the same key and order never post twice.
+- **This is the only client.** The CLI is built on it, watchers receive it as
+  `board`, acting as the watcher, and the middleware as `vboard:middleware`.
+  Sync callbacks get a client with its methods, acting as the platform user.
 
   ```ts
-  export const { GET, POST, scheduler, client } = board({ … })
+  // app/api/board/[[...path]]/route.ts
+  export const team = board({ backend: a2() })
+  export const GET = team.fetch, POST = team.fetch
+
   // app/api/deploys/route.ts
-  await client('deploys', { key: delivery.id }).post('deploys', `${sha} is live`)
+  await team.as('deploys').post('deploys', { text: `${sha} is live`, id: delivery.id })
   ```
 
 ## CLI
@@ -1050,8 +1456,9 @@ const reply = await board.wait({ re: msg.id, after: msg.id, timeout: '30m' }) //
 
 - **Writes print the new message ID on stdout.** Because IDs are also cursors,
   a script can chain them directly, e.g. `wait --after "$id"`.
-- **IDs are always accepted as bare numbers.** Output shows `#812`, but in a
-  shell an unquoted `#` starts a comment, so every example uses `812`.
+- **IDs are accepted with or without `#`.** Output shows `#812`, but in a
+  shell an unquoted `#` starts a comment, so every example uses `812`. The CLI
+  passes an ID to the board as it is.
 
 ### Configuration
 
@@ -1072,7 +1479,7 @@ discovery endpoint, then saves `{ "url": "<canonical board URL>" }` in
 local to each person's checkout; credentials stay in the existing user-level
 cache. The link selects a board, not a channel.
 
-The CLI and Node SDK search upward from the current directory for a link,
+The CLI and `board()` in Node search upward from the current directory for a link,
 stopping at a Git checkout root (a `.git` directory or worktree file). Linking
 from a subdirectory writes at that root, or at the nearest existing link for
 a subproject. Without a link or Git root, linking writes in the current
@@ -1171,9 +1578,6 @@ vboard typing <id> [status]                     show typing in the thread's sync
                                                 Slack shows the status, if given, instead of "Typing…"
 
 vboard inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
-vboard stuck                                    events that failed 10 times and stopped their thread
-vboard stuck retry|skip <session>#<index> [consumer]
-                                                retry one with a fresh 10 tries, or skip it so its thread goes on
 vboard sources                                 the board's sources (sync entries) and their platforms
 vboard sources <key> read <channel|thread|link> [--limit N]  read a source's channel, thread, or message link without syncing it
 vboard download <attachment> [path]             save an attachment: its own name here by default, `-` for stdout
@@ -1197,9 +1601,9 @@ computer who don't need it on the internet. No config file: it's flags only.
   any other board (remote, or its own `board()` dev server on localhost) keeps
   its link, and `serve` prints the `VBOARD_URL` to use instead.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
-  (`auth.local` in `board()`), and signs one token for you, the OS user (or
+  (`oidcTokens({ local })` as `a2()`'s `authenticate`), and signs one token for you, the OS user (or
   `--handle`), into `~/.config/vboard/local/<hash of url>.json`, mode 0600, removed
-  on exit. The Node client uses that file for a loopback URL when there's no
+  on exit. A handle in Node uses that file for a loopback URL when there's no
   `VBOARD_TOKEN`. Everyone on the machine who can read it is
   `local:user:<name>`, with full access; agents tell themselves apart with
   profiles, as always (`claude via julian`).
@@ -1212,8 +1616,9 @@ it, and nothing is hosted.
   picker), tombstones, undelivered targets, and each sync entry's raw inbox,
   which discovery lists. Start threads, reply, react, label, and edit or delete
   your own messages. `--as` and `--human` pick the profile, as for every command.
-- **A client like any other.** The page runs the SDK against the inspector's
-  `/board` proxy, which forwards the board's API with your credentials. It
+- **A client like any other.** The page is a handle on the inspector's
+  `/board` proxy (`board({ backend: http(proxy, { token, headers }) })`, the
+  default build), which forwards the board's API with your credentials. It
   loads snapshots (each with its cursor), then follows `/events` from that
   cursor: every event carries its message as it is afterwards, so the page
   updates in place and navigates without fetching. Your writes show at once and
@@ -1367,14 +1772,19 @@ by the platform's own things: Slack channels, GitHub repos.
 ```ts
 // app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { slack } from 'vboard/adapter-slack'
-import { github } from 'vboard/adapter-github'
-import { redisHttp } from 'vboard/store-redis-http'
-import { vercelQueues } from 'vboard/scheduler-vercel'
+import { a2 } from 'vboard/backend-a2'
+import { slack } from 'vboard/sync-slack'
+import { github } from 'vboard/sync-github'
+import { redisHttp } from 'vboard/backend-a2/store-redis-http'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
   scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+const team = board({
+  backend,
   sync: {
     slack: slack({
       adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
@@ -1404,7 +1814,40 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
+
+**Sync runs in `board()`, on any backend.** Its adapters, webhooks, and
+deliveries run where `board()` does, and it keeps its records on the backend
+through protocol routes every backend answers, each behind the `sync`
+permission in the channel concerned:
+
+| Method | Route | What it keeps |
+| --- | --- | --- |
+| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key (null for a callback's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
+| `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
+| `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
+| `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, the post an import made with a client ID, who an account is linked to and how, a person's accounts |
+| `syncCopies` | `GET /sync/copies` | messages' copies the caller's sync recorded, by target |
+| `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
+| `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
+| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, only for people, each for themselves; account links, only by a code; unlinking your own, or anyone's with `sync` in every channel |
+
+Only these take provenance (an author, an origin) from a body, and only from a
+caller with `sync` where it lands: `sync` says this project may speak for
+platform users there. An author, or an account it links, is a user of a
+platform the caller syncs (its own sync's entries, or those it registered),
+never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`,
+`local:`, `vboard:`). A caller that pushes to an inbox pulls it back:
+a2() delivers its own sync's in-process on `vboard-inbox` and queues anyone
+else's in their registrant session. Outbound, sync is one of the board's
+subscriptions, beside its watchers: a2() delivers it on `vboard-sync`'s thread
+lanes, and a board on `http()` registers it (its sync entries) and pulls it as
+matches of watcher `@sync`. A root posted through `board()` lands with its
+channel's config targets in the same batch; one written straight on the board
+it uses gets them when sync sees it. Two syncers on one platform channel would
+each import and each deliver: that's config's to avoid.
 
 **Each mapping chooses a default mirror or an event callback:**
 
@@ -1465,11 +1908,12 @@ sync: {
 }
 ```
 
-`GitHubPayload` comes from `vboard/adapter-github`. The new event-taking `sync`
+`GitHubPayload` comes from `vboard/sync-github`. The new event-taking `sync`
 overload exists only on the trusted in-process callback client. It accepts the
 current verified envelope, not a reconstructed object; there is no HTTP endpoint
 for submitting platform events. `board.sync(messageId, target)` retains its
-thread-attachment meaning everywhere.
+thread-attachment meaning everywhere; the second argument tells the two apart,
+a target string or the event.
 
 - `text` replaces the event's generated message or reply. If a lifecycle event
   creates both a root and a reply, it replaces the reply; `root` controls that
@@ -1489,9 +1933,10 @@ thread-attachment meaning everywhere.
   already succeeded returns its existing message, allowing later callback work to
   resume. Callbacks adding external I/O must make it idempotent themselves.
 
-`board.sync` returns `{ root, message }`. `root` identifies the board thread's
-root; `message` identifies the imported message, the affected message for an
-edit/delete/reaction, or a generated lifecycle reply. A root-only lifecycle
+`board.sync` returns `{ root, message }`, message IDs as strings. `root`
+identifies the board thread's root; `message` identifies the imported message,
+the affected message for an edit/delete/reaction, or a generated lifecycle
+reply. A root-only lifecycle
 import returns its root as `message`; a label-only update returns `message: null`.
 An event that cannot be applied returns null IDs where no board message exists.
 Results stay the same when an import is retried after succeeding.
@@ -1569,8 +2014,9 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    case it goes to the mirror or to your function. Anything else is ignored,
    even in channels the bot belongs to.
 4. **Targets are resolved once, when a root is appended.** They're written as
-   `thread.synced` events in the same batch as the root. A deploy that changes
-   the mappings affects new threads only, and it can't reinterpret pending sync
+   `thread.synced` events in the same batch as the root, or, for a root that
+   reached the board another way, as sync sees it. A deploy that changes the
+   mappings affects new threads only, and it can't reinterpret pending sync
    work. A2 stores resolved lanes on events for the same reason.
 5. **Attaching an existing thread.** `sync <id> <target>` appends
    `thread.synced`. For a channel target, the outbound consumer then posts the
@@ -1587,22 +2033,32 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
 
 ### Inbound handling
 
-1. `POST /webhooks/:name` calls the provider's `receive`, which authenticates
-   the request and emits normalized events. The built-in providers use Chat SDK.
-2. The board appends `external.received` to the inbox session for that external
-   channel (`inbox:<key>:<channel>`), using the platform's ID as the event ID. It
-   answers 200 right away. That's well inside Slack's 3-second retry window, and
-   platform retries do nothing.
-3. The inbound consumer, `vboard-inbox`, runs the mirror or
-   your function on the external thread's lane. Its writes land in the board
-   log.
+1. `POST /webhooks/:name`, a `board()` route, calls the provider's `receive`,
+   which authenticates the request and emits normalized events. The built-in
+   providers use Chat SDK.
+2. Sync pushes each event to the backend's inbox (`inboxPush`), with the
+   platform's ID for it, which dedupes it. On a2(), its own sync's land as
+   `external.received` in the inbox session for that external channel
+   (`inbox:<key>:<channel>`). It answers 200 right away. That's well inside
+   Slack's 3-second retry window, and platform retries do nothing.
+3. On a2(), the inbound consumer, `vboard-inbox`, hands each event back to
+   `board()`'s sync on the external thread's lane, and sync runs the mirror or
+   your function. On a board on `http()`, the deployment that pushed them pulls
+   them back right after (`inboxNext`, then `inboxAck`), one platform thread at
+   a time and in order. Its writes are imports (`syncImport`) on the board
+   that keeps the log.
 
-The `board` a function receives is a vboard client, the same type
-`createClient` returns. Only its transport and defaults differ:
+The `board` a function receives is a vboard client, with the handle's methods.
+Only its transport and defaults differ:
 
 - **The transport is in-process,** with no HTTP and no token.
 - **Writes are authored by the platform actor that triggered the event,** for
-  example `slack:user:U0456`, with `origin` set from the event.
+  example `slack:user:U0456`, with `origin` set from the event for the import.
+  The function's own writes (`reply`, `label`, `react`, and `edit` and `delete`
+  of the actor's own messages) are imports too, `syncImport` as that actor
+  with `from: null`, naming a message by its board ID: they sync out like a
+  message written on the board, and work the same on every backend. Its reads,
+  and anything else it does, are sync's own caller's.
 - **Write IDs are derived from the triggering event and the call order,** the
   same way A2 names a consumer's own appends. A retried function doesn't post
   twice as long as it makes its writes in the same order. Writes made in
@@ -1645,9 +2101,15 @@ dead-letters and holds up its thread's lane.
 
 ### Outbound handling
 
-- **On each board write in a synced thread**, the outbound consumer calls the
-  provider's methods: post, react, edit, or delete. It then records
-  `message.synced`, so later edits and reactions can find the platform's copy.
+- **On each board write in a synced thread**, sync, which gets every post,
+  change, and thread sync as a subscription, calls the provider's methods:
+  post, react, edit, or delete. It then records `message.synced` as a receipt
+  (`syncReceipt`), so later edits and reactions can find the platform's copy.
+  On a2() the subscription runs on the `vboard-sync` consumer, and a receipt
+  is that consumer's own append. A post or an edit renders the message as it
+  is when it goes out, read again then: one that goes late (a backlog, a
+  retry) sends what its author has since edited, and nothing they deleted.
+  Each sync delivers only to its own keys' targets.
 - **Attachments go where a platform takes them.** Slack gets the files
   themselves: the text posts first, and its receipt is recorded, then the files
   upload into the same thread as a message of their own, and
@@ -1681,7 +2143,7 @@ their own platform token, which they grant by signing in (`vb identity link
 
 ```ts
 type UserTokens = {
-  authorize(principal: string): Promise<string>       // a sign-in URL binding whoever completes it to `principal`
+  authorize(principal: string, options?: { callback?: string }): Promise<string> // a sign-in URL binding whoever completes it to `principal`, back to `callback`
   token(principal: string): Promise<string | null>    // their token, or null when they haven't signed in
 }
 ```
@@ -1764,7 +2226,7 @@ adapter: withUserTokens(createSlackAdapter({ ... }), { authorize, token }),
   so vboard asks GraphQL's `viewer`, which answers for that token, once per
   instance. `botUserId` skips the call.
 - **An adapter** is used as given. It posts as the app unless it's wrapped in
-  `withUserTokens` (from `vboard/adapter-slack`, `vboard/adapter-github`, or
+  `withUserTokens` (from `vboard/sync-slack`, `vboard/sync-github`, or
   `vboard/sync`).
 
 With an adapter of your own and async tokens, including Connect, a public Slack `client` resolver is required for name lookups, membership,
@@ -1970,8 +2432,11 @@ agent's name. People's messages, and messages with files, post as the app.
 
 **Message links.** A Slack permalink in a message (`…/archives/C0123/p…`)
 becomes one of the message's `links`; its text stays as written. A link to a
-message the board has (it was synced, either way) is that board message, `#id`,
-with a snapshot of it. Otherwise the snapshot comes from Slack's unfurl: in the
+message the board has (it was synced, either way) in the same board channel is
+that board message, `#id`, with a snapshot of it. One in another channel isn't
+(sync reads every channel, and the link's readers may not), and an earlier
+version's board snapshot never carries over. Otherwise the snapshot comes from
+Slack's unfurl: in the
 message event if Slack sent it there, or in the `message_changed` that follows,
 which Chat SDK drops and the provider reads itself. With no unfurl yet, the
 board reads the message with `conversations.replies` (`channels:history`), but
@@ -1987,8 +2452,8 @@ own imports as that message quoted (`> **Ada**: …`) with its permalink below. 
 are what the message said when the link arrived; its files are linked, not
 copied.
 
-**Reading on demand.** `vb sources slack read <target>` (`GET /sources/:key/read`)
-reads a channel (`#name` or `C0123`, newest 50 by default, shown oldest first),
+**Reading on demand.** `GET /sources/:key/read` (`readSource` on the handle),
+on the board that runs the entry, reads a channel (`#name` or `C0123`, newest 50 by default, shown oldest first),
 a thread (`C0123:1727000000.123456`, or a reply's ts, which reads the thread
 it's in), or the thread a message permalink is in, for research and references:
 an agent can read a channel the board doesn't sync. `more` says the platform had
@@ -2127,7 +2592,7 @@ Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
 the numbers themselves.
 
 ```ts
-import { kapso } from 'vboard/adapter-kapso'
+import { kapso } from 'vboard/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 
@@ -2194,7 +2659,12 @@ you'd type after `vb tail`; `run` gets each event that tail would print, durably
 with nothing kept open.
 
 ```ts
-export const { GET, POST, scheduler } = board({
+const backend = a2({
+  // store and scheduler
+})
+
+const team = board({
+  backend,
   sync: { … },
   watch: {
     triage: {
@@ -2213,6 +2683,8 @@ export const { GET, POST, scheduler } = board({
     },
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 - **Try it in a terminal first.** `vb tail firehose --from slack --json` prints
@@ -2230,9 +2702,9 @@ export const { GET, POST, scheduler } = board({
   thread (`vb label 812 wake=$CLAUDE_CODE_SESSION_ID`) and unset the label when
   done; `vb read --label wake` lists every pending one. The board never calls a
   URL it was given at runtime: only code you deployed runs.
-- **`board` is the in-process client** that inbound functions get. Its writes
-  are authored by the watcher, `vboard:watch:<id>`, with IDs derived from the
-  match, so a retried `run` doesn't post twice if it writes in the same order.
+- **`board` is the handle, acting as the watcher.** Its writes are authored
+  by the watcher, `vboard:watch:<id>`, with IDs derived from the match, so a
+  retried `run` doesn't post twice if it writes in the same order.
   They sync like any other write.
 - **`when: 'enters'` runs only when a message comes into view:** an existing
   message changes from not matching to matching (a label is set, a text is
@@ -2271,20 +2743,37 @@ removed from config skips the matches it left behind.
 
 ## Middleware
 
-`board({ middleware: [...] })` runs on every post and edit before it's written,
-from every source: the HTTP API, sync (default imports and callbacks' writes),
-watchers, in-process clients, and scheduled sends. It is the one place to filter
-what reaches the board, such as prompt injection from a synced platform. Each
-middleware gets the `write`, its `author`, its `source`, `respond(text)`, an
-in-process `board` client, and `next(patch?)`. Calling `next` passes the write on,
-optionally changing its text or a post's labels; not calling it drops the write,
-which never reaches the log, and so does emptying a write that has no files. A
-retried post whose `id` already landed, by the same author in the same channel
-or thread, returns that message without running the chain again; anyone else's
-answers 409 `duplicate_id`.
+`board({ middleware: [...] })` runs on every post and edit before it reaches
+the backend, from every source: the HTTP API (a board on `http()` using this
+one included), sync (default imports and callbacks' writes, as imports),
+watchers, the handle, and scheduled sends, which a2() sends through `board()`
+as their creator. It's `board()`'s, beside `access`, so it sees every write
+once on any backend, its backend's own writes for someone included. A board on
+`http()` runs its own on what it writes there, and the board it uses runs its
+own on what arrives. It is the one place to filter what reaches the board,
+such as prompt injection from a synced platform. It runs only on a write the
+caller may make, once `board()` knows it would land (a reply's root is there,
+the caller may post, label, and sync where it lands, and has the files it
+carries; an edit is its author's own, of a message still there, that it can
+read or wrote without reading): one it would refuse answers 403 or 404 first,
+so an edit of its principal's message it can't read answers 404 as one that
+isn't there does. Each middleware gets the `write`
+(IDs as refs: an edit's `id`, a write's `re`, its thread's root), its
+`author`, its `source`, `respond(text)`, an in-process `board` handle, and
+`next(patch?)`. Calling `next` passes the write on, optionally changing its
+text or a post's labels; not calling it drops the write, which never reaches
+the log, and so does emptying a write that has no files. A retried post whose
+`id` already landed, by the same author in the same channel or thread, returns
+that message without running the chain again, and so does an import whose ID
+landed. Anyone else's answers 409 `duplicate_id`. Sync finds an event it
+imported by its platform IDs first, so an import goes through the chain once.
+An import's `source` (`{ key, channel, thread }`, from sync) is what the
+middleware is told it came from.
 
-`respond` answers where the write came from: a reply in the platform thread for
-sync, and the message of the `422 dropped` error the API answers with otherwise.
+`respond` is what goes back with a write it drops, where the write came from:
+for an import, the answer carries it (`{ message: null, dropped: [...] }`) and
+sync replies with it in the platform thread, whichever board keeps the log;
+otherwise it's the message of the `422 dropped` error the API answers with.
 A dropped scheduled send ends its schedule (`reason: 'dropped'`), since its text
 never changes. The middleware's own `board` writes as `vboard:middleware` and
 skips the middleware. Sync callbacks keep routing (which channel an event goes
@@ -2343,7 +2832,9 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   The next send is the next slot after now, so after downtime it sends once
   rather than replaying every missed slot. Vercel Queues delays at most 6 days,
   so a send further out goes in hops of up to 5.
-- **It needs a scheduler.** Without one, `POST /schedules` answers 501.
+- **It runs on the scheduler.** `a2()` has one in this process in development,
+  requires one in production, and has none in tests, where `POST /schedules`
+  answers 501.
 
 ## Non-goals for v1
 
@@ -2351,7 +2842,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 - Accounts, login, sessions, roles, and moderating others' messages
 - Restricting the board's own people, minted or stored tokens and grants, and
   per-thread access rules
-- Hiding volume: message IDs and cursors still show how busy the board is
+- Hiding volume: on `a2()`, message IDs and cursors still show how busy the
+  board is
 - A web UI; the CLI and `tail` are the UI
 - Custom views or reducers supplied by whoever mounts the board
 - Outbound webhooks as their own feature: a [watcher](#watchers) whose `run`
@@ -2392,9 +2884,9 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The client is `vboard/client`, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
+| What does each import hold? | **`vboard` is the board,** since mounting it is the main thing. The handle is `board()` too, with no backend for one elsewhere, and adapters are `vboard/adapter-*`, named for what they connect: a sync adapter for the Chat SDK adapter it takes, a blob store for its service. |
 | What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
-| Is there one filter for every write, or one per source? | **One: `middleware` on `board()`** (board thread #4100). Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
+| Is there one filter for every write, or one per source? | **One: `middleware` on `a2()`**, the board that keeps the log (board thread #4100). Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |
 | Can Connect user tokens post as a person? | **Assumed yes, not yet verified with a real consent:** both factory connectors answer `user_authorization_required` and return real consent URLs (issue #6). Which scopes the tokens get is unverified until someone signs in; without them, delivery falls back to the app. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A runtime registration can't carry code, and one that carries a URL makes the board call wherever it's told. A watcher reads labels and mentions instead (see [Watchers](#watchers)). |

@@ -10,9 +10,13 @@ inbound event for its external channel, connected threads included, and decides:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { github, GitHubPayload } from 'vboard/adapter-github'
+import { a2 } from 'vboard/backend-a2'
+import { github, GitHubPayload } from 'vboard/sync-github'
 
-export const { GET, POST, scheduler } = board({
+const backend = a2()
+
+const team = board({
+  backend,
   sync: {
     github: github({
       adapter: 'github/acme',
@@ -32,6 +36,8 @@ export const { GET, POST, scheduler } = board({
     }),
   },
 })
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 `board.sync(channel, event)` applies the default import: the same thing a string
@@ -41,6 +47,13 @@ event is skipped; the thread stays connected, so later events still reach you.
 
 For an event in a thread that's already synced, the channel is ignored: the event
 lands in that thread. The channel only places new roots.
+
+The function's other writes through `board` (a reply, a label, a reaction, an
+edit or delete of the user's own message) are the platform user's, with the
+same provenance as the import, and go through the
+[middleware](../01-board/08-middleware.md) like it. Its reads, and anything
+else it does, are sync's own. It works the same on any backend, a board on
+`http()` included: there the writes land on the board it uses as imports.
 
 ## The event
 
@@ -70,8 +83,8 @@ Then, by kind:
 
 GitHub events also carry `subject: { type: 'pull_request' | 'issue', repo, number }`,
 comments and reactions included. The types are exported: `SlackEvent` from
-`vboard/adapter-slack`, `GitHubEvent` and `GitHubPayload` from
-`vboard/adapter-github`, and `WhatsAppEvent` from `vboard/adapter-kapso`.
+`vboard/sync-slack`, `GitHubEvent` and `GitHubPayload` from
+`vboard/sync-github`, and `WhatsAppEvent` from `vboard/sync-kapso`.
 
 ## Permalinks
 
@@ -142,8 +155,9 @@ Retried after it succeeded, it returns the same IDs.
 
 ## More than an import
 
-`board` is the board's in-process client, the same one `createClient()` returns,
-so a function can also reply, react, label, or attach:
+`board` is an in-process client of the board, with the
+[handle's](../04-reference/02-board.md) methods, so a function can also reply,
+react, label, or attach:
 
 ```ts
 // in slack({ channels: { … } }):
@@ -199,8 +213,9 @@ other than the one it received throws.
 ## Render
 
 Every provider takes `render`, which decides the body of each board message it
-posts. It receives immutable copies of the message and its author, the default
-label, and the resolved destination, and returns markdown:
+posts. It receives immutable copies of the message, as clients see it (its IDs
+are strings), and its author, the default label, and the resolved destination,
+and returns markdown:
 
 ```ts
 // in kapso({ … }): post the text alone, without the author label

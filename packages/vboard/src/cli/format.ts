@@ -1,9 +1,22 @@
-import type { BoardEventView, Me, MessageView, ScheduleView, SourceRead, StuckEvent, ThreadSummaryView } from '../api/routes.ts'
+import type { BoardEventView, Me, MessageView, ScheduleView, SourceRead, ThreadSummaryView } from '../api/routes.ts'
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
+import type { CheckResult, ConformanceReport } from '../conformance/index.ts'
 
 /** "claude via julian" for a profile, the name otherwise. */
+/**
+ * Text for a terminal. What boards and platforms say can carry control characters, ESC among them,
+ * which starts the sequences that clear the screen, move the cursor, or retitle the window: each
+ * but tab and newline shows as its picture (`␛`), a C1 control as `�`, and a Windows line end as a
+ * newline. `--json` prints what the board said, as it said it.
+ */
+export const terminalText = (text: string): string =>
+  text.replace(/\r\n/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, (char) => {
+    const code = char.charCodeAt(0)
+    return code < 0x20 ? String.fromCharCode(0x2400 + code) : code === 0x7f ? '\u2421' : '\ufffd'
+  })
+
 export const who = (me: { name: string; handle: string; profile: string | null }): string =>
   me.profile !== null && me.handle.includes('/') ? `${me.name} via ${me.handle.slice(0, me.handle.indexOf('/'))}` : me.name
 
@@ -95,7 +108,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
 /** Threads in order, each root followed by its replies. */
 export function formatThreads(messages: MessageView[], known: Map<string, string> = new Map()): string {
   const names = new Map([...known, ...messages.map((m) => [m.by.actor, authorName(m)] as const)])
-  const byRoot = new Map<number, MessageView[]>()
+  const byRoot = new Map<string, MessageView[]>()
   const roots: MessageView[] = []
   const orphans: MessageView[] = []
   for (const message of messages) {
@@ -174,13 +187,6 @@ const until = (iso: string, now: number) => {
   return `in ${span(ms < 60_000 ? Math.ceil(ms / 1000) * 1000 : Math.ceil(ms / 60_000) * 60_000)}`
 }
 
-/** A stuck event: its ref (what `stuck retry` takes), what gave up on it, what it holds up, and why it stopped. */
-export function formatStuck(event: StuckEvent, now = Date.now()): string {
-  const where = event.root !== null ? `#${event.root}` : (event.thread ?? event.external ?? event.lane ?? 'no lane')
-  const error = (event.error ?? 'no error recorded').split('\n')[0]!.slice(0, 200)
-  return `${event.session}#${event.index}  ${event.type}  ${event.consumer}  ${where}  failed ${event.failures}× · stopped ${ago(event.failedAt, now)} ago\n    ${error}`
-}
-
 /** One schedule: what it sends, when, where, and how it stops. */
 export function formatSchedule(schedule: ScheduleView, options: { pad?: string; now?: number } = {}): string {
   const now = options.now ?? Date.now()
@@ -219,7 +225,7 @@ export function formatSchedule(schedule: ScheduleView, options: { pad?: string; 
 /** One line per live event, for `tail` and `wait`. */
 export function formatEvent(event: BoardEventView): string {
   const message = event.message
-  if (!message) return `#${event.index}  ${event.type}`
+  if (!message) return `#${event.cursor}  ${event.type}`
   const where = message.re === null ? message.channel : `${message.channel} ↳ #${message.re}`
   const who = authorName(message)
   switch (event.type) {
@@ -246,7 +252,7 @@ export function formatEvent(event: BoardEventView): string {
     case 'message.sync_failed':
       return `#${message.id}  ${where}  ✗ didn't reach ${event.payload.target}: ${event.payload.error}`
     default:
-      return `#${event.index}  ${event.type}`
+      return `#${event.cursor}  ${event.type}`
   }
 }
 
@@ -270,4 +276,23 @@ export function formatSourceRead(key: string, read: SourceRead, now = Date.now()
   })
   const more = read.more ? [`(${read.thread ? 'later replies' : 'older messages'} not shown: raise --limit, up to 200)`] : []
   return [where, ...blocks, ...more].join('\n')
+}
+
+/**
+ * A conformance report: each group a heading, its checks under it, and why for one that failed
+ * or was skipped, then the counts.
+ */
+export function formatConformance(report: ConformanceReport): string {
+  const blocks: string[] = []
+  for (const group of [...new Set(report.checks.map((check) => check.group))]) {
+    const lines: string[] = [group]
+    for (const check of report.checks.filter((c) => c.group === group)) {
+      lines.push(`  ${check.status.padEnd(7)}  ${check.name}`)
+      if (check.detail) lines.push(`           ${check.detail}`)
+    }
+    blocks.push(lines.join('\n'))
+  }
+  const count = (status: CheckResult['status']) => report.checks.filter((check) => check.status === status).length
+  const counts = [`${count('passed')} passed`, ...(count('skipped') ? [`${count('skipped')} skipped`] : []), ...(count('failed') ? [`${count('failed')} failed`] : [])]
+  return `${blocks.join('\n\n')}\n\n${counts.join(', ')}`
 }

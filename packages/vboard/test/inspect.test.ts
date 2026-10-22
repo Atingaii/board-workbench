@@ -100,7 +100,7 @@ describe('inspect', () => {
   })
 
   it("passes the board's errors through", async () => {
-    await expect(page().thread(9999)).rejects.toMatchObject({ status: 404 })
+    await expect(page().thread('9999')).rejects.toMatchObject({ status: 404 })
   })
 
   it('streams board events to the page', async () => {

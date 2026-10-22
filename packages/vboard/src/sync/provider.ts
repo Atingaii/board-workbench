@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import type { Message, Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/reducers.ts'
 import type { BoardClient } from '../client/client.ts'
-import type { SourceRead } from '../api/routes.ts'
+import type { MessageView, SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
 import { immutable, type ProviderEvent, type SyncOverrides, type SyncResult, type SyncRoot } from './events.ts'
 import type { UserTokens } from './users.ts'
@@ -10,7 +10,7 @@ export const ResolvedTarget = z.object({ target: z.string().min(1), channel: z.s
 export type ResolvedTarget = z.infer<typeof ResolvedTarget>
 
 export type SyncClient<E extends ProviderEvent = ProviderEvent> = Omit<BoardClient, 'sync'> & {
-  sync(id: number, target: string): ReturnType<BoardClient['sync']>
+  sync(id: string, target: string): ReturnType<BoardClient['sync']>
   sync(channel: string, event: E, overrides?: SyncOverrides): Promise<SyncResult>
 }
 
@@ -40,7 +40,8 @@ export type ProviderMapping = {
 }
 
 export type RenderInput = {
-  message: Readonly<Message>
+  /** The message as clients see it: its IDs are refs. */
+  message: Readonly<MessageView>
   author: Readonly<Actor> | null
   /** How this platform mentions an actor, through linked accounts; null when it can't. */
   mentionOf: (actor: string) => string | null
@@ -63,7 +64,8 @@ export class UnreadableError extends Error {
   }
 }
 
-export type ProviderFile = { data: Buffer; filename: string; mimeType?: string }
+/** A file to send: its bytes (a Node `Buffer` is one), its name, and its type. */
+export type ProviderFile = { data: Uint8Array; filename: string; mimeType?: string }
 /**
  * Who a post is from, for a platform that can show it as the sender (Slack's per-message
  * username and icon): `name` is the label the text opens with (`**name**: …`).
@@ -139,8 +141,8 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   async startTyping(_thread: string, _latest: string | null, _status?: string): Promise<void> {}
   /**
    * The channel whose inbox a thread's events land in (`slack:C0123ABC` for `slack:C0123ABC:1727.1234`),
-   * worked out without calling the platform. Null when the provider can't tell: `vb stuck` then only
-   * sees the mapped channels' inboxes.
+   * worked out without calling the platform. Null when the provider can't tell: a key's inbox then
+   * lists only the mapped channels'.
    */
   inboxChannel(_key: string, _thread: string): string | null { return null }
   async deleteFiles(_ids: string[]): Promise<void> {}

@@ -8,12 +8,15 @@ import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { configDir, createClient, detectAgent, projectDir, projectUrl } from '../client/node.ts'
+import { boardUrl, configDir, connect, detectAgent, projectDir, projectUrl } from '../client/node.ts'
+import { http } from '../backend-http/index.ts'
+import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
-import { actorName, formatAccess, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatStuck, formatThreadSummaries, formatThreads, who } from './format.ts'
+import { conformance } from '../conformance/index.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -71,14 +74,13 @@ usage: vboard <command> [options]      (also installed as \`vb\`)
                                            Slack shows the status, if given, instead of "Typing…"
   sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
   inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
-  stuck                                    events that failed 10 times and stopped their thread (full access only)
-  stuck retry|skip <event> [consumer]      retry one with a fresh 10 tries, or skip it so its thread goes on,
-                                           for one consumer or all it's stuck for, e.g. stuck retry board#55
   sources                                  the board's sources (its sync entries: slack, github, …)
   sources <key> read <channel|thread|link> [--limit N]
                                            read a source's channel, thread, or message link without syncing it,
                                            e.g. sources slack read '#general', or a Slack permalink (full access only)
   download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
+  conformance [--channel <c>]              check that the board speaks the protocol: posts to conformance,
+                                           kept on the board, and deletes what it posted (1 if a check fails)
 
   hooks [install|uninstall|status] [claude|codex|cursor|pi]...
                                            after a turn that didn't update the board, remind the agent to (linked projects only)
@@ -160,6 +162,7 @@ function markAttachmentId(args: string[]): string[] {
 /** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
 const REMOVED: Record<string, string> = {
   update: "`vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)",
+  stuck: '`vb stuck` is gone: a board on a2() keeps its dead letters in A2, on the backend\'s `servers`',
 }
 
 /** The command word: the first argument that isn't a flag or a string flag's value. */
@@ -181,7 +184,7 @@ const parsed = (() => {
     return parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS })
   } catch (error) {
     const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
-    process.stderr.write(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}\n`)
+    process.stderr.write(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
     return null
   }
 })()
@@ -189,14 +192,19 @@ const parsed = (() => {
 const { values: flags, positionals: marked } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
 const positionals = marked.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
 
-const out = (text: string) => process.stdout.write(`${text}\n`)
-const printJson = (value: unknown) => out(JSON.stringify(value))
+// What a person reads can't drive their terminal; what a program reads is byte for byte what the board said.
+const out = (text: string) => process.stdout.write(`${terminalText(text)}\n`)
+const printJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`)
 
-function messageId(value: string | undefined, what = 'message id'): number {
-  const id = Number(value?.replace(/^#/, ''))
-  if (!value || !Number.isInteger(id) || id <= 0) throw new UsageError(`expected a ${what}, got: ${value ?? '(nothing)'}`)
+/** A message's ID as you'd write it: `#812` or `812`. It's passed to the board as it is. */
+function messageId(value: string | undefined, what = 'message id'): string {
+  const id = value?.replace(/^#/, '') ?? ''
+  if (!/^[^\s/]+$/.test(id)) throw new UsageError(`expected a ${what}, got: ${value ?? '(nothing)'}`)
   return id
 }
+
+/** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
+const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
 
 function labelPairs(values: string[] | undefined): Record<string, string> {
   const pairs: Record<string, string> = {}
@@ -237,9 +245,9 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
 }
 
 /** `s12` or `12`. */
-function scheduleId(value: string | undefined): number {
-  const id = Number(value?.replace(/^s/i, ''))
-  if (!value || !Number.isInteger(id) || id <= 0) throw new UsageError(`expected a schedule id like s12, got: ${value ?? '(nothing)'}`)
+function scheduleId(value: string | undefined): string {
+  const id = value?.replace(/^s(?=\d)/i, '') ?? ''
+  if (!/^[^\s/]+$/.test(id)) throw new UsageError(`expected a schedule id like s12, got: ${value ?? '(nothing)'}`)
   return id
 }
 
@@ -250,7 +258,7 @@ function instant(flag: string, value: string): string {
   return time.toISOString()
 }
 
-function filters(channel?: string): Filters & { after?: number } {
+function filters(channel?: string): Filters & { after?: string } {
   return {
     ...(channel ? { channel } : {}),
     ...(flags.re ? { re: messageId(flags.re) } : {}),
@@ -259,11 +267,19 @@ function filters(channel?: string): Filters & { after?: number } {
     ...(flags.label?.length ? { label: flags.label } : {}),
     ...(flags.from ? { from: flags.from } : {}),
     ...(flags.text ? { text: flags.text } : {}),
-    ...(flags.after !== undefined ? { after: Number(flags.after) } : {}),
+    ...(flags.after !== undefined ? { after: flags.after.replace(/^#/, '') } : {}),
   }
 }
 
-function client() {
+/**
+ * The board this command talks to, `--url`'s or the one the environment points at, as `--as`
+ * says: a handle on it, and how it reaches it (the credentials `vb` finds, `--handle`'s handle).
+ */
+function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
+  const at = (url ?? boardUrl()).replace(/\/+$/, '')
+  const handle = options.handle ?? flags.handle
+  const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
+  const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   const profile: ProfileOption | undefined = flags.human
     ? null
     : flags.as
@@ -271,13 +287,11 @@ function client() {
         ? { name: flags.as, avatar: flags.avatar }
         : flags.as
       : undefined
-  return createClient({
-    ...(flags.url ? { url: flags.url } : {}),
-    ...(profile !== undefined ? { profile } : {}),
-    ...(flags.human ? { session: null } : {}),
-    ...(flags.handle ? { handle: flags.handle } : {}),
-  })
+  return { url: at, transport, board: profile !== undefined ? board.as(profile) : board }
 }
+
+/** A handle on the board this command talks to. */
+const client = (): Board => connection().board
 
 /**
  * What names an agent's turns, for the turn-end hook: its session, or for
@@ -392,7 +406,7 @@ function warnUnknownMentions(handles: string[] | undefined) {
   const names = handles.map((handle) => `@${handle}`)
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
   const one = names.length === 1
-  process.stderr.write(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one\n`)
+  process.stderr.write(terminalText(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one`) + '\n')
 }
 
 function printMessage(message: MessageView) {
@@ -406,9 +420,22 @@ function printEvent(event: BoardEventView) {
 }
 
 /** Best-effort: the URL is printed either way. */
+/** `url`, when it's an http or https URL as `new URL` reads it: the only kind the CLI opens, so a board can't hand the opener a flag or another scheme. */
+function browsable(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
+/** Opens an http(s) URL in the browser, as one argument to the opener: no shell reads it, Windows' included. */
 function openBrowser(url: string) {
+  const at = browsable(url)
+  if (at === null) return
   const [command, ...args] =
-    process.platform === 'darwin' ? ['open', url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '', url] : ['xdg-open', url]
+    process.platform === 'darwin' ? ['open', at] : process.platform === 'win32' ? ['rundll32', 'url.dll,FileProtocolHandler', at] : ['xdg-open', at]
   const child = spawn(command!, args, { detached: true, stdio: 'ignore' })
   child.on('error', () => {})
   child.unref()
@@ -469,40 +496,37 @@ async function identity(args: string[]): Promise<number> {
   }
   if (sub !== 'link' || !target || args.length !== 2) throw new UsageError('usage: vboard identity [link <key> [--code] [--no-wait] | unlink <account>]')
   const before = new Set((await board.identity()).links.map((link) => `${link.actor}|${link.at}`))
-  const challenge = await board.linkAccount(target, flags.code ? { method: 'code' } : {})
-  if (flags.json) printJson(challenge)
+  // The entry's platform, as the board lists it: what the code is posted from, or the sign-in is for.
+  const platform = (await board.discovery().catch(() => null))?.sync.find((entry) => entry.key === target)?.platform ?? target
+  const { code, expiresAt, signIn } = await board.syncCode(target)
+  const consent = signIn !== undefined && !flags.code
+  // The board says where its sign-in is, and the CLI opens it: only a web page.
+  if (consent && browsable(signIn) === null) throw new Error(`the board's sign-in isn't an http or https URL: ${JSON.stringify(signIn)}`)
+  if (flags.json) printJson({ sync: target, platform, code, expiresAt, ...(signIn !== undefined ? { signIn } : {}) })
   const until = Date.now() + LINK_WAIT_MS
   const sleep = () => new Promise((resolve) => setTimeout(resolve, 2000))
-  if (challenge.method === 'consent') {
+  /** An account linked on that platform since this run began: where the code or the sign-in landed. */
+  const linkedSince = async () =>
+    (await board.identity()).links.find((link) => link.actor.startsWith(`${platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
+  if (consent) {
     if (!flags.json) {
-      out(`Sign in to ${challenge.platform} as yourself to link it (and to post as you there):\n\n  ${challenge.url}\n`)
+      out(`Sign in to ${platform} as yourself to link it (and to post as you there):\n\n  ${signIn}\n`)
       out(`Only open it yourself: whoever completes it links their account to you.`)
     }
-    if (!flags['no-open'] && !flags.json) openBrowser(challenge.url)
-    if (flags['no-wait']) return 0
-    while (Date.now() < until) {
-      const linked = await board.checkAccount(target)
-      if (linked) {
-        if (flags.json) printJson(linked)
-        else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
-        return 0
-      }
-      await sleep()
-    }
-  } else {
-    if (!flags.json) {
-      const minutes = Math.round((Date.parse(challenge.expiresAt) - Date.now()) / 60_000)
-      out(`From your ${challenge.platform} account, post this as a message anywhere the board syncs, within ${minutes} minutes:\n\n  ${challenge.code}\n`)
-    }
-    if (flags['no-wait']) return 0
-    while (Date.now() < Math.min(until, Date.parse(challenge.expiresAt))) {
-      await sleep()
-      const linked = (await board.identity()).links.find((link) => link.actor.startsWith(`${challenge.platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
-      if (linked) {
-        if (flags.json) printJson(linked)
-        else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
-        return 0
-      }
+    if (!flags['no-open'] && !flags.json) openBrowser(signIn!)
+  } else if (!flags.json) {
+    const minutes = Math.round((Date.parse(expiresAt) - Date.now()) / 60_000)
+    out(`From your ${platform} account, post this as a message anywhere the board syncs, within ${minutes} minutes:\n\n  ${code}\n`)
+  }
+  if (flags['no-wait']) return 0
+  // The sign-in, or the code's post, links the account where the entry's sync runs: it shows up in your links.
+  while (Date.now() < Math.min(until, consent ? Infinity : Date.parse(expiresAt))) {
+    await sleep()
+    const linked = await linkedSince()
+    if (linked) {
+      if (flags.json) printJson(linked)
+      else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
+      return 0
     }
   }
   process.stderr.write('timed out\n')
@@ -520,8 +544,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'use': {
       const url = args[0]
       if (!url || args.length !== 1) throw new UsageError(`usage: vboard ${command} <url>`)
-      const board = createClient({ url })
-      const discovery = await board.discovery()
+      const discovery = await connection(url).board.discovery()
       const root = command === 'link' ? projectDir() : null
       await saveLink(root, discovery.url)
       out(root === null ? `using ${discovery.url}` : `linked ${root} to ${discovery.url}`)
@@ -529,16 +552,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'whoami': {
-      const board = client()
+      const { board, url, transport } = connection()
       const me = await board.me()
-      const source = await board.source()
+      const source = transport.source()
       if (flags.json) {
-        printJson({ ...me, board: board.url, source })
+        printJson({ ...me, board: url, source })
         return 0
       }
       const name = me.profile !== null ? `${me.name} via ${me.handle.split('/')[0]}` : me.name
       out(`${name} (${me.actor})`)
-      const rows: [string, string][] = [['board', board.url]]
+      const rows: [string, string][] = [['board', url]]
       if (source) rows.push(['source', source])
       if (me.expiresAt) {
         const minutes = Math.max(0, Math.round((Date.parse(me.expiresAt) - Date.now()) / 60_000))
@@ -550,6 +573,14 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const width = Math.max(...rows.map(([subject]) => subject.length))
       for (const [subject, value] of rows) out(`${subject.padEnd(width)}  ${value}`)
       return 0
+    }
+
+    case 'conformance': {
+      if (args.length > 0) throw new UsageError('usage: vboard conformance [--channel <c>]')
+      const report = await conformance(client(), flags.channel ? { channel: flags.channel } : {})
+      if (flags.json) printJson(report)
+      else out(formatConformance(report))
+      return report.ok ? 0 : 1
     }
 
     case 'channels': {
@@ -581,7 +612,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'read': {
       const target = args[0]
       const board = client()
-      if (target && /^#?\d+$/.test(target)) {
+      if (target && isMessageRef(target)) {
         const thread = await board.thread(messageId(target))
         // With filters, the root and only the replies that match them.
         const narrowed = Object.keys(filters()).length > 0
@@ -619,7 +650,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'post': {
       const [target, body] = args
       if (!target) throw new UsageError('usage: vboard post <channel|id> "<text>"')
-      const re = /^#?\d+$/.test(target) ? messageId(target) : undefined
+      const re = isMessageRef(target) ? messageId(target) : undefined
       if (re !== undefined && flags.sync?.length) throw new UsageError('--sync attaches whole threads: post to a channel, or use vb sync <id> <target>')
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const board = client()
@@ -674,7 +705,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
       const files = await attachments(board)
-      const where = /^#?\d+$/.test(target) ? messageId(target) : target
+      const where = isMessageRef(target) ? { re: messageId(target) } : target
       const schedule = await board.schedule(where, {
         text: content,
         ...(files.length ? { attachments: files } : {}),
@@ -897,27 +928,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'stuck': {
-      const [action, ref] = args
-      if (action === undefined) {
-        const list = await client().stuck()
-        if (flags.json) return list.forEach(printJson), 0
-        if (list.length === 0) return out('nothing is stuck'), 0
-        out(list.map((event) => formatStuck(event)).join('\n'))
-        return 0
-      }
-      const consumer = args[2]
-      const at = ref?.lastIndexOf('#') ?? -1
-      const index = ref === undefined ? NaN : Number(ref.slice(at + 1))
-      if ((action !== 'retry' && action !== 'skip') || at <= 0 || !Number.isInteger(index) || index < 1 || args.length > 3)
-        throw new UsageError('usage: vboard stuck [retry|skip <session>#<index> [consumer]], e.g. stuck retry board#812')
-      const { redriven } = await client().redrive(ref!.slice(0, at), index, action, consumer)
-      const what = consumer === undefined ? ref : `${ref} for ${consumer}`
-      if (flags.json) printJson({ redriven })
-      else out(redriven ? `${action === 'retry' ? 'retrying' : 'skipped'} ${what}` : `${what} isn't stuck`)
-      return 0
-    }
-
     case 'sources': {
       const [key, sub, target] = args
       if (!key) {
@@ -929,9 +939,6 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (sub !== 'read' || !target) throw new UsageError('usage: vboard sources <key> read <channel|thread|link> [--limit N]')
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
-      // A board older than this CLI answers an unknown path with its discovery document.
-      if (!Array.isArray((read as { messages?: unknown }).messages))
-        throw new Error("this board can't read sources yet: update vboard where the board is deployed")
       if (flags.json) return printJson(read), 0
       return out(formatSourceRead(key, read)), 0
     }
@@ -985,8 +992,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
         if (!flags['no-inspect']) {
           // With this board's token, whatever VBOARD_TOKEN says.
-          const board = createClient({ url: local.url, token: local.token, handle: local.handle, profile: null, session: null, person: null })
-          inspector = await startInspector({ client: board })
+          const { board } = connection(local.url, { token: local.token, handle: local.handle })
+          inspector = await startInspector({ client: board.as(null) })
           out(`inspector at ${inspector.url}`)
           if (!flags['no-open']) openBrowser(inspector.url)
         }
@@ -1030,7 +1037,8 @@ if (parsed === null) {
   run(command, args).then(
     (code) => exit(code),
     (error: unknown) => {
-      process.stderr.write(`error: ${(error as Error).message}\n`)
+      // A board's error says what the board said: it can't drive the terminal either.
+      process.stderr.write(`${terminalText(`error: ${(error as Error).message}`)}\n`)
       exit(error instanceof UsageError ? 2 : 1)
     },
   )
