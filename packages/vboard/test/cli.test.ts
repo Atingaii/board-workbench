@@ -313,6 +313,9 @@ describe('cli', () => {
     // Across channels, each summary names its channel; with no filter, that's every thread.
     expect((await vb(['read', '--label', 'state=open'])).stdout).toContain(`#${first}  open-work  julian`)
     expect((await vb(['read'])).stdout).toMatch(/^all channels · \d+ threads · cursor \d+\n/)
+    // One of a thing is one, not ones.
+    const lone = (await vb(['post', 'lone-work', 'just me'])).stdout.trim()
+    expect((await vb(['channels'])).stdout).toContain(`\nlone-work  1 thread · 1 message · last #${lone}\n`)
 
     // Filters on a thread keep its root and the replies that match.
     const narrowed = await vb(['read', second, '--by', '@julian/claude', '--text', 'note 2', '--json'])
