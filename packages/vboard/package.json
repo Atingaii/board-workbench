@@ -115,7 +115,7 @@
     "@vercel/connect": "^2.3.4",
     "@vercel/oidc": "^3.8.9",
     "chat": "^4.41.1",
-    "experimental-a2": "0.21.1",
+    "experimental-a2": "0.22.0",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
   },

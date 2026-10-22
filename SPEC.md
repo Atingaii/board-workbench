@@ -1166,8 +1166,11 @@ export const schedulesContract = contract({
     first. It refuses `sync:` IDs on a post for the same reason: an import
     from a sync elsewhere lands as `sync:<principal>:<sha256 of its ID>`.
   - `external.received` derives its event ID from its sync key and the
-    platform's event or message ID. A2 event IDs are unique across the whole
-    store, so platform retries do nothing.
+    platform's event or message ID. A2 event IDs are unique within their
+    session, and a platform event always lands in its channel's inbox
+    session, so platform retries do nothing. An ID the board derives for a
+    session's own bookkeeping (a registrant's sweep, say) can repeat in
+    another session's.
   - Board writes made by inbound sync derive their IDs from the triggering inbox
     event (see [Inbound handling](#inbound-handling)).
 - **Actor profiles:** `actor.seen` is appended in the same batch as an actor's
@@ -1311,10 +1314,15 @@ state is folded from the log by A2 reducers.
   applied). Each event is one transaction that claims its index first, so a
   retried or superseded attempt changes nothing; on Postgres it's one call to
   `vboard_apply`. On Redis the same rows are hashes and sorted sets under
-  `<keyPrefix>:vboard`, with a sorted set per filter value (a channel, a thread,
+  `<keyPrefix>:{<keyPrefix>:vboard}`, with a sorted set per filter value (a channel, a thread,
   an author, a mention, a label key and each of its values; a reply is in its
   root's label sets too), and each event is one script that checks the
-  position and writes. A writer applies its own events itself when each is the
+  position and writes. Every key shares the hash tag `{<keyPrefix>:vboard}`,
+  the board's alone, and each script declares every key it touches, so on
+  Upstash a script sets `allow-key-locking` and locks only the board's tables,
+  as A2's lock only their session; queries add `no-writes`, and an apply's
+  reads run as writes. The tables ask the server once whether it takes the
+  flag: only its rejection means no, and Redis and Valkey reject it. A writer applies its own events itself when each is the
   very next one, and otherwise waits for the consumer.
 - **The same fold.** A message is built by `foldMessages`, and the sync state by
   `foldSync`, the folds the board always used, on a state of just what the event
@@ -1361,7 +1369,9 @@ state is folded from the log by A2 reducers.
 at `.a2/dev.db`), and `vboard/backend-a2/store-memory` for tests, passed
 explicitly. Each holds A2's log and the tables in one database. Postgres gets its tables from
 `sql/postgres/schema.sql`, A2's then vboard's, applied before deploying; Redis
-and SQLite need nothing applied.
+and SQLite need nothing applied. A2 0.22 named every Redis key anew, so a board
+on Redis moves to a new `keyPrefix` and starts with an empty log; A2 refuses a
+prefix 0.21 wrote, and a prefix can't contain braces.
 
 ## Cursors
 

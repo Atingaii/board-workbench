@@ -146,7 +146,8 @@ describe('watchers on http()', () => {
       await vi.waitFor(() => expect(t.queue.timers.filter(isSweep)).toHaveLength(1))
       expect(fix.seen).toEqual([])
       t.down = false
-      expect(await t.sweep()).toBeLessThanOrEqual(2 * SWEEP_MS)
+      // A sweep is on the minute at least a second after the back-off.
+      expect(await t.sweep()).toBeLessThanOrEqual(wakeBackoff(1) + SWEEP_MS + 1000)
       await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toEqual(['while it deploys']))
       expect(t.woken).toHaveLength(2)
     } finally {
@@ -469,6 +470,30 @@ describe('pulling matches', () => {
       }
       // Three pulls, leases until 12:05:10, one sweep on the minute after.
       expect(t.queue.timers.filter(isSweep).map((task) => new Date(task.dueAt).toISOString())).toEqual(['2026-10-20T12:06:00.000Z'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("sets each registrant's sweep, when two pull in the same minute", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:10.000Z'))
+    try {
+      const { t, julian, pull } = await queued()
+      // Both queues record a sweep on the same minute, under the same derived ID: an ID is its session's.
+      const marketing = caller(t.remote.fetch, await deploymentToken())
+      expect((await marketing('POST', '/watchers', { watch: { fix: { tail: 'feedback' } } })).status).toBe(200)
+      await julian('POST', '/messages', { channel: 'feedback', text: 'for both' })
+      await vi.waitFor(async () => expect(await pull()).toHaveLength(1))
+      const theirs = await marketing('GET', '/watchers/matches')
+      expect(theirs.status).toBe(200)
+      expect(theirs.body.matches.map((match: { event: { message: { text: string } } }) => match.event.message.text)).toEqual(['for both'])
+      const server = t.remote.servers.at(-1)!
+      const armed = async (owner: string) => (await server.session(`watch:@${owner}`).history()).filter((event: { type: string }) => event.type === 'watch.armed')
+      const [ours, other] = [await armed(V0), await armed('vercel:project:prj_marketing:production')]
+      expect([ours.length, other.length]).toEqual([1, 1])
+      expect(ours[0]!.id).toBe(other[0]!.id)
+      expect(t.queue.timers.filter(isSweep)).toHaveLength(2)
     } finally {
       vi.useRealTimers()
     }

@@ -261,9 +261,6 @@ end $$;
 --> statement-breakpoint
 
 do $$ begin
-  if to_regclass('a2_events_event_id') is null then
-    create unique index if not exists a2_events_event_id on a2_events (event_id);
-  end if;
   if to_regclass('a2_events_types') is null then
     create index if not exists a2_events_types
       on a2_events (session_id, event_type, idx);
@@ -279,6 +276,30 @@ do $$ begin
   if to_regclass('a2_snapshot_pins_checkpoint') is null then
     create index if not exists a2_snapshot_pins_checkpoint
       on a2_snapshot_pins (session_id, reducer_name, up_to_index);
+  end if;
+end $$;
+--> statement-breakpoint
+
+-- Event ids are unique per session, through the index on (session_id,
+-- event_id). It replaces a2_events_event_id, on event_id alone. The swap
+-- locks the table before it builds, so it waits for running queries instead
+-- of deadlocking with a writer when the whole file runs as one transaction.
+-- The old index goes only once the new one is valid, so a session's ids
+-- always have a unique index.
+do $$ begin
+  if to_regclass('a2_events_session_event_id') is null then
+    if to_regclass('a2_events_event_id') is not null then
+      lock table a2_events in access exclusive mode;
+    end if;
+    create unique index if not exists a2_events_session_event_id
+      on a2_events (session_id, event_id);
+  end if;
+  if to_regclass('a2_events_event_id') is not null and exists (
+    select 1 from pg_index
+     where indexrelid = to_regclass('a2_events_session_event_id')
+       and indisvalid and indisunique
+  ) then
+    drop index a2_events_event_id;
   end if;
 end $$;
 --> statement-breakpoint
