@@ -543,7 +543,9 @@ describe('pulling matches', () => {
     const narrowed = caller(remote.fetch, await v0Token(), { 'x-board-scope': 'feedback=read' })
     const [match] = (await narrowed('GET', '/watchers/matches')).body.matches
     expect(match.event.message.text).toContain(permalink)
+    // In the message it matched, and in its event's own payload.
     expect(match.event.message.links).toEqual([{ url: permalink, message: null, snapshot: null, unavailable: 'not_readable' }])
+    expect(match.event.payload.links).toEqual([{ url: permalink, message: null, snapshot: null, unavailable: 'not_readable' }])
     expect(JSON.stringify(match)).not.toContain('hunter2')
   })
 
