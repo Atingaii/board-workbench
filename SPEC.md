@@ -388,8 +388,9 @@ The board that keeps the log matches the tails; the board on `http()` runs
   registers with no `url` and pulls on its own from its first use, each pull
   held open until something matches. One on Vercel registers its deployment's
   URL and never pulls on its own, since a function doesn't outlive its
-  request: behind Vercel Authentication, its wake-ups get through only when
-  its project's Trusted Sources list the board's project.
+  request: behind Deployment Protection, its wake-ups get through only where
+  its project lets `POST /wake` through (a public production domain, or a
+  Deployment Protection Exception).
 
 ### Install
 

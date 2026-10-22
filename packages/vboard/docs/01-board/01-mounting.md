@@ -70,8 +70,9 @@ A board on `http()` keeps nothing:
   so the same `id` never posts twice and no one can post with it first.
 - **Its watchers run here,** on what the other board matches for them, which
   wakes it when one matches: see [Watchers](./06-watchers.md#on-a-board-on-http).
-  Behind Deployment Protection, this project lists the other board's project
-  in its Trusted Sources, and that's all.
+  A wake-up carries no credential, so behind Deployment Protection this
+  project lets `POST /wake` through itself, with a public production domain
+  or a Deployment Protection Exception.
 - **Its sync runs here too.** Webhooks land on this board, and what it
   imports, it writes there. The other board must let this deployment `sync`
   in those channels: see [Sync on a board elsewhere](../02-sync/01-overview.md#on-a-board-elsewhere).
