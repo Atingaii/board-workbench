@@ -246,8 +246,15 @@ export async function landedFor(ctx: WriteContext, identity: Identity, landed: M
   if (!landed.blind) return null
   const [event] = await ctx.session.history({ gte: landed.id, lte: landed.id })
   const posted = foldMessages({ byId: {}, replies: {} }, event as BoardEvent).byId[landed.id]!
-  return { ...view(posted, actors, await readerFor(ctx, access, posted)), mentions: [] }
+  return { ...view(posted, actors, await readerFor(ctx, access, posted)), text: blindText(posted.text, identity.actor.id), mentions: [] }
 }
+
+/**
+ * A message's text for its writer where it can't read: each exact mention but of itself shows as
+ * `@…`. The board may have turned an email it wrote into an actor ID, and who that is, `/actors`
+ * doesn't show it either.
+ */
+export const blindText = (text: string, own: string) => replaceMentions(text, (token) => (token.kind === 'actor' && token.actor !== own ? '@…' : null))
 
 const sameAuthor = (a: Author, b: Author) =>
   a.actor === b.actor && a.principal === b.principal && a.profile === b.profile && a.session === b.session

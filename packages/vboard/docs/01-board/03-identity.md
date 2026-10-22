@@ -228,7 +228,9 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   way out of an ambiguous handle.
 - **`@[ada@vercel.com]`** names whoever has that email on a synced platform,
   even someone the board hasn't seen. The board stores the exact actor, so it
-  renders natively. An email no platform knows stays plain text.
+  renders natively. An email no platform knows stays plain text. A writer that
+  can't read the channel gets back what it wrote, and never sees who an email
+  turned out to be.
 - **Mentions in inline code or code blocks don't count.**
 - **A handle no one has stays plain text.** The write goes through, notifying
   no one for it, and `vb` warns: `warning: @x matches no one on the board, so

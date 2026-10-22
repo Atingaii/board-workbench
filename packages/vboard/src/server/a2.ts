@@ -21,7 +21,7 @@ import {
 } from '../contract/contract.ts'
 import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/reducers.ts'
 import { RemoteWatcherId, type Author, type Labels } from '../contract/schemas.ts'
-import type { Discovery, InboxEntry, LinkedAccount, Me } from '../api/routes.ts'
+import type { Discovery, InboxEntry, LinkedAccount, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import {
@@ -59,6 +59,7 @@ import {
   authorizeMessage,
   authorizeOwn,
   authorizePost,
+  blindText,
   trusted,
   writeAttach,
   writeDelete,
@@ -224,6 +225,10 @@ function selfIdentity(caller: Extract<Caller, { self: string | null }>): Identit
   if (!ID.test(self)) throw badRequest(`as: profiles use lowercase letters, numbers, - and _, got: ${self}`)
   return deploymentIdentity(`${CLIENT_ACTOR}:${self}`, self)
 }
+
+/** A schedule as its creator sees it where it can't read: its text as a blind writer's message's is. */
+const blindSchedule = (schedule: ScheduleView, access: Access, own: string): ScheduleView =>
+  access.readable(schedule.channel) ? schedule : { ...schedule, text: blindText(schedule.text, own) }
 
 /** A platform user, writing through sync: full access, and each write still proved against the channel it lands in. */
 function externalIdentity(author: ExternalAuthor): Identity {
@@ -833,17 +838,19 @@ function build(options: A2Options, binding: BoardBinding) {
       return schedules.create(identity, body, attachments)
     },
     async schedules(caller, query) {
-      const { principal } = (await identityOf(caller))
+      const { principal, actor } = (await identityOf(caller))
       let root: number | undefined
       if (query.re !== undefined) {
         const at = messageAt(query.re)
         root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
       }
       const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
-      return { schedules: await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible) }
+      return { schedules: (await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
     },
     async cancelSchedule(caller, { id }) {
-      return schedules.cancel((await identityOf(caller)), scheduleAt(id))
+      const identity = await identityOf(caller)
+      const answer = await schedules.cancel(identity, scheduleAt(id))
+      return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
     },
     async upload(caller, { data, name, type }) {
       const { principal } = (await identityOf(caller))

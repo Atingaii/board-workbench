@@ -43,7 +43,8 @@ import { avatarSvg } from './avatars.ts'
 import { badRequest, forbidden, HttpError, json, notFound, toErrorResponse } from './errors.ts'
 import { DroppedError, type WriteSource } from './middleware.ts'
 import { createRouter, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
-import { syncTarget, withEmailMentions, type SyncTarget } from './targets.ts'
+import { compileAccess, type Access } from './access.ts'
+import { mentionsEmails, syncTarget, withEmailMentions, type SyncTarget } from './targets.ts'
 import type { WriteOrigin } from './writes.ts'
 import type { WatcherContext } from './watch.ts'
 
@@ -241,6 +242,32 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     return syncTarget(target)
   }
 
+  /**
+   * What a request's caller may do, as the backend says once it has verified them: board() asks
+   * before it does anything for them past calling the backend (a platform call, an email lookup,
+   * sync's own write, reading an upload), so a caller the backend won't let in starts none of it.
+   * Null for this deployment's own code, which may do everything.
+   */
+  const accesses = new WeakMap<Caller, Promise<Access>>()
+  function accessOf(caller: Caller, signal: AbortSignal): Promise<Access> | null {
+    if (!('request' in caller)) return null
+    let found = accesses.get(caller)
+    if (!found) accesses.set(caller, (found = backend.me(caller, {}, signal).then(({ can }) => compileAccess(can))))
+    return found
+  }
+
+  /**
+   * Whether board() may work for a write of `caller`'s that lands in `channel`, or in the thread of
+   * message `re`, which it must read: `post` there, as the backend says. One it may not goes to the
+   * backend as it came, for the backend to say why.
+   */
+  async function mayPost(caller: Caller, where: { channel?: string | undefined; re?: string | undefined }, signal: AbortSignal): Promise<{ access: Access | null; channel: string } | null> {
+    const channel = where.channel ?? (where.re === undefined ? undefined : (await lookup(caller, where.re, signal))?.channel)
+    if (channel === undefined) return null
+    const access = await accessOf(caller, signal)
+    return access === null || access.can('post', channel) ? { access, channel } : null
+  }
+
   /** A message as `caller` may read it, or null. */
   async function lookup(caller: Caller, id: string, signal: AbortSignal): Promise<MessageView | null> {
     try {
@@ -252,15 +279,29 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     }
   }
 
-  /** A post, with the emails it mentions resolved and the targets its channel syncs with landing beside it. */
+  /**
+   * A post, with the emails it mentions resolved and the targets its channel syncs with landing
+   * beside it, once the backend says the caller may post there (and sync, for targets it names).
+   */
   async function post(caller: Caller, input: Protocol['post']['input'], signal: AbortSignal): Promise<Protocol['post']['output']> {
-    const body = input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input
+    // Without sync, nothing here calls a platform: its targets only take their shape.
+    if (!engine) return backend.post(caller, input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input, signal)
+    const work = (input.sync?.length ?? 0) > 0 || mentionsEmails(input.text) || (input.channel !== undefined && !input.noSync)
+    const allowed = work ? await mayPost(caller, input, signal) : null
+    if (!allowed) return backend.post(caller, input, signal)
+    const { access, channel } = allowed
+    // A reply's targets are a mistake the backend names: only a new thread's go to the platform.
+    const syncs = input.re === undefined && (input.sync?.length ?? 0) > 0 && (access === null || access.can('sync', channel))
+    const body = syncs ? { ...input, sync: await Promise.all(input.sync!.map(resolveTarget)) } : input
     let poster = caller
-    if (engine && body.channel !== undefined && !body.noSync) {
+    if (body.channel !== undefined && !body.noSync) {
       const config = await engine.configTargets(body.channel)
       if (config.length > 0) poster = { ...caller, origin: { ...caller.origin, config } } as Caller
     }
-    return backend.post(poster, { ...body, text: await withEmails(body.text) }, signal)
+    const text = await withEmails(body.text)
+    const answer = await backend.post(poster, { ...body, text }, signal)
+    // One that can't read where it posted gets back what it sent: who its emails are isn't its to see.
+    return text !== input.text && access !== null && !access.readable(answer.message.channel) ? { ...answer, message: { ...answer.message, text: input.text } } : answer
   }
 
   /**
@@ -359,17 +400,28 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       case 'post':
         return post(caller, input as Protocol['post']['input'], signal)
       case 'edit': {
+        // Its emails resolve once the backend says the caller may post where the message is, and read it.
         const { id, text } = input as Protocol['edit']['input']
+        if (!engine || !mentionsEmails(text) || !(await mayPost(caller, { re: id }, signal))) return backend.edit(caller, { id, text }, signal)
         return backend.edit(caller, { id, text: await withEmails(text) }, signal)
       }
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
-        return backend.schedule(caller, { ...body, text: await withEmails(body.text) }, signal)
+        const allowed = engine && mentionsEmails(body.text) ? await mayPost(caller, body, signal) : null
+        if (!allowed) return backend.schedule(caller, body, signal)
+        const text = await withEmails(body.text)
+        const answer = await backend.schedule(caller, { ...body, text }, signal)
+        // As for a post: one that can't read where it lands gets back what it sent.
+        const { access } = allowed
+        return text !== body.text && access !== null && !access.readable(answer.schedule.channel) ? { ...answer, schedule: { ...answer.schedule, text: body.text } } : answer
       }
       case 'inbox': {
         const query = input as Protocol['inbox']['input']
-        // A channel by name, for an entry this board has: its platform ID.
-        if (engine && entries[query.key] && query.channel !== undefined) return backend.inbox(caller, { ...query, channel: await engine.inboxChannel(query.key, query.channel) }, signal)
+        // A channel by name, for an entry this board has: its platform ID, for a caller that may sync.
+        if (engine && entries[query.key] && query.channel !== undefined) {
+          const access = await accessOf(caller, signal)
+          if (access === null || access.anywhere('sync')) return backend.inbox(caller, { ...query, channel: await engine.inboxChannel(query.key, query.channel) }, signal)
+        }
         return backend.inbox(caller, query, signal)
       }
       default: {
@@ -530,6 +582,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
 
       if (typeof (backend[target.name] as unknown) !== 'function') throw notFound(`no route: ${request.method} ${url.pathname}`)
       const caller = own ?? callerOf(request, boardUrl)
+      // A file is read only for a caller the backend knows.
+      if (target.name === 'upload') await accessOf(caller, request.signal)
       const input = await inputOf(target.name, request, url, match.params)
       if (target.name === 'events' && (request.headers.get('accept') ?? '').includes('text/event-stream'))
         return await sse(caller, input as Protocol['events']['input'], request)

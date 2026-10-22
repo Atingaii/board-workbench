@@ -138,7 +138,12 @@ every backend: it routes each request, validates it with the schemas in
 and serves `/avatars/:name`, `/openapi.json`, and SSE. It does no auth: it
 verifies no token, applies no rules, and runs no middleware. It calls the
 backend's method of the same name as the route with what the request said
-about its caller. What it returns is [the handle](#the-handle), whose `fetch`
+about its caller. What it does for a request beyond that waits for the
+backend's say: before it resolves a sync target on a platform (which can join
+a Slack channel), looks up an email, records who that is, or reads an upload,
+it asks the backend's `me` who the caller is and what it may do, and does it
+only for a caller that may (`post`, and `sync` for targets, where the write
+lands). A request it may not goes to the backend as it came, which refuses it. What it returns is [the handle](#the-handle), whose `fetch`
 is that one handler (`export const GET = team.fetch, POST = team.fetch`).
 TypeScript rejects an option that belongs to `a2()`; nothing checks at runtime.
 
@@ -690,11 +695,13 @@ board({
   `/schedules`, and `/actors` drop what you can't read. An event about no
   message (`actor.*`, `thread.synced`) reaches only a caller that reads every
   channel. Links to an unreadable board message lose their snapshot when read.
-- **A write doesn't answer what a read wouldn't.** A post in a channel its
-  caller can't read comes back with the text it sent and no mentions: the
-  board resolves handles and emails to actor IDs, which `/actors` hides from
-  that caller. The board stores the resolved text and mentions, so they still
-  notify. Nor does it list the handles that matched no one
+- **A write doesn't answer what a read wouldn't.** A post or a schedule in a
+  channel its caller can't read comes back with the text it sent and no
+  mentions: the board resolves handles and emails to actor IDs, which
+  `/actors` hides from that caller. The board stores the resolved text and
+  mentions, so they still notify. Where that caller reads its post again
+  (`GET /posts/:id`) or lists its schedules, each exact mention but of itself
+  shows as `@…`. Nor does it list the handles that matched no one
   (`unknownMentions`), which would say which ones exist: a known and an
   unknown handle answer alike. Still, an ambiguous handle fails (without
   candidates) and an `@[actor-id]` the board doesn't know is `unknown_mention`
