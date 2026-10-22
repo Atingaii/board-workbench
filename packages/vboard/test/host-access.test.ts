@@ -240,6 +240,25 @@ describe('a function among the access rules', () => {
     expect((await asCookie(without, 'session=customer-99')('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
   })
 
+  it("keeps a sync from writing as a host's principal, or as the watchers it registered, whatever platform it names", async () => {
+    const tenant = supportBoard((fn) => [vercelProject({ project: 'prj_sync', can: 'all' }), fn], customers)
+    const customer = asCookie(tenant, 'session=customer-99')
+    const staff = asCookie(tenant, 'session=staff-ada')
+    expect((await customer('POST', '/watchers', { watch: { inbox: { tail: 'support/' } } })).status).toBe(200)
+    expect((await customer('POST', '/messages', { channel: 'support/billing', text: 'my invoice is wrong' })).status).toBe(201)
+    expect((await staff('POST', '/messages', { channel: 'support/billing', text: 'on it' })).status).toBe(201)
+    // A sync that says its platform is `support`, or `vercel`'s like, speaks for neither.
+    const sync = caller(tenant.fetch, await deploymentToken('sync', 'prj_sync'))
+    expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'support', platform: 'support' }] })).status).toBe(200)
+    const as = (id: string) => sync('POST', '/sync/imports', { op: 'post', author: { id, handle: 'x', name: 'X', avatar: null, isBot: false }, from: 'support', channel: 'support/billing', text: `as ${id}` })
+    // Its watcher's own writes don't wake it, so an import as it would hide what it says from it.
+    for (const id of ['support:customer:99+inbox', 'support:customer:99']) {
+      const denied = await as(id)
+      expect([denied.status, denied.body.error?.message], id).toEqual([403, `${id} is someone this board signs in, not a platform user: sync can't write as them`])
+    }
+    expect((await as('support:user:7')).status).toBe(200)
+  })
+
   it('leaves a principal to the next rule when it returns undefined', async () => {
     const asked: string[] = []
     const passes: RuleFunction = (principal) => void asked.push(principal.id)

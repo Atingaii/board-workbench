@@ -1290,12 +1290,26 @@ function build(options: A2Options, binding: BoardBinding) {
    * signs in, on a platform it syncs: the one of entry `from`, when it names one.
    */
   async function speaksFor(caller: Inner, principal: string, author: { id: string }, from: string | null) {
-    if (authenticates(author.id)) throw forbidden(`${author.id} is someone this board signs in, not a platform user: sync can't write as them`)
+    if (authenticates(author.id) || (await signedIn(author.id))) throw forbidden(`${author.id} is someone this board signs in, not a platform user: sync can't write as them`)
     const entries = await entriesOf(caller, principal)
     const platforms = (from === null ? entries : entries.filter((entry) => entry.key === from)).map((entry) => entry.platform)
     if (from !== null && platforms.length === 0) throw forbidden(`this token doesn't sync ${from} here: its board registers its sync entries`)
     if (!platforms.some((platform) => author.id.startsWith(`${platform}:`)))
       throw forbidden(`${author.id} isn't a user of ${platforms.length ? platforms.join(' or ') : 'a platform this token syncs'}`)
+  }
+
+  /**
+   * Whether `id` is someone this board signs in that `authenticates` can't tell by its shape: a
+   * host's principal, which may take any ID, and their agents (`<principal>+<profile>`). It is once
+   * it has registered (its watchers write as `<principal>+<id>`, which never wakes them) or written
+   * as anything but a platform user.
+   */
+  async function signedIn(id: string): Promise<boolean> {
+    const plus = id.indexOf('+')
+    const owners = (await registry.state()).byOwner
+    if (owners[id] || (plus > 0 && owners[id.slice(0, plus)])) return true
+    const { state: actors } = await session.state(actorsReducer)
+    return [id, plus > 0 ? id.slice(0, plus) : null].some((known) => known !== null && actors.byId[known] !== undefined && actors.byId[known]!.kind !== 'external')
   }
 
   /** The caller, when it may sync somewhere: what every sync route needs. */

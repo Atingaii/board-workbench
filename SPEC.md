@@ -725,7 +725,9 @@ board({
 - Sync callbacks are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)). An import's author is always a
-  platform user: never an ID the board authenticates.
+  platform user: never an ID the board authenticates, nor a host's principal
+  it has seen register or write, or that principal's agents and registered
+  watchers (`<principal>+<id>`), whose own writes never wake them.
 
 ### Linked accounts
 
