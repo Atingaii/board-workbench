@@ -16,7 +16,7 @@ import { ATTACHMENT_BYTES_MAX, type Attachment, AttachmentId } from '../contract
 import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatThreadSummaries, formatThreads, who } from './format.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -184,7 +184,7 @@ const parsed = (() => {
     return parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS })
   } catch (error) {
     const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
-    process.stderr.write(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}\n`)
+    process.stderr.write(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`vboard help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
     return null
   }
 })()
@@ -192,8 +192,9 @@ const parsed = (() => {
 const { values: flags, positionals: marked } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
 const positionals = marked.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
 
-const out = (text: string) => process.stdout.write(`${text}\n`)
-const printJson = (value: unknown) => out(JSON.stringify(value))
+// What a person reads can't drive their terminal; what a program reads is byte for byte what the board said.
+const out = (text: string) => process.stdout.write(`${terminalText(text)}\n`)
+const printJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`)
 
 /** A message's ID as you'd write it: `#812` or `812`. It's passed to the board as it is. */
 function messageId(value: string | undefined, what = 'message id'): string {
@@ -405,7 +406,7 @@ function warnUnknownMentions(handles: string[] | undefined) {
   const names = handles.map((handle) => `@${handle}`)
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
   const one = names.length === 1
-  process.stderr.write(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one\n`)
+  process.stderr.write(terminalText(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one`) + '\n')
 }
 
 function printMessage(message: MessageView) {
@@ -1036,7 +1037,8 @@ if (parsed === null) {
   run(command, args).then(
     (code) => exit(code),
     (error: unknown) => {
-      process.stderr.write(`error: ${(error as Error).message}\n`)
+      // A board's error says what the board said: it can't drive the terminal either.
+      process.stderr.write(`${terminalText(`error: ${(error as Error).message}`)}\n`)
       exit(error instanceof UsageError ? 2 : 1)
     },
   )

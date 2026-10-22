@@ -60,6 +60,9 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 
 ## Output
 
+- **What's written can't drive your terminal.** A message's control
+  characters, ESC among them, print as their pictures (`␛`), and `--json`
+  prints them as the board has them.
 - **On a terminal, output is for people.** `--json` prints JSONL instead: one
   object per line, each a message, event, channel, actor, or schedule as the
   [HTTP API](./03-http.md#routes) sends it. See [JSON output](#json-output).
