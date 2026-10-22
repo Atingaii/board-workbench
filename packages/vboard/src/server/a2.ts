@@ -253,6 +253,8 @@ function build(options: A2Options, binding: BoardBinding) {
    * included; this deployment's own code everything.
    */
   const identityOf = async (caller: Caller): Promise<Identity> => ('identity' in caller ? caller.identity : selfIdentity(caller))
+  /** Its own code's handle, which reaches it in process. */
+  let ownHandle: ReturnType<BoardBinding['handle']> | null = null
   const post = options.transport?.post ?? publicPost
   const tails = Object.fromEntries(
     Object.entries(binding.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),
@@ -491,7 +493,7 @@ function build(options: A2Options, binding: BoardBinding) {
       // As its own code sees it: board() answers a request with who the board is to it, the URL it
       // reached and the project tokens are minted for. Its own code reaches it in process when
       // nothing says where else.
-      const url = binding.url() ?? binding.handle(OWN).url
+      const url = binding.url() ?? (ownHandle ??= binding.handle(OWN)).url
       const { id, teamId } = await binding.project()
       const body: Discovery = {
         version: VERSION,
