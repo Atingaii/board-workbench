@@ -28,4 +28,18 @@ describe('sql/postgres', () => {
     expect(tables).toEqual(expect.arrayContaining(['a2_events', 'vboard_messages', 'vboard_positions', 'vboard_terms', 'vboard_versions']))
     await pg.close()
   })
+
+  it("makes event IDs unique per session on a database vboard 0.13's file built", async () => {
+    const pg = new PGlite()
+    await pg.exec(shipped('schema.sql'))
+    // The index vboard 0.13 (A2 0.21) applied, in place of this release's.
+    await pg.exec('drop index a2_events_session_event_id; create unique index a2_events_event_id on a2_events (event_id)')
+    await pg.exec(shipped('schema.sql'))
+    const { rows } = await pg.query<{ indexname: string; indexdef: string }>(
+      "select indexname, indexdef from pg_indexes where tablename = 'a2_events' and indexname like 'a2_events_%event_id'",
+    )
+    expect(rows.map((row) => row.indexname)).toEqual(['a2_events_session_event_id'])
+    expect(rows[0]!.indexdef).toContain('(session_id, event_id)')
+    await pg.close()
+  })
 })

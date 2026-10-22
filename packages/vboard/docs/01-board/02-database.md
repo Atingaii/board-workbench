@@ -55,9 +55,9 @@ One database holds two things:
 | `vboard_external_threads`, `vboard_external_messages` | the other way: which board thread and message a platform's thread and message are |
 | `vboard_positions` | the last log index the tables applied |
 
-On Redis the tables are hashes and sorted sets under `<keyPrefix>:vboard`, with
-a sorted set for each channel, thread, author, mention, and label, so the same
-filters are a lookup there too.
+On Redis the tables are hashes and sorted sets under
+`<keyPrefix>:{<keyPrefix>:vboard}`, with a sorted set for each channel, thread,
+author, mention, and label, so the same filters are a lookup there too.
 
 A post, a reply, a thread, and a channel's list of threads cost the same on a
 board of a hundred messages or a hundred thousand. Other lists stop as soon as
@@ -115,6 +115,22 @@ query, like Drizzle, applies it as it ships.
 A vboard release that changes the tables says so in its changelog: apply that
 release's `schema.sql` before you deploy it.
 
+### Upgrading Postgres to vboard 0.14
+
+vboard 0.14 runs on A2 0.22, where an event ID is unique within its session,
+not across the store. Its `schema.sql` replaces the unique index on
+`a2_events (event_id)` with one on `(session_id, event_id)`, and keeps every
+row.
+
+1. **Apply 0.14's `schema.sql`**, as above.
+2. **Deploy 0.14.**
+
+The swap locks `a2_events` against reads and writes until the new index is
+built. On a large table, build it by hand first, without blocking anything, as
+[A2's 0.22 upgrade](https://www.a2.dev/upgrades/0-22) shows; `schema.sql` then
+finds it done. Until the file is applied, the old index refuses an ID that
+another session already holds, as it always did.
+
 ## Redis
 
 ```package-install
@@ -155,23 +171,51 @@ is one script that checks the log index and changes every key the event
 touches, so it applies once or not at all. That needs one server, or a
 provider without cluster mode, like Upstash.
 
+On Upstash a script locks the whole database unless it opts out. vboard's and
+A2's scripts lock only their own keys instead: every key of the board's tables
+shares one hash tag, `{<keyPrefix>:vboard}`, and every key of an A2 session
+shares that session's, so a script on one doesn't hold up the others. Reads
+share their lock. A store asks the server once whether it takes Upstash's
+`allow-key-locking` flag; Redis and Valkey don't, and run one command at a time
+anyway. No script publishes.
+
 | Option | What it does |
 | --- | --- |
 | `url` | `redis()`: the server, as `ioredis` takes it. `redisHttp()`: the REST endpoint |
 | `token` | `redisHttp()`: the REST token |
 | `client` | `redis()`, instead of `url`: an `ioredis` client you made, shared by A2 and the tables. Closing the store ends it |
-| `keyPrefix` | Where the board's keys go, so boards can share a Redis. Default `a2` |
+| `keyPrefix` | Where the board's keys go, so boards can share a Redis. Default `a2`. It can't contain braces |
 
 Redis keeps everything in memory: about 4 KB a message, counting the versions
 `vb tail` and watchers read. A filter without an index, like `text`, reads
 messages until it fills a page, a few thousand to a script, since Redis runs
 nothing else while a script runs.
 
+### Upgrading Redis to vboard 0.14
+
+vboard 0.14 runs on A2 0.22, which names every Redis key differently, so a
+board starts over: **point the store at a new `keyPrefix`**, then deploy. The
+board starts with an empty log there, and never reads the old prefix's keys;
+delete them whenever you like.
+
+On a prefix that vboard 0.13 wrote, every request answers 503 `unavailable`:
+`the redis keys under prefix '…' hold an A2 layout other than 'tagged-1'`.
+
+A board that syncs starts over on each platform too. Its message IDs start
+again from 1, and the threads it had on Slack or GitHub no longer map to board
+threads. A new reply in one brings it over as a new board thread, its root
+fetched from the platform; an edit or a reaction to an older message there
+doesn't reach the board. Schedules live in the log, so create them again; a
+board on `http()` registers its watchers again when it next starts, or on
+`POST /watchers`.
+
 ## SQLite
 
 `sqlite({ path })` keeps the log and the tables in one file, and creates the
 tables when it opens. It's the store `a2()` uses when you pass none, and
 `vb serve` keeps one in `.vboard/`. Delete the file and the board starts over.
+vboard 0.14 makes event IDs unique per session in the file when it opens it, so
+don't open that file with an earlier vboard afterwards.
 
 ## When a read sees a write
 

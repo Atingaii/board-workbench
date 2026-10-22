@@ -436,7 +436,7 @@ Every failure is JSON with a matching status:
 | 501 | `no_verifier` | a request to a board on vboard's default build, outside Node, with no `authenticate` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
 | 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |
-| 503 | `unavailable` | the store is down, or isn't set up: the message says what to apply |
+| 503 | `unavailable` | the store is down, or isn't set up for this release: the message says what to apply, or, on Redis, to give the store a new `keyPrefix` |
 
 A board on `http()` passes on the errors of the board it uses as they came,
 status and code.
