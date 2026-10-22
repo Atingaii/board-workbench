@@ -7,6 +7,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { localTokenFile } from '../client/node.ts'
 import { fsBlob } from '../server/blob.ts'
 import { a2 } from '../server/a2.ts'
+import { localScheduler } from '../scheduler/local.ts'
 import { oidcTokens } from '../server/tokens.ts'
 import { board } from '../server/index.ts'
 
@@ -48,7 +49,8 @@ function safeUsername(): string {
 
 /**
  * A board on this machine, for agents and people sharing one computer: a log in
- * SQLite under `dir`, attachments next to it, no sync, on 127.0.0.1 only. Its
+ * SQLite under `dir`, attachments next to it, a scheduler in this process, no sync,
+ * on 127.0.0.1 only. Its
  * keys live in memory for this run; it signs one token, for you, into a file
  * only you can read (`localTokenFile`), which `vb` on this machine picks up.
  */
@@ -79,7 +81,8 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   }
   const url = `http://127.0.0.1:${port}/api/board`
   const mounted = board({
-    backend: a2({ store, blob: fsBlob(join(dir, 'attachments')) }),
+    // Its timers live in this process, which runs as long as the board does.
+    backend: a2({ store, scheduler: localScheduler(), blob: fsBlob(join(dir, 'attachments')) }),
     authenticate: oidcTokens({ local: { issuer: ISSUER, jwks } }),
     url,
     basePath: '/api/board',

@@ -15,7 +15,7 @@ export type BlobStore = {
   get(key: string): Promise<{ data: ReadableStream<Uint8Array> | Uint8Array; contentType: string } | null>
 }
 
-/** For tests: forgets everything when the process ends. */
+/** Files in memory, for tests: forgets everything when the process ends. */
 export function memoryBlob(): BlobStore {
   const files = new Map<string, { data: Uint8Array; contentType: string }>()
   return {
@@ -24,7 +24,7 @@ export function memoryBlob(): BlobStore {
   }
 }
 
-/** For development: files on disk next to A2's `.a2/dev.db`. */
+/** Files on disk, for development and `vb serve`: under `dir`, `.a2/attachments` by default. */
 export function fsBlob(dir = '.a2/attachments'): BlobStore {
   const path = (key: string) => join(dir, ...key.split('/'))
   return {
@@ -44,12 +44,6 @@ export function fsBlob(dir = '.a2/attachments'): BlobStore {
   }
 }
 
-/** A2's rule for its store: memory in tests, disk in development, and nothing in production unless you pass one. */
-export function defaultBlob(): BlobStore | null {
-  const env = process.env.NODE_ENV
-  return env === 'production' ? null : env === 'test' ? memoryBlob() : fsBlob()
-}
-
 const dataKey = (id: string) => `vboard/attachments/${id}`
 const metaKey = (id: string) => `vboard/attachments/${id}.json`
 
@@ -65,7 +59,8 @@ function mediaType(type: string | null): string {
   return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(value) && value.length <= 255 ? value : 'application/octet-stream'
 }
 
-const noBlob = () => badRequest('this board has no blob store for attachments: pass `blob` to `board()`', 'no_blob_store')
+/** A board without a blob store keeps no files: every file route says so. */
+const noBlob = () => new HttpError(501, 'no_files', 'this board keeps no files: pass `blob` to `a2()`')
 
 /** 128 random bits, base64url, drawn again when they'd start with `-`, which a command line reads as a flag. */
 function attachmentId(): string {

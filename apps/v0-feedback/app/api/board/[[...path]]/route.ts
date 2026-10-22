@@ -1,5 +1,5 @@
 import { board, type WatcherContext } from "vboard";
-import { a2 } from "vboard/backend-a2";
+import { a2, fsBlob } from "vboard/backend-a2";
 import { vercelBlob } from "vboard/backend-a2/blob-vercel";
 import { slack } from "vboard/sync-slack";
 import { createSlackAdapter } from "@chat-adapter/slack";
@@ -30,11 +30,13 @@ const backend = a2({
         // `-2` since A2 0.17 changed its Redis layout.
         keyPrefix: env === "production" ? "vboard-2" : `vboard-2:${env}`,
       })
-    : undefined,
+    : // Locally, SQLite at .a2/dev.db, loaded only here.
+      (await import("vboard/backend-a2/store-sqlite")).sqlite(),
   scheduler: vercelQueues({ topic: "vboard" }),
-  // A private Blob store connected to the project. Its credentials are read on the first
-  // upload, so the board serves without one; uploads fail until it's connected.
-  blob: env ? vercelBlob() : undefined,
+  // A private Blob store connected to the project, and locally files in .a2/attachments. Its
+  // credentials are read on the first upload, so the board serves without one; uploads fail
+  // until it's connected.
+  blob: env ? vercelBlob() : fsBlob(),
 });
 
 export const feedback = board({

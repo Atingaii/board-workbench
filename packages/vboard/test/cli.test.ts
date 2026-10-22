@@ -531,10 +531,13 @@ describe('cli', () => {
     } finally {
       await scheduled.close()
     }
-    // Without one, the board answers only part of it, and says which.
+    // Without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
     const partial = await vb(['conformance'])
-    expect(partial.code).toBe(1)
-    expect(partial.stdout).toContain("\n\nschedules\n  failed   schedules a reply, lists it, and cancels it\n           this board has no scheduler, so it can't schedule messages\n")
+    expect(partial.code).toBe(0)
+    expect(partial.stdout).toContain(
+      '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
+    )
+    expect(partial.stdout).toMatch(/\n\n\d+ passed, 1 skipped\n$/)
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: 'error: usage: vboard conformance [--channel <c>]\n' })
   })
 

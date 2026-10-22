@@ -45,7 +45,7 @@ describe('cli schedules', () => {
     const root = (await vb(['post', 'dev', 'no queue here'])).stdout.trim()
     expect(await vb(['schedule', root, 'later', '--in', '1h'])).toMatchObject({
       code: 1,
-      stderr: "error: this board has no scheduler, so it can't schedule messages\n",
+      stderr: 'error: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
     })
   })
 })

@@ -73,12 +73,12 @@ export interface MessageTables {
 }
 
 /**
- * Where a board keeps everything: its A2 log, and the tables it reads from.
- * Create one with `postgres()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`.
+ * Where a board keeps everything: its A2 log, and the tables it reads from. Create one with
+ * `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`.
  */
 export type BoardStore = {
-  /** The board's A2 store; undefined leaves the choice to A2's defaults. */
-  readonly log: A2Store | undefined
+  /** The board's A2 store. */
+  readonly log: A2Store
   readonly tables: MessageTables
   close(): Promise<void>
 }

@@ -4,8 +4,9 @@ import type { Board } from '../server/board.ts'
 
 /**
  * Checks that a board speaks the protocol, through a handle on it (`conformance(board())`), as
- * `vb` and agents use it: every board answers all of it. It writes to one channel (`conformance`
- * by default), keeps every post on the board, and deletes what it posted.
+ * `vb` and agents use it: every board answers all of it. A board may keep no schedules or files,
+ * and says so with a 501, which the kit reports as not kept here. It writes to one channel
+ * (`conformance` by default), keeps every post on the board, and deletes what it posted.
  */
 
 /** What a check is about, for the report's headings. */
@@ -15,7 +16,7 @@ export type CheckResult = {
   group: CheckGroup
   name: string
   status: 'passed' | 'failed' | 'skipped'
-  /** Why it failed, or why it was skipped. */
+  /** Why it failed, or why it was skipped: `not kept here: …` for what the board answers 501 to. */
   detail?: string
 }
 
@@ -72,6 +73,12 @@ type Context = {
 }
 
 type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) => Promise<void | string> }
+
+/**
+ * The groups a board may keep none of, saying so with a 501: a board on `a2()` without a scheduler
+ * answers `no_scheduler`, and without a blob store `no_files`.
+ */
+const OPTIONAL = new Set<CheckGroup>(['schedules', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
@@ -398,7 +405,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
         const skipped = await run(ctx)
         checks.push(skipped ? { group, name, status: 'skipped', detail: skipped } : { group, name, status: 'passed' })
       } catch (error) {
-        checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
+        if (OPTIONAL.has(group) && error instanceof BoardError && error.status === 501) checks.push({ group, name, status: 'skipped', detail: `not kept here: ${error.message}` })
+        else checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
   } finally {

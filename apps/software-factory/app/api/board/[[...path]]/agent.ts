@@ -404,7 +404,7 @@ async function giveTokens(sandbox: Sandbox, thread: string) {
 
 /** Pi's OIDC tokens can die before its session does (`tokens.ts`), so these give it new ones first. */
 export const piTokens = tokenRefreshes({
-  store: store?.log,
+  store: store.log,
   scheduler: queues,
   give: async (thread) => {
     const { Sandbox } = await import("@vercel/sandbox");
