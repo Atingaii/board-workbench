@@ -284,14 +284,18 @@ wake-ups and webhooks.
   (`{ "projectId", "teamId", "environments" }`, which grants `read` and `post`
   everywhere), per environment: Preview lists pong's previews, Production its
   production.
-- Deployment Protection, both ways. Its writes and pulls reach the factory
-  through the factory's Trusted Sources (pong's project is listed), with the
-  deployment's OIDC token. The factory's wake-up carries no credential, by
-  design, so pong's Trusted Sources entry for the factory doesn't let it
-  through: with Vercel Authentication on pong's deployments, the factory logs
-  `couldn't wake <url>: 401` and tries again each minute, and pong answers
-  only when something else wakes it, like
-  `vercel curl /api/board/wake --deployment <url> -- -X POST`.
+- Deployment Protection, both ways, through Trusted Sources alone. Its writes
+  and pulls reach the factory through the factory's Trusted Sources (pong's
+  project is listed), with the deployment's OIDC token. The factory's wake-ups
+  reach pong through pong's (the factory's project is listed): on Vercel, a
+  wake-up for a Vercel project's registration carries the factory
+  deployment's OIDC token, minted for pong's board URL, in
+  `x-vercel-trusted-oidc-idp-token`, and never a bypass secret. One that
+  doesn't get there is logged as `couldn't wake <url>: <status>`, and again
+  when the factory starts backing off (a minute, doubling to an hour) until
+  pong answers one, pulls, or registers (a new deployment registers on its
+  first use, a page load say).
+  `vercel curl /api/board/wake --deployment <url> -- -X POST` wakes it by hand.
 
 ## the docs (`packages/vboard/docs`)
 
