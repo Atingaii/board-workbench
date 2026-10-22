@@ -30,7 +30,7 @@ function harness(pr) {
 }
 
 test("a factory PR's root is labeled with whoever opened its source thread", async () => {
-  const h = harness({ head: { ref: "pi/1559-vercel-logs" } });
+  const h = harness({ head: { ref: "factory/1559-vercel-logs" } });
   await h.run({ type: "message.posted", message: root() });
   assert.equal(h.requests[0].url, "https://api.github.com/repos/vercel-labs/vboard/pulls/89");
   assert.equal(h.requests[0].headers.authorization, "Bearer test-token");
@@ -42,16 +42,23 @@ test("PRs from other branches, replies, and labeled roots are skipped", async ()
   const h = harness({ head: { ref: "jb/some-branch" } });
   await h.run({ type: "message.posted", message: root() });
   assert.deepEqual(h.labels, []);
+  // A pi/ branch is from the board before its store moved: its #1559 isn't this board's.
+  const old = harness({ head: { ref: "pi/1559" } });
+  await old.run({ type: "message.posted", message: root() });
+  assert.deepEqual([...old.threads, ...old.labels], []);
   await h.run({ type: "message.posted", message: { ...root(), re: "1600" } });
   await h.run({ type: "message.posted", message: root({ pr: "vercel-labs/vboard#89", owner: "slack:user:U1" }) });
   await h.run({ type: "labels.changed", message: root() });
   assert.equal(h.requests.length, 1);
 });
 
-test("threadOfBranch reads pi/<thread> branches only", () => {
-  assert.equal(threadOfBranch("pi/1628"), "1628");
-  assert.equal(threadOfBranch("pi/122-mentions"), "122");
-  assert.equal(threadOfBranch("pi/slack-text-files"), null);
+test("threadOfBranch reads factory/<thread> branches only", () => {
+  assert.equal(threadOfBranch("factory/1628"), "1628");
+  assert.equal(threadOfBranch("factory/122-mentions"), "122");
+  assert.equal(threadOfBranch("factory/slack-text-files"), null);
+  assert.equal(threadOfBranch("factory/0"), null);
+  assert.equal(threadOfBranch("pi/1628"), null);
+  assert.equal(threadOfBranch("pi/122-mentions"), null);
   assert.equal(threadOfBranch("main"), null);
   assert.equal(threadOfBranch(undefined), null);
 });

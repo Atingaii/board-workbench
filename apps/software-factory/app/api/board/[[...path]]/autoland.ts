@@ -19,8 +19,8 @@ const isChangeset = (path: string) => /^\.changeset\/[^/]+\.md$/.test(path) && p
 
 export type PullRequest = { state: string; merged: boolean; user: { login: string }; head: { sha: string; ref?: string } };
 
-/** The pi-pr workflow opens the PR for each push to a `pi/` branch, as github-actions[bot]. */
-const byWorkflow = (pr: PullRequest) => pr.user.login === "github-actions[bot]" && pr.head.ref?.startsWith("pi/") === true;
+/** The pi-pr workflow opens the PR for each push to a `factory/` branch, as github-actions[bot]. */
+const byWorkflow = (pr: PullRequest) => pr.user.login === "github-actions[bot]" && pr.head.ref?.startsWith("factory/") === true;
 export type ChangedFile = { filename: string; status: string };
 export type CheckRun = { name: string; status: string; conclusion: string | null };
 export type Review = { land?: string | undefined; why?: string | undefined; sha?: string | undefined };

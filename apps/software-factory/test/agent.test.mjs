@@ -161,3 +161,10 @@ test("the reviewer tells the PR's source thread, and that thread's Pi acts on it
   assert.match(INSTRUCTIONS.thread, /Your PR's reviewer posts its verdict in your thread/);
   assert.match(INSTRUCTIONS.thread, /gets the reviewer to look again/);
 });
+
+test("Pi's branch for a thread is factory/<thread id>", async () => {
+  const { INSTRUCTIONS } = await import("../app/api/board/[[...path]]/agent.ts");
+  assert.match(INSTRUCTIONS.thread, /a branch named factory\/<thread id>/);
+  assert.match(INSTRUCTIONS.review, /its branch is factory\/<id>/);
+  for (const text of Object.values(INSTRUCTIONS)) assert.doesNotMatch(text, /\bpi\/</);
+});
