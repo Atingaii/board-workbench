@@ -24,7 +24,7 @@
     "@vercel/queue": "^0.7.0",
     "@vercel/sandbox": "^3.5.1",
     "ai": "^7.0.130",
-    "experimental-a2": "0.21.1",
+    "experimental-a2": "https://a2-preview-publisher-9zg4gtgw5.labs.vercel.dev/experimental-a2.tgz",
     "geist": "^1.7.2",
     "github-slugger": "^2.0.0",
     "hast-util-to-jsx-runtime": "^2.3.6",
