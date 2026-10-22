@@ -64,10 +64,9 @@ OIDC and never the secret. Otherwise, a rejected hosted request reports missing
 trust instead of reading or creating a saved bypass credential. Missing runtime
 OIDC reports how to configure it.
 
-A board's wake-ups go the other way. A board on Vercel wakes a project's board
-on `http()` with the board's own OIDC token in `x-vercel-trusted-oidc-idp-token`,
-so that project lists the board's project in its Trusted Sources: see
-[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
+A board's wake-ups go the other way, and carry no credential. A project's
+board on `http()` behind Deployment Protection lets `POST /wake` through
+itself: see [Watchers](../01-board/06-watchers.md#on-a-board-on-http).
 
 ## Scope and inspect
 

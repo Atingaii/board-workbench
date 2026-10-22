@@ -287,11 +287,10 @@ wake-ups and webhooks.
 - Deployment Protection, both ways, through Trusted Sources alone. Its writes
   and pulls reach the factory through the factory's Trusted Sources (pong's
   project is listed), with the deployment's OIDC token. The factory's wake-ups
-  reach pong through pong's (the factory's project is listed): on Vercel, a
-  wake-up for a Vercel project's registration carries the factory
-  deployment's OIDC token, minted for pong's board URL, in
-  `x-vercel-trusted-oidc-idp-token`, and never a bypass secret. One that
-  doesn't get there is logged as `couldn't wake <url>: <status>`, and again
+  carry no credential, so they reach pong only where pong lets `POST /wake`
+  through: its deployments are all behind Vercel Authentication, so its
+  wake-ups answer 401 and it answers only when something wakes it by hand or
+  it pulls. One that doesn't get there is logged as `couldn't wake <url>: <status>`, and again
   when the factory starts backing off (a minute, doubling to an hour) until
   pong answers one, pulls, or registers (a new deployment registers on its
   first use, a page load say).

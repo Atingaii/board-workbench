@@ -37,7 +37,7 @@ import { defaultStore } from '../store/default.ts'
 import type { BoardStore, MessageFilter } from '../store/types.ts'
 import { compileWatcher, createWatchers, ID, registrantSession, type Woken } from './watch.ts'
 import { ack, pull, pullInbox, queueReducer, type QueueSession } from './registered.ts'
-import { createRegistry, storedPrincipal, type Registration, type StoredPrincipal, type SyncEntrySpec } from './registry.ts'
+import { createRegistry, storedPrincipal, type Registration, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
 import { publicPost, type Post } from './transport.ts'
 import {
@@ -60,7 +60,6 @@ import {
   type WriteOrigin,
 } from './writes.ts'
 import { isKeyIdOf } from '../client/ids.ts'
-import { hostedToken } from '../client/node.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
 import { localScheduler } from '../scheduler/local.ts'
 import { VERSION } from '../version.ts'
@@ -132,13 +131,6 @@ const NEVER = new AbortController().signal
 
 /** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
 const WAKE_TIMEOUT_MS = 5000
-
-/**
- * A registration a Vercel project's deployment made, as Vercel's token said: a board on Vercel
- * wakes it through Deployment Protection. A host's own principal never counts, whatever its ID.
- */
-const byVercelProject = (principal: StoredPrincipal) =>
-  principal.kind === 'deployment' && principal.id.startsWith('vercel:project:') && principal.facts?.issuer === 'vercel'
 
 /**
  * `idempotentId`'s shape, a UUIDv8: the IDs the board derives for its own writes (schedule
@@ -385,38 +377,15 @@ function build(options: A2Options, binding: BoardBinding) {
       }),
     )
 
-  /** Said once: a board on Vercel that can't mint OIDC tokens wakes without them. */
-  let unminted = false
   /**
-   * What gets a wake-up past a Vercel project's Deployment Protection: on Vercel, this
-   * deployment's OIDC token with the registrant's URL as its audience, which the registrant's
-   * Trusted Sources check, as a hosted client's request carries it. Never the bypass secret,
-   * which is this project's own. Nothing for anyone else, or off Vercel.
-   */
-  async function protection(registration: Registration & { url: string }): Promise<Record<string, string>> {
-    if (process.env.VERCEL !== '1' || !byVercelProject(registration.principal)) return {}
-    try {
-      return { 'x-vercel-trusted-oidc-idp-token': await hostedToken(registration.url) }
-    } catch (error) {
-      if (!unminted) {
-        unminted = true
-        const cause = (error as { cause?: unknown }).cause
-        const why = cause instanceof Error ? cause.message : (error as Error).message
-        console.error(`[vboard] wake-ups go without a Vercel OIDC token, so Deployment Protection stops them: ${why}`)
-      }
-      return {}
-    }
-  }
-
-  /**
-   * Tells a registrant's board it has matches to pull, with no event in it: its board pulls them
-   * with its own credentials. The hash says whether its registration is stale. Says whether the
+   * Tells a registrant's board it has matches to pull, with no event and no credential in it: its
+   * board pulls them with its own credentials, and lets this POST through its own protection. The hash says whether its registration is stale. Says whether the
    * wake-up got there: an answer, or still pulling when the wait ran out.
    */
   async function wake(registration: Registration & { url: string }): Promise<Woken> {
     try {
       const response = await post(`${registration.url}/wake`, {
-        headers: { 'content-type': 'application/json', 'x-board-watchers': registration.hash, ...(await protection(registration)) },
+        headers: { 'content-type': 'application/json', 'x-board-watchers': registration.hash },
         body: '{}',
         // Its board runs what it pulls before it answers; the wake-up only has to arrive.
         signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),

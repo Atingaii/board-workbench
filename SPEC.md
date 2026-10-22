@@ -376,22 +376,14 @@ The board that keeps the log matches the tails; the board on `http()` runs
   there, a pull, or a registration (`POST /watchers`, changed or not, since a
   new deployment registers on its first use). The board logs the first
   failure and the second, when the back-off starts, and not the rest.
-- **Through Deployment Protection:** on Vercel, a wake-up for a registration
-  whose principal Vercel's token proved a project's deployment
-  (`vercel:project:…`, with Vercel facts; a host's own principal never
-  counts) carries `x-vercel-trusted-oidc-idp-token`: the board deployment's
-  OIDC token with the registration's `url` as its audience, minted as the
-  Node SDK's hosted client mints one (`hostedToken`). The registrant lists
-  the board's project in its Trusted Sources, and that's all. Anything else's
-  wake-ups, and every one off Vercel, carry no token, and none ever carries
-  `VERCEL_AUTOMATION_BYPASS_SECRET`. When minting fails, the wake-up goes
-  without it and the board logs that once. There's no option for any of it,
-  and no Vercel API lookup of the wake URL's host: the board has no
-  credential for one. The cost: the registrant receives the board's token,
-  and Trusted Sources ignores `aud` between projects of the same team, so a
-  registered project could replay it past Deployment Protection on that
-  team's other deployments that trust the board's project. The board itself
-  refuses it (wrong audience). Only the platform can close that.
+- **Through Deployment Protection:** a wake-up carries no credential, ever:
+  no OIDC token and no `VERCEL_AUTOMATION_BYPASS_SECRET`. A registrant behind
+  Deployment Protection lets `POST /wake` through itself (a public
+  production domain, or a Deployment Protection Exception for the domain it
+  registers). Credentials sent with wake-ups would go to whatever URL a
+  registrant chose, and Trusted Sources checks no audience on a Vercel
+  project's entry, so the board sends none. Waking projects through their
+  protection is the platform's to do, the way Connect forwards webhooks.
 - **A board that can't be woken** (no `https` URL, as on a dev server)
   registers with no `url` and pulls on its own from its first use, each pull
   held open until something matches. One on Vercel registers its deployment's

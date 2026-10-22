@@ -1,4 +1,3 @@
-import { decodeJwt } from 'jose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { board, type Watcher, type WatcherContext } from '../src/server/index.ts'
 import { githubActions, oidc, vercelProject, type CallerRequest } from '../src/access/index.ts'
@@ -319,9 +318,8 @@ const SECRET = 'this-projects-bypass-secret'
 
 describe('a wake-up through Deployment Protection', () => {
   beforeEach(() => {
-    vi.stubEnv('VERCEL', '1')
     vi.stubEnv('VERCEL_AUTOMATION_BYPASS_SECRET', SECRET)
-    // The board's deployment's token, for whatever audience it's asked for.
+    // The board's deployment could mint a token, if anything asked it to.
     mint.mockReset().mockImplementation(async ({ audience }) => deploymentToken('board', PROJECT_ID, 'preview', { audience }))
   })
   afterEach(() => {
@@ -329,25 +327,13 @@ describe('a wake-up through Deployment Protection', () => {
     vi.restoreAllMocks()
   })
 
-  it("carries the board's OIDC token for the registrant's URL when a Vercel project registered, and never the bypass secret", async () => {
-    const fix = recorder('feedback')
-    const t = team({ fix: fix.watcher })
-    await t.project.registerWatchers()
-    await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
-    await vi.waitFor(() => expect(fix.seen).toHaveLength(1))
-    expect(t.woken).toEqual([`${V0_URL}/wake`])
-    const [headers] = t.wakes
-    expect(decodeJwt(headers!['x-vercel-trusted-oidc-idp-token']!)).toMatchObject({ aud: V0_URL, project_id: PROJECT_ID })
-    expect(headers).not.toHaveProperty('x-vercel-protection-bypass')
-    expect(JSON.stringify(t.wakes)).not.toContain(SECRET)
-  })
-
-  it("carries none for a workflow's registration, another issuer's, a person's, or a host's own principal's", async () => {
-    /** Whether each registrant's wake-up carried a token, by the host it registered. */
-    const carried: Record<string, boolean> = {}
+  it.each(['1', ''])('carries no credential for any registrant, on Vercel (%j) or off, and never the bypass secret', async (vercel) => {
+    vi.stubEnv('VERCEL', vercel)
+    /** Each registrant's wake-up headers, by the host it registered. */
+    const sent: Record<string, Record<string, string>> = {}
     const transport = {
       post: async (url: string, init: { headers: Record<string, string> }) => {
-        carried[new URL(url).host] = 'x-vercel-trusted-oidc-idp-token' in init.headers
+        sent[new URL(url).host] = init.headers
         return new Response(null, { status: 204 })
       },
     }
@@ -360,7 +346,6 @@ describe('a wake-up through Deployment Protection', () => {
         vercelProject({ project: 'prj_v0', can: 'all' }),
       ],
     })
-    // A host's verifier names a Vercel project, but no Vercel token said so.
     const hosted = testBoard({
       scheduler: fakeQueue().scheduler,
       transport,
@@ -378,42 +363,11 @@ describe('a wake-up through Deployment Protection', () => {
     for (const [on, token, host] of registrants) expect((await caller(on.fetch, token)('POST', '/watchers', register(host))).status).toBe(200)
     await caller(remote.fetch, await personToken('u_ada'))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
     await caller(hosted.fetch, 'pt_app')('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
-    await vi.waitFor(() => expect(Object.keys(carried)).toHaveLength(5))
-    // Only v0's, a Vercel project's deployment, as Vercel's token said.
-    expect(carried).toEqual({ 'workflow.test': false, 'gitlab.test': false, 'person.test': false, 'v0.test': true, 'host.test': false })
-    expect(mint.mock.calls).toEqual([[{ audience: 'https://v0.test/api/board' }]])
-  })
-
-  it('carries none off Vercel', async () => {
-    const carried: boolean[] = []
-    for (const vercel of ['', '1']) {
-      vi.stubEnv('VERCEL', vercel)
-      const fix = recorder('feedback')
-      const t = team({ fix: fix.watcher })
-      await t.project.registerWatchers()
-      await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
-      await vi.waitFor(() => expect(fix.seen).toHaveLength(1))
-      carried.push('x-vercel-trusted-oidc-idp-token' in t.wakes[0]!)
-    }
-    expect(carried).toEqual([false, true])
-    expect(mint).toHaveBeenCalledTimes(1)
-  })
-
-  it("still wakes when it can't mint a token, and says so once", async () => {
-    mint.mockRejectedValue(new Error('no OIDC token in this function'))
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const fix = recorder('feedback')
-    const t = team({ fix: fix.watcher })
-    await t.project.registerWatchers()
-    const julian = await julianOn(t.remote.fetch)
-    await julian('POST', '/messages', { channel: 'feedback', text: 'first' })
-    await vi.waitFor(() => expect(fix.seen).toHaveLength(1))
-    await julian('POST', '/messages', { channel: 'feedback', text: 'second' })
-    await vi.waitFor(() => expect(fix.seen).toHaveLength(2))
-    expect(t.wakes.map((headers) => 'x-vercel-trusted-oidc-idp-token' in headers)).toEqual([false, false])
-    expect(errors.mock.calls.map((args) => args.join(' ')).filter((line) => line.includes('OIDC'))).toEqual([
-      '[vboard] wake-ups go without a Vercel OIDC token, so Deployment Protection stops them: no OIDC token in this function',
-    ])
+    await vi.waitFor(() => expect(Object.keys(sent)).toHaveLength(5))
+    // A Vercel project's included: the project lets /wake through its own protection.
+    for (const headers of Object.values(sent)) expect(Object.keys(headers).sort()).toEqual(['content-type', 'x-board-watchers'])
+    expect(JSON.stringify(sent)).not.toContain(SECRET)
+    expect(mint).not.toHaveBeenCalled()
   })
 })
 

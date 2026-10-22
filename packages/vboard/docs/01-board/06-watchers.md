@@ -217,21 +217,13 @@ export const GET = team.fetch, POST = team.fetch
   `watch.failed`, and the thread goes on.
 - **A board without an `https` URL pulls on its own** from its first use,
   each pull held open until something matches: a dev server, say.
-- **Behind Deployment Protection, list the other board's project in this
-  project's Trusted Sources,** for the environment the other board runs in.
-  That's all it takes. When the other board runs on
-  Vercel, a wake-up for a Vercel project's deployment carries the other
-  board's OIDC token, minted with this board's URL as its audience, in
-  `x-vercel-trusted-oidc-idp-token`. It never carries a bypass secret.
-  Registrations by anything else (GitHub Actions, other issuers, people)
-  get no token, so behind Vercel Authentication their wake-ups answer 401.
-- **What that costs:** this project receives the other board's token.
-  Trusted Sources ignores the audience between projects of the same team, so
-  this project could replay it past Deployment Protection on other
-  deployments in that team that trust the other board's project. The other
-  board itself refuses it, since its audience is this board's URL. A wake-up
-  reveals nothing else, and only makes this board pull with its own
-  credentials.
+- **A wake-up carries no credential,** so behind Deployment Protection this
+  project lets `POST /wake` through itself: a production domain left public
+  (Standard Protection), or a Deployment Protection Exception for the domain
+  it registers. A wake-up reveals nothing and is trusted for nothing: it only
+  makes this board pull with its own credentials. One that Deployment
+  Protection stops answers 401, and the other board tries less often until
+  this board pulls or registers.
 - **Retries need the other board's scheduler,** as its own watchers do.
 - **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
   same way,** with its entries in its registration (`sync: [{ key, platform,

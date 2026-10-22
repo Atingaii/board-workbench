@@ -390,10 +390,9 @@ class Wall extends Error {
 
 /**
  * This deployment's Vercel OIDC token, with `url` as its audience: what a hosted client sends a
- * board, and what a board on Vercel wakes a Vercel project's board with, for Deployment
- * Protection's Trusted Sources. Its `cause` says why it couldn't.
+ * board, for Deployment Protection's Trusted Sources. Its `cause` says why it couldn't.
  */
-export async function hostedToken(url: string): Promise<string> {
+async function hostedToken(url: string): Promise<string> {
   try {
     return await getVercelOidcToken({ audience: url })
   } catch (cause) {
