@@ -5,6 +5,7 @@ import { http } from '../src/backend-http/index.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 import { LEASE_MS, SWEEP_MS, wakeBackoff } from '../src/server/registered.ts'
+import { canonicalWatchers } from '../src/server/watchers-hash.ts'
 import { slack } from '../src/sync/slack.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 
@@ -581,5 +582,18 @@ describe('registering', () => {
     expect((await (await julianOn(t.remote.fetch))('GET', '/watchers')).body.watchers.map((found: { owner: string }) => found.owner)).toEqual([
       'vercel:project:prj_marketing:production',
     ])
+  })
+
+  it('hashes watchers and sync entries in code-unit order, the same in every locale', () => {
+    const spec = { tail: 'feedback', when: 'matches' as const }
+    const entry = (key: string) => ({ key, platform: 'slack', signIn: false })
+    // A locale's collation puts `a` before `B`; code units put `B` (U+0042) before `a` (U+0061).
+    const canonical = canonicalWatchers({ a: spec, B: spec }, [entry('a'), entry('B')])
+    expect(JSON.parse(canonical)).toEqual([
+      ['B', 'feedback', 'matches'],
+      ['a', 'feedback', 'matches'],
+      ['sync', [['B', 'slack', false], ['a', 'slack', false]]],
+    ])
+    expect(canonicalWatchers({ B: spec, a: spec }, [entry('B'), entry('a')])).toBe(canonical)
   })
 })
