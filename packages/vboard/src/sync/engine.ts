@@ -347,19 +347,21 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   // --- inbound: inbox → board -------------------------------------------------------
 
   /**
-   * What a platform message's links point to. A linked message the board has
-   * (it was synced) is that board message; otherwise it's what the platform sent
-   * about it (Slack's unfurl), what an earlier version of this message had, or
-   * what the platform says when asked. A link nobody can read says why.
+   * What a platform message's links point to, for a message in board channel `channel`. A linked
+   * message the board has (it was synced) in that same channel is that board message; otherwise
+   * it's what the platform sent about it (Slack's unfurl, which the platform checked against who
+   * posted the link), what an earlier version of this message had, or what the platform says when
+   * asked. A board copy in another channel is never one: sync reads every channel, and the link's
+   * readers may not read that one. A link nobody can read says why.
    */
-  async function resolveLinks(platform: SyncProvider, links: ExternalLink[], previous: ImportLink[] = []): Promise<ImportLink[]> {
+  async function resolveLinks(platform: SyncProvider, links: ExternalLink[], channel: string, previous: ImportLink[] = []): Promise<ImportLink[]> {
     if (links.length === 0) return []
     const resolved: ImportLink[] = []
     for (const link of links) {
       if (resolved.some((done) => done.url === link.url)) continue
       const id = (await find({ thread: link.thread, message: link.message })).message
       const copy = id === null ? null : await messageOf(id)
-      if (copy && !copy.deleted) {
+      if (copy && !copy.deleted && copy.channel === channel) {
         resolved.push({ url: link.url, message: copy.id, unavailable: null, snapshot: {
           author: copy.author?.name ?? copy.by.actor,
           text: copy.text, createdAt: copy.createdAt,
@@ -371,7 +373,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         resolved.push({ url: link.url, message: null, snapshot: link.snapshot, unavailable: null })
         continue
       }
-      const kept = previous.find((earlier) => earlier.url === link.url && earlier.snapshot)
+      // What the platform said before, never a board copy's, which may be gone or another channel's.
+      const kept = previous.find((earlier) => earlier.url === link.url && earlier.snapshot && earlier.message === null)
       if (kept) {
         resolved.push(kept)
         continue
@@ -667,7 +670,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         const existing = (await find({ thread: event.subthread ?? event.thread, message: event.message })).message
         if (existing !== null) return { root: rootId ?? existing, message: existing }
         const { attachments, notes } = event.files?.length ? await importFiles(platform, event.files, meta.attempt) : { attachments: [], notes: [] }
-        const links = await resolveLinks(platform, event.links ?? [])
+        const links = await resolveLinks(platform, event.links ?? [], synced?.channel ?? channel)
         const base = {
           ...(links.length ? { links } : {}),
           author: event.author,
@@ -709,7 +712,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           const stored = await messageOf(id)
           const text = clampText(withNotes(overrides.text ?? event.text, stored ? notesIn(stored.text) : []), (stored?.attachments.length ?? 0) > 0)
           if (stored && !event.linksOnly && stored.text !== text) await screened(await call('syncImport', { op: 'edit', author, from: key, origin, text, source: from }))
-          const links = stored ? await resolveLinks(platform, event.links ?? [], stored.links) : []
+          const links = stored ? await resolveLinks(platform, event.links ?? [], stored.channel, stored.links) : []
           if (stored && !sameLinks(links, stored.links)) await call('syncImport', { op: 'links', author, from: key, origin, links })
         } else {
           if (platform.singleReaction) {

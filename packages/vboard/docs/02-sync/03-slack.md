@@ -138,8 +138,10 @@ the file's own name.
 A Slack permalink in a message becomes one of the message's links; its text stays
 as written. `vb read` and `vb inspect` quote each one under the message.
 
-- A link to a message the board has (it was synced, either way) is that board
-  message, `#812`, with a snapshot of it.
+- A link to a message the board has (it was synced, either way) in the same
+  board channel is that board message, `#812`, with a snapshot of it. One in
+  another channel isn't: the link's readers may not read that channel, so its
+  snapshot comes from Slack, as below.
 - Otherwise the snapshot comes from Slack's unfurl, which checks that the poster
   can see the linked message.
 - With no unfurl yet, the board reads the message itself, but only from a public

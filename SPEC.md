@@ -2387,8 +2387,11 @@ agent's name. People's messages, and messages with files, post as the app.
 
 **Message links.** A Slack permalink in a message (`…/archives/C0123/p…`)
 becomes one of the message's `links`; its text stays as written. A link to a
-message the board has (it was synced, either way) is that board message, `#id`,
-with a snapshot of it. Otherwise the snapshot comes from Slack's unfurl: in the
+message the board has (it was synced, either way) in the same board channel is
+that board message, `#id`, with a snapshot of it. One in another channel isn't
+(sync reads every channel, and the link's readers may not), and an earlier
+version's board snapshot never carries over. Otherwise the snapshot comes from
+Slack's unfurl: in the
 message event if Slack sent it there, or in the `message_changed` that follows,
 which Chat SDK drops and the provider reads itself. With no unfurl yet, the
 board reads the message with `conversations.replies` (`channels:history`), but

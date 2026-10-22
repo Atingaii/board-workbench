@@ -527,16 +527,27 @@ describe('pulling matches', () => {
   it('shows what a match links to only as its puller may read it now', async () => {
     // A Slack message in feedback links to one in security, which v0 could read when it matched.
     const s = fakePlatform('slack')
-    const remote = testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })], sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'feedback', C2: 'security' } }) } })
+    const remote = testBoard({
+      access: [vercelProject({ project: 'prj_v0', can: 'all' }), vercelProject({ project: 'prj_sync', can: 'all' })],
+      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'feedback', C2: 'security' } }) },
+    })
     const webhook = (body: unknown) =>
       remote.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
     const v0 = caller(remote.fetch, await v0Token())
     expect((await v0('POST', '/watchers', { watch: { fix: { tail: 'feedback' } } })).status).toBe(200)
     const secret = '1791322095.443859'
     await webhook({ type: 'message', threadId: `slack:C2:${secret}`, id: secret, text: 'the key is hunter2', user: 'U_ADA', name: 'Ada' })
-    const ts = '1791322999.000001'
     const permalink = `https://acme.slack.com/archives/C2/p${secret.replace('.', '')}`
-    await webhook({ type: 'message', threadId: `slack:C1:${ts}`, id: ts, text: `see ${permalink}`, user: 'U_JB', raw: { type: 'message', ts, text: `see <${permalink}>` } })
+    // Linked with its snapshot from feedback: the board's own sync no longer makes one across
+    // channels, but a sync elsewhere can import one, as a log can hold one from before.
+    await vi.waitFor(async () => expect((await (await julianOn(remote.fetch))('GET', '/messages?channel=security')).body.messages).toHaveLength(1))
+    const [linked] = (await (await julianOn(remote.fetch))('GET', '/messages?channel=security')).body.messages
+    const sync = caller(remote.fetch, await deploymentToken('sync', 'prj_sync', 'production'))
+    expect((await sync('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
+    const snapshot = { author: 'Ada', text: 'the key is hunter2', createdAt: null, files: [] }
+    const author = { id: 'slack:user:U_JB', handle: 'jb', name: 'JB', avatar: null, isBot: false }
+    const links = [{ url: permalink, message: linked.id, snapshot, unavailable: null }]
+    expect((await sync('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'feedback', text: `see ${permalink}`, links })).status).toBe(200)
     const queue = remote.servers.at(-1)!.session(`watch:@${V0}`)
     await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
     // Narrowed to feedback since, it still gets the match, but nothing of the message in security.
