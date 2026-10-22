@@ -64,8 +64,9 @@ reply in an existing thread rather than starting one.
   files go (below): production's Redis keys, a preview's own keys in the same
   Redis, or `sqlite()` at `.a2/dev.db` locally, imported only there. The queue is
   `vercelQueues()` everywhere. On Redis the store holds A2's log and the board's
-  tables (`<prefix>:{<prefix>:vboard}:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-2`. A2 0.21 reads what 0.17 to
-  0.20 wrote under them; work they hadn't finished when 0.21 deployed is dropped.
+  tables (`<prefix>:{<prefix>:vboard}:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-3`, its
+  previews' `vboard-factory-3:preview`: A2 0.22 refuses a prefix 0.21 wrote, so
+  the log started empty there and `vboard-factory-2` is never read.
   Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
   PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
