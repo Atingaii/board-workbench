@@ -69,9 +69,11 @@ import { VERSION } from '../version.ts'
 export type A2Options = {
   /**
    * Where the board keeps its log and tables: `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or
-   * `memory()` from `vboard/backend-a2/store-*`.
+   * `memory()` from `vboard/backend-a2/store-*`. Omitted: SQLite at `.a2/dev.db` in the working
+   * directory, everywhere, which suits development and a single long-running server. Serverless
+   * functions can't write there: pass a store, and the board's requests say so until you do.
    */
-  store: BoardStore
+  store?: BoardStore
   /**
    * What gives the board a clock: `vercelQueues()` or `qstash()` from `vboard/backend-a2/scheduler-*`,
    * or `localScheduler()` from `vboard/backend-a2/scheduler-local` in a long-running process. Mount
@@ -90,7 +92,7 @@ export type A2Options = {
   transport?: { post?: Post }
 }
 
-const boardServer = (options: A2Options) =>
+const boardServer = (options: A2Options & { store: BoardStore }) =>
   createServer({
     contract: boardContract,
     store: options.store.log,
@@ -214,8 +216,33 @@ type PlatformEvent = Received['payload']['event']
 /** An append that holds an event ID already in the log. */
 const duplicate = (error: unknown) => error instanceof A2Error && error.code === 'PARTIAL_DUPLICATE_BATCH'
 
+/** Where a board given no store keeps it, in the working directory, in every environment. */
+const DEFAULT_STORE_PATH = '.a2/dev.db'
+
+/** Why a file couldn't be opened, in a few words: a read-only filesystem, a serverless function's say. */
+function unwritable(error: unknown): string {
+  const { code, message } = error as { code?: unknown; message?: unknown }
+  if (code === 'EROFS' || code === 'EACCES' || code === 'EPERM' || /unable to open database|readonly database/i.test(String(message)))
+    return "this filesystem isn't writable here"
+  return String(message ?? error).split('\n')[0]!
+}
+
+/**
+ * The store of a board given none: SQLite at `.a2/dev.db`, opened on its first use (so nothing loads
+ * SQLite for a board that's given a store). Where it can't open, each request says why and what to
+ * pass: never a store in memory, which would lose the board without a word.
+ */
+async function defaultStore(): Promise<BoardStore> {
+  const { sqlite } = await import('../store/sqlite.ts')
+  try {
+    return sqlite({ path: DEFAULT_STORE_PATH })
+  } catch (error) {
+    throw new HttpError(500, 'no_store', `can't open SQLite at ${DEFAULT_STORE_PATH}: ${unwritable(error)}, so pass a store to a2()`)
+  }
+}
+
 /** Everything behind a board on `a2()`, built once board() binds it. Nothing in it connects until it's used. */
-function build(options: A2Options, binding: BoardBinding) {
+function build(options: A2Options & { store: BoardStore }, binding: BoardBinding) {
   const blob = options.blob ?? null
   const { store } = options
   // The same A2 store object for every server: A2 recognizes its own stores by identity.
@@ -1271,22 +1298,38 @@ function build(options: A2Options, binding: BoardBinding) {
 }
 
 /**
- * The board in this deployment, on A2's log: its store, and optionally a scheduler and somewhere
- * for files. It's the backend itself: pass it to `board({ backend })`, and mount its `scheduler`
- * in a route of its own. It trusts the callers board() verified; what it does outside requests, it
- * asks board()'s policy about and writes through board(). Nothing is built or connected until
- * board() binds it.
+ * The board in this deployment, on A2's log: its store (SQLite at `.a2/dev.db` by default), and
+ * optionally a scheduler and somewhere for files. It's the backend itself: pass it to
+ * `board({ backend })`, and mount its `scheduler` in a route of its own. It trusts the callers
+ * board() verified; what it does outside requests, it asks board()'s policy about and writes
+ * through board(). Nothing is built or connected until board() binds it, and the default store
+ * opens on the first call.
  */
-export function a2(options: A2Options) {
+export function a2(options: A2Options = {}) {
+  let binding: BoardBinding | null = null
   let built: ReturnType<typeof build> | null = null
-  const ready = () => {
-    if (!built) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
+  let opening: Promise<ReturnType<typeof build>> | null = null
+  /** What's built, for what can't wait for the default store to open. */
+  const now = () => {
+    if (built) return built
+    if (!binding) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
+    throw new Error('a2: its default store opens on the board\'s first request: pass a store to reach it before that')
+  }
+  const ready = async () => {
+    if (!built) {
+      if (!binding) throw new Error("a2: this backend isn't serving a board yet: pass it to board({ backend })")
+      const bound = binding
+      opening ??= defaultStore().then((store) => (built ??= build({ ...options, store }, bound)))
+      // A store that didn't open is tried again on the next call: nothing else stands in for it.
+      opening.catch(() => (opening = null))
+      await opening
+    }
     // The first call on an instance starts the schedules catching up, and doesn't wait.
-    built.schedules.catchUp()
-    return built
+    built!.schedules.catchUp()
+    return built!
   }
   const methods = Object.fromEntries(
-    METHODS.map((name) => [name, (caller: Caller, input: never, signal: AbortSignal) => (ready().methods[name] as (...args: unknown[]) => unknown)(caller, input, signal)]),
+    METHODS.map((name) => [name, async (caller: Caller, input: never, signal: AbortSignal) => ((await ready()).methods[name] as (...args: unknown[]) => unknown)(caller, input, signal)]),
   ) as unknown as ProtocolMethods
   const backend = {
     ...methods,
@@ -1294,25 +1337,27 @@ export function a2(options: A2Options) {
     routes: [] as BackendRoute[],
     // The board lives here: board() lets its people and own deployments in by default.
     keeps: true,
-    bind(binding: BoardBinding) {
-      if (built) throw new Error('a2: this backend already serves a board: create one a2() per board()')
-      built = build(options, binding)
+    bind(given: BoardBinding) {
+      if (binding) throw new Error('a2: this backend already serves a board: create one a2() per board()')
+      binding = given
+      // A store it's given builds now, and connects when it's first used.
+      if (options.store) built = build({ ...options, store: options.store }, given)
     },
     /** The scheduler's callback: `export { scheduler as POST }` from a route of its own. A board without a scheduler answers 404. */
-    scheduler: (request: Request): Promise<Response> => ready().scheduler(request),
+    scheduler: async (request: Request): Promise<Response> => (await ready()).scheduler(request),
     /** The A2 servers behind this board, to share one scheduler with other A2 servers. */
     get servers() {
-      return ready().servers
+      return now().servers
     },
     /** For tests and tools. */
     get session() {
-      return ready().session
+      return now().session
     },
     get store() {
-      return ready().store
+      return now().store
     },
   }
-  // What tests and tools look at stays out of a spread, so `{ ...a2({ store }), delete }` is a backend too.
+  // What tests and tools look at stays out of a spread, so `{ ...a2(), delete }` is a backend too.
   for (const key of ['servers', 'session', 'store']) Object.defineProperty(backend, key, { enumerable: false })
   return backend satisfies Backend
 }

@@ -51,7 +51,7 @@ export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: 
 /** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
 export function mount(options: MountOptions) {
   const { store, scheduler, blob, transport, auth, ...rest } = options
-  const backend = a2({ store, ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
+  const backend = a2({ ...(store ? { store } : {}), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
   const { url, ...given } = rest
   const created = board({
     ...given,
@@ -72,7 +72,7 @@ export function mount(options: MountOptions) {
  * A board on a memory store, with its files in memory, whose tokens come from a local test issuer.
  * It has no scheduler unless a test passes one, and `blob: undefined` keeps no files.
  */
-export function testBoard(options: Partial<MountOptions> = {}) {
+export function testBoard(options: MountOptions = {}) {
   const clock = testClock()
   const store = memory({ clock })
   const created = mount({

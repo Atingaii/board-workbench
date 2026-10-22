@@ -1,15 +1,17 @@
+import { existsSync } from 'node:fs'
+import { chmod, mkdir, mkdtemp } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { a2 } from '../src/backend-a2/index.ts'
 import { slack } from '../src/sync/slack.ts'
-import { memory } from '../src/store/memory.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
 
-/** A board on a2() with only its store, a watcher, and Slack synced to `firehose`, in the environment `env`. */
+/** A board on a2() with only a store, a watcher, and Slack synced to `firehose`, in the environment `env`. */
 function bare(env: string) {
   vi.stubEnv('NODE_ENV', env)
   const s = fakePlatform('slack')
@@ -35,15 +37,63 @@ function bare(env: string) {
 
 afterEach(() => vi.unstubAllEnvs())
 
-describe('a2() takes only a store', () => {
-  it('needs one in its type', () => {
-    // @ts-expect-error: no store, no board.
-    expect(() => a2({})).not.toThrow()
-    // @ts-expect-error: no store, no board.
-    expect(() => a2()).not.toThrow()
-    expect(a2({ store: memory() }).keeps).toBe(true)
+describe('a2() with no store', () => {
+  /** Runs `body` with the working directory at a new temporary directory, prepared by `setup`. */
+  async function inDir(body: (dir: string) => Promise<void>, setup: (dir: string) => Promise<void> = async () => {}) {
+    const dir = await mkdtemp(join(tmpdir(), 'vboard-store-'))
+    const cwd = process.cwd()
+    await setup(dir)
+    process.chdir(dir)
+    try {
+      await body(dir)
+    } finally {
+      process.chdir(cwd)
+      await chmod(dir, 0o755)
+      if (existsSync(join(dir, '.a2'))) await chmod(join(dir, '.a2'), 0o755)
+    }
+  }
+
+  it.each(['development', 'production', 'test'])('in %s, keeps the board in SQLite at .a2/dev.db in the working directory', async (env) => {
+    vi.stubEnv('NODE_ENV', env)
+    await inDir(async (dir) => {
+      const first = testBoard({ store: undefined })
+      const { body } = await caller(first.fetch, await personToken())('POST', '/messages', { channel: 'dev', text: 'kept on disk' })
+      expect(existsSync(join(dir, '.a2', 'dev.db'))).toBe(true)
+      // Another board on the file, as after a restart, has it: it was never in memory.
+      const again = testBoard({ store: undefined })
+      expect((await caller(again.fetch, await personToken())('GET', `/messages/${body.message.id}`)).body.message.text).toBe('kept on disk')
+      await Promise.all([first.backend.store.close(), again.backend.store.close()])
+    })
   })
 
+  // Where a deployment's files are read-only, as on Vercel outside /tmp: none, or a `.a2` it can't write in.
+  const readOnly = {
+    'a read-only working directory': async (dir: string) => chmod(dir, 0o555),
+    'a read-only .a2': async (dir: string) => {
+      await mkdir(join(dir, '.a2'))
+      await chmod(join(dir, '.a2'), 0o555)
+    },
+  }
+  it.skipIf(process.getuid?.() === 0).each(Object.entries(readOnly))('says what to pass on every request where SQLite can\'t open: %s', async (_, setup) => {
+    vi.stubEnv('NODE_ENV', 'production')
+    await inDir(async (dir) => {
+      const board = testBoard({ store: undefined })
+      const julian = caller(board.fetch, await personToken())
+      const refused = {
+        status: 500,
+        body: { error: { code: 'no_store', message: "can't open SQLite at .a2/dev.db: this filesystem isn't writable here, so pass a store to a2()" } },
+      }
+      expect(await julian('POST', '/messages', { channel: 'dev', text: 'lost?' })).toEqual(refused)
+      // Nothing took the post somewhere else: every call after says the same.
+      expect(await julian('GET', '/messages?channel=dev')).toEqual(refused)
+      expect(await julian('GET', '/me')).toEqual(refused)
+      await expect(board.post('dev', 'from the handle')).rejects.toMatchObject({ status: 500, code: 'no_store' })
+      expect(existsSync(join(dir, '.a2', 'dev.db'))).toBe(false)
+    }, setup)
+  })
+})
+
+describe('a2() takes a scheduler and a blob store only if you pass them', () => {
   it.each(['development', 'production'])('in %s, runs watchers and sync in the request that wrote, and refuses to schedule', async (env) => {
     const { board, s, seen, webhook } = bare(env)
     const julian = caller(board.fetch, await personToken())
