@@ -28,8 +28,9 @@ There are two independent checks. Configure both on the board project.
 [{"projectId":"prj_FACTORY_ID","teamId":"team_FACTORY_TEAM_ID","environments":["production"]}]
 ```
 
-Omitting the variable trusts no external projects. Omitting `environments`
-defaults to production. Add preview or development only when intended.
+The board route reads it into `board({ access })`, so the grants are the
+board's policy whatever keeps its log. Omitting the variable trusts no
+external projects. Omitting `environments` defaults to production. Add preview or development only when intended.
 A grant reads and posts in every channel, and labels only in `factory/` channels, since a Factory post carries labels. It never reacts or syncs.
 Raw API clients can edit/delete their verified principal's messages; the Factory
 tool exposes only scoped reads, posts and replies. Sessions do not create separate

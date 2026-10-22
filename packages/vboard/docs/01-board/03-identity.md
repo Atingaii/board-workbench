@@ -31,7 +31,7 @@ discovery there names another URL, they get no token and fail with
 another one and collect tokens it could replay there.
 
 Other runtimes bring their own credentials in `http(url, { fetch })`: a page,
-its own session, which the board's `a2({ authenticate })` recognizes. See the
+its own session, which the board's `board({ authenticate })` recognizes. See the
 [handle reference](../04-reference/02-board.md).
 
 ### From your terminal
@@ -78,14 +78,13 @@ error: the board at https://www.example.com/api/board says its project is prj_ab
 
 ## How the board verifies
 
-The board that keeps the log verifies each request: `board()` hands its
-backend the token as it came, and `a2()` checks it with its `authenticate`,
-`verifyTokens()` from `vboard/access` by default. It verifies a token once and
-keeps who it is until the token expires, so a live stream doesn't verify each
-time it polls.
+`board()` verifies each request before its backend sees it, with its
+`authenticate`: `oidcTokens()` from `vboard/access` by default, the OIDC tokens
+made out to this board. It verifies a token once and keeps who it is until the
+token expires, so a live stream doesn't verify each time it polls.
 
 - **Vercel tokens** are verified with `jose` against the team issuer's keys.
-  `a2()` knows its own project from its `project` option,
+  `board()` knows its own project from its `project` option,
   `VERCEL_PROJECT_ID`, or `.vercel/project.json`. A `development` token from
   it is a person and must carry `user_id`. Any other environment is the
   deployment itself: in the environment the board runs in, it can do
@@ -96,7 +95,7 @@ time it polls.
   accepted only when they match a rule in [`access`](./09-access.md), which
   also says what they may do in each channel.
 - **Tests** point verification at a local issuer:
-  `a2({ authenticate: verifyTokens({ vercel: { issuer, jwks } }) })`. It still
+  `board({ authenticate: oidcTokens({ vercel: { issuer, jwks } }) })`. It still
   runs real verification against a real key set; no environment variable
   turns it off.
 
@@ -161,12 +160,11 @@ import { githubActions, vercelProject } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
 
 const team = board({
-  backend: a2({
-    access: [
-      vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
-      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
-    ],
-  }),
+  backend: a2(),
+  access: [
+    vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
+    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
+  ],
 })
 export const GET = team.fetch, POST = team.fetch
 ```
@@ -174,7 +172,7 @@ export const GET = team.fetch, POST = team.fetch
 - **A project name without `team` means the board's own team.** Names are only
   unique within a team, so another team's `marketing` doesn't match. A project
   ID matches on any team, since IDs are unique. The board knows its team from
-  `a2({ project: { teamId } })`, `VERCEL_ORG_ID`, the linked project, or on
+  `board({ project: { teamId } })`, `VERCEL_ORG_ID`, the linked project, or on
   Vercel the platform's token. When it can't tell, a name matches nothing.
 - **Names are for reading; IDs are stored.** A rule matches a project or repo
   by name, but the principal records its ID, so a rename doesn't change who

@@ -32,16 +32,17 @@ Authorization: Bearer <OIDC JWT>
   development token carrying `user_id`), the project's own deployments in the
   environment the board runs in, and
   anything matching a rule in `access`. See [Access](../01-board/09-access.md).
-- **The backend verifies.** `board()` hands each route's method the token, the
-  headers below, and the board's URL as they came, and the board that keeps the
-  log checks them: `a2()` with its `authenticate`, which may also take a
-  session cookie of the app's own (see [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier)).
+- **`board()` verifies.** It checks the token for the board's URL with its
+  `authenticate`, which may also take a session cookie of the app's own (see
+  [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier)),
+  works out the actor from the headers below, and applies its `access`, before
+  it calls the backend with the caller it verified.
 
 These routes take no token:
 
 | Route | Why |
 | --- | --- |
-| `GET /` | discovery, the backend's: tells a client which project to mint a token for |
+| `GET /` | discovery: tells a client which project to mint a token for |
 | `GET /avatars/:name` | built-in agent avatars |
 | `GET /openapi.json` | the API's schema |
 | `POST /webhooks/:key` | platforms can't send a board token; the sync adapter verifies the request |
@@ -60,7 +61,8 @@ These routes take no token:
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |
 
 `board()` checks their shape (a 400 for one that's malformed), and the board
-records them after verifying the token. Provenance (`by`,
+records them after verifying the token. They're labels under the verified
+principal, never who it is. Provenance (`by`,
 `mentions`, `origin`, and sync receipts) is never read from the body of a post
 or any other write; only [sync's routes](#syncs-routes) take an author and an
 origin, from a caller that may `sync` where they land.
@@ -132,7 +134,9 @@ a person calls (`/webhooks/:key`, `/messages/:id/sync`, `/identity/sign-in`,
 backend: the ones that need a sync entry answer 404 on a board that doesn't
 run it. `/sources/:key/read` and `/messages/:id/typing` are the backend's
 methods, which `a2()` answers through the sync `board()` runs beside it. A
-board on `http()` answers only wake-ups, webhooks, and its sync's sign-ins. There are no
+board on `http()` answers only wake-ups, webhooks, and its sync's sign-ins,
+unless it has an `access` of its own: then it serves its callers as its
+project on the board it uses (see [A board on `http()`](../01-board/09-access.md#a-board-on-http)). There are no
 optional groups, so a client never asks a board what it does.
 [Conformance](./05-conformance.md) checks a board against all of it.
 

@@ -15,8 +15,9 @@ await team.post('deploys', 'www@a1b2c3 is live')
 `board()` returns the handle on a board. Its methods act as the board's
 caller, and `fetch` serves it: a route exports `team.fetch` as `GET` and
 `POST` (see [Mounting](../01-board/01-mounting.md)). Every call goes through
-`board()`, which calls the backend's methods: the backend stores, and decides
-what the caller may do. Who the caller is depends on where the board lives:
+`board()`, which runs the middleware and calls the backend's methods: the
+backend stores, honoring what the caller may do. Who the caller is depends on
+where the board lives:
 
 | Backend | The handle acts as |
 | --- | --- |
@@ -57,8 +58,8 @@ const team = board({
 })
 ```
 
-The board recognizes that session with `a2({ authenticate })`, the app's own
-verifier composed with `verifyTokens()`, and its route checks the `Origin` of
+The board recognizes that session with `board({ authenticate })`, the app's own
+verifier composed with `oidcTokens()`, and its route checks the `Origin` of
 writes: see [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier). Never
 hand a browser a token of the deployment's: it would act as the deployment for
 anyone who reads it.

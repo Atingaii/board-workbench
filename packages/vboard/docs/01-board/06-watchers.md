@@ -204,8 +204,8 @@ export const GET = team.fetch, POST = team.fetch
   they keep failing, the wait doubles, up to an hour, and the other board logs
   the first failure and the start of the back-off. It starts over when this
   board answers one, pulls, or registers. Its matches wait either way.
-- **It sees what its deployment may read** on the other board, checked when an
-  event matches and again when it's pulled.
+- **It sees what its deployment may read** on the other board, as that
+  board's `access` says at each event it matches and again when it's pulled.
 - **Its writes are by the deployment, with the watcher's ID as its profile:**
   `vercel:project:prj_v0:production+fix`. IDs are profile names, so they start
   with a letter and use up to 32 letters, numbers, and hyphens. Its posts get

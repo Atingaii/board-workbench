@@ -5,10 +5,11 @@ description: "The board's code says what each caller may do in each channel: rea
 
 ## Who gets what
 
-Every caller is an OIDC principal. The board that keeps the log verifies it
-(see [Identity](./03-identity.md)) and says what it may do: `a2({ authenticate,
-access })`. `board()` verifies nothing itself. Some get everything without
-asking; the rest get what `access` gives them:
+Every caller is an OIDC principal. `board()` verifies it (see
+[Identity](./03-identity.md)) and says what it may do, `board({ authenticate,
+access })`, then calls its backend with the caller it verified. The policy is
+the board's on every backend, and the backend only stores. Some get everything
+without asking; the rest get what `access` gives them:
 
 | Caller | Default |
 | --- | --- |
@@ -43,6 +44,10 @@ import { a2 } from 'vboard/backend-a2'
 
 const backend = a2({
   // store and scheduler as in Mounting
+})
+
+const team = board({
+  backend,
   access: [
     // front's feedback intake posts and never reads.
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
@@ -54,8 +59,6 @@ const backend = a2({
     vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
   ],
 })
-
-const team = board({ backend })
 export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
@@ -81,23 +84,68 @@ export const { scheduler } = backend
   `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
   percent-encoded (`oidc:ci.test%3A8443:<sub>`). Two rules whose issuers
   differ only by a trailing slash, the host's case, or a default port would
-  name the same principals, so the board throws when it starts. `a2()`
+  name the same principals, so the board throws when it starts. `board()`
   verifies these issuers' tokens because its rules name them.
 - **A function is a rule of your own:** `(principal) => can` gives what a
   rule's `can` takes (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), null for
   nothing, or undefined to leave the principal to the next rule. The token
   rules match only tokens, so a function is how principals your own verifier
   returns get anything (see [below](#a-hosts-own-verifier)). It's asked again
-  whenever a principal acts, a schedule's send included. The defaults come
-  first: it's never asked about a person, or the board's own deployments in
-  its environment.
-- **A board on `http()` has no `access`.** The board that keeps the log decides
-  what its callers may do there.
+  whenever a principal acts, a schedule's send and a registered watcher's
+  match included. The defaults come first: it's never asked about a person, or
+  the board's own deployments in its environment.
+- **It holds outside requests too.** A schedule sends only while its creator
+  may post there, a watcher registered from another board matches only what
+  its registrant may read at each event, and the middleware sees every write
+  that reaches the backend, its own code's included.
+
+## A board on `http()`
+
+A board on `http()` keeps no log, and with no `access` of its own it serves no
+requests but its wake-ups and webhooks. With one, it serves its own callers as
+a gateway to the board it uses: it verifies and limits them, then acts on that
+board as its project.
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from 'vboard'
+import { http } from 'vboard/backend-http'
+import type { CallerRequest } from 'vboard/access'
+
+/** Whoever the app's session cookie names, or null for a request without one. */
+async function session(request: CallerRequest) {
+  // const user = await readSession(request.headers.get('cookie'))   // yours
+  const user = null as { id: string; username: string } | null
+  return user ? ({ id: `support:user:${user.id}`, kind: 'person', handle: user.username } as const) : null
+}
+
+const gateway = board({
+  backend: http(process.env.TEAM_BOARD_URL),
+  authenticate: session,
+  access: (principal) => (principal.kind === 'person' ? { 'support/': ['read', 'post'] } : null),
+})
+export const GET = gateway.fetch, POST = gateway.fetch
+```
+
+The policies stack: yours decides what your users may do, and the team's board
+decides what your project may do, so a user gets only what both allow. The
+team's board sees the project, labeled with who it was: Ada via support.
+
+- **It never vouches for a person.** Each call goes with the project's
+  credentials, with the caller's handle as its profile (`ada`, shown as
+  `support/ada`), a label under the project and never who it is there, and its
+  access as [`x-board-scope`](#narrowing-a-token).
+- **What's the project's own there, its callers can't do.** The team's board
+  sees one principal, so editing, deleting, and scheduling, which go by it,
+  and the project's registration, sync, and links answer 403. Posts, replies,
+  reactions, labels, uploads, and reads go through. A post's `id` is its
+  caller's own.
+- **`GET /me` answers who the caller is here,** as this board verified it.
 
 ## A host's own verifier
 
-`a2({ authenticate })` says who a request is. It's one function, `verifyTokens()`
-from `vboard/access` by default, and composing verifiers is plain code. Each
+`board({ authenticate })` says who a request is. It's one function,
+`oidcTokens()` from `vboard/access` by default, and composing verifiers is
+plain code. Each
 answers null when the request carries nothing it recognizes, so the next one
 gets it, and a 401 when it carries a credential that fails. A board on an app's
 own site can take the app's session cookie, from its staff and its customers,
@@ -105,10 +153,10 @@ and `vb`'s tokens, from people, agents, and deployments:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
-import { vercelProject, verifyTokens, type CallerRequest } from 'vboard/access'
+import { vercelProject, oidcTokens, type CallerRequest } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
 
-const tokens = verifyTokens()
+const tokens = oidcTokens()
 
 /** Whoever the app's session cookie names, or null for a request without one. */
 async function session(request: CallerRequest) {
@@ -122,6 +170,10 @@ async function session(request: CallerRequest) {
 
 const backend = a2({
   // store and scheduler as in Mounting
+})
+
+export const team = board({
+  backend,
   authenticate: async (request) => (await session(request)) ?? (await tokens(request)),
   access: [
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
@@ -129,8 +181,6 @@ const backend = a2({
     (principal) => (principal.id.startsWith('support:customer:') ? { 'support/': ['read', 'post'] } : undefined),
   ],
 })
-
-export const team = board({ backend })
 export const GET = team.fetch
 export const POST = async (request: Request) => {
   if (request.headers.has('cookie') && request.headers.get('origin') !== 'https://support.example.com') return new Response('forbidden', { status: 403 })
@@ -148,7 +198,7 @@ write.
 - **A verifier gets what the request said:** `credential`, its bearer token or
   null, `headers`, for a cookie, `audience`, the board's URL, `claims`, what it
   claims for itself, and `board`, what the board knows that verifying needs
-  (its project, and the issuers its rules trust), which `verifyTokens()` reads.
+  (its project, and the issuers its rules trust), which `oidcTokens()` reads.
 - **A host's own returns the principal:** `id` in the board's scheme
   (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
   optionally `expiresAt`. The handle, name, profile, and `x-board-scope` the
@@ -164,12 +214,13 @@ write.
   board sends that response as is. Anything else thrown is a 500, so turn a
   bad credential into a 401 yourself.
 - **It's asked once per request,** however many times a stream polls, and a
-  token `verifyTokens()` verified is kept until it expires.
+  token `oidcTokens()` verified is kept until it expires. What `access` gives
+  is worked out again for each page a stream sends.
 
 A host that serves many teams' boards from one deployment can't use the
 built-in verifier at all: its callers can't access the host's project, and
 every team's board would trust the host's own deployments. Its verifier
-replaces `verifyTokens()`, and a function as `access` says what each principal
+replaces `oidcTokens()`, and a function as `access` says what each principal
 may do:
 
 ```ts
@@ -179,14 +230,14 @@ board({
     store: redis({ keyPrefix: `board:${teamId}:` }),
     scheduler: vercelQueues({ topic: `board-${teamId}` }),
     blob: vercelBlob({ prefix: teamId }),
-    authenticate: async (request) => {
-      if (request.credential === null) return null
-      const caller = await verifyPlatformToken(request.credential)
-      if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
-      return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, expiresAt: caller.expiresAt }
-    },
-    access: async (principal) => canOf(teamId, principal.id),
   }),
+  authenticate: async (request) => {
+    if (request.credential === null) return null
+    const caller = await verifyPlatformToken(request.credential)
+    if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
+    return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, expiresAt: caller.expiresAt }
+  },
+  access: async (principal) => canOf(teamId, principal.id),
 })
 ```
 
@@ -195,9 +246,9 @@ board({
   `{ 'dev/': ['post'] }`), or null for nothing. It's asked again whenever a
   principal acts, a schedule's send included, so what it says now is what
   holds.
-- **Nothing else is trusted.** Without `verifyTokens()` in its verifier, no
+- **Nothing else is trusted.** Without `oidcTokens()` in its verifier, no
   people, own-project deployments, audience check, or platform token header
-  count. A board whose verifier is `verifyTokens()` alone takes no host's
+  count. A board whose verifier is `oidcTokens()` alone takes no host's
   principals: schedules one made before the board switched are revoked. The
   board's own code's (its handle's, watchers') keep sending.
 - **One board per team.** Create a `board()` for each team and cache them.
@@ -208,32 +259,36 @@ board({
 
 ## A backend of your own
 
-`board()` hands every backend the same unverified caller, so a backend of your
-own verifies it and decides. `vboard/access` has the pieces `a2()` uses:
+`board()` hands every backend a caller it verified, `{ identity, origin }`, or
+its own code, `{ self, origin }`. A backend of your own trusts the first, since
+only `board()` makes one, and honors what it may do in each channel:
 
 ```ts lib/backend.ts
 import { HttpError, type Caller } from 'vboard'
-import { compileRules, resolveActor, vercelProject, verifyTokens } from 'vboard/access'
 
-const project = async () => ({ id: process.env.VERCEL_PROJECT_ID ?? null, teamId: process.env.VERCEL_ORG_ID ?? null })
-const authenticate = verifyTokens()
-const accessOf = compileRules([vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } })], { project })
+/** What a caller may read: every method that shows messages asks. */
+export function readable(caller: Caller, channel: string) {
+  // This deployment's own code: yours to decide.
+  if (!('identity' in caller)) return true
+  return caller.identity.principal.access.readable(channel)
+}
 
-/** Who a request's caller is and what it may do: every method starts here. */
-export async function callerOf(caller: Caller) {
-  if (!('request' in caller)) return null // this deployment's own code: yours to decide
-  const principal = await authenticate({ ...caller.request, board: { project, issuers: [] } })
-  if (!principal) throw new HttpError(401, 'unauthorized', 'missing bearer token')
-  const scoped = caller.request.claims.scope === null ? principal : { ...principal, scope: caller.request.claims.scope }
-  const { actor } = resolveActor(scoped, caller.request.claims, caller.request.audience)
-  return { actor, access: await accessOf(scoped) }
+export function mayPost(caller: Caller, channel: string) {
+  if ('identity' in caller && !caller.identity.principal.access.can('post', channel)) throw new HttpError(403, 'forbidden', `this token can't post in ${channel}`)
 }
 ```
+
+`identity` is the principal with its `access`, the author record its writes
+carry, and the actor it writes as. What a backend stores for later, a
+schedule's creator or a registrant, it asks `board()` about again through its
+binding's `accessNow(principal)`, and it writes for someone outside a request
+through the binding's `handle(caller)`, so the middleware sees it.
+`vboard/access` has the pieces `board()` uses:
 
 | Export | What it does |
 | --- | --- |
 | `vercelProject()`, `githubActions()`, `oidc()` | The rules, as above |
-| `verifyTokens(options?)` | An `authenticate`: verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer `board.issuers` names, or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `a2()`'s default |
+| `oidcTokens(options?)` | An `authenticate`: the OIDC tokens made out to this board. It verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer `board.issuers` names, or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `board()`'s default |
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileRules(rules, { project })` | What a principal may do under `rules`, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
 

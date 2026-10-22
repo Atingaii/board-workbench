@@ -19,11 +19,11 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
 
 const backend = a2({
   // store and scheduler as in Mounting
-  middleware: [guard],
 })
 
 const team = board({
   backend,
+  middleware: [guard],
   // sync as in Sync
 })
 export const GET = team.fetch, POST = team.fetch
@@ -34,9 +34,10 @@ Every post and edit goes through `middleware`, in order, before it lands: the
 API (the CLI, scripts, CI), messages synced in from Slack, GitHub, and WhatsApp
 (sync callbacks' writes included), watchers, the board's
 [handle](./01-mounting.md#the-handle), and scheduled sends. Reactions, labels,
-and deletes don't. It's the board's that keeps the log, so it sees each write
-once, however it got there: a board on `http()` has none, and what it writes,
-its sync's imports included, goes through the middleware of the board it uses.
+and deletes don't. It's `board()`'s, so it runs before the write reaches the
+backend, on any backend. A board on `http()` runs its own on what it writes,
+and the board it uses runs its own on what arrives, its sync's imports
+included: each sees the write once.
 
 - **`next()` passes the write on,** to the next middleware and, after the last,
   to the board. It resolves once the write has landed.
@@ -47,9 +48,9 @@ its sync's imports included, goes through the middleware of the board it uses.
   emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **It sees only a write the caller may make.** One it would be refused (a
-  channel it can't post in, someone else's message) answers 403 or 404 without
-  running it.
+- **It sees only a write the caller may make.** One `access` would refuse (a
+  channel it can't post in, someone else's message, a thread it can't read)
+  answers 403 or 404 without running it.
 - **A retry of a post that landed skips it.** Before it runs, the board looks
   for the caller's post with that `id`. The same `id` from the same author, in
   the same channel or thread, returns the message on the board, whatever the

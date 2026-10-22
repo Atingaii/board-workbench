@@ -387,13 +387,20 @@ for a person at a terminal first; `--json` is for programs.
 
 API → `board()` → CLI. The CLI makes no HTTP calls of its own; everything goes
 through a handle from `board()`, and `board()` only ever calls the backend's
-methods: the backend verifies, decides, and stores, and nothing reaches around
-them. `board()` does no auth: it routes, validates, serves, and runs watchers
-and sync, and hands each method what the request said about its caller,
-unverified. `a2()` verifies it (`authenticate`, `verifyTokens()` from
-`vboard/access` by default), applies `access`, and runs the `middleware`, so
-the middleware sees every write once. A board on `http()` answers only
-wake-ups and webhooks, so a repo links the team's board itself. Request
+methods, and nothing reaches around them. The policy is `board()`'s, in one
+place on every backend: it routes and validates each request, verifies its
+caller (`authenticate`, `oidcTokens()` from `vboard/access` by default),
+applies `access`, runs the `middleware`, and calls the backend with the caller
+it verified (`{ identity, origin }`), which the backend trusts because only
+`board()` makes one. Nothing with side effects runs for a request before
+`access` allows it. `a2()` is the log and its engine (`store`, `scheduler`,
+`blob`); what it does outside requests asks `board()`'s policy through the
+binding (`accessNow`), and what it writes for someone (a schedule's send) goes
+through the binding's handle, so the middleware sees every write once. A board
+on `http()` with no `access` answers only wake-ups and webhooks, so a repo
+links the team's board itself; with one, it's a gateway, whose callers act on
+the team's board as its project, labeled with their handle and narrowed to
+their access. Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
 handle. Nothing on the way to a handle over `http()` imports Node: credentials
 go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`

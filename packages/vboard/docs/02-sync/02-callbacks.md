@@ -51,7 +51,7 @@ lands in that thread. The channel only places new roots.
 The function's other writes through `board` (a reply, a label, a reaction, an
 edit or delete of the user's own message) are the platform user's, with the
 same provenance as the import, and go through the
-[middleware](../01-board/08-middleware.md) of the board that keeps the log like it. Its reads, and anything
+[middleware](../01-board/08-middleware.md) like it. Its reads, and anything
 else it does, are sync's own. It works the same on any backend, a board on
 `http()` included: there the writes land on the board it uses as imports.
 

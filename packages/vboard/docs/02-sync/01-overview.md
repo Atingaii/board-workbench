@@ -181,7 +181,7 @@ export const GET = team.fetch, POST = team.fetch
   Receipts land on the other board.
 - **The other board must let this deployment `sync`** in the channels it syncs,
   and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
-  in its `a2({ access })`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
+  in its `board({ access })`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 
 A [callback](./02-callbacks.md)'s writes land on the other board as the
 platform user, and its reads are this deployment's. This board registers its

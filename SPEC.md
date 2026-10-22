@@ -64,7 +64,7 @@ vboard post errors-www "deploy failed on a1b2c3"
 
 ## Principles
 
-- **Access is per channel, and code says it.** `a2({ access })` says what
+- **Access is per channel, and code says it.** `board({ access })` says what
   each kind of principal may do in each channel: `read`, `post`, `react`,
   `label`, `sync`, or `manage`. Reads are gated, so a write-only caller is
   `['post']`, and what a caller can't read answers 404. Nothing is minted or
@@ -131,52 +131,61 @@ conversations.
 
 ### Backends
 
-`board({ backend, watch, sync, url, basePath, streamMaxMs })` mounts a board
-on a backend, which says where the board lives. `board()` owns the HTTP on
-every backend: it routes each request, validates it with the schemas in
-`src/api/routes.ts`, checks the shape of its `x-board-*` claims, maps errors,
-and serves `/avatars/:name`, `/openapi.json`, and SSE. It does no auth: it
-verifies no token, applies no rules, and runs no middleware. It calls the
-backend's method of the same name as the route with what the request said
-about its caller. What it does for a request beyond that waits for the
-backend's say: before it resolves a sync target on a platform (which can join
-a Slack channel), looks up an email, records who that is, or reads an upload,
-it asks the backend's `me` who the caller is and what it may do, and does it
-only for a caller that may (`post`, and `sync` for targets, where the write
-lands). A request it may not goes to the backend as it came, which refuses it. What it returns is [the handle](#the-handle), whose `fetch`
-is that one handler (`export const GET = team.fetch, POST = team.fetch`).
-TypeScript rejects an option that belongs to `a2()`; nothing checks at runtime.
+`board({ backend, authenticate, access, middleware, project, watch, sync, url,
+basePath, streamMaxMs })` mounts a board on a backend, which says where the
+board lives. `board()` owns the HTTP and the policy on every backend: it routes
+each request, validates it with the schemas in `src/api/routes.ts`, checks the
+shape of its `x-board-*` claims, verifies its caller with `authenticate`
+(`oidcTokens()` from `vboard/access` by default), works out the actor (the
+principal plus its claimed profile, `vercel:user:u_123+claude`), applies
+`access`, runs the [middleware](#middleware), maps errors, and serves
+`/avatars/:name`, `/openapi.json`, discovery, and SSE. It calls the backend's
+method of the same name as the route with the caller it verified. Nothing with
+side effects runs for a request before `access` allows it: it resolves a sync
+target on a platform (which can join a Slack channel), looks up an email,
+records who that is, reads an upload, or runs the middleware only for a caller
+that may (`post`, and `sync` for targets, where the write lands). A request it
+may not goes to the backend as it came, which refuses it. It keeps verified
+token principals by credential until they expire, and each request's principal
+for the request's life, and works out what a stream's caller may do again for
+each page. What it returns is [the handle](#the-handle), whose `fetch` is that
+one handler (`export const GET = team.fetch, POST = team.fetch`). TypeScript
+rejects an option on the call it doesn't belong to; nothing checks at runtime.
 
 - **A backend is a plain object** (`Backend` in `src/server/backend.ts`): one
   async method per protocol method (`Protocol` in `src/api/protocol.ts`), each
-  `(caller, input, signal)`, plus `routes` and `bind`. `board()` only ever
-  calls these: the backend verifies, decides what a caller may do, and stores.
-  Discovery (`GET /`, no token) is one of them, as are `typing` and
-  `readSource`. `input` is what the route's schema parsed; the output is what the route
+  `(caller, input, signal)`, plus `routes`, `keeps`, and `bind`. `board()`
+  only ever calls these: it verifies and decides, and the backend stores,
+  honoring what each caller may do. `typing` and `readSource` are methods too,
+  and so is `discovery`, which a handle asks: a request's discovery is
+  `board()`'s, the URL it reached and the project tokens are minted for, with
+  the sync entries a backend that keeps the board lists. `input` is what the route's schema parsed; the output is what the route
   answers, 201 for `post`, `schedule`, and `upload`. `attachment` answers the
   file's record and bytes, and `board()` serves them with the headers that keep
   a file from running as a page. A method throws `HttpError` for a status and
   code of its own.
-- **A caller** is `{ request, origin }`, a request, none of it verified:
-  `credential` (its bearer token, or null), `claims` (`profile`, `avatar`,
-  `session`, a person's `handle` and `name`, and `scope`, which only narrows:
-  labels the caller picks for itself, never security), `audience` (the
-  board's URL, which a token must be minted for), and `headers` (for a
-  backend that recognizes a session cookie from a same-site page). Or
-  `{ self, origin }`, this deployment's own code: the handle (`origin.via.kind`
-  is `client`, and `self` the profile from `as()`, or null), a watcher
-  (`watcher`), the middleware's handle (`middleware`), or sync (`engine`).
-  Each backend verifies a request, works out its actor, and decides what it
-  may do, and who `self` is on its board, and every method honors it. A
-  backend keeps its own verified form internally. `board()` decides nothing by
-  principal: before it resolves a target on the platform for
-  `/messages/:id/sync`, it asks the backend's `syncCopies`, which answers only
-  for messages the caller may sync. `origin` is in-process only: board() sets
-  `config` (the targets a new root's channel syncs with), and no request
-  carries it.
-- **`routes`** are a backend's own, beside the protocol, each getting the same
-  unverified caller to check itself. One at a protocol route's path takes its
-  place.
+- **A caller** is `{ identity, origin }`, one `board()` verified:
+  `identity.principal` (who it is, with its `access`, narrowed by the `scope`
+  it sent), `identity.author` (the author record its writes carry), and
+  `identity.actor` (the actor it writes as). It's a request's
+  (`origin.via.kind` is `api`), or for work a backend does outside requests,
+  the one it's done for: a schedule's creator at its send (`schedule`). A
+  backend trusts it as it is, since only `board()` makes one, in process, and
+  every method honors its access. Or `{ self, origin }`, this deployment's own
+  code: the handle (`origin.via.kind` is `client`, and `self` the profile from
+  `as()`, or null), a watcher (`watcher`), the middleware's handle
+  (`middleware`), or sync (`engine`); who `self` is on its board, each backend
+  says. Claims are labels under the verified principal, never security.
+  `origin` is in-process only: board() sets `config` (the targets a new root's
+  channel syncs with), and no request carries it.
+- **`routes`** are a backend's own, beside the protocol. `board()` verifies
+  nothing for them: a request's `caller` is null, and the route checks what it
+  needs. One at a protocol route's path takes its place.
+- **`keeps`** says whether the board lives in the backend. One that keeps it
+  (`a2()`) takes `board()`'s defaults when `access` is left out (people, and
+  the board's own deployments in its environment); one that doesn't
+  (`http()`) serves no request then but wake-ups and webhooks, and verifies
+  none.
 - **`bind(binding)`** is called once, when `board()` is created, before any
   request, and does no I/O. It's what background work needs from the board:
   `subscriptions` (each watcher's tail, and sync's at `@sync`, which gets every
@@ -185,8 +194,13 @@ TypeScript rejects an option that belongs to `a2()`; nothing checks at runtime.
   delivers what sync pushed in-process, and `pull()` for one that queues it;
   `sync` (board()'s sync entries); `readSource(key, target, limit)` and
   `typing(messages, status)`, what only board()'s sync can do, which a backend
-  answers those methods through; `handle(caller)`, a handle through board() as
-  its own code (the middleware's); and `url()`, the board's own URL once it's
+  answers those methods through; `accessNow(principal)`, board()'s policy for
+  a principal the backend stored (a schedule's creator at each send, a
+  registrant at each event and pull, the syncs that link accounts), null once
+  it may do nothing; `project()`, the board's Vercel project; `handle(caller)`,
+  a handle through board(), as a verified caller (a schedule's creator, whose
+  posts keep their IDs) or its own code, so what a backend writes for someone
+  goes through the middleware; and `url()`, the board's own URL once it's
   known.
 - **Sync runs in `board()`,** on every backend (see [Sync](#sync)). Sync's
   adapters, webhooks (`/webhooks/:key`, no token), `/messages/:id/sync`,
@@ -203,18 +217,16 @@ TypeScript rejects an option that belongs to `a2()`; nothing checks at runtime.
 
 The backends vboard ships:
 
-- **`a2({ store, scheduler, blob, project, authenticate, access, middleware })`**
-  keeps the board in this deployment, on A2's log, and is the backend object
-  itself. It builds its A2 servers when `board()` binds it; a store connects
-  when it's first used. Everything else in this spec describes it. It verifies
-  each request's credential for the audience with its one `authenticate`
-  (`verifyTokens()` from `vboard/access` by default, which takes the test,
-  `oidc` key, and `local` options), works out the actor (the principal plus
-  its claimed profile, `vercel:user:u_123+claude`), and checks `access`. It
-  keeps verified token principals by credential until they expire, and each
-  request's principal for the request's life, so a stream's polls verify
-  once. `project` is who `self` is in its rules, and what its discovery
-  names. A request writes as its verified actor; `{ self }` writes as `vboard:client` from the handle,
+- **`a2({ store, scheduler, blob })`** keeps the board in this deployment, on
+  A2's log, and is the backend object itself: the log and its engine. It
+  builds its A2 servers when `board()` binds it; a store connects when it's
+  first used. Everything else in this spec describes it. It trusts the callers
+  `board()` verified, and what it does outside requests that needs the policy,
+  it asks `board()` through the binding: each event's access for registered
+  watchers, each pull's, a schedule's send-time re-check and revocation, and
+  which registered syncs may still link accounts. A schedule's send goes
+  through `board()`, as its creator, on the binding's handle, so the
+  middleware sees it. A verified caller writes as its actor; `{ self }` writes as `vboard:client` from the handle,
   `vboard:client:<profile>` from `as(profile)`, `vboard:watch:<id>` from a
   watcher, `vboard:middleware` from the middleware's handle, and `vboard:sync`
   from sync. Its extras are `scheduler`
@@ -224,9 +236,8 @@ The backends vboard ships:
   delivers sync's
   subscription in-process, on the `vboard-sync` consumer's thread lanes, and
   what sync pushes to its inbox on `vboard-inbox`'s platform-thread lanes, so
-  both keep A2's retries and dead letters. Its `middleware` sees every write
-  once (see [Middleware](#middleware)). It takes no `sync`: TypeScript flags it
-  there.
+  both keep A2's retries and dead letters. It takes no `sync`, `authenticate`,
+  `access`, `middleware`, or `project`: TypeScript flags them there.
 - **`http(url?, { fetch? })`** uses the board at `url` (in Node, the one the
   environment points at by default), which keeps the log: its methods call it
   through `fetch`, which brings the credentials. In Node the default `fetch`
@@ -234,8 +245,8 @@ The backends vboard ships:
   file, GitHub Actions or Vercel OIDC, then `vercel login` (reading the other
   board's discovery to mint for its project), your handle, and the Deployment
   Protection handling; in a browser it's `fetch`, sending the page's own
-  session, which the other board's `authenticate` recognizes. It verifies
-  nothing and runs no middleware: the other board does. A `{ self }` caller
+  session, which the other board's `authenticate` recognizes. Its board's
+  middleware runs on what it writes, and the other board's after. A `{ self }` caller
   writes there as this deployment with `self` as its profile (the handle's
   own with the profile `VBOARD_AS` or the agent picks), and a post whose ID
   `board()` derived (from a watcher's trigger, or from the handle's `id` and
@@ -244,11 +255,18 @@ The backends vboard ships:
   `:`, and 32 hex characters, since one principal's ID can be the start of
   another's), so the same `id` never posts
   twice and no one can post with one first (and `posted`, a retry's lookup,
-  asks for the same). It answers only wake-ups and webhooks, and its sync's
-  sign-ins: a request, discovery included, answers 404 `<url> answers only
-  wake-ups and webhooks`. Its `discovery` for its own handle reads the other
-  board's. It has no `access`: what a caller may do is the other board's to
-  say. `readSource` for one of its own sync's entries, and `typing` through
+  asks for the same). Without an `access` on its board, it answers only
+  wake-ups and webhooks, and its sync's sign-ins: a request, discovery
+  included, answers 404 `<url> answers only wake-ups and webhooks`, and none is
+  verified. Its `discovery` for its own handle reads the other board's. With
+  one, its board is a gateway: it verifies and limits its own callers, and
+  each acts on the other board as this deployment, never vouching for a
+  person, with the caller's handle as its profile (`<principal>+ada`, a label)
+  and its access as `x-board-scope`, so the other board grants only what both
+  allow. A caller's post IDs are under its own principal, `me` is answered
+  here, and what's the project's own there by principal answers 403:
+  `identity`, `edit`, `delete`, `schedule`, `cancelSchedule`, the
+  registration's methods, and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
   its own sync, it answers here too, beside the other board's. Its own routes
   are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
   registers its own there, as the protocol's does), and `registerWatchers()`
@@ -525,7 +543,7 @@ talking to.
     (`https://oidc.vercel.com/<team>`).
   - `aud` must be the board's URL.
   - The board knows its own project: `project_id` is compared to
-    `VERCEL_PROJECT_ID`, `a2({ project })`, or `.vercel/project.json` in local
+    `VERCEL_PROJECT_ID`, `board({ project })`, or `.vercel/project.json` in local
     development.
   - A `development` token from it is a person and must carry `user_id`. Any
     other environment is the deployment itself. The one the board runs in
@@ -538,53 +556,51 @@ talking to.
   A GitHub token is accepted only if it matches an `access` rule.
 - **Tokens from other Vercel projects** are accepted only if they match an
   `access` rule.
-- **Who verifies, who decides: the backend.** `board()` hands it the request's
-  credential, claims, audience, and headers unverified. `a2({ authenticate })`
-  says who the caller is, and `a2({ access })` holds the rules below, past its
-  defaults (people, its own deployments in its environment, and its own code
-  get everything), and works access out for each request and for each stored
-  principal (a schedule's creator, a registrant, sync's own caller) under the
+- **Who verifies, who decides: `board()`.** `board({ authenticate })` says who
+  the caller is, from the request's credential, claims, audience, and headers,
+  and `board({ access })` holds the rules below, past its defaults (people, its
+  own deployments in its environment, and its own code get everything), and
+  works access out for each request and, through the binding, for each
+  principal its backend stored (a schedule's creator, a registrant) under the
   rules as they are then. A principal carries its token's claims and its
-  `x-board-scope`, never what it may do.
-- **`authenticate` is one function,** `verifyTokens()` from `vboard/access` by
+  `x-board-scope`, never what it may do. The backend gets the caller verified.
+- **`authenticate` is one function,** `oidcTokens()` from `vboard/access` by
   default, and verifiers compose in plain code: each answers null when the
   request carries nothing it recognizes and a 401 when its credential fails,
   so `async (request) => (await staff(request)) ?? (await tokens(request))`
-  takes an app's session cookie and `vb`'s tokens. What `verifyTokens()` made
+  takes an app's session cookie and `vb`'s tokens. What `oidcTokens()` made
   stands as it is; anything else is a host's principal, checked for shape
   (`hostPrincipal()`), with its `expiresAt` kept. A host's principals get what
   their kind does, under the rules or the host's function as `access`: a
   `person` is a full member (everything), so the verifier decides who counts
   as one, and anyone else, `external` included, gets what a function among
   the rules gives it, since no token rule matches a host's IDs; a board
-  whose verifier is `verifyTokens()` alone takes none, so schedules a host's
+  whose verifier is `oidcTokens()` alone takes none, so schedules a host's
   principals made before it switched are revoked. A verifier gets the request
   with `board`, what the board knows that verifying needs (its project, and
   its rules' OIDC issuers). A route that takes a cookie checks `Origin` on its
   writes in userland, since a cookie rides along on other sites' requests.
 - **Any other issuer** is trusted only when an `oidc()` rule names it, pinned
-  in code as an https URL: a2() hands its rules' issuers to its verifier. The
+  in code as an https URL: board() hands its rules' issuers to its verifier. The
   board fetches keys only for issuers a rule names, and a rule matches exact claims, at least one. Its principal is
   `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
   percent-encoded (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at
   the first `:`. Two rules whose issuers would name the same principals
   (`https://ci.test/a` and `https://ci.test/a/`) are an error at boot.
-- **Tests** pass `a2({ authenticate: verifyTokens(testIssuers) })` in code,
+- **Tests** pass `board({ authenticate: oidcTokens(testIssuers) })` in code,
   which points verification at a local test issuer. Verification still runs `jose` against a real JWKS, and
   there's no bypass reachable through env. Local development needs no bypass
   either, because development tokens are real.
 
 ```ts
 board({
-  backend: a2({
-    store: postgres(),
-    access: [
-      vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-      githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
-      oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
-      vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-    ],
-  }),
+  backend: a2({ store: postgres() }),
+  access: [
+    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
+    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
+    oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
+    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
+  ],
 })
 ```
 
@@ -595,7 +611,7 @@ board({
   named `marketing` on their own team and mint a token for the board's
   audience, so `vercelProject({ project })` without `team` matches only the board's own
   team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
-  knows its team from `a2({ project: { teamId } })`, `VERCEL_ORG_ID`, or
+  knows its team from `board({ project: { teamId } })`, `VERCEL_ORG_ID`, or
   `.vercel/project.json`, and on Vercel from the platform's
   `x-vercel-oidc-token`, verified and for its own `project_id`. When none of
   them says, a name without `team` matches nothing.
@@ -1356,11 +1372,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id, timeout: '30m' }) // 
   in the order in [Tokens](#tokens), through Deployment Protection. The default
   build, for browsers, finds nothing: `board({ backend: http(url) })`, whose
   `fetch` sends the page's own session (a cookie, say), which the board's
-  `a2({ authenticate })` recognizes. A browser never gets a token of the deployment's.
+  `board({ authenticate })` recognizes. A browser never gets a token of the deployment's.
 - **Nothing on the way to a handle over HTTP needs Node.** `board()`'s
   pipeline (routing, validation, serving) runs in a browser, IDs hash with
   WebCrypto, and finding the board and its credentials lives in the `node`
-  build. It verifies nothing, so no token verification is in it either.
+  build. The default build verifies no tokens by itself: `oidcTokens()` and
+  finding the board's project load in the `node` build, the first time a board
+  serves, so a board serving requests outside Node passes `authenticate` and
+  `project`.
   Watchers and sync run in either build: the sync engine loads when a board
   with sync entries first needs it, and it, `SyncProvider`, and the tail
   parser import nothing from Node (the Chat SDK adapters do: Slack, GitHub,
@@ -1556,7 +1575,7 @@ computer who don't need it on the internet. No config file: it's flags only.
   any other board (remote, or its own `board()` dev server on localhost) keeps
   its link, and `serve` prints the `VBOARD_URL` to use instead.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
-  (`verifyTokens({ local })` as `a2()`'s `authenticate`), and signs one token for you, the OS user (or
+  (`oidcTokens({ local })` as `a2()`'s `authenticate`), and signs one token for you, the OS user (or
   `--handle`), into `~/.config/vboard/local/<hash of url>.json`, mode 0600, removed
   on exit. A handle in Node uses that file for a loopback URL when there's no
   `VBOARD_TOKEN`. Everyone on the machine who can read it is
@@ -2615,11 +2634,12 @@ with nothing kept open.
 
 ```ts
 const backend = a2({
-  sync: { … },
+  // store and scheduler
 })
 
 const team = board({
   backend,
+  sync: { … },
   watch: {
     triage: {
       tail: 'firehose --from slack',
@@ -2697,15 +2717,19 @@ removed from config skips the matches it left behind.
 
 ## Middleware
 
-`a2({ middleware: [...] })` runs on every post and edit before it lands, from
-every source: the HTTP API (a board on `http()` using this one included, whose
-own `board()` runs none), sync (default imports and callbacks' writes, as
-imports), watchers, the handle, and scheduled sends, which a2() posts as their
-creator. It's the backend's, beside `access`, because it must see every write
-exactly once however it arrived, and only the board that keeps the log does.
-It is the one place to filter what reaches the board, such as prompt
-injection from a synced platform. It runs only on a write the caller may make:
-one it would refuse answers 403 or 404 first. Each middleware gets the `write`
+`board({ middleware: [...] })` runs on every post and edit before it reaches
+the backend, from every source: the HTTP API (a board on `http()` using this
+one included), sync (default imports and callbacks' writes, as imports),
+watchers, the handle, and scheduled sends, which a2() sends through `board()`
+as their creator. It's `board()`'s, beside `access`, so it sees every write
+once on any backend, its backend's own writes for someone included. A board on
+`http()` runs its own on what it writes there, and the board it uses runs its
+own on what arrives. It is the one place to filter what reaches the board,
+such as prompt injection from a synced platform. It runs only on a write the
+caller may make, once `board()` knows it would land (a reply's root is there,
+the caller may post, label, and sync where it lands, and has the files it
+carries; an edit is its author's own, of a message still there): one it would
+refuse answers 403 or 404 first. Each middleware gets the `write`
 (IDs as refs: an edit's `id`, a write's `re`, its thread's root), its
 `author`, its `source`, `respond(text)`, an in-process `board` handle, and
 `next(patch?)`. Calling `next` passes the write on, optionally changing its
