@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { decodeJwt } from 'jose'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { board, type Watcher, type WatcherContext } from '../src/server/index.ts'
-import { vercelProject } from '../src/access/index.ts'
+import { githubActions, oidc, vercelProject, type CallerRequest } from '../src/access/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { bearer, BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
+import { bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
-import { LEASE_MS } from '../src/server/registered.ts'
+import { LEASE_MS, SWEEP_MS, wakeBackoff } from '../src/server/registered.ts'
 import { slack } from '../src/sync/slack.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 
@@ -13,6 +14,11 @@ const V0_URL = 'https://v0.test/api/board'
 const V0 = 'vercel:project:prj_v0:production'
 const v0Token = () => deploymentToken('v0', 'prj_v0', 'production')
 
+// The board's own Vercel OIDC token, as @vercel/oidc mints it on Vercel: only the tests that say
+// they run on Vercel give it one.
+const mint = vi.hoisted(() => vi.fn(async (_options: { audience: string }): Promise<string> => Promise.reject(new Error('not on Vercel'))))
+vi.mock('@vercel/oidc', async (original) => ({ ...(await original<typeof import('@vercel/oidc')>()), getVercelOidcToken: mint }))
+
 /**
  * The team's board on a2(), and v0's board on http() using it, calling each other in-process:
  * the team's board wakes v0's at `<V0_URL>/wake`, and v0's pulls and writes back over HTTP.
@@ -20,6 +26,8 @@ const v0Token = () => deploymentToken('v0', 'prj_v0', 'production')
 function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercelProject>[0]['can'] = 'all') {
   const queue = fakeQueue()
   const woken: string[] = []
+  /** Each wake-up's headers, as the board sent them. */
+  const wakes: Record<string, string>[] = []
   let down = false
   let project: ReturnType<typeof v0Board>
   const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -34,6 +42,7 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
     transport: {
       post: (url, init) => {
         woken.push(url)
+        wakes.push(init.headers)
         if (down) return Promise.resolve(new Response('deploying', { status: 503 }))
         return route(url, { method: 'POST', headers: init.headers, body: init.body })
       },
@@ -49,6 +58,7 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
     remote,
     queue,
     woken,
+    wakes,
     get project() {
       return project
     },
@@ -61,6 +71,14 @@ function team(watch: Record<string, Watcher> = {}, can: Parameters<typeof vercel
     fireTimers: async () => {
       for (const timer of queue.timers) timer.dueAt = 0
       await queue.fire()
+    },
+    /** With `Date` faked: moves the clock to the next sweep and fires what's due then, and says how long that was. */
+    sweep: async () => {
+      const before = Date.now()
+      const at = Math.min(...queue.timers.filter(isSweep).map((task) => task.dueAt))
+      vi.setSystemTime(at)
+      await queue.fire()
+      return at - before
     },
   }
 }
@@ -111,18 +129,23 @@ describe('watchers on http()', () => {
   })
 
   it("try a wake-up that didn't get there again, from a sweep a minute or so on", async () => {
-    const fix = recorder('feedback')
-    const t = team({ fix: fix.watcher })
-    await t.project.registerWatchers()
-    t.down = true
-    const julian = await julianOn(t.remote.fetch)
-    await julian('POST', '/messages', { channel: 'feedback', text: 'while it deploys' })
-    await vi.waitFor(() => expect(t.queue.timers.filter(isSweep)).toHaveLength(1))
-    expect(fix.seen).toEqual([])
-    t.down = false
-    await t.fireTimers()
-    await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toEqual(['while it deploys']))
-    expect(t.woken).toHaveLength(2)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const fix = recorder('feedback')
+      const t = team({ fix: fix.watcher })
+      await t.project.registerWatchers()
+      t.down = true
+      const julian = await julianOn(t.remote.fetch)
+      await julian('POST', '/messages', { channel: 'feedback', text: 'while it deploys' })
+      await vi.waitFor(() => expect(t.queue.timers.filter(isSweep)).toHaveLength(1))
+      expect(fix.seen).toEqual([])
+      t.down = false
+      expect(await t.sweep()).toBeLessThanOrEqual(2 * SWEEP_MS)
+      await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toEqual(['while it deploys']))
+      expect(t.woken).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("never runs on what its registrant can't read", async () => {
@@ -185,6 +208,212 @@ describe('watchers on http()', () => {
     } finally {
       backend.close()
     }
+  })
+})
+
+/** What the board logged about waking boards, one line each. */
+const wakeLogs = (errors: { mock: { calls: unknown[][] } }) =>
+  errors.mock.calls.map((args) => args.join(' ')).filter((line) => line.includes("couldn't wake"))
+
+/** v0's queue on the team's board, and how many of its wake-ups in a row didn't get there, as recorded. */
+function v0Queue(t: ReturnType<typeof team>) {
+  const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
+  const history = async () => (await queue.history()) as { type: string; payload: { failures?: number; by?: string } }[]
+  return {
+    history,
+    /** The `watch.unreachable` events so far. */
+    unreachable: async () => (await history()).filter((event) => event.type === 'watch.unreachable'),
+    /** What each `watch.reachable` so far says ended the wait. */
+    reached: async () => (await history()).flatMap((event) => (event.type === 'watch.reachable' ? [event.payload.by] : [])),
+  }
+}
+
+describe("a board whose wake-ups don't get there", () => {
+  beforeEach(() => void vi.useFakeTimers({ toFake: ['Date'] }))
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('is woken less often while they fail, a minute doubling to an hour, and the log says so twice', async () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 8].map((failures) => wakeBackoff(failures) / SWEEP_MS)).toEqual([1, 2, 4, 8, 16, 32, 60, 60])
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = team({ fix: recorder('feedback').watcher })
+    await t.project.registerWatchers()
+    t.down = true
+    const julian = await julianOn(t.remote.fetch)
+    const queue = v0Queue(t)
+    await julian('POST', '/messages', { channel: 'feedback', text: 'first' })
+    await vi.waitFor(async () => expect(await queue.unreachable()).toHaveLength(1))
+    // A match while it waits only queues: the sweep wakes it for both.
+    await julian('POST', '/messages', { channel: 'feedback', text: 'second' })
+    await vi.waitFor(async () => expect((await queue.history()).filter((event) => event.type === 'watch.matched')).toHaveLength(2))
+    await t.remote.servers.at(-1)!.drain(`watch:@${V0}`)
+    expect(t.woken).toHaveLength(1)
+    // Each try waits out its back-off, then the sweep on the minute after it.
+    for (let failures = 1; failures <= 7; failures++) {
+      const waited = await t.sweep()
+      expect(waited).toBeGreaterThan(wakeBackoff(failures))
+      expect(waited).toBeLessThanOrEqual(wakeBackoff(failures) + SWEEP_MS + 1000)
+      await vi.waitFor(async () => expect(await queue.unreachable()).toHaveLength(failures + 1))
+    }
+    expect(t.woken).toHaveLength(8)
+    expect((await queue.unreachable()).map((event) => event.payload.failures)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(wakeLogs(errors)).toEqual([
+      `[vboard] couldn't wake ${V0_URL}: 503`,
+      `[vboard] couldn't wake ${V0_URL} again (503): trying less often, up to once an hour, until it answers, pulls, or registers`,
+    ])
+  })
+
+  it('starts over once one gets there', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fix = recorder('feedback')
+    const t = team({ fix: fix.watcher })
+    await t.project.registerWatchers()
+    t.down = true
+    const julian = await julianOn(t.remote.fetch)
+    const queue = v0Queue(t)
+    await julian('POST', '/messages', { channel: 'feedback', text: 'while it deploys' })
+    await vi.waitFor(async () => expect(await queue.unreachable()).toHaveLength(1))
+    await t.sweep()
+    await vi.waitFor(async () => expect(await queue.unreachable()).toHaveLength(2))
+    t.down = false
+    await t.sweep()
+    await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toEqual(['while it deploys']))
+    await vi.waitFor(async () => expect(await queue.reached()).toContain('wake'))
+    // The next that doesn't get there is a first failure: a minute's wait, and said again.
+    t.down = true
+    await julian('POST', '/messages', { channel: 'feedback', text: 'down again' })
+    await vi.waitFor(async () => expect(await queue.unreachable()).toHaveLength(3))
+    expect((await queue.unreachable()).at(-1)!.payload.failures).toBe(1)
+    expect(wakeLogs(errors)).toHaveLength(3)
+    expect(wakeLogs(errors).at(-1)).toBe(`[vboard] couldn't wake ${V0_URL}: 503`)
+  })
+
+  it.each(['pulls', 'registers'] as const)('is woken for its next match right away once its board %s', async (how) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fix = recorder('feedback')
+    const t = team({ fix: fix.watcher })
+    await t.project.registerWatchers()
+    t.down = true
+    const julian = await julianOn(t.remote.fetch)
+    const queue = v0Queue(t)
+    await julian('POST', '/messages', { channel: 'feedback', text: 'while it deploys' })
+    await vi.waitFor(async () => expect(await queue.unreachable()).toHaveLength(1))
+    t.down = false
+    // The clock hasn't moved: without this, the next match would wait for the sweep.
+    if (how === 'pulls') expect((await caller(t.remote.fetch, await v0Token())('GET', '/watchers/matches')).body.matches).toHaveLength(1)
+    else {
+      t.deploy({ fix: fix.watcher })
+      await t.project.registerWatchers()
+    }
+    expect(await queue.reached()).toEqual([how === 'pulls' ? 'pull' : 'registration'])
+    await julian('POST', '/messages', { channel: 'feedback', text: 'next' })
+    await vi.waitFor(() => expect(fix.seen.map((event) => event.message?.text)).toContain('next'))
+    expect(t.woken).toHaveLength(2)
+  })
+})
+
+/** This project's own bypass secret, as Vercel's system variable holds it. */
+const SECRET = 'this-projects-bypass-secret'
+
+describe('a wake-up through Deployment Protection', () => {
+  beforeEach(() => {
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_AUTOMATION_BYPASS_SECRET', SECRET)
+    // The board's deployment's token, for whatever audience it's asked for.
+    mint.mockReset().mockImplementation(async ({ audience }) => deploymentToken('board', PROJECT_ID, 'preview', { audience }))
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it("carries the board's OIDC token for the registrant's URL when a Vercel project registered, and never the bypass secret", async () => {
+    const fix = recorder('feedback')
+    const t = team({ fix: fix.watcher })
+    await t.project.registerWatchers()
+    await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
+    await vi.waitFor(() => expect(fix.seen).toHaveLength(1))
+    expect(t.woken).toEqual([`${V0_URL}/wake`])
+    const [headers] = t.wakes
+    expect(decodeJwt(headers!['x-vercel-trusted-oidc-idp-token']!)).toMatchObject({ aud: V0_URL, project_id: PROJECT_ID })
+    expect(headers).not.toHaveProperty('x-vercel-protection-bypass')
+    expect(JSON.stringify(t.wakes)).not.toContain(SECRET)
+  })
+
+  it("carries none for a workflow's registration, another issuer's, a person's, or a host's own principal's", async () => {
+    /** Whether each registrant's wake-up carried a token, by the host it registered. */
+    const carried: Record<string, boolean> = {}
+    const transport = {
+      post: async (url: string, init: { headers: Record<string, string> }) => {
+        carried[new URL(url).host] = 'x-vercel-trusted-oidc-idp-token' in init.headers
+        return new Response(null, { status: 204 })
+      },
+    }
+    const remote = testBoard({
+      scheduler: fakeQueue().scheduler,
+      transport,
+      access: [
+        githubActions({ repository: 'basehub-ai/www', can: 'all' }),
+        oidc({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' }),
+        vercelProject({ project: 'prj_v0', can: 'all' }),
+      ],
+    })
+    // A host's verifier names a Vercel project, but no Vercel token said so.
+    const hosted = testBoard({
+      scheduler: fakeQueue().scheduler,
+      transport,
+      authenticate: (request: CallerRequest) => (request.credential === 'pt_app' ? { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } : null),
+      access: () => 'all',
+    })
+    const register = (host: string) => ({ url: `https://${host}/api/board`, watch: { fix: { tail: 'feedback' } } })
+    const registrants = [
+      [remote, await workflowToken(), 'workflow.test'],
+      [remote, await oidcToken(), 'gitlab.test'],
+      [remote, await personToken(), 'person.test'],
+      [remote, await v0Token(), 'v0.test'],
+      [hosted, 'pt_app', 'host.test'],
+    ] as const
+    for (const [on, token, host] of registrants) expect((await caller(on.fetch, token)('POST', '/watchers', register(host))).status).toBe(200)
+    await caller(remote.fetch, await personToken('u_ada'))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
+    await caller(hosted.fetch, 'pt_app')('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
+    await vi.waitFor(() => expect(Object.keys(carried)).toHaveLength(5))
+    // Only v0's, a Vercel project's deployment, as Vercel's token said.
+    expect(carried).toEqual({ 'workflow.test': false, 'gitlab.test': false, 'person.test': false, 'v0.test': true, 'host.test': false })
+    expect(mint.mock.calls).toEqual([[{ audience: 'https://v0.test/api/board' }]])
+  })
+
+  it('carries none off Vercel', async () => {
+    const carried: boolean[] = []
+    for (const vercel of ['', '1']) {
+      vi.stubEnv('VERCEL', vercel)
+      const fix = recorder('feedback')
+      const t = team({ fix: fix.watcher })
+      await t.project.registerWatchers()
+      await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'export is broken' })
+      await vi.waitFor(() => expect(fix.seen).toHaveLength(1))
+      carried.push('x-vercel-trusted-oidc-idp-token' in t.wakes[0]!)
+    }
+    expect(carried).toEqual([false, true])
+    expect(mint).toHaveBeenCalledTimes(1)
+  })
+
+  it("still wakes when it can't mint a token, and says so once", async () => {
+    mint.mockRejectedValue(new Error('no OIDC token in this function'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fix = recorder('feedback')
+    const t = team({ fix: fix.watcher })
+    await t.project.registerWatchers()
+    const julian = await julianOn(t.remote.fetch)
+    await julian('POST', '/messages', { channel: 'feedback', text: 'first' })
+    await vi.waitFor(() => expect(fix.seen).toHaveLength(1))
+    await julian('POST', '/messages', { channel: 'feedback', text: 'second' })
+    await vi.waitFor(() => expect(fix.seen).toHaveLength(2))
+    expect(t.wakes.map((headers) => 'x-vercel-trusted-oidc-idp-token' in headers)).toEqual([false, false])
+    expect(errors.mock.calls.map((args) => args.join(' ')).filter((line) => line.includes('OIDC'))).toEqual([
+      '[vboard] wake-ups go without a Vercel OIDC token, so Deployment Protection stops them: no OIDC token in this function',
+    ])
   })
 })
 

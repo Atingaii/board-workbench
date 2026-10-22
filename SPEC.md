@@ -339,16 +339,40 @@ The board that keeps the log matches the tails; the board on `http()` runs
   registrant (its lane is `wake` in the registrant's session), and only when
   something is free to pull. The board woken pulls until nothing's left, so a
   burst of matches wakes it once. `https` to a public address only, checked as
-  it connects, with no redirects and no token; the board woken trusts nothing
+  it connects, with no redirects and no event; the board woken trusts nothing
   in it. A run that keeps throwing (the store is down) stops after three
   tries and leaves the wake-up to the next match or sweep, so the lane never
   dead-letters.
+- **A wake-up that doesn't get there** (an error, or an answer that isn't
+  2xx) is `watch.unreachable` in the registrant's session, with how many
+  failed in a row and when the next may go: a minute, doubling to an hour
+  (`wakeBackoff`). Until then a match only queues, and the sweep armed for
+  that time wakes it. `watch.reachable` ends the wait: a wake-up that gets
+  there, a pull, or a registration (`POST /watchers`, changed or not, since a
+  new deployment registers on its first use). The board logs the first
+  failure and the second, when the back-off starts, and not the rest.
+- **Through Deployment Protection:** on Vercel, a wake-up for a registration
+  whose principal Vercel's token proved a project's deployment
+  (`vercel:project:…`, with Vercel facts; a host's own principal never
+  counts) carries `x-vercel-trusted-oidc-idp-token`: the board deployment's
+  OIDC token with the registration's `url` as its audience, minted as the
+  Node SDK's hosted client mints one (`hostedToken`). The registrant lists
+  the board's project in its Trusted Sources, and that's all. Anything else's
+  wake-ups, and every one off Vercel, carry no token, and none ever carries
+  `VERCEL_AUTOMATION_BYPASS_SECRET`. When minting fails, the wake-up goes
+  without it and the board logs that once. There's no option for any of it,
+  and no Vercel API lookup of the wake URL's host: the board has no
+  credential for one. The cost: the registrant receives the board's token,
+  and Trusted Sources ignores `aud` between projects of the same team, so a
+  registered project could replay it past Deployment Protection on that
+  team's other deployments that trust the board's project. The board itself
+  refuses it (wrong audience). Only the platform can close that.
 - **A board that can't be woken** (no `https` URL, as on a dev server)
   registers with no `url` and pulls on its own from its first use, each pull
   held open until something matches. One on Vercel registers its deployment's
   URL and never pulls on its own, since a function doesn't outlive its
-  request: behind Vercel Authentication, its wake-ups answer 401 and it runs
-  nothing until something else wakes it.
+  request: behind Vercel Authentication, its wake-ups get through only when
+  its project's Trusted Sources list the board's project.
 
 ### Install
 

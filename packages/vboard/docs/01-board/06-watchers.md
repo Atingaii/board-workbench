@@ -197,10 +197,13 @@ export const GET = team.fetch, POST = team.fetch
   production domain, or a preview's own; a request's `Host` never counts. A
   registration holds at most 32 watchers, and needs `read` somewhere.
 - **A match wakes it with nothing in the wake-up:** a `POST <url>/wake` with
-  no event and no token. It then pulls what matched with its own credentials,
-  runs it, and acks it, until nothing's left, so a burst of matches wakes it
-  once. A wake-up that doesn't get there is tried again a minute or so on. A
+  no event. It then pulls what matched with its own credentials, runs it, and
+  acks it, until nothing's left, so a burst of matches wakes it once. A
   forged wake-up costs it one pull that finds nothing.
+- **A wake-up that doesn't get there is tried again** a minute or so on. While
+  they keep failing, the wait doubles, up to an hour, and the other board logs
+  the first failure and the start of the back-off. It starts over when this
+  board answers one, pulls, or registers. Its matches wait either way.
 - **It sees what its deployment may read** on the other board, checked when an
   event matches and again when it's pulled.
 - **Its writes are by the deployment, with the watcher's ID as its profile:**
@@ -214,11 +217,21 @@ export const GET = team.fetch, POST = team.fetch
   `watch.failed`, and the thread goes on.
 - **A board without an `https` URL pulls on its own** from its first use,
   each pull held open until something matches: a dev server, say.
-- **Deployment Protection stops wake-ups.** A wake-up carries no credential,
-  so a deployment behind Vercel Authentication answers it with 401 and its
-  watchers don't run; the other board tries again each minute. A wake-up
-  reveals nothing and only makes this board pull with its own credentials, so
-  the deployment its URL names can go unprotected.
+- **Behind Deployment Protection, list the other board's project in this
+  project's Trusted Sources,** for the environment the other board runs in.
+  That's all it takes. When the other board runs on
+  Vercel, a wake-up for a Vercel project's deployment carries the other
+  board's OIDC token, minted with this board's URL as its audience, in
+  `x-vercel-trusted-oidc-idp-token`. It never carries a bypass secret.
+  Registrations by anything else (GitHub Actions, other issuers, people)
+  get no token, so behind Vercel Authentication their wake-ups answer 401.
+- **What that costs:** this project receives the other board's token.
+  Trusted Sources ignores the audience between projects of the same team, so
+  this project could replay it past Deployment Protection on other
+  deployments in that team that trust the other board's project. The other
+  board itself refuses it, since its audience is this board's URL. A wake-up
+  reveals nothing else, and only makes this board pull with its own
+  credentials.
 - **Retries need the other board's scheduler,** as its own watchers do.
 - **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
   same way,** with its entries in its registration (`sync: [{ key, platform,

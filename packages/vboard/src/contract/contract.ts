@@ -353,6 +353,15 @@ export const watchContract = contract({
     'watch.armed': z.object({ at: z.number().int().nonnegative() }),
     /** A timer: an error's wait is over (`matched`), or a sweep (`sweep`). Its consumer decides what it still means. */
     'watch.due': z.object({ matched: MatchId.optional(), retry: z.boolean().optional(), sweep: z.number().int().nonnegative().optional() }),
+    /** A wake-up didn't get there, `failures` in a row: nothing wakes the registrant again before `until`. */
+    'watch.unreachable': z.object({
+      failures: z.number().int().positive(),
+      until: z.number().int().nonnegative(),
+      /** Its answer's status, or the error. */
+      why: z.string().min(1).max(200),
+    }),
+    /** The registrant's board answered a wake-up, pulled, or registered: its next match wakes it. */
+    'watch.reachable': z.object({ by: z.enum(['wake', 'pull', 'registration']) }),
   },
 })
 

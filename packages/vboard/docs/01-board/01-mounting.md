@@ -64,8 +64,10 @@ A board on `http()` keeps nothing:
   use up to 32 letters, numbers, and hyphens. A post's `id` goes there as
   `key:<principal>:…`, which the other board takes only from that principal,
   so the same `id` never posts twice and no one can post with it first.
-- **Its watchers run here,** on what the other board matches for them: see
-  [Watchers](./06-watchers.md#on-a-board-on-http).
+- **Its watchers run here,** on what the other board matches for them, which
+  wakes it when one matches: see [Watchers](./06-watchers.md#on-a-board-on-http).
+  Behind Deployment Protection, this project lists the other board's project
+  in its Trusted Sources, and that's all.
 - **Its sync runs here too.** Webhooks land on this board, and what it
   imports, it writes there. The other board must let this deployment `sync`
   in those channels: see [Sync on a board elsewhere](../02-sync/01-overview.md#on-a-board-elsewhere).

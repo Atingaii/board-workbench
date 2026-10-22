@@ -388,11 +388,19 @@ class Wall extends Error {
   }
 }
 
-async function hostedToken(url: string): Promise<string> {
+/**
+ * This deployment's Vercel OIDC token, with `url` as its audience: what a hosted client sends a
+ * board, and what a board on Vercel wakes a Vercel project's board with, for Deployment
+ * Protection's Trusted Sources. Its `cause` says why it couldn't.
+ */
+export async function hostedToken(url: string): Promise<string> {
   try {
     return await getVercelOidcToken({ audience: url })
-  } catch {
-    throw new BoardError('no_token', `cannot obtain Vercel OIDC credentials for ${url}: enable OIDC on the calling project or supply token / VBOARD_TOKEN; configure Deployment Protection Trusted Sources for its project and environment`, 0)
+  } catch (cause) {
+    throw Object.assign(
+      new BoardError('no_token', `cannot obtain Vercel OIDC credentials for ${url}: enable OIDC on the calling project or supply token / VBOARD_TOKEN; configure Deployment Protection Trusted Sources for its project and environment`, 0),
+      { cause },
+    )
   }
 }
 
