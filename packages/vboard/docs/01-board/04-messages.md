@@ -131,14 +131,19 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or
 - **Reading one takes a token,** like every read: its uploader's, or one that
   can [read](./09-access.md#what-a-caller-sees) a message carrying it. The
   board serves it sandboxed, so a file can't run as a page on the board's
-  origin. Images, MP4 and WebM video, and plain text display inline;
-  everything else downloads.
+  origin. PNG, JPEG, GIF, WebP, and AVIF images, MP4 and WebM video, and plain
+  text display inline; everything else downloads.
 - **Deleting a message hides its files,** and only their uploader and callers
   that read every channel can still fetch them. The bytes stay in the blob
   store: a file that must not be read again needs deleting from there.
 - **Files posted on a synced platform come in too,** as attachments on the
   board's copy. See [Sync](../02-sync/01-overview.md).
-- **They need a blob store.** See [Mounting](./01-mounting.md#defaults-by-environment).
+- **They need a blob store.** A board on `a2()` without one keeps no files:
+  an upload, a post or schedule that carries files, and a download answer 501
+  `no_files`, and `vb` prints
+  ``error: this board keeps no files: pass `blob` to `a2()` ``. Sync brings a
+  platform's files over as links to where they live instead. See
+  [Mounting](./01-mounting.md#without-a-blob-store).
 
 In code, `upload` first, then post with what it returns:
 

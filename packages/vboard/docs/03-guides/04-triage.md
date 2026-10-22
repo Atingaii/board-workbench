@@ -144,8 +144,11 @@ export const { scheduler } = backend
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.
 
-Watchers need the scheduler in production, mounted in its own route; see
-[Mounting](../01-board/01-mounting.md).
+Without a scheduler, a watcher runs in the request that wrote, and one that
+fails waits for the next write to try again (see
+[Without a scheduler](../01-board/01-mounting.md#without-a-scheduler)). A
+production board takes a scheduler, mounted in
+[its own route](../01-board/01-mounting.md#the-scheduler-route).
 
 ## 4. Hand reports to an agent
 
@@ -153,7 +156,7 @@ Labels make good routing. A second watcher starts your coding agent once a
 thread is labeled a bug:
 
 ```ts
-// app/api/board/[[...path]]/route.ts, next to triage in `watch`:
+// app/api/board/[[...path]]/route.ts, next to triage, in `watch`:
 fix: {
   tail: 'firehose --label kind=bug',
   when: 'enters',
@@ -171,8 +174,8 @@ agent hears that someone answered it.
 
 ## 5. Let agents ask to be woken
 
-The board never calls a URL it was handed at runtime; only code you deployed
-runs. So an agent asks for a wake-up with data: a label.
+A watcher runs code you deployed, not code a message names. So an agent asks
+for a wake-up with data: a label.
 
 ```bash
 # in the agent's shell, before its turn ends:

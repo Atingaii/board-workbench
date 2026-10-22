@@ -12,9 +12,14 @@ connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 import { slack } from 'vboard/sync-slack'
 
-const backend = a2()
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
 
 const team = board({
   backend,
@@ -23,7 +28,7 @@ const team = board({
       adapter: 'slack/acme',
       channels: {
         '#errors-www': 'errors-www',
-        C0C6MNT9LLC: 'dev',
+        C0123ABC: 'dev',
       },
     }),
   },
@@ -49,15 +54,33 @@ The prefix is the entry's key, so a second workspace keyed `acme` reads
 Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
 (`npm i chat @chat-adapter/slack`):
 
-```ts
-// in board({ backend, sync: { … } }):
-slack: slack({
-  adapter: createSlackAdapter({
-    botToken: process.env.SLACK_BOT_TOKEN!,
-    signingSecret: process.env.SLACK_SIGNING_SECRET!,
-  }),
-  channels: { '#prs': 'prs' },
-}),
+```ts app/api/board/[[...path]]/route.ts
+import { createSlackAdapter } from '@chat-adapter/slack'
+import { board } from 'vboard'
+import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
+import { slack } from 'vboard/sync-slack'
+
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
+
+const team = board({
+  backend,
+  sync: {
+    slack: slack({
+      adapter: createSlackAdapter({
+        botToken: process.env.SLACK_BOT_TOKEN!,
+        signingSecret: process.env.SLACK_SIGNING_SECRET!,
+      }),
+      channels: { '#prs': 'prs' },
+    }),
+  },
+})
+export const GET = team.fetch, POST = team.fetch
+export const { scheduler } = backend
 ```
 
 An adapter whose `botToken` is a function (minted per call) also needs a `client`
@@ -82,12 +105,13 @@ most once a minute, while the other channels sync.
 - **Mentions** round-trip. `<@U0456>` resolves to `slack:user:U0456` on the way
   in, and a board mention of a Slack user posts as `<@U0456>`. A board message can
   mention someone by email, `@[ada@acme.com]`, and Slack looks them up (it needs
-  `users:read.email`). See [mentions](../01-board/03-identity.md).
+  `users:read.email`). See [mentions](../01-board/03-identity.md#mentions).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.
-- **Typing:** `team.typing('812', 'running tests…')`, or `vb typing 812 running tests…`, sets the thread's status in Slack,
-  under the thread, until the app posts or about two minutes pass. The status is
-  at most 100 characters; without one, Slack shows "Typing…".
+- **Typing:** `team.typing('812', 'running tests…')`, or
+  `vb typing 812 running tests…`, sets the thread's status in Slack, under the
+  thread, until the app posts or about two minutes pass. The status is at most
+  100 characters; without one, Slack shows "Typing…".
 
 ## Agents post under their own names
 
@@ -100,24 +124,30 @@ Julian: the picture their CLI sent when they posted as themselves, or else one
 looked up by their handle. Without either, it keeps the app's icon.
 
 This needs `chat:write.customize`, which the board checks once with `auth.test`.
-Without it, agents post as the app with the label, as everyone else does. People's
-messages, and messages with files, always post as the app. An edit leaves the
-label out only where Slack shows the message under the agent's name.
+Without it, agents post as the app with the label. People's messages post as the
+app too, unless they've linked their Slack account, and files upload as the app.
+An edit leaves the label out only where Slack shows the message under the
+agent's name.
 
 ## Files
 
 **From Slack:** a file posted in a synced thread becomes a board attachment. When
 the message lands, vboard fetches each file through the adapter (it needs
-`files:read`) and stores it in the board's [blob store](../01-board/04-messages.md).
-A file that can't come over gets a line in the text instead, and the message still
-lands:
+`files:read`) and stores it in the board's blob store. A file that can't come
+over gets a line in the text instead, and the message still lands:
 
 ```text
 📎 run.mov (50.0 MB) didn't come over: over 4 MB
 ```
 
-That covers files over 4 MB, a board without a blob store, and a fetch that fails
-three times.
+That covers files over 4 MB and a fetch that fails three times. A board
+[without a blob store](../01-board/01-mounting.md#without-a-blob-store) keeps no
+files, so each one is a line that links it where it lives in Slack, for people
+who can see it there:
+
+```text
+📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files
+```
 
 **To Slack:** the text posts first, then the files upload into the same thread as a
 message of their own (it needs `files:write`). A failed upload retries alone, and

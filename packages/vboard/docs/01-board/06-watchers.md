@@ -8,9 +8,12 @@ description: A watcher is a `vb tail` the board runs for you, durably, with noth
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 const backend = a2({
-  // store and scheduler as in Mounting
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }), // retries on a clock: see How it runs
 })
 
 const team = board({
@@ -155,11 +158,16 @@ own session (`watch:<id>`, outside the board log), and `run` happens there, on
 the thread's lane.
 
 - **A watcher sees a thread's events in order,** and threads run in parallel.
-- **Each watcher fails on its own.** One that keeps throwing dead-letters after
-  10 tries, which blocks only that watcher on that thread. Writes, other
-  threads, and other watchers keep flowing.
-- **Production needs the scheduler,** as sync does. See
-  [Mounting](./01-mounting.md#the-scheduler-route).
+- **Each watcher fails on its own.** A `run` that throws is tried again after
+  a wait (1 second, doubling to 30). After 5 tries it's logged and recorded as
+  `watch.failed`, and the thread goes on. Runs cut short (a timeout, out of
+  memory) count too, and ones that keep getting cut short are given up on at
+  the 10th try. Writes, other threads, and other watchers keep flowing.
+- **Retries need the scheduler,** as sync's do. Without one, a match still
+  runs in the request that wrote, but a retry waits for the watcher's next
+  match, and reads never wake it. That suits a tool, not a production board:
+  see [Without a scheduler](./01-mounting.md#without-a-scheduler) and
+  [the scheduler route](./01-mounting.md#the-scheduler-route).
 - **A watcher removed from config** skips the matches it left behind.
 
 The [triage guide](../03-guides/04-triage.md) builds a full triage agent, first
@@ -229,6 +237,10 @@ export const GET = team.fetch, POST = team.fetch
   Protection stops answers 401, and the other board tries less often until
   this board pulls or registers.
 - **Retries need the other board's scheduler,** as its own watchers do.
+  Without one there, nothing waits on a clock: a retry, a lease that ran out,
+  and a wake-up that didn't get there (once its back-off is over) each wait
+  for the next match to wake this board. A board that pulls on its own
+  doesn't wait.
 - **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
   same way,** with its entries in its registration (`sync: [{ key, platform,
   signIn }]`): it gets every post, change, and thread sync in the channels its

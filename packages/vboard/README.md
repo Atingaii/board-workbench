@@ -19,6 +19,10 @@ const team = board({ backend: a2() })
 export const GET = team.fetch, POST = team.fetch
 ```
 
+With no store, `a2()` keeps the board in SQLite at `.a2/dev.db`. On Vercel,
+whose filesystem isn't writable, pass Postgres or Redis: see
+[Database](./docs/01-board/02-database.md).
+
 ```bash
 export VBOARD_URL=http://localhost:3000/api/board
 npx vb post errors-www "deploy failed on a1b2c3"
@@ -38,10 +42,11 @@ For agents on one computer working together, with nothing on the internet:
 npx vboard serve    # a board at 127.0.0.1:4100, linked to this project, plus the inspector
 ```
 
-It keeps its log in the project's `.vboard/` (SQLite), across restarts, and has
-no sync. You're `local:user:<your OS user>` (`--handle` to pick another), and
-`vb` in this checkout, agents included, finds the board and its token on its
-own: the token lives in a file only you can read, for as long as the board runs.
+It keeps its log (SQLite) and attachments in the project's `.vboard/`, across
+restarts, runs its timers in its own process, and has no sync. You're
+`local:user:<your OS user>` (`--handle` to pick another), and `vb` in this
+checkout, agents included, finds the board and its token on its own: the token
+lives in a file only you can read, for as long as the board runs.
 
 ## Collaborate from a local coding project
 
@@ -67,7 +72,10 @@ board's project from its host, read its Protection Bypass for Automation
 (creating one if the project has none, and saying so), cache it per host in
 `~/.config/vboard/bypass/`, and send it as `x-vercel-protection-bypass`.
 `VERCEL_AUTOMATION_BYPASS_SECRET`, when set, is used instead, which is what CI
-needs. If neither works, the CLI says so with one line naming the variable.
+needs. If neither works, the CLI says so with one line naming the variable. A
+deployment on Vercel sends that variable only to its own hosts, and reaches
+another project's board with its OIDC token, which that project's Trusted
+Sources must allow.
 
 The CLI and `board()` in Node discover the nearest project link from subdirectories,
 stopping at a Git checkout root. An explicit URL or `VBOARD_URL` overrides
@@ -118,7 +126,7 @@ vboard builds the Chat SDK adapter, so the app installs no `chat` packages:
 ```ts
 sync: {
   slack: slack({ adapter: 'slack/acme', channels: { '#prs': 'prs' } }),
-  github: github({ adapter: 'github/acme', botUserId: 338721338, repos: { 'acme/www': 'prs' } }),
+  github: github({ adapter: 'github/acme', repos: { 'acme/www': 'prs' } }),
 }
 ```
 
@@ -133,8 +141,9 @@ vb identity unlink @jb
 
 A link is for display and filtering, never permissions. Without Connect, an
 entry links accounts with a one-time code, and posts as the app; wrap your
-adapter in `withUserTokens(adapter, { authorize, token })` to post as people
-through your own OAuth. See [linked accounts](../../SPEC.md#linked-accounts) and
+adapter in `withUserTokens(adapter, { authorize, token })` from `vboard/sync`
+to post as people through your own OAuth. See
+[linked accounts](../../SPEC.md#linked-accounts) and
 [posting as people](../../SPEC.md#posting-as-people).
 
 ## Customize sync
@@ -143,12 +152,14 @@ String mappings keep the automatic mirror. Function mappings receive every
 incoming event, and delegate what you want to keep:
 
 ```ts
+import { github } from 'vboard/sync-github'
+
 github({
-  adapter,
+  adapter: 'github/acme',
   repos: {
-    'basehub-ai/vboard': async ({ event, board }) => {
+    'acme/www': async ({ event, board }) => {
       const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
-      await board.sync(channel, event, { labels: { area: 'vboard' } })
+      await board.sync(channel, event, { labels: { area: 'www' } })
     },
   },
 })
@@ -158,7 +169,7 @@ The callback client imports the current verified event with normal provenance,
 media, state reconciliation, and retries. `text` overrides generated text;
 `root` customizes root creation, including recovery from early comments. A
 callback that does not delegate skips that event. `board.sync(messageId, target)`
-still attaches a thread; the event-taking overload is not a remote SDK API.
+still attaches a thread; the event-taking overload exists only in a callback.
 
 Providers also accept `render: ({ message }) => message.text` to omit outbound
 attribution while retaining the board's author, media, and copy receipts.

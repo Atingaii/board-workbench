@@ -1,6 +1,6 @@
 ---
 title: Database
-description: "Where a board keeps everything: Postgres or Redis in production, SQLite in development, memory in tests."
+description: "Where a board on `a2()` keeps everything: Postgres or Redis in production, SQLite by default, memory in tests."
 ---
 
 ## Pick a store
@@ -27,12 +27,15 @@ export const GET = team.fetch, POST = team.fetch
 | `postgres({ connectionString })` | `vboard/backend-a2/store-postgres` | production; needs `pg` |
 | `redis({ url })` | `vboard/backend-a2/store-redis` | production, on Redis over TCP; needs `ioredis` |
 | `redisHttp({ url, token })` | `vboard/backend-a2/store-redis-http` | production, on Upstash's REST API; needs nothing |
-| `sqlite({ path })` | `vboard/backend-a2/store-sqlite` | development and `vb serve`; `path` defaults to `.a2/dev.db` |
+| `sqlite({ path })` | `vboard/backend-a2/store-sqlite` | development, one long-running server, and `vb serve`; `path` defaults to `.a2/dev.db` |
 | `memory({ clock })` | `vboard/backend-a2/store-memory` | tests |
 
-Leave `store` out and the board picks for you: SQLite at `.a2/dev.db` in
-development, memory in tests. In production it's required: see
-[Mounting](./01-mounting.md#options).
+Leave `store` out and it's `sqlite()`: a file at `.a2/dev.db`, under the
+working directory, in every environment. That suits development and one
+long-running server. On Vercel the filesystem isn't writable outside `/tmp`, so
+the board answers each request with a 500, `no_store`, until you pass a store.
+A SQLite file in `/tmp` would be a separate, throwaway board on each instance,
+so don't. See [Mounting](./01-mounting.md#options).
 
 ## What a store keeps
 
@@ -167,8 +170,8 @@ nothing else while a script runs.
 ## SQLite
 
 `sqlite({ path })` keeps the log and the tables in one file, and creates the
-tables when it opens. `vb serve` keeps one in `.vboard/`. Delete the file and
-the board starts over.
+tables when it opens. It's the store `a2()` uses when you pass none, and
+`vb serve` keeps one in `.vboard/`. Delete the file and the board starts over.
 
 ## When a read sees a write
 

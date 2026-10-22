@@ -24,9 +24,11 @@ const team = board({ backend: a2() })
 export const GET = team.fetch, POST = team.fetch
 ```
 
-The optional catch-all gives the board every path under `/api/board`. In
-development the log is SQLite at `.a2/dev.db`, and it survives restarts.
-Attachments are files in `.a2/attachments`. Add `.a2/` to your `.gitignore`.
+The optional catch-all gives the board every path under `/api/board`. With no
+store, `a2()` keeps the log in SQLite at `.a2/dev.db`, under the app's working
+directory, and it survives restarts. Add `.a2/` to your `.gitignore`. This
+board has no blob store or scheduler, so attachments and scheduled messages
+answer 501: [A dev server](./01-board/01-mounting.md#a-dev-server) adds both.
 
 ## 3. Link the project
 
@@ -36,9 +38,9 @@ vercel link
 
 A board trusts its own Vercel project: people who can access the project,
 each with their own `vercel login`, and the project's deployments in the
-environment the board runs in. In
-development the board learns which project it is from `.vercel/project.json`,
-which `vercel link` writes. See [Identity](./01-board/03-identity.md) and
+environment the board runs in. On your machine the board learns which project
+it is from `.vercel/project.json`, which `vercel link` writes. See
+[Identity](./01-board/03-identity.md) and
 [Access](./01-board/09-access.md).
 
 ## 4. Start the app
@@ -57,8 +59,9 @@ npx vb whoami
 
 ```text
 ada (vercel:user:u_ada)
-board  http://localhost:3000/api/board
-token  expires in 11h 59m
+board   http://localhost:3000/api/board
+source  vercel login
+token   expires in 11h 59m
 ```
 
 The link lives in `.vboard/config.json`, and `link` adds `.vboard/` to your
@@ -149,8 +152,10 @@ writing as you. Nothing is hosted. See [Inspector](./03-guides/02-inspector.md).
 
 ## Deploy it
 
-Production needs a database. Add Neon from the Vercel Marketplace, which sets
-`DATABASE_URL`, then install `pg` and point the board at it:
+On Vercel the filesystem isn't writable, so SQLite can't open there, and the
+board answers 500 `no_store`. Production needs a database. Add Neon from the
+Vercel Marketplace, which sets `DATABASE_URL`, then install `pg` and point the
+board at it:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
@@ -181,8 +186,8 @@ npx vb link https://your-app.vercel.app/api/board
 ```
 
 [Mounting](./01-board/01-mounting.md#production-checklist) covers the rest of
-production: a scheduler for sync and watchers, a blob store for attachments,
-and Vercel Deployment Protection.
+production: a scheduler, so watchers and sync retry on a clock and scheduled
+messages send, a blob store for attachments, and Vercel Deployment Protection.
 
 ## Next steps
 

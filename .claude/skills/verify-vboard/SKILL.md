@@ -6,7 +6,8 @@ description: Prove vboard behavior from a fresh environment. Spins up a Vercel S
 # verify-vboard
 
 The surface is the `vb` CLI against a local board (`vb serve`, `packages/vboard/src/cli/serve.ts`):
-SQLite log and attachments under the project's `.vboard/`, a local issuer, `127.0.0.1:4100`, no sync.
+SQLite log and attachments under the project's `.vboard/`, a scheduler in its process, a local
+issuer, `127.0.0.1:4100`, no sync.
 Everything runs in a fresh Vercel Sandbox, so nothing on this machine (your `~/.config/vboard`,
 a linked project, a global `vb`) leaks into the result. The inspector (`vb inspect --no-open`)
 is a secondary surface; see [features/README.md](features/README.md).

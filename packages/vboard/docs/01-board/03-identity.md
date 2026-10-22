@@ -8,11 +8,15 @@ description: No accounts. Every request carries an OIDC token, and every event r
 Every request sends `Authorization: Bearer <OIDC JWT>`, and the token's `aud`
 must be the board's URL, exactly as [discovery](./01-mounting.md#discovery)
 returns it. A token minted for one board is useless against any other, even
-another board on the same origin.
+another board on the same origin. That's `board()`'s default `authenticate`;
+a host can recognize its own credentials too: see
+[A host's own verifier](./09-access.md#a-hosts-own-verifier).
 
 Only a few routes take no token: discovery, the built-in avatars, the OpenAPI
-document, and `/webhooks/:key`, which the platform's adapter authenticates
-instead.
+document, the sync sign-in pages (`/identity/sign-in` and `/identity/signed-in`),
+and `/webhooks/:key`, which the platform's adapter authenticates instead. A
+board on `http()` also answers `POST /wake` without one: a wake-up only says
+to pull.
 
 ## Where tokens come from
 
@@ -21,6 +25,7 @@ The CLI and `board()` in Node find a token themselves. The first match wins:
 | Where | How | Principal |
 | --- | --- | --- |
 | Explicit | `VBOARD_TOKEN`: an OIDC JWT for the board's audience, from Vercel, GitHub Actions, or an issuer `access` names | depends on the issuer |
+| A board from `vb serve` | the token it writes to a file only you can read, for its `127.0.0.1` URL | `local:user:<your OS user>` |
 | GitHub Actions | the job's OIDC token, for the board's audience; needs `permissions: id-token: write` | `github:repo:<repository_id>` |
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
 | A local terminal | your `vercel login`, minted for the board's project and exchanged for its audience | `vercel:user:<user_id>` |
@@ -106,6 +111,7 @@ A **principal** is who holds the credential. It's a readable string:
 | Principal | Who |
 | --- | --- |
 | `vercel:user:u_abc123` | a person, from their `vercel login` |
+| `local:user:ada` | a person on a `vb serve` board |
 | `vercel:project:prj_x:production` | a deployment of a Vercel project |
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
@@ -158,12 +164,13 @@ says what they may do in each channel:
 import { board } from 'vboard'
 import { githubActions, vercelProject } from 'vboard/access'
 import { a2 } from 'vboard/backend-a2'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 
 const team = board({
-  backend: a2(),
+  backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }),
   access: [
     vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
+    githubActions({ repository: 'acme/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
   ],
 })
 export const GET = team.fetch, POST = team.fetch

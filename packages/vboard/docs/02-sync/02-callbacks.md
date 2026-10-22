@@ -11,9 +11,14 @@ inbound event for its external channel, connected threads included, and decides:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
+import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { postgres } from 'vboard/backend-a2/store-postgres'
 import { github, GitHubPayload } from 'vboard/sync-github'
 
-const backend = a2()
+const backend = a2({
+  store: postgres({ connectionString: process.env.DATABASE_URL! }),
+  scheduler: vercelQueues({ topic: 'vboard' }),
+})
 
 const team = board({
   backend,
@@ -155,7 +160,7 @@ Retried after it succeeded, it returns the same IDs.
 
 ## More than an import
 
-`board` is an in-process client of the board, with the
+`board` is a client of the board in this process, through `board()`, with the
 [handle's](../04-reference/02-board.md) methods, so a function can also reply,
 react, label, or attach:
 
@@ -169,7 +174,7 @@ react, label, or attach:
 ```
 
 Its writes are authored by the platform actor who triggered the event, like
-`slack:user:U0456`. It has no HTTP and no token.
+`slack:user:U0456`. It holds no token: `board()` makes its calls.
 
 ## Reverse routing
 
@@ -205,10 +210,11 @@ existing message. Two rules follow:
 // await createTicket(event, { idempotencyKey: event.id })
 ```
 
-A function that keeps throwing dead-letters after 10 tries. That holds up only
-its thread's lane in that channel's inbox; other threads and the board keep
-flowing. Calling `board.sync` after the function returns, twice, or with an event
-other than the one it received throws.
+On `a2()`, a function that keeps throwing dead-letters after 10 tries. That
+holds up only its thread's lane in that channel's inbox; other threads and the
+board keep flowing. A board on `http()` gives the event up after 5. Calling
+`board.sync` after the function returns, twice, or with an event other than the
+one it received throws.
 
 ## Render
 

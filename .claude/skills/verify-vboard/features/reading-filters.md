@@ -37,6 +37,6 @@ Seen in a sandbox: `--text stdin` returns the one thread with the matching reply
 - `--mentions` with no handle means you: `local:user:ubuntu` in the sandbox, so mention `@ubuntu`.
 - `--limit 1` keeps the thread with the newest activity, root included.
 - `vb read <channel> --json` prints `{ message, replies, last }` per thread; `vb read <id> --json`
-  prints messages, where a reply has `"re":<root>`.
+  prints messages, where a reply has `"re":"<root>"` (IDs are strings).
 - `vb.sh` keeps stdout and stderr apart, so `$($V/vb.sh "$S" read dev --json)` is clean JSON lines.
 - Releases before thread summaries read messages by default, and print every channel name as-is.
