@@ -262,6 +262,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * backend as it came, for the backend to say why.
    */
   async function mayPost(caller: Caller, where: { channel?: string | undefined; re?: string | undefined }, signal: AbortSignal): Promise<{ access: Access | null; channel: string } | null> {
+    // This deployment's own code needs no lookup: it may.
+    if (!('request' in caller)) return { access: null, channel: where.channel ?? '' }
     const channel = where.channel ?? (where.re === undefined ? undefined : (await lookup(caller, where.re, signal))?.channel)
     if (channel === undefined) return null
     const access = await accessOf(caller, signal)
