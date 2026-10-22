@@ -1092,12 +1092,15 @@ function build(options: A2Options, binding: BoardBinding) {
         }
       }
       const { state: actors } = query.account !== undefined || query.person !== undefined ? await session.state(actorsReducer) : { state: null }
-      const link = query.account !== undefined ? actors?.links[query.account] : undefined
+      // Who's linked to whom holds board-wide: a sync learns it only for users of the platforms it syncs.
+      const platforms = actors ? (await entriesOf(caller, principal.id)).map((entry) => `${entry.platform}:`) : []
+      const ours = (account: string) => platforms.some((platform) => account.startsWith(platform))
+      const link = query.account !== undefined && ours(query.account) ? actors?.links[query.account] : undefined
       return {
         thread,
         message,
         person: link ? { id: link.to, method: link.method } : null,
-        accounts: query.person === undefined || !actors ? [] : linkedTo(actors, query.person).map((id) => ({ id, method: actors.links[id]!.method })),
+        accounts: query.person === undefined || !actors ? [] : linkedTo(actors, query.person).filter(ours).map((id) => ({ id, method: actors.links[id]!.method })),
         holder,
       }
     },

@@ -453,6 +453,26 @@ describe('the sync permission', () => {
     expect(await links()).toEqual([])
   })
 
+  it("tells a sync who an account is, and a person's accounts, only on the platforms it syncs", async () => {
+    const team = testBoard({
+      access: [vercelProject({ project: 'prj_support', can: { 'support/': 'all' } }), vercelProject({ project: 'prj_code', can: { 'code/': 'all' } })],
+    })
+    const support = caller(team.fetch, await supportToken())
+    const code = caller(team.fetch, await deploymentToken('code', 'prj_code', 'production'))
+    const julian = await julianOn(team.fetch)
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })).status).toBe(200)
+    expect((await code('POST', '/watchers', { watch: {}, sync: [{ key: 'github', platform: 'github' }] })).status).toBe(200)
+    const github = { id: 'github:user:42', handle: 'jb', name: 'Julian', avatar: null, isBot: false }
+    for (const [sync, as, account] of [['slack', support, author], ['github', code, github]] as const) {
+      const { code: issued } = (await julian('POST', '/sync/codes', { sync })).body
+      expect((await as('POST', '/sync/accounts', { sync, account, code: issued })).status).toBe(200)
+    }
+    const find = async (query: string) => (await support('GET', `/sync/find?${query}`)).body
+    expect((await find(`account=${author.id}`)).person).toMatchObject({ id: 'vercel:user:u_julian' })
+    expect((await find(`account=${github.id}`)).person).toBeNull()
+    expect((await find('person=vercel:user:u_julian')).accounts.map((found: { id: string }) => found.id)).toEqual([author.id])
+  })
+
   it('takes provenance only on the sync routes: a post never says who it is by', async () => {
     const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })] })
     const support = caller(team.fetch, await supportToken())
