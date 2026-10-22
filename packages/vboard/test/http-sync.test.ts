@@ -389,6 +389,66 @@ describe('the sync permission', () => {
     expect((await project.fetch(new Request(challenge.signIn))).status).toBe(404)
   })
 
+  it('registers sync entries only for a token that may sync, and signs people in only through one that still may', async () => {
+    // A project that may only read, one that may sync in support/, and one whose sync the team can take away.
+    let other: 'all' | null = 'all'
+    const team = testBoard({
+      access: [
+        vercelProject({ project: 'prj_reader', can: { '*': ['read'] } }),
+        vercelProject({ project: 'prj_support', can: { 'support/': 'all' } }),
+        (principal) => (principal.id === 'vercel:project:prj_other:production' ? other : undefined),
+      ],
+    })
+    const reader = caller(team.fetch, await deploymentToken('reader', 'prj_reader', 'production'))
+    const support = caller(team.fetch, await supportToken())
+    const otherOne = caller(team.fetch, await deploymentToken('other', 'prj_other', 'production'))
+    const julian = await julianOn(team.fetch)
+    const entry = { key: 'slack', platform: 'slack', signIn: true }
+    const registering = (as: typeof support, url: string) => as('POST', '/watchers', { url, watch: {}, sync: [entry] })
+    // Reading is enough to register watchers, not a sync: its sign-in would get a person's live code.
+    const refused = await registering(reader, 'https://reader.test/api/board')
+    expect([refused.status, refused.body.error.message]).toEqual([403, "this token can't register a sync: it needs sync somewhere"])
+    expect((await reader('POST', '/watchers', { url: 'https://reader.test/api/board', watch: {} })).status).toBe(200)
+    expect((await julian('POST', '/sync/codes', { sync: 'slack' })).status).toBe(404)
+    // One sync that claims the key signs people in where it runs.
+    expect((await registering(support, SUPPORT_URL)).status).toBe(200)
+    expect((await julian('POST', '/sync/codes', { sync: 'slack' })).body.signIn).toMatch(new RegExp(`^${SUPPORT_URL}/identity/sign-in\\?`))
+    // Two that claim it: neither is the key's to sign in for, and a code links by posting it.
+    expect((await registering(otherOne, 'https://other.test/api/board')).status).toBe(200)
+    const both = (await julian('POST', '/sync/codes', { sync: 'slack' })).body
+    expect([both.code, both.signIn]).toEqual([expect.stringMatching(/^vb-/), undefined])
+    expect((await team.fetch(new Request(BOARD_URL)).then((r) => r.json())).sync).toEqual([{ key: 'slack', platform: 'slack' }])
+    // One that may no longer sync claims nothing.
+    other = null
+    expect((await julian('POST', '/sync/codes', { sync: 'slack' })).body.signIn).toMatch(new RegExp(`^${SUPPORT_URL}/`))
+  })
+
+  it("unlinks another's account only for a caller that syncs in every channel", async () => {
+    const team = testBoard({
+      access: [vercelProject({ project: 'prj_support', can: { 'support/': 'all' } }), vercelProject({ project: 'prj_all', can: 'all' })],
+    })
+    const support = caller(team.fetch, await supportToken())
+    const everywhere = caller(team.fetch, await deploymentToken('all', 'prj_all', 'production'))
+    const julian = await julianOn(team.fetch)
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })).status).toBe(200)
+    const link = async () => {
+      const { code } = (await julian('POST', '/sync/codes', { sync: 'slack' })).body
+      expect((await support('POST', '/sync/accounts', { sync: 'slack', account: author, code })).status).toBe(200)
+    }
+    const links = async () => (await julian('GET', '/identity')).body.links.map((found: { actor: string }) => found.actor)
+    await link()
+    // Sync in support/ speaks for platform users there, not for who everyone on the board is.
+    const denied = await support('POST', '/sync/accounts/unlink', { account: author.id })
+    expect([denied.status, denied.body.error.code]).toEqual([404, 'not_linked'])
+    expect(await links()).toEqual([author.id])
+    expect((await everywhere('POST', '/sync/accounts/unlink', { account: author.id })).status).toBe(200)
+    expect(await links()).toEqual([])
+    // And a person unlinks their own.
+    await link()
+    expect((await julian('POST', '/sync/accounts/unlink', { account: author.id })).status).toBe(200)
+    expect(await links()).toEqual([])
+  })
+
   it('takes provenance only on the sync routes: a post never says who it is by', async () => {
     const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })] })
     const support = caller(team.fetch, await supportToken())

@@ -154,9 +154,9 @@ lands or is, or somewhere for the lookups and the inbox.
 | POST | `/inbox/:key` | `{ events }`: platform events for the caller's inbox, each `{ id, event, raw }`, where `id` is the platform's own and lands once |
 | GET | `/inbox/:key/next` | `{ items }`: the caller's next inbox events, each leased until it acks, one platform thread at a time and in order. Query: `limit` |
 | POST | `/inbox/:key/:id/ack` | `{ lease, error? }`: done, or an error to try again after a wait. After 5 tries it's given up on |
-| POST | `/sync/codes` | `{ sync }` → `{ code, expiresAt, signIn? }`: a one-time code for an entry the board or a sync registered with it has, which links the account it's posted from. `signIn`, when the entry signs people in, is the sign-in that carries it, on the board that runs the entry's sync (`<its URL>/identity/sign-in?sync&code`): the person opens it, and `GET /identity` shows the link once it's made. People only, each for themselves |
+| POST | `/sync/codes` | `{ sync }` → `{ code, expiresAt, signIn? }`: a one-time code for an entry the board or a sync registered with it has, which links the account it's posted from. `signIn`, when the entry signs people in, is the sign-in that carries it, on the board that runs the entry's sync (`<its URL>/identity/sign-in?sync&code`): the board's own sync for a key it has, or else the one registered sync that claims the key and may still sync. A key two registered syncs claim has no `signIn`: the person opens it, and `GET /identity` shows the link once it's made. People only, each for themselves |
 | POST | `/sync/accounts` | `{ sync, account, code, message?, method? }`: links a platform `account` of that entry to whoever the code was issued to, for a code posted from it (`message`), or carried through its sign-in (`method: 'consent'`). 404 `bad_code` for one that isn't live. Answers `{ person, link }`. There's no linking an account without a code |
-| POST | `/sync/accounts/unlink` | `{ account }`: your own account, or anyone's with `sync` somewhere |
+| POST | `/sync/accounts/unlink` | `{ account }`: your own account, or anyone's with `sync` in every channel |
 
 On `a2()`, the board's own sync pushes to an inbox per platform channel, which
 `vboard-inbox` delivers back to it on the platform thread's lane. Anyone else's
@@ -170,8 +170,9 @@ deliver as matches of watcher `@sync` when it registers its sync entries: see
 caller with it can write as any user of a platform it syncs, with the origin
 it says, redeem a code a person handed it to link that person's account, and
 read the platform IDs of what's there. It names the platforms it syncs when it
-registers (`POST /watchers` with `sync`), and it can't write as anyone the
-board signs in, or get a code for anyone. Give it to the deployment that runs
+registers (`POST /watchers` with `sync`, which needs `sync` somewhere), and it
+can't write as anyone the board signs in, or get a code for anyone. Links are
+board-wide, so only `sync` in every channel unlinks someone else's account. Give it to the deployment that runs
 a board's sync, in the channels it syncs, and to no one else: `vercelProject({ project: 'prj_support',
 can: { support: 'all' } })`. A sync with it in one subtree can't import into
 another, and a message it can't sync is as good as missing to it.

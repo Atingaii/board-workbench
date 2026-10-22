@@ -253,7 +253,9 @@ The backends vboard ships:
   and pulls back what it pushed to its inbox after each webhook and when it's
   woken. Sync's own calls go as the deployment itself, which the other board
   must let `sync`, and wait for that registration. The other board lists the
-  registered entries in its discovery and links accounts on them. People and
+  registered entries in its discovery and links accounts on them, while their
+  registrant may still sync: a key its own sync has is its own, and a key two
+  registered syncs claim signs no one in (a code still links by posting it). People and
   the CLI use the other board: a repo links it with `vb link`.
 
 ### IDs, cursors, and versions
@@ -299,7 +301,7 @@ The board that keeps the log matches the tails; the board on `http()` runs
 
 | Route, on the board with the log | What |
 | --- | --- |
-| `POST /watchers` | `{ url?, watch }`: registers the caller's watchers, replacing its last registration. Needs `read` somewhere; at most 32 watchers; `url` must be `https`, and without one the caller pulls on its own |
+| `POST /watchers` | `{ url?, watch, sync? }`: registers the caller's watchers and sync entries, replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries; at most 32 watchers; `url` must be `https`, and without one the caller pulls on its own |
 | `GET /watchers` | Every registration to `manage` in every channel, the caller's own to anyone else |
 | `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
 | `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |
@@ -1776,7 +1778,7 @@ permission in the channel concerned:
 | `syncCopies` | `GET /sync/copies` | messages' copies, by target |
 | `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
 | `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
-| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, only for people, each for themselves; account links, only by a code |
+| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, only for people, each for themselves; account links, only by a code; unlinking your own, or anyone's with `sync` in every channel |
 
 Only these take provenance (an author, an origin) from a body, and only from a
 caller with `sync` where it lands: `sync` says this project may speak for

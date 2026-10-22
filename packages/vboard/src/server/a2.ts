@@ -868,6 +868,8 @@ function build(options: A2Options, binding: BoardBinding) {
       // A registered watcher sees only what its registrant may read.
       if (!principal.access.anywhere('read'))
         throw forbidden("this token can't read anywhere, so a watcher it registers would see nothing")
+      // A sync's entries are where the board links people's accounts, its sign-in included: only for one that may sync.
+      if ((body.sync?.length ?? 0) > 0 && !principal.access.anywhere('sync')) throw forbidden("this token can't register a sync: it needs sync somewhere")
       for (const [id, spec] of Object.entries(body.watch)) {
         const name = RemoteWatcherId.safeParse(id)
         if (!name.success) throw badRequest(`watch ${id}: ${name.error.issues[0]!.message}`, 'bad_watcher')
@@ -1235,8 +1237,8 @@ function build(options: A2Options, binding: BoardBinding) {
       const { principal, author } = (await identityOf(caller))
       const { state } = await session.state(actorsReducer)
       const found = state.links[account]
-      // Your own account, or anyone's for a caller that speaks for platform users.
-      if (!found || (found.to !== principal.id && !principal.access.anywhere('sync'))) throw notFound(`${account} isn't linked`, 'not_linked')
+      // Your own account, or anyone's for a caller that speaks for platform users in every channel: a link holds board-wide.
+      if (!found || (found.to !== principal.id && !principal.access.everywhere('sync'))) throw notFound(`${account} isn't linked`, 'not_linked')
       await session.append({ type: 'actor.unlinked', payload: { actor: account, by: author } })
       return { ok: true }
     },
@@ -1257,14 +1259,22 @@ function build(options: A2Options, binding: BoardBinding) {
   }
 
   /**
-   * The sync entries this board links accounts on: its own sync's, then those of every sync
-   * registered here, by key, each with the URL where its sync runs, once that's known.
+   * The sync entries this board links accounts on, by key, each with the URL where its sync runs,
+   * once that's known: its own sync's, then those of the syncs registered here that may still sync.
+   * A key its own sync has is its own. A key two registered syncs claim is neither's to sign people
+   * in for: a person links it by posting the code where either syncs.
    */
   async function linkable(): Promise<(SyncEntrySpec & { url: string | null })[]> {
     const found = new Map<string, SyncEntrySpec & { url: string | null }>()
     for (const entry of binding.sync) found.set(entry.key, { ...entry, url: binding.url() })
-    for (const registration of Object.values((await registry.state()).byOwner))
-      for (const entry of registration.sync) if (!found.has(entry.key)) found.set(entry.key, { ...entry, url: registration.url })
+    const claimed = new Map<string, (SyncEntrySpec & { url: string | null })[]>()
+    for (const registration of Object.values((await registry.state()).byOwner)) {
+      if (registration.sync.length === 0) continue
+      if (!(await authority.accessNow(registration.principal))?.anywhere('sync')) continue
+      for (const entry of registration.sync)
+        if (!found.has(entry.key)) (claimed.get(entry.key) ?? claimed.set(entry.key, []).get(entry.key)!).push({ ...entry, url: registration.url })
+    }
+    for (const [key, claims] of claimed) found.set(key, claims.length === 1 ? claims[0]! : { ...claims[0]!, signIn: false, url: null })
     return [...found.values()]
   }
 
