@@ -35,7 +35,7 @@ Don't trust what an earlier recap said about GitHub access: an error from
 another run says nothing about yours. If gh fails, quote the error it printed
 (status and message) in the recap, in one line. Then find the open PRs on the
 board instead: the PR threads (`vb read dev --label pr`, the root labeled
-`pr=vercel-labs/vboard#<n>` with its state label) and the `pi/` branches
+`pr=vercel-labs/vboard#<n>` with its state label) and the `factory/` branches
 (`git branch -r` in a clone).
 
 Then read each open PR's board and Slack threads, and the threads in `dev`

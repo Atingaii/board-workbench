@@ -1,11 +1,11 @@
-# The software factory's Pi pushes its work to pi/<board thread> as the Vercel GitHub App, through
+# The software factory's Pi pushes its work to factory/<board thread> as the Vercel GitHub App, through
 # Sandbox git credentials, which give it git but not GitHub's API. Each push opens the branch's pull
 # request here, as github-actions[bot], titled and described by the branch's first commit.
 name: pi-pr
 
 on:
   push:
-    branches: ["pi/**"]
+    branches: ["factory/**"]
 
 permissions:
   contents: read

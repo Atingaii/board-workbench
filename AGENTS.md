@@ -82,7 +82,7 @@ reply in an existing thread rather than starting one.
   kinds live in `kinds.ts`
   and tells it when someone replies; Pi reads what's new itself. Before it plans
   or builds, Pi searches earlier threads and PRs and builds on related work. For a bug, Pi
-  reproduces it, then opens a PR from a `pi/<thread>` branch (its body opens
+  reproduces it, then opens a PR from a `factory/<thread>` branch (its body opens
   with a line linking what triggered it: the Slack thread or GitHub issue, which
   `taskMessage` puts in Pi's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
@@ -140,7 +140,11 @@ reply in an existing thread rather than starting one.
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
-  per thread, with `vb`, `gh`, and git. Its credentials are placeholders that
+  per thread (`factory-<thread>`), with `vb`, `gh`, and git. Its sandbox, branch
+  (`factory/<thread>`), and preview say `factory`, not `pi` as before
+  `vboard-factory-3`: thread IDs restarted there, so an old `pi-12` or `pi/12`
+  belongs to another #12, and the watchers that read a PR's branch (`owner`,
+  `crosspost`, `autoland`) ignore `pi/`. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
   every message. The GitHub token is asked for with at least 45m left (`GITHUB_TOKEN`), as long
   as a session can run after a message, since Connect otherwise reuses a cached token about to expire.
@@ -162,10 +166,10 @@ reply in an existing thread rather than starting one.
   come from a warm pool without the helper), a branch pushed by name that tracks
   `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
   Pi's `gh` goes through `github/vboard-factory`: the sandbox's network policy
-  adds the app's token to requests to `api.github.com`. A push to `pi/**` also
+  adds the app's token to requests to `api.github.com`. A push to `factory/**` also
   has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
   branch's first commit if it has none yet.
-  `check` also runs on `pi/**` pushes, since a run for a bot's PR waits for approval.
+  `check` also runs on `factory/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments` (`fsBlob()`). Pi attaches a screenshot to the reply
@@ -199,7 +203,8 @@ reply in an existing thread rather than starting one.
   (dnf), Chrome (through `agent-browser`, pinned as `AGENT_BROWSER`), and a
   static ffmpeg (`FFMPEG_STATIC`), and a failed install doesn't stop Pi. Pi
   tests against a local dev server or the preview of its own branch
-  (`piPreview`). The network policy adds the Vercel Authentication bypass to
+  (`piPreview`, `vboard-factory-git-factory-<thread>.playground-vercel.tools`).
+  The network policy adds the Vercel Authentication bypass to
   that host only, so the secret never reaches other deployments, or the
   sandbox.
 - The A2 scheduler route (`app/api/a2/scheduler`) is private to Vercel Queues

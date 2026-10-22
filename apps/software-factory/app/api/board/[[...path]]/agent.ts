@@ -183,7 +183,7 @@ A person's :security: reaction on a PR is a request for a deepsec review of its 
 
 const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/${REPO}, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
-A thread's kind label (bug, feature, question, task) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone ${REPO}; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named pi/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
+A thread's kind label (bug, feature, question, task) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone ${REPO}; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named factory/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
 Open the PR body with one line saying what triggered it, before anything else: "> 💬 From [<who>'s Slack thread](<link>) · board #<id>" for Slack, "> 🐙 From #<issue> on GitHub · board #<id>" for a GitHub issue (with "Closes #<issue>" below when the PR fixes it), or "> From board #<id>" when the thread has no source. Your task message gives the source link and who posted it.
 Before you plan or build for a bug or feature, look for related work: search earlier threads with vb read dev --text <keywords> and pull requests with gh pr list --state all --search <keywords>. If a thread or PR already covers it, link it in your reply and build on it (comment there, push to its branch, or ask to merge it) instead of starting over with a duplicate.
 For a bug report:
@@ -206,7 +206,7 @@ Before anything else, react to the PR thread's root with vb react <root id> look
 2. Run pnpm install and pnpm check. Try the change where you can: a test that should fail without it, or the CLI by hand.
 3. Put the detail on GitHub, attached to the code: submit one review with gh api repos/${REPO}/pulls/<N>/reviews --input review.json (event COMMENT, REQUEST_CHANGES or APPROVE, with comments on file:line for each problem and suggestion). You review as the factory GitHub App's bot, and GitHub rejects APPROVE and REQUEST_CHANGES on that account's own PRs, so on a PR it opened use COMMENT and put the verdict in the body. Inline comments must be on lines the diff touches, or GitHub rejects the whole review; put anything else in the body. Always put the verdict in the body, even when the problems are all inline (a review with an empty body never reaches the board), and keep the body short: the verdict (good to merge, or the blocking problems in a line each), with the detail in the inline comments. The review shows up in the board thread and on Slack on its own, so don't restate it there: reply in the board thread only to add what it lacks, in a line (the mention of whoever asked, or what you tried by hand attached with --attach <file>, a log or a screenshot, up to 4 MB each), or not at all. vb read lists files people attached as file lines; vb download <id> saves one.
 4. After each review, say whether the PR could land without a person, in one command on the PR thread's root: vb label <root id> land=yes|no land.why="<one line>" land.sha=<the head SHA you reviewed>. Say yes only when all of these hold: it fixes a bug or does what a person clearly asked for (not something you or its author had to interpret); your review found nothing to fix; and it has no caveats, open questions, or negative tradeoffs (in its body, in the thread, or that you see). Otherwise say no, and land.why says which one failed. When unsure, say no. The board checks the rest itself: who opened it, CI, and whether it changes vboard core for users.
-5. Tell the thread the work started in. When the PR was built for another board thread (its branch is pi/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
+5. Tell the thread the work started in. When the PR was built for another board thread (its branch is factory/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you: answer questions, and review again if new commits landed (gh pr view <N> --json commits), labeling land again.`;
 
 export const INSTRUCTIONS: Record<Task, string> = {
@@ -248,11 +248,11 @@ cd ~ && exec flock ~/.pi/lock bash -c '
     --append-system-prompt "$INSTRUCTIONS" "$MESSAGE"' >> ~/pi.log 2>&1`;
 
 /**
- * The preview of Pi's own branch, `pi/<thread>`: its branch URL on the factory's preview domain. Pi's network policy
- * gets it past Vercel Authentication. Only this host: `*.playground-vercel.tools` would also hand the bypass secret
- * to every other deployment on that domain.
+ * The preview of Pi's own branch, `factory/<thread>`: its branch URL on the factory's preview domain, which spells
+ * the branch's `/` as `-`. Pi's network policy gets it past Vercel Authentication. Only this host:
+ * `*.playground-vercel.tools` would also hand the bypass secret to every other deployment on that domain.
  */
-export const piPreview = (thread: string) => `vboard-factory-git-pi-${thread}.playground-vercel.tools`;
+export const piPreview = (thread: string) => `vboard-factory-git-factory-${thread}.playground-vercel.tools`;
 
 /**
  * The board routes Pi's `vb` calls, as an RE2 regex: discovery, and reading and writing messages, schedules and
@@ -382,8 +382,11 @@ type PiMessage = {
   message: string;
 };
 
-/** A thread's sandbox. */
-const piSandbox = (thread: string) => `pi-${thread}`;
+/**
+ * A thread's sandbox. Not `pi-<thread>`: those belong to threads on the board before its store moved, and new threads
+ * reuse their IDs.
+ */
+export const piSandbox = (thread: string) => `factory-${thread}`;
 
 /** Puts fresh tokens in a running sandbox's network policy, and says when they die. */
 async function giveTokens(sandbox: Sandbox, thread: string) {

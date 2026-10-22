@@ -10,7 +10,7 @@ export const CROSSPOST_ACTOR = `vboard:watch:${CROSSPOST}`;
 /**
  * Links a factory PR's Slack thread and the Slack thread it was built for, both ways, once the
  * PR's root lands in Slack: the PR thread gets `:crosspost: From <who>'s thread`, and the source
- * thread gets `:crosspost: #12 <title>`, each a link to the other. Only `pi/<thread>` PRs whose
+ * thread gets `:crosspost: #12 <title>`, each a link to the other. Only `factory/<thread>` PRs whose
  * source thread came from Slack; the root is labeled `crosspost=yes` so it happens once.
  */
 export function crosspost(options: GitHubOptions = {}): Watcher {

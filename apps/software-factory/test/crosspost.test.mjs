@@ -19,7 +19,7 @@ const slackSource = {
   author: { handle: "JB", name: "Julian Benegas" },
 };
 
-function harness({ ref = "pi/2326", source = slackSource } = {}) {
+function harness({ ref = "factory/2326", source = slackSource } = {}) {
   const requests = [];
   const labels = [];
   const replies = [];
@@ -68,7 +68,10 @@ test("skips posts, replies, GitHub receipts, crossposted roots, other branches, 
 
   const other = harness({ ref: "jb/some-branch" });
   await other.run(synced());
+  // A pi/ branch is from the board before its store moved: its #2326 is another thread.
+  const old = harness({ ref: "pi/2326" });
+  await old.run(synced());
   const github = harness({ source: { ...slackSource, origin: { thread: "github:vercel-labs/vboard:issue:7" } } });
   await github.run(synced());
-  assert.deepEqual([...other.replies, ...github.replies, ...other.labels, ...github.labels], []);
+  assert.deepEqual([...other.replies, ...old.replies, ...github.replies, ...other.labels, ...old.labels, ...github.labels], []);
 });

@@ -1,9 +1,13 @@
 import type { Watcher } from "vboard";
 import { github, prNumber, type GitHubOptions } from "./github.ts";
 
-/** The board thread a factory PR was built for, from its `pi/<thread>` branch (`pi/1559`, `pi/1559-vercel-logs`). */
+/**
+ * The board thread a factory PR was built for, from its `factory/<thread>` branch (`factory/1559`,
+ * `factory/1559-vercel-logs`). Not `pi/<thread>`: those are threads on the board before its store moved, and new
+ * threads reuse their IDs.
+ */
 export const threadOfBranch = (ref: unknown) => {
-  const match = typeof ref === "string" ? /^pi\/([1-9]\d*)(?:-|$)/.exec(ref) : null;
+  const match = typeof ref === "string" ? /^factory\/([1-9]\d*)(?:-|$)/.exec(ref) : null;
   return match ? match[1]! : null;
 };
 

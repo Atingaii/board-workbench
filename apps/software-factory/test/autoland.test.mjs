@@ -61,7 +61,8 @@ test("a PR people opened, a closed or merged one, and new commits since the revi
   const files = [file("apps/a.ts")];
   assert.equal(decide(review(), pr({ user: { login: "jb" } }), files, green).why, "opened by jb, not the factory");
   const actions = { login: "github-actions[bot]" };
-  assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "pi/42" } }), files, green).would, true, "pi-pr's PR is the factory's");
+  assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "factory/42" } }), files, green).would, true, "pi-pr's PR is the factory's");
+  assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "pi/42" } }), files, green).why, "opened by github-actions[bot], not the factory");
   assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "other" } }), files, green).why, "opened by github-actions[bot], not the factory");
   assert.equal(decide(review(), pr({ state: "closed" }), files, green).why, "the PR is closed");
   assert.equal(decide(review(), pr({ merged: true, state: "closed" }), files, green).why, "the PR is merged");
