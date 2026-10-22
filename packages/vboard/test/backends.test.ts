@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { connect } from '../src/client/node.ts'
 import { memory } from '../src/store/memory.ts'
 import { board, HttpError, type Backend, type Caller } from '../src/server/index.ts'
-import { oidc, vercelProject, verifyTokens } from '../src/access/index.ts'
+import { oidc, vercelProject, oidcTokens } from '../src/access/index.ts'
 import { a2 } from '../src/backend-a2/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
@@ -55,7 +55,7 @@ describe('board() and its backend', () => {
     expect(() => board({ backend, url: BOARD_URL })).toThrow('a2: this backend already serves a board')
   })
 
-  it('serves the protocol on a backend of your own, calling each method with what the request said and its parsed input', async () => {
+  it('serves the protocol on a backend of your own, calling each method with the caller it verified and its parsed input', async () => {
     const calls: { method: string; caller: Caller; input: unknown }[] = []
     const record = (method: string) => async (caller: Caller, input: unknown) => {
       calls.push({ method, caller, input })
@@ -63,6 +63,7 @@ describe('board() and its backend', () => {
     }
     const mine = {
       routes: [{ method: 'GET', path: '/health', handle: async () => Response.json({ ok: true }) }],
+      keeps: true,
       bind: () => {},
       messages: record('messages'),
       async post(caller: Caller, input: { channel?: string; text: string }) {
@@ -71,7 +72,7 @@ describe('board() and its backend', () => {
         return { message: { id: 'm1', channel: input.channel, text: input.text } }
       },
     } as unknown as Backend
-    const { fetch } = board({ backend: mine, url: BOARD_URL })
+    const { fetch } = board({ backend: mine, project: { id: PROJECT_ID, teamId: TEAM_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL })
     const token = await personToken()
     const julian = caller(fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-scope': 'dev/=read' })
 
@@ -81,17 +82,17 @@ describe('board() and its backend', () => {
       ['messages', { channel: 'dev', label: [['state', ['open', 'draft']]], limit: 5 }],
       ['post', { channel: 'dev', text: 'hello' }],
     ])
-    // What the request said about who it is, none of it verified: that's the backend's to do.
+    // Who the request is, as board() verified it: its principal, with what access lets it do, narrowed by its scope.
     expect(calls[0]!.caller).toMatchObject({
-      request: {
-        credential: token,
-        claims: { profile: 'claude', handle: 'julian', avatar: null, session: null, name: null, scope: 'dev/=read' },
-        audience: BOARD_URL,
+      identity: {
+        principal: { id: 'vercel:user:u_julian', kind: 'person', scope: 'dev/=read' },
+        author: { actor: 'vercel:user:u_julian+claude', principal: 'vercel:user:u_julian', profile: 'claude', session: null },
+        actor: { id: 'vercel:user:u_julian+claude', kind: 'agent', handle: 'julian/claude', name: 'claude' },
       },
       origin: { via: { kind: 'api' } },
     })
     const { caller: first } = calls[0]!
-    expect('request' in first && first.request.headers.get('x-board-handle')).toBe('julian')
+    expect('identity' in first && first.identity.principal.access.summary()).toEqual({ 'dev/': ['read'] })
 
     // What it throws, it answers; what doesn't validate never reaches it.
     expect(await julian('POST', '/messages', { channel: 'missing', text: 'hi' })).toEqual({
@@ -105,13 +106,10 @@ describe('board() and its backend', () => {
     expect((await julian('GET', '/channels')).status).toBe(404)
     expect((await julian('POST', '/wake', {})).status).toBe(404)
     expect(await (await fetch(new Request(`${BOARD_URL}/health`))).json()).toEqual({ ok: true })
-    // A request with no token reaches it too, for it to refuse or recognize some other way (a cookie).
-    expect((await fetch(new Request(`${BOARD_URL}/messages`, { headers: { cookie: 'session=abc' } }))).status).toBe(200)
-    expect(calls.at(-1)!.caller).toMatchObject({ request: { credential: null } })
-    expect((calls.at(-1)!.caller as Extract<Caller, { request: unknown }>).request.headers.get('cookie')).toBe('session=abc')
-    // A claim that doesn't parse never reaches it.
+    // A request board() can't verify never reaches it, and neither does a claim that doesn't parse.
+    expect((await fetch(new Request(`${BOARD_URL}/messages`, { headers: { cookie: 'session=abc' } }))).status).toBe(401)
     expect((await caller(fetch, token, { 'x-board-profile': 'not a profile' })('GET', '/messages')).status).toBe(400)
-    expect(calls).toHaveLength(4)
+    expect(calls).toHaveLength(3)
 
     // Your own code is `{ self }`: the backend decides who that is.
     const own = board({ backend: { ...mine, bind: () => {} } as Backend, url: BOARD_URL })
@@ -122,14 +120,14 @@ describe('board() and its backend', () => {
   })
 
   it('takes a backend made from another, with one method changed', async () => {
-    const kept = a2({ store: memory(), project: { id: PROJECT_ID, teamId: TEAM_ID }, authenticate: verifyTokens(testAuth) })
+    const kept = a2({ store: memory() })
     const backend: Backend = {
       ...kept,
       async delete() {
         throw new HttpError(403, 'forbidden', 'messages on this board stay')
       },
     }
-    const { fetch } = board({ backend, url: BOARD_URL })
+    const { fetch } = board({ backend, project: { id: PROJECT_ID, teamId: TEAM_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL })
     const julian = await julianOn(fetch)
     const id = (await julian('POST', '/messages', { channel: 'dev', text: 'kept' })).body.message.id
     expect(await julian('POST', `/messages/${id}/delete`, {})).toEqual({ status: 403, body: { error: { code: 'forbidden', message: 'messages on this board stay' } } })

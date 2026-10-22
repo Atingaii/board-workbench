@@ -16,8 +16,8 @@ import type { WriteSource } from './middleware.ts'
 
 export { syncTarget, withEmailMentions, type SyncTarget }
 
-/** Who a write is attributed to, with what its principal may do, as the backend worked it out. */
-export type Identity = { principal: Granted; author: Author; actor: Actor }
+import type { Identity } from './backend.ts'
+export type { Identity }
 
 /** A piece of the board's own deployment, writing as `actor` with full access. */
 export function deploymentIdentity(actor: string, handle: string): Identity {

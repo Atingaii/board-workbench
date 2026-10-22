@@ -3,20 +3,28 @@ import { BoardError, createBoardClient, type BoardClient, type PostOptions, type
 import { derivedId } from '../client/ids.ts'
 import type { SyncProvider } from '../sync/provider.ts'
 import { SYNC, type Backend, type BoardBinding, type Caller, type SelfCaller, type Subscription, type SyncEntry } from './backend.ts'
+import type { Middleware } from './middleware.ts'
+import { createPolicy, type Policy, type PolicyOptions, type Serving } from './policy.ts'
 import { createServe, type PlatformCaller, type Serve } from './serve.ts'
 import type { Watcher } from './watch.ts'
 
 /**
- * `board()`'s options: where the board lives, and what runs here. Who may use it, and what
- * its writes go through, are the backend's: `a2({ authenticate, access, middleware })`.
+ * `board()`'s options: where the board lives, who may use it and what its writes go through, and
+ * what runs here. The backend keeps or reaches the log; the policy is the board's.
  */
-export type BoardOptions = {
+export type BoardOptions = PolicyOptions & {
   /**
    * Where the board lives: `a2({ … })` from `vboard/backend-a2` keeps it here, `http(url)` from
    * `vboard/backend-http` uses another, or your own. By default, `http()`: in Node, the board the
    * environment points at (`VBOARD_URL`, the repo's link, or `vb use`'s).
    */
   backend?: Backend
+  /**
+   * Runs on every post and edit before it reaches the backend, whatever it came from: requests (a
+   * board on `http()` using this one included), watchers, schedules, the handle, and sync's imports.
+   * Each calls `next()` to pass the write on; one that doesn't drops it.
+   */
+  middleware?: readonly Middleware[]
   /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
   watch?: Record<string, Watcher>
   /**
@@ -53,12 +61,14 @@ export type Board = BoardClient & {
   as(profile: ProfileOption): Board
 }
 
-/** What a build of vboard gives board(): Node's finds boards in the environment. */
+/** What a build of vboard gives board(): Node's finds boards, tokens, and the board's project in the environment. */
 export type Runtime = {
   /** The backend for a board() given none: `http()`, to the board the environment points at. */
   http(): Backend
   /** Loads the sync engine, only for a board that syncs. */
   sync: () => Promise<typeof import('../sync/engine.ts')>
+  /** Loads what the policy finds in the environment, the first time a board serves: null where nothing does, so pass `authenticate` and `project`. */
+  serving: (() => Promise<Serving>) | null
 }
 
 /** What the board's pipeline shares with its handle. */
@@ -66,13 +76,15 @@ export type BoardContext = {
   options: BoardOptions
   backend: Backend
   runtime: Runtime
+  /** Who may use the board, and what each may do. */
+  policy: Policy
   /** The mount path, as the last request that reached a route had it. */
   state: { learned: string | null }
   ownUrl(): string | null
   /** An in-process client through the board, as `caller`: its posts are idempotent per trigger. */
   clientAs(caller: Caller | PlatformCaller, trigger: string | null): BoardClient
-  /** The handle, acting as `caller`: a watcher's, or the middleware's. */
-  handleOf(caller: SelfCaller, trigger: string | null): Board
+  /** The handle, acting as `caller`: a watcher's, the middleware's, or a schedule's creator's. */
+  handleOf(caller: Caller, trigger: string | null): Board
 }
 
 /** How long a handle's live events wait for the next, in seconds, before asking again. */
@@ -86,6 +98,7 @@ const EVENTS_WAIT_S = 25
  */
 export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   const backend = options.backend ?? runtime.http()
+  const policy = createPolicy(options, backend.keeps, runtime.serving)
   const watch = options.watch ?? {}
   const entries = options.sync ?? {}
   const state: BoardContext['state'] = { learned: null }
@@ -132,10 +145,12 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
 
   /**
    * A handle through board(), as `caller`: a post's `id` is its own, derived under who it writes as,
-   * so a retry posts once and no request can take it first.
+   * so a retry posts once and no request can take it first. A verified caller's are a backend's,
+   * derived already (a schedule's send's), so they go as they are.
    */
-  function handleOf(caller: SelfCaller, trigger: string | null): Board {
+  function handleOf(caller: Caller, trigger: string | null): Board {
     const client = clientAs(caller, trigger)
+    if ('identity' in caller) return handle({ ...client, events: (query, opts) => events(client, query, opts) }, () => ownUrl() ?? inProcess)
     const via = caller.origin.via?.kind ?? 'client'
     const id = (given: string) => derivedId(`vboard-${via === 'watcher' ? 'watch' : via}`, caller.self ?? '', given)
     const owned = async <T extends PostOptions | ReplyOptions>(input: string | T): Promise<string | T> =>
@@ -166,7 +181,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     return handleOf(profileCaller(profile), null)
   }
 
-  const context: BoardContext = { options, backend, runtime, state, ownUrl, clientAs, handleOf }
+  const context: BoardContext = { options, backend, runtime, policy, state, ownUrl, clientAs, handleOf }
 
   const subscriptions: Record<string, Subscription> = Object.fromEntries(
     Object.entries(watch).map(([id, watcher]) => [id, { kind: 'tail', tail: watcher.tail, when: watcher.when ?? 'matches' }]),
@@ -182,6 +197,8 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     sync: ownEntries,
     readSource: async (key, target, limit) => (await server()).readSource(key, target, limit),
     typing: async (messages, status) => (await server()).typing(messages, status),
+    accessNow: (principal) => policy.accessNow(principal),
+    project: () => policy.project(),
     handle: (caller) => handleOf(caller, null),
     url: ownUrl,
   }

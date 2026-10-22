@@ -7,7 +7,7 @@ import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
 import { a2, type A2Options } from '../src/backend-a2/index.ts'
-import { verifyTokens, type VerifyTokensOptions } from '../src/access/index.ts'
+import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
 export const PROJECT_ID = 'prj_board'
@@ -43,22 +43,21 @@ export function testClock() {
 }
 
 /**
- * board()'s options and a2()'s, side by side, as tests write them. `auth` is `verifyTokens()`'s
- * options, for a2's `authenticate`.
+ * board()'s options and a2()'s, side by side, as tests write them. `auth` is `oidcTokens()`'s
+ * options, for board()'s `authenticate`.
  */
-export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: VerifyTokensOptions }
+export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: OidcTokensOptions }
 
 /** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
 export function mount(options: MountOptions) {
-  const { watch, url, basePath, streamMaxMs, sync, auth, ...rest } = options
-  const backend = a2({ ...rest, ...(!rest.authenticate && auth ? { authenticate: verifyTokens(auth) } : {}) })
+  const { store, scheduler, blob, transport, auth, ...rest } = options
+  const backend = a2({ ...(store ? { store } : {}), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
+  const { url, ...given } = rest
   const created = board({
+    ...given,
     backend,
-    ...(watch ? { watch } : {}),
-    ...(sync ? { sync } : {}),
+    ...(!rest.authenticate && auth ? { authenticate: oidcTokens(auth) } : {}),
     ...('url' in options ? { url } : {}),
-    ...(basePath !== undefined ? { basePath } : {}),
-    ...(streamMaxMs !== undefined ? { streamMaxMs } : {}),
   })
   // Read when a test asks: a board missing a piece in production builds none of them.
   const lazy = (read: () => unknown) => ({ get: read, enumerable: true })

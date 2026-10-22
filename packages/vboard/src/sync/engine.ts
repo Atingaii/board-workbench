@@ -8,7 +8,7 @@ import { ATTACHMENT_BYTES_MAX, ATTACHMENTS_PER_MESSAGE_MAX, MESSAGE_TEXT_MAX, to
 import type { BoardEventView, InboxItem, LinkedAccount, LinkView, MessageView, SyncThreadView } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { afterRetry } from '../server/attempts.ts'
-import type { Backend, Caller, InboxDelivery } from '../server/backend.ts'
+import type { Caller, InboxDelivery, ProtocolMethods } from '../server/backend.ts'
 import { badRequest, HttpError, notFound } from '../server/errors.ts'
 import { channelOf, type SyncTarget } from '../server/writes.ts'
 import { DroppedError, type WriteSource } from '../server/middleware.ts'
@@ -26,9 +26,9 @@ export type SyncEvent = BoardEventView & { before?: MessageView }
 /** Where a platform event's writes come from, for the middleware, and how to answer there: a reply in its own platform thread. */
 type EventSource = { via: Extract<WriteSource, { kind: 'sync' }>; respond: (text: string) => Promise<void> }
 
-/** What sync runs on: the board's backend, and in-process clients through board(). */
+/** What sync runs on: the board's backend's methods, its imports through board()'s middleware, and in-process clients through board(). */
 export type SyncHost = {
-  backend: Backend
+  backend: ProtocolMethods
   /**
    * A client through board() for a sync callback, as the platform user `author` its event came from on
    * entry `key`: its writes are imports as them, on any backend, and its reads are sync's. Its posts get
@@ -605,7 +605,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const rootId = synced?.root
     // A2's `idempotentId`, byte for byte: logs already hold these IDs, and a retry must find its own.
     const writeId = (n: number) => derivedId('vboard-inbound', meta.id, String(n))
-    // The backend's middleware sees each post and edit, and what it responds to one it drops is said in the platform thread.
+    // board()'s middleware sees each post and edit, and what it responds to one it drops is said in the platform thread.
     const from = { key, channel: source.via.channel, thread: source.via.thread }
     const screened = async (answer: Protocol['syncImport']['output']) => {
       if (!answer.dropped) return answer.message

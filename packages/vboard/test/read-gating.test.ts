@@ -4,7 +4,7 @@ import { compileAccess } from '../src/server/access.ts'
 import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
 import { board as mount, type Middleware } from '../src/server/index.ts'
-import { githubActions, vercelProject, verifyTokens } from '../src/access/index.ts'
+import { githubActions, vercelProject, oidcTokens } from '../src/access/index.ts'
 import { a2 } from '../src/backend-a2/index.ts'
 import { slack } from '../src/sync/slack.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
@@ -512,9 +512,9 @@ describe('schedules', () => {
       const store = memory()
       const queue = fakeQueue()
       const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { store, scheduler: queue.scheduler, access, project: { id: PROJECT_ID }, authenticate: verifyTokens(testAuth) }
-      const route = mount({ backend: a2(options), url: BOARD_URL })
-      mount({ backend: a2(options), url: BOARD_URL })
+      const options = { access, project: { id: PROJECT_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL }
+      const route = mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
+      mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
       const platform = await deploymentToken('board', PROJECT_ID)
       const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
       expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)

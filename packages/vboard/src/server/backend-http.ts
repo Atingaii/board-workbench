@@ -1,10 +1,10 @@
-import { RegisterBody, routes, type Discovery, type MatchView, type RegistrationView } from '../api/routes.ts'
+import { RegisterBody, routes, type Discovery, type MatchView, type Me, type RegistrationView } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { BoardError, createBoardClient, type BoardClient, type ProfileOption } from '../client/client.ts'
-import { DERIVED_ID, keyId, sha256 } from '../client/ids.ts'
+import { DERIVED_ID, derivedId, keyId, sha256 } from '../client/ids.ts'
 import type { Attachment } from '../contract/schemas.ts'
-import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
-import { HttpError, json } from './errors.ts'
+import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type Identity, type ProtocolMethods, type SelfCaller } from './backend.ts'
+import { forbidden, HttpError, json } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
@@ -35,6 +35,35 @@ export type Environment = {
 /** A watcher's or client's name is the profile its writes are by. */
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 const PROFILE_RULE = 'ids start with a letter and use up to 32 letters, numbers, and hyphens'
+
+/**
+ * What a board's own callers can't do on the board it uses, where they act as its project: what's
+ * the project's own there (its registration, its sync, its links), and what's anyone's own there by
+ * principal (editing, deleting, scheduling), which the board it uses can't tell them apart for.
+ */
+const PROJECTS_OWN = new Set<Method>([
+  'identity', 'edit', 'delete', 'schedule', 'cancelSchedule', 'watchers', 'register', 'matches', 'ack',
+  'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'syncRoots', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
+  'syncCode', 'syncAccount', 'syncUnlink',
+])
+
+/**
+ * A caller's handle as a profile on the board this one uses: `ada`, `ada-lovelace` for
+ * `ada.lovelace`, under the project. It's a label, never who they are there.
+ */
+function profileOf(handle: string): string {
+  let name = handle.replace(/[^A-Za-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')
+  if (!/^[A-Za-z]/.test(name)) name = `u-${name}`
+  return name.slice(0, 32).replace(/-+$/, '')
+}
+
+/** What a caller may do, as `x-board-scope` says it: the board it uses narrows the project's access to it. Null for everything. */
+function scopeOf(identity: Identity): string | null {
+  const { access } = identity.principal
+  if (access.everywhere('manage')) return null
+  const entries = Object.entries(access.summary()).map(([pattern, permissions]) => `${pattern}=${permissions.join(',')}`)
+  return entries.length > 0 ? entries.join(';') : '*='
+}
 
 /** Registering again this soon after the same registration only repeats it. */
 const REGISTER_EVERY_MS = 10_000
@@ -140,16 +169,12 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     return client
   }
 
-  /** What this deployment answers itself: wake-ups and webhooks. Everything else is the board it uses'. */
-  const servesOnly = () => new HttpError(404, 'not_found', `${bound().url() ?? 'this board'} answers only wake-ups and webhooks`)
-
   /**
-   * The client a caller's call goes through: a handle's, as the token's holder with its profile;
-   * a watcher's or the middleware's, as this deployment with theirs; and sync's, as the deployment
-   * itself. A request from anyone else isn't this deployment's to answer.
+   * The client a call of this deployment's own code goes through: a handle's, as the token's holder
+   * with its profile; a watcher's or the middleware's, as this deployment with theirs; and sync's,
+   * as the deployment itself.
    */
-  function clientOf(caller: Caller): BoardClient {
-    if ('request' in caller) throw servesOnly()
+  function clientOf(caller: SelfCaller): BoardClient {
     if (caller.origin.via?.kind === 'engine') return own
     if (caller.origin.via?.kind === 'client') {
       if (caller.self !== null) asProfile(caller.self)
@@ -222,9 +247,50 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     throw new HttpError(502, 'remote_error', `${remote} answered ${response.status}`)
   }
 
+  /**
+   * A call of one of this board's own callers, which board() verified and limited, on the board it
+   * uses: as this deployment, with the caller's handle as its profile, a label there and never who
+   * it is, narrowed to what the caller may do. Its post IDs are its own, under its principal here.
+   * Who it is here, the board answers itself.
+   */
+  async function asProject(method: Method, identity: Identity, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
+    if (method === 'me') {
+      const { principal, author, actor } = identity
+      const me: Me = {
+        actor: actor.id,
+        principal: principal.id,
+        kind: actor.kind,
+        handle: actor.handle,
+        name: actor.name,
+        avatar: actor.avatar,
+        profile: author.profile,
+        session: author.session,
+        expiresAt: principal.expiresAt?.toISOString() ?? null,
+        can: principal.access.summary(),
+      }
+      return me
+    }
+    if (PROJECTS_OWN.has(method))
+      throw forbidden(`this board's callers act as its project on ${remote}, which can't tell them apart: ${method} is the project's own to do there`)
+    const scope = scopeOf(identity)
+    const avatar = identity.actor.avatar?.startsWith('https://') ? identity.actor.avatar : undefined
+    const client = createBoardClient({
+      url: remote,
+      fetch: doFetch,
+      profile: { name: profileOf(identity.actor.handle), ...(avatar ? { avatar } : {}) },
+      session: null,
+      ...(scope !== null ? { headers: { 'x-board-scope': scope } } : {}),
+    })
+    if ((method === 'post' || method === 'posted') && typeof input.id === 'string')
+      input = { ...input, id: await ownKey(await derivedId('vboard-gateway', identity.principal.id, input.id)).catch(rethrow) }
+    const response = await call(client, method, input, signal)
+    return method === 'attachment' ? attachmentOf(String(input.id), response) : response.json()
+  }
+
   /** A protocol method, called on the board it uses, as `caller`. */
   async function remoteCall(method: Method, caller: Caller, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
     const registering = start()
+    if ('identity' in caller) return asProject(method, caller.identity, input, signal)
     const client = clientOf(caller)
     // Sync's records name its entries, which the board it uses knows from its registration.
     if ('self' in caller && caller.origin.via?.kind === 'engine') await registering
@@ -238,9 +304,8 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
 
   const methods: ProtocolMethods = {
     ...(Object.fromEntries(METHODS.map((method) => [method, (caller: Caller, input: Record<string, unknown>, signal: AbortSignal) => remoteCall(method, caller, input, signal)])) as unknown as ProtocolMethods),
-    // The board it uses is what a handle here asks about; a request gets nothing to go on.
-    async discovery(caller) {
-      if ('request' in caller) throw servesOnly()
+    // The board it uses is what a handle here asks about. board() answers a request's itself.
+    async discovery() {
       return discovery()
     },
     // A source this board's own sync reads is read here; any other is the board it uses' to read.
@@ -375,7 +440,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
       method: 'POST',
       path: '/watchers',
       async handle(request, { caller }) {
-        if ('self' in caller) return json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal))
+        if (caller) return json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal))
         started ??= Promise.resolve()
         const here = wakeable(bound().url())
         const registration = await register(here).catch(rethrow)
@@ -387,8 +452,10 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
 
   const backend = {
     ...methods,
-    // Requests here are only wake-ups: who may do what is the board it uses' to say.
+    // Its own routes are wake-ups: who may do what on the board it uses is that board's to say.
     routes: routesHere,
+    // The log is the board it uses': a board here serves requests only with an `access` of its own.
+    keeps: false,
     bind(next: BoardBinding) {
       if (binding) throw new Error('http: this backend already serves a board: create one http() per board()')
       for (const [id, spec] of Object.entries(next.subscriptions)) {

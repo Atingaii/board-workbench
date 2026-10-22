@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { vercelProject, verifyTokens, type CallerRequest, type Can, type HostPrincipal, type RuleFunction } from '../src/access/index.ts'
+import { vercelProject, oidcTokens, type CallerRequest, type Can, type HostPrincipal, type RuleFunction } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
 import { vercelBlob } from '../src/blob/vercel.ts'
@@ -177,7 +177,7 @@ describe("a host's authenticate and access", () => {
   })
 
   it("composes with vb's tokens: a session cookie, or a bearer token, and nothing is a 401", async () => {
-    const tokens = verifyTokens(testAuth)
+    const tokens = oidcTokens(testAuth)
     // The host's session: null when the request carries none, so the next verifier gets it.
     const staff = (request: CallerRequest) =>
       request.headers.get('cookie') === 'session=ada' ? ({ id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' } as const) : null
@@ -201,7 +201,7 @@ describe("a host's authenticate and access", () => {
 
 /** An app's own site: its session cookie names staff (people) and customers (external), and `vb`'s tokens still work. */
 function supportBoard(rules: (customers: RuleFunction) => MountOptions['access'], customers: RuleFunction) {
-  const tokens = verifyTokens(testAuth)
+  const tokens = oidcTokens(testAuth)
   const session = (request: CallerRequest): HostPrincipal | null => {
     const cookie = request.headers.get('cookie') ?? ''
     if (cookie === 'session=staff-ada') return { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada' }

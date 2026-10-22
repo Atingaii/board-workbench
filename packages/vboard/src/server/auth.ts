@@ -1,21 +1,43 @@
-import {
-  createRemoteJWKSet,
-  decodeJwt,
-  jwtVerify,
-  type JWTPayload,
-  type JWTVerifyGetKey,
-} from 'jose'
-import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can, type Permission } from './access.ts'
-import type { CallerRequest } from './backend.ts'
+import type { JWTPayload, JWTVerifyGetKey } from 'jose'
+import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can } from './access.ts'
 import { unauthorized, forbidden } from './errors.ts'
-import { ownProjectId, ownTeamId } from './identity.ts'
+
+/**
+ * What a request says about who's calling, beside its credential: labels the caller picks for
+ * itself, under whoever the credential turns out to be. They're never security: board() uses them
+ * to work out the actor a verified caller writes as.
+ */
+export type Claims = {
+  /** `x-board-profile`: the agent or tool it writes as, `claude`, say. */
+  profile: string | null
+  /** `x-board-avatar`: an https URL for its picture. */
+  avatar: string | null
+  /** `x-board-session`: the agent session it writes from. */
+  session: string | null
+  /** `x-board-handle` and `x-board-name`: a person's handle and display name. */
+  handle: string | null
+  name: string | null
+  /** `x-board-scope`: what it narrows itself to, `dev/=read,post`. It only narrows. */
+  scope: string | null
+}
+
+/** A request, as board() hands it to `authenticate`: what it said, none of it verified yet. */
+export type CallerRequest = {
+  /** The bearer token, or null when it sent none. */
+  credential: string | null
+  claims: Claims
+  /** The board's URL, which a token must be minted for. */
+  audience: string
+  /** Its headers, for a verifier that recognizes a session of its own: a same-site page's cookie, say. */
+  headers: Headers
+}
 
 /** `external`: a platform user writing through sync (`slack:user:U0456`). A local board's people are `local:user:<name>`. */
 export type PrincipalKind = 'person' | 'deployment' | 'workflow' | 'external'
 
 /**
- * Who's calling, as a backend verified it: an ID in the board's scheme and what its token said.
- * What it may do is the backend's to work out: a2() from its `access`.
+ * Who's calling, as board() verified it: an ID in the board's scheme and what its token said.
+ * What it may do is board()'s `access` to say.
  */
 export type Principal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`, `oidc:<issuer>:<sub>`. */
@@ -30,7 +52,7 @@ export type Principal = {
   scope?: string
 }
 
-/** A principal and what it may do in each channel, as a backend worked it out. */
+/** A principal and what it may do in each channel, as board()'s `access` worked it out. */
 export type Granted = Principal & { access: Access }
 
 /**
@@ -39,7 +61,8 @@ export type Granted = Principal & { access: Access }
  */
 export const authenticates = (id: string) => /^(vercel|oidc|local|vboard):/.test(id) || id.startsWith('github:repo:')
 
-type Claims = JWTPayload & Record<string, unknown>
+/** A verified token's claims, as rules match them. */
+type TokenClaims = JWTPayload & Record<string, unknown>
 
 /** What a verified token said: its issuer and its claims, never the token itself. */
 export type TokenFacts = {
@@ -56,28 +79,16 @@ export type TokenFacts = {
   team?: string
 }
 
-const REGISTERED = new Set(['aud', 'exp', 'iat', 'nbf', 'jti'])
-
-/** The claims rules can match on: plain values, bounded, as a schedule stores them. */
-function factsOf(issuer: TokenFacts['issuer'], iss: string, claims: Claims): TokenFacts {
-  const kept: Record<string, string | number | boolean> = {}
-  for (const [name, value] of Object.entries(claims)) {
-    if (REGISTERED.has(name) || Object.keys(kept).length >= 64) continue
-    if (typeof value === 'number' || typeof value === 'boolean' || (typeof value === 'string' && value.length <= 1000)) kept[name] = value
-  }
-  return { issuer, iss, claims: kept }
-}
-
 /** What a rule may compare claims to: the board's own Vercel team and project, when they're known. */
 export type MatchContext = { teamId: string | null; projectId: string | null }
 
-/** One entry in `a2({ access })`: who it matches, and what they may do. The first entry that matches decides. */
+/** One entry in `board({ access })`: who it matches, and what they may do. The first entry that matches decides. */
 export type AccessRule = {
   /** `vercel` and `github` are their platforms' issuers; `oidc` is the exact `url`. */
   issuer: 'vercel' | 'github' | 'oidc'
   /** For `oidc`: the issuer URL, pinned in code. */
   url?: string
-  matches(claims: Claims, context: MatchContext): boolean
+  matches(claims: TokenClaims, context: MatchContext): boolean
   access: Access
 }
 
@@ -197,8 +208,8 @@ export type IssuerConfig = {
   jwks?: JWTVerifyGetKey
 }
 
-/** `verifyTokens()`'s options: tests point these at a local issuer; production uses the defaults. */
-export type VerifyTokensOptions = {
+/** `oidcTokens()`'s options: tests point these at a local issuer; production uses the defaults. */
+export type OidcTokensOptions = {
   vercel?: IssuerConfig
   github?: IssuerConfig
   /** Keys for `oidc()` issuers, by issuer URL, instead of their published JWKS. It trusts no issuer by itself. */
@@ -211,24 +222,8 @@ export type VerifyTokensOptions = {
   local?: { issuer: string; jwks: JWTVerifyGetKey }
 }
 
-const VERCEL_ISSUER = /^https:\/\/oidc\.vercel\.com(?:\/[a-z0-9-]+)?$/
-const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com'
-
-const issuerMatches = (iss: string, accepted: string | RegExp) =>
-  typeof accepted === 'string' ? iss === accepted : accepted.test(iss)
-
-const remoteKeys = new Map<string, JWTVerifyGetKey>()
-
-async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
-  const cached = remoteKeys.get(iss)
-  if (cached) return cached
-  const response = await fetch(`${iss.replace(/\/+$/, '')}/.well-known/openid-configuration`)
-  if (!response.ok) throw unauthorized(`cannot load keys for issuer ${iss}`)
-  const { jwks_uri } = (await response.json()) as { jwks_uri: string }
-  const keys = createRemoteJWKSet(new URL(jwks_uri))
-  remoteKeys.set(iss, keys)
-  return keys
-}
+export const VERCEL_ISSUER = /^https:\/\/oidc\.vercel\.com(?:\/[a-z0-9-]+)?$/
+export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com'
 
 /**
  * `gitlab.com`, `example.com/oidc`, `ci.test%3A8443`: an issuer as a principal
@@ -237,99 +232,13 @@ async function keysFor(iss: string): Promise<JWTVerifyGetKey> {
  * URL normalizes (a trailing slash, the host's case) share a name, so the board
  * refuses to trust two of them.
  */
-const issuerName = (iss: string) => {
+export const issuerName = (iss: string) => {
   const url = new URL(iss)
   return `${url.host}${url.pathname.replace(/\/+$/, '')}`.replace(/[%:]/g, (char) => (char === '%' ? '%25' : '%3A'))
 }
 
-/** What tokens are verified with: the platform's issuers, OIDC issuers a backend's rules name, and test issuers. */
-function createVerifier(options: {
-  projectId: () => Promise<string | null>
-  /** The board's team from config or the environment; the platform's token is the fallback. */
-  teamId: () => Promise<string | null>
-  /** OIDC issuers past Vercel's and GitHub's whose tokens are verified: the ones the backend's rules name. */
-  issuers: readonly string[]
-  auth?: VerifyTokensOptions | undefined
-}) {
-  const vercelIssuer = options.auth?.vercel ?? { issuer: VERCEL_ISSUER }
-  const githubIssuer = options.auth?.github ?? { issuer: GITHUB_ISSUER }
-  // The only issuers past Vercel's and GitHub's whose tokens are verified, or whose keys are fetched.
-  const oidcIssuers = trustedIssuers(options.issuers)
-
-  let platformTeam: string | null = null
-  /**
-   * The team on a Vercel-signed token for the board's own project. Project IDs
-   * are unique, so its `owner_id` is the board's team, whoever sent the token.
-   */
-  async function teamFrom(platformToken: string | undefined, ownProject: string | null) {
-    if (platformTeam !== null || !platformToken || ownProject === null) return platformTeam
-    try {
-      const iss = String(decodeJwt(platformToken).iss ?? '')
-      if (!issuerMatches(iss, vercelIssuer.issuer)) return null
-      const keys = vercelIssuer.jwks ?? (await keysFor(iss))
-      const { payload } = await jwtVerify(platformToken, keys, { issuer: iss })
-      if (payload.project_id === ownProject && typeof payload.owner_id === 'string') platformTeam = payload.owner_id
-    } catch {}
-    return platformTeam
-  }
-
-  /** `platformToken`: the board's own OIDC token, which Vercel sends with each request. */
-  async function verify(token: string, audience: string, platformToken?: string): Promise<Principal> {
-    let iss: string
-    try {
-      iss = String(decodeJwt(token).iss ?? '')
-    } catch {
-      throw unauthorized('malformed token')
-    }
-
-    const local = options.auth?.local
-    if (local && iss === local.issuer) return localPerson(token, local, audience)
-
-    const isVercel = issuerMatches(iss, vercelIssuer.issuer)
-    const isGitHub = !isVercel && issuerMatches(iss, githubIssuer.issuer)
-    const isOidc = !isVercel && !isGitHub && oidcIssuers.has(iss)
-    if (!isVercel && !isGitHub && !isOidc) throw unauthorized(`untrusted issuer: ${iss || '(none)'}`)
-
-    let claims: Claims
-    try {
-      const keys = isOidc
-        ? (options.auth?.oidc?.[iss] ?? (await keysFor(iss)))
-        : ((isVercel ? vercelIssuer : githubIssuer).jwks ?? (await keysFor(iss)))
-      ;({ payload: claims } = (await jwtVerify(token, keys, { issuer: iss, audience })) as {
-        payload: Claims
-      })
-    } catch (error) {
-      if ((error as { status?: number }).status === 401) throw error
-      throw unauthorized(`invalid token: ${(error as Error).message}`)
-    }
-    const facts = factsOf(isOidc ? 'oidc' : isGitHub ? 'github' : 'vercel', iss, claims)
-    const expiresAt = claims.exp ? new Date(claims.exp * 1000) : null
-
-    if (isOidc) {
-      if (typeof claims.sub !== 'string' || claims.sub === '') throw unauthorized(`token from ${iss} without sub`)
-      return { id: `oidc:${issuerName(iss)}:${claims.sub}`, kind: 'workflow', handle: claims.sub.slice(0, 128), expiresAt, facts }
-    }
-    if (isGitHub)
-      return { id: `github:repo:${String(claims.repository_id)}`, kind: 'workflow', handle: String(claims.repository), expiresAt, facts }
-
-    const environment = String(claims.environment ?? '')
-    const project = String(claims.project ?? '')
-    const ownProject = (await options.projectId()) ?? null
-    if (ownProject !== null && claims.project_id === ownProject && environment === 'development') {
-      // A development token minted with someone's Vercel login carries their user ID.
-      if (typeof claims.user_id !== 'string') throw unauthorized('development token without user_id')
-      return { id: `vercel:user:${claims.user_id}`, kind: 'person', handle: `user-${claims.user_id.slice(0, 6).toLowerCase()}`, expiresAt }
-    }
-    const teamId = (await options.teamId()) ?? (await teamFrom(platformToken ?? process.env.VERCEL_OIDC_TOKEN, ownProject)) ?? null
-    // Kept with the claims, so a rule naming a project without its team matches later as it does now.
-    return deployment(teamId === null ? facts : { ...facts, team: teamId }, project, environment, expiresAt)
-  }
-
-  return { verify }
-}
-
 /** OIDC issuers to trust, checked: two that name the same principals can't both be. */
-function trustedIssuers(issuers: readonly string[]): Set<string> {
+export function trustedIssuers(issuers: readonly string[]): Set<string> {
   const named = new Map<string, string>()
   for (const iss of issuers) {
     const name = issuerName(iss)
@@ -359,11 +268,11 @@ export type AccessFunction = (principal: Known) => Can | null | undefined | Prom
  */
 export type RuleFunction = (principal: Known) => Can | null | undefined | Promise<Can | null | undefined>
 
-/** A principal as a backend keeps it to work its access out again: who it is, its token's facts, and its scope. */
+/** A principal as the board keeps it to work its access out again: who it is, its token's facts, and its scope. */
 export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope'>
 
 /**
- * What principals may do, under a backend's rules: `vercelProject()`, `githubActions()`, `oidc()`,
+ * What principals may do, under a board's rules: `vercelProject()`, `githubActions()`, `oidc()`,
  * and functions of your own, the first that matches deciding, past the defaults (people, and the
  * board's own deployments in its environment, may do everything). Or a host's own function of the
  * principal.
@@ -388,7 +297,7 @@ export function createAuthority(options: {
   async function byRules(principal: Known, facts: TokenFacts | null): Promise<Access> {
     if (facts?.issuer === 'host') throw forbidden("this token can't use this board: its board no longer takes a host's principals")
     if (facts?.issuer === 'oidc' && !oidcIssuers.has(facts.iss)) throw unauthorized(`untrusted issuer: ${facts.iss}`)
-    const claims = (facts?.claims ?? {}) as Claims
+    const claims = (facts?.claims ?? {}) as TokenClaims
     const own = facts?.issuer === 'vercel' ? await options.project() : null
     const context: MatchContext = own ? { teamId: facts!.team ?? own.teamId, projectId: own.id } : { teamId: null, projectId: null }
     const environment = String(claims.environment ?? '')
@@ -495,29 +404,7 @@ function factsFromId(id: string): TokenFacts | null {
   return deployment ? { issuer: 'vercel', iss: '', claims: { project_id: deployment[1]!, environment: deployment[2]! } } : null
 }
 
-const LOCAL_SUB = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/
-
-async function localPerson(token: string, local: NonNullable<VerifyTokensOptions['local']>, audience: string): Promise<Principal> {
-  let claims: Claims
-  try {
-    ;({ payload: claims } = (await jwtVerify(token, local.jwks, { issuer: local.issuer, audience })) as { payload: Claims })
-  } catch (error) {
-    throw unauthorized(`invalid token: ${(error as Error).message}`)
-  }
-  const sub = String(claims.sub ?? '')
-  if (!LOCAL_SUB.test(sub)) throw unauthorized('local token without a valid sub')
-  return { id: `local:user:${sub}`, kind: 'person', handle: sub, expiresAt: claims.exp ? new Date(claims.exp * 1000) : null }
-}
-
-const deployment = (facts: TokenFacts, project: string, environment: string, expiresAt: Date | null): Principal => ({
-  id: `vercel:project:${String(facts.claims.project_id)}:${environment}`,
-  kind: 'deployment',
-  handle: environment === 'production' ? project : `${project}@${environment}`,
-  expiresAt,
-  facts,
-})
-
-/** What a backend knows that verifying a request needs: its own Vercel project, and the OIDC issuers its rules trust. */
+/** What board() knows that verifying a request needs: its own Vercel project, and the OIDC issuers its rules trust. */
 export type AuthenticateContext = {
   /** The board's own Vercel project and team: its people's development tokens are for it. */
   project(): Promise<{ id: string | null; teamId: string | null }>
@@ -529,12 +416,12 @@ export type AuthenticateContext = {
 export type AuthenticateRequest = CallerRequest & { board: AuthenticateContext }
 
 /**
- * Who a request is, in the board's ID scheme: `verifyTokens()` checks its bearer token for the
+ * Who a request is, in the board's ID scheme: `oidcTokens()` checks its bearer token for the
  * board's URL, and a host's own verifier recognizes its own credentials (a session cookie in
  * `request.headers`, say). Null when the request carries nothing it recognizes, so verifiers
  * compose: `(request) => (await staff(request)) ?? (await tokens(request))`. To reject a
  * credential that fails, throw an `HttpError` (a 401), or return or throw a `Response`; anything
- * else thrown is a 500. What a principal may do is the backend's: `a2({ access })`.
+ * else thrown is a 500. What a principal may do is `board({ access })`'s to say.
  */
 export type Authenticate = (
   request: AuthenticateRequest,
@@ -549,50 +436,21 @@ export type HostPrincipal = {
   expiresAt?: Date | null
 }
 
-const TOKENS = Symbol('vboard.verifyTokens')
-/** The principals `verifyTokens()` made: a backend takes them as they are, and checks the rest as a host's. */
+/** What marks `oidcTokens()`, so board() can tell it makes no host's principals. */
+export const TOKENS = Symbol('vboard.oidcTokens')
+/** The principals `oidcTokens()` made: board() takes them as they are, and checks the rest as a host's. */
 const verifiedTokens = new WeakSet<object>()
 
-/** The board's own project, for a verifier asked outside a backend that knows it: from the environment. */
-const environmentBoard: AuthenticateContext = {
-  project: async () => ({ id: await ownProjectId(), teamId: await ownTeamId() }),
-  issuers: [],
+/** Marks a principal `oidcTokens()` made. */
+export function markVerified(principal: Principal): Principal {
+  verifiedTokens.add(principal)
+  return principal
 }
 
-/**
- * The built-in verifier: a request's bearer token, from Vercel (people and deployments), GitHub
- * Actions, an `oidc()` rule's issuer, or `local`'s, verified for the board's URL. Null for a request
- * with no token, and a 401 for one whose token fails. Without `request.board`, the board's project
- * is the environment's, and it trusts no issuer past Vercel's and GitHub's.
- */
-export function verifyTokens(options: VerifyTokensOptions = {}): (request: CallerRequest & { board?: AuthenticateContext }) => Promise<Principal | null> {
-  let made: { board: AuthenticateContext; issuers: string; verify: ReturnType<typeof createVerifier>['verify'] } | null = null
-  const authenticate = async (request: CallerRequest & { board?: AuthenticateContext }): Promise<Principal | null> => {
-    if (request.credential === null) return null
-    const board = request.board ?? environmentBoard
-    const issuers = board.issuers.join('\n')
-    if (made?.board !== board || made.issuers !== issuers)
-      made = {
-        board,
-        issuers,
-        verify: createVerifier({
-          projectId: async () => (await board.project()).id,
-          teamId: async () => (await board.project()).teamId,
-          issuers: board.issuers,
-          auth: options,
-        }).verify,
-      }
-    const principal = await made.verify(request.credential, request.audience, request.headers.get('x-vercel-oidc-token') ?? undefined)
-    verifiedTokens.add(principal)
-    return principal
-  }
-  return Object.assign(authenticate, { [TOKENS]: true })
-}
-
-/** Whether `authenticate` is `verifyTokens()`'s alone: it makes no host's principals. */
+/** Whether `authenticate` is `oidcTokens()`'s alone: it makes no host's principals. */
 export const verifiesTokens = (authenticate: Authenticate) => TOKENS in authenticate
 
-/** Whether `verifyTokens()` made `principal`, as opposed to a host's own verifier. */
+/** Whether `oidcTokens()` made `principal`, as opposed to a host's own verifier. */
 export const fromTokens = (principal: object) => verifiedTokens.has(principal)
 
 const PRINCIPAL_ID = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*:[^\s+\]]{1,200}$/

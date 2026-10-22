@@ -2,8 +2,7 @@ import type { ActorsState, Actor } from '../contract/reducers.ts'
 import { toStorable, type Author } from '../contract/schemas.ts'
 import { extractMentions } from '../contract/mentions.ts'
 import { parseScope } from './access.ts'
-import type { Principal } from './auth.ts'
-import type { Claims } from './backend.ts'
+import type { Claims, Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
 
 /** Agents whose avatars the board serves itself. */
@@ -19,7 +18,7 @@ export type ResolvedActor = {
 
 /**
  * What a request's headers say about its caller, checked for shape: a 400 for one that's
- * malformed. None of it is verified; a backend works out the actor from it once it knows who the
+ * malformed. None of it is verified; board() works out the actor from it once it knows who the
  * credential is.
  */
 export function claimsOf(headers: Headers): Claims {

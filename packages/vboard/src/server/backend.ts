@@ -2,39 +2,26 @@ import type { Protocol } from '../api/protocol.ts'
 import type { MessageView, SourceRead } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
 import type { ExternalEvent } from '../contract/contract.ts'
+import type { Actor } from '../contract/reducers.ts'
+import type { Author } from '../contract/schemas.ts'
+import type { Access } from './access.ts'
+import type { Granted, Known } from './auth.ts'
 import type { Board } from './board.ts'
 import type { WatcherContext } from './watch.ts'
 import type { WriteOrigin } from './writes.ts'
 
 /**
- * What a request says about who's calling, beside its credential: labels the caller picks for
- * itself, under whoever the credential turns out to be. They're never security: a backend that
- * verifies the credential uses them to work out the actor it writes as.
+ * Who a verified caller is: its principal, with what board()'s `access` lets it do now (its scope
+ * included, which only narrows), the author record its writes carry, and the actor it writes as.
  */
-export type Claims = {
-  /** `x-board-profile`: the agent or tool it writes as, `claude`, say. */
-  profile: string | null
-  /** `x-board-avatar`: an https URL for its picture. */
-  avatar: string | null
-  /** `x-board-session`: the agent session it writes from. */
-  session: string | null
-  /** `x-board-handle` and `x-board-name`: a person's handle and display name. */
-  handle: string | null
-  name: string | null
-  /** `x-board-scope`: what it narrows itself to, `dev/=read,post`. It only narrows. */
-  scope: string | null
-}
+export type Identity = { principal: Granted; author: Author; actor: Actor }
 
-/** A request, as board() hands it to a backend: what it said, none of it verified. */
-export type CallerRequest = {
-  /** The bearer token, or null when it sent none. */
-  credential: string | null
-  claims: Claims
-  /** The board's URL, which a token must be minted for. */
-  audience: string
-  /** Its headers, for a backend that recognizes a session of its own: a same-site page's cookie, say. */
-  headers: Headers
-}
+/**
+ * A caller board() verified, and what its policy lets it do: a request's, or for work a backend does
+ * outside requests, the one it does it for (a schedule's creator, at its send). A backend trusts it
+ * as it is: only board() makes one, in process.
+ */
+export type VerifiedCaller = { identity: Identity; origin: WriteOrigin }
 
 /** This deployment's own code, as it calls the backend through board(). */
 export type SelfCaller = {
@@ -54,11 +41,8 @@ export type SelfCaller = {
   origin: WriteOrigin
 }
 
-/** Who's calling a backend's method. Every method verifies what it needs and honors what the caller may do. */
-export type Caller =
-  /** A request: what it said about itself, unverified. The backend verifies its credential for `audience`. */
-  | { request: CallerRequest; origin: WriteOrigin }
-  | SelfCaller
+/** Who's calling a backend's method: one board() verified, or this deployment's own code. Every method honors what it may do. */
+export type Caller = VerifiedCaller | SelfCaller
 
 /** One method per protocol route: the caller, the parsed input, and the request's signal. */
 export type ProtocolMethods = {
@@ -70,8 +54,8 @@ export type BackendRoute = {
   method: 'GET' | 'POST'
   /** Under the board's mount, with `:param` segments, e.g. `/wake`. One at a protocol route's path takes its place. */
   path: string
-  /** `caller` is the request's, unverified, or this deployment's own code: the route verifies what it needs. */
-  handle(request: Request, context: { caller: Caller; param: string | null }): Promise<Response>
+  /** `caller` is this deployment's own code, or null for a request, which board() doesn't verify for it: the route checks what it needs. */
+  handle(request: Request, context: { caller: Caller | null; param: string | null }): Promise<Response>
 }
 
 /** The subscription sync's outbound runs on, in `BoardBinding.subscriptions`. No watcher's ID starts with `@`. */
@@ -119,23 +103,41 @@ export type BoardBinding = {
    * through board()'s sync: what `typing` answers. Answers the threads that took it.
    */
   typing(messages: readonly MessageView[], status: string | undefined): Promise<string[]>
-  /** A handle through board(), as `caller`: the middleware's, say. */
-  handle(caller: SelfCaller): Board
+  /**
+   * What a principal the backend stored may do now, under board()'s `access`: a schedule's creator
+   * at each send, a registrant at each event and pull. Null once it may do nothing.
+   */
+  accessNow(principal: Known): Promise<Access | null>
+  /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
+  project(): Promise<{ id: string | null; teamId: string | null }>
+  /**
+   * A handle through board(), as `caller`: what a backend writes for someone outside a request
+   * goes through it, so board()'s middleware sees it, a schedule's send as its creator, say. A
+   * verified caller's posts keep the IDs they're given.
+   */
+  handle(caller: Caller): Board
   /** The board's own URL, where a board elsewhere can wake it, once it's known. */
   url(): string | null
 }
 
 /**
- * Where a board lives. board() serves the protocol over HTTP: it routes, validates, serves, runs
- * watchers and sync, and calls these with what each request said. A backend verifies, decides,
- * stores, and answers.
+ * Where a board lives. board() serves the protocol over HTTP: it routes, validates, verifies each
+ * caller, applies `access`, runs the middleware, watchers, and sync, and calls these with the caller
+ * it verified. A backend stores and answers, honoring what each caller may do.
  */
 export interface Backend extends ProtocolMethods {
   /** Routes of its own, beside the protocol: one at a protocol route's path takes its place. */
   readonly routes: readonly BackendRoute[]
   /**
+   * Whether the board lives here. One that keeps it (`a2()`) lets in, when board()'s `access` is left
+   * out, its people and the board's own deployments; one that uses another board (`http()`) serves no
+   * requests then but wake-ups and webhooks, and with an `access`, serves its callers as that board's
+   * project.
+   */
+  readonly keeps: boolean
+  /**
    * board() calls it once, when it's created, before any request: what background work needs
-   * from the board (its subscriptions, its sync, a handle through it). It does no I/O.
+   * from the board (its subscriptions, its sync, its policy, a handle through it). It does no I/O.
    */
   bind(board: BoardBinding): void
 }
