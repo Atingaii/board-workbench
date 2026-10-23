@@ -4,8 +4,7 @@ export const CHANNEL_PATH_MAX = 80
 export const MESSAGE_TEXT_MAX = 10_000
 /** The longest `x-board-scope` header the board reads; a schedule keeps its creator's. */
 export const SCOPE_MAX = 4000
-/** Under Vercel Functions' 4.5 MB request body limit, so an upload fits in one request. */
-export const ATTACHMENT_BYTES_MAX = 4 * 1024 * 1024
+export { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, IMPORT_BYTES_MAX } from './files.ts'
 export const ATTACHMENTS_PER_MESSAGE_MAX = 10
 
 const segment = '[a-z0-9][a-z0-9_-]*'

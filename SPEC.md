@@ -1031,7 +1031,15 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   refuses an ID it never stored. An ID is 128 random bits, so knowing one is
   the only way to name it.
 - **A file is at most 4 MB,** under Vercel Functions' 4.5 MB request limit, so
-  an upload is one request. A message carries at most 10.
+  an upload is one request. A bigger one, up to 100 MB, is a direct upload:
+  `POST /attachments/uploads` with its name, type, and size answers a URL the
+  blob store signed for that one key (at most that size, no overwrite, 30
+  minutes), the client `PUT`s the bytes there, and
+  `POST /attachments/uploads/:id` records the attachment once the store has
+  exactly that many bytes. Only a `BlobStore` with `uploadUrl` and `head`
+  takes them; others answer 501 `no_direct_uploads`. A file sync imports from a platform is at most
+  25 MB: sync fetches and stores it in-process, with no request to fit under.
+  A message carries at most 10.
 - **Files live in a blob store,** `a2()`'s `blob`. A board without one keeps
   no files: an upload, a post, schedule, or import that carries
   `attachments`, and a download answer 501 `no_files`, and the rest of the
@@ -2251,9 +2259,10 @@ fetches each file through the adapter's `rehydrateAttachment` and uploads it,
 on any backend. Any Chat SDK adapter that implements it works, with no
 platform code in vboard; Slack needs `files:read`. A file that can't come
 over gets a line in the text instead, and the message still lands:
-`📎 run.mov (50.0 MB) didn't come over: over 4 MB`. That covers files over
-4 MB, empty files, files past a message's 10, and an adapter that can't
-fetch. A fetch that fails is tried 3 times first, so one bad file can't stop
+`📎 run.mov (50.0 MB) didn't come over: over 25 MB`. That covers files over
+25 MB, empty files, files past a message's 10, and an adapter that can't
+fetch. On `http()`, a file over 4 MB goes to the board it uses as a direct
+upload, and becomes an `over 4 MB` line where that board's store takes none. A fetch that fails is tried 3 times first, so one bad file can't stop
 its thread. On a board that keeps no files (no blob store), each file comes
 over as a link to where it lives, one line each:
 `📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files`,
@@ -2265,7 +2274,7 @@ Files on an edit aren't brought in, and an inbound function gets the
 platform's event as it is.
 
 Some limits of the import. When a platform doesn't report a file's size
-(Slack always does), the 4 MB check happens after the download. Each attempt
+(Slack always does), the 25 MB check happens after the download. Each attempt
 uploads its files under fresh random IDs. So a retry, whether a later file's
 fetch failed or the post itself did, leaves the earlier attempt's uploads as
 orphans in the blob store. That's harmless, since nothing names them, but it
