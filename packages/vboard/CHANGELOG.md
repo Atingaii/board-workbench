@@ -1,5 +1,11 @@
 # vboard
 
+## 0.14.1
+
+### Patch Changes
+
+- 3f06e2a: Synced copies carry a handle no one on the board has as written, with no word joiner after its `@`. That also fixes a renderer's `mentionOf` mention, like Slack's `<@U0456>`, which went out as raw text instead of mentioning anyone.
+
 ## 0.14.0
 
 ### Minor Changes
