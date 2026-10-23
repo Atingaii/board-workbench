@@ -787,12 +787,14 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /**
-   * `convert(text)` with every occurrence of `kept` left as it is: a renderer's own
+   * `convert(text)` with every whole occurrence of `kept` left as it is: a renderer's own
    * `mentionOf` mentions are already native, so `<@U0456>` mustn't read as a handle `@U0456`.
+   * Whole, as a mention reads: GitHub's `@anna` doesn't hold the start of `@annabelle`.
    */
   function keeping(text: string, kept: string[], convert: (text: string) => string): string {
     if (!kept.length || /[\uE010\uE011]/.test(text)) return convert(text)
-    const pattern = new RegExp(kept.sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+    const alternatives = kept.sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+    const pattern = new RegExp(`(?<![\\w@.-])(?:${alternatives})(?![A-Za-z0-9_/-]|\\.(?=[A-Za-z0-9]))`, 'g')
     const held: string[] = []
     const out = convert(text.replace(pattern, (match) => `\uE010${held.push(match) - 1}\uE011`))
     return out.replace(/\uE010(\d+)\uE011/g, (_, i: string) => held[Number(i)]!)
