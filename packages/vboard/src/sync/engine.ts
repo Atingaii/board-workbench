@@ -787,6 +787,18 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /**
+   * `convert(text)` with every occurrence of `kept` left as it is: a renderer's own
+   * `mentionOf` mentions are already native, so `<@U0456>` mustn't read as a handle `@U0456`.
+   */
+  function keeping(text: string, kept: string[], convert: (text: string) => string): string {
+    if (!kept.length || /[\uE010\uE011]/.test(text)) return convert(text)
+    const pattern = new RegExp(kept.sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g')
+    const held: string[] = []
+    const out = convert(text.replace(pattern, (match) => `\uE010${held.push(match) - 1}\uE011`))
+    return out.replace(/\uE010(\d+)\uE011/g, (_, i: string) => held[Number(i)]!)
+  }
+
+  /**
    * How `platform` mentions an actor: its own account, its person's, or any account
    * its person linked there. An agent is just itself.
    */
@@ -857,15 +869,20 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
     if (message.from) name = `${name} (${entries[message.from]?.platform ?? message.by.actor.slice(0, message.by.actor.indexOf(':'))})`
     const platform = platformOf(key)
+    const given = new Set<string>()
     const body = platform.render(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
       author: actor ? { ...actor } : null,
-      mentionOf: (id: string) => nativeMention(platform, id, actors),
+      mentionOf: (id: string) => {
+        const mention = nativeMention(platform, id, actors)
+        if (mention) given.add(mention)
+        return mention
+      },
       label: name,
       target,
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = textFor(platform, message, actors, body)
+    const markdown = keeping(body, [...given], (text) => textFor(platform, message, actors, text))
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
     return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
   }
