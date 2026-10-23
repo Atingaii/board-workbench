@@ -771,8 +771,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /**
    * A message's text for a platform: each mention it resolved reads natively where the
    * actor is the platform's own, and as their plain name anywhere else. A handle it
-   * didn't resolve gets a word joiner after its `@`: it reads the same, but a platform
-   * that links typed handles (GitHub) can't ping whoever has that login there.
+   * didn't resolve goes out as written.
    */
   function textFor(platform: SyncProvider, message: MessageView, actors: Actors, text = message.text): string {
     const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
@@ -782,22 +781,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           ? mentioned.find((candidate) => candidate.id === token.actor)
           : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
       if (actor) return nativeMention(platform, actor.id, actors) ?? actor.name
-      return token.kind === 'handle' ? `@⁠${written.slice(1)}` : null
+      return null
     })
-  }
-
-  /**
-   * `convert(text)` with every whole occurrence of `kept` left as it is: a renderer's own
-   * `mentionOf` mentions are already native, so `<@U0456>` mustn't read as a handle `@U0456`.
-   * Whole, as a mention reads: GitHub's `@anna` doesn't hold the start of `@annabelle`.
-   */
-  function keeping(text: string, kept: string[], convert: (text: string) => string): string {
-    if (!kept.length || /[\uE010\uE011]/.test(text)) return convert(text)
-    const alternatives = kept.sort((a, b) => b.length - a.length).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
-    const pattern = new RegExp(`(?<![\\w@.-])(?:${alternatives})(?![A-Za-z0-9_/-]|\\.(?=[A-Za-z0-9]))`, 'g')
-    const held: string[] = []
-    const out = convert(text.replace(pattern, (match) => `\uE010${held.push(match) - 1}\uE011`))
-    return out.replace(/\uE010(\d+)\uE011/g, (_, i: string) => held[Number(i)]!)
   }
 
   /**
@@ -871,20 +856,15 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
     if (message.from) name = `${name} (${entries[message.from]?.platform ?? message.by.actor.slice(0, message.by.actor.indexOf(':'))})`
     const platform = platformOf(key)
-    const given = new Set<string>()
     const body = platform.render(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
       author: actor ? { ...actor } : null,
-      mentionOf: (id: string) => {
-        const mention = nativeMention(platform, id, actors)
-        if (mention) given.add(mention)
-        return mention
-      },
+      mentionOf: (id: string) => nativeMention(platform, id, actors),
       label: name,
       target,
     }))
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
-    const markdown = keeping(body, [...given], (text) => textFor(platform, message, actors, text))
+    const markdown = textFor(platform, message, actors, body)
     // An agent's message can carry its own name and picture where the platform shows a sender per message.
     return message.by.profile && !message.from ? { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } } : { markdown }
   }

@@ -2140,8 +2140,7 @@ accounts, or null. It returns the
 message body as markdown; vboard still adds attachment notes.
 The board's stored message and verified author are unchanged. Resolved mentions
 are converted to the destination's native form in the rendered body, after the
-custom renderer runs; code spans retain their usual treatment. What `mentionOf`
-returned is already native and goes out as it is.
+custom renderer runs; code spans retain their usual treatment.
 
 ```ts
 kapso({

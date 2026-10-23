@@ -74,7 +74,7 @@ function slackAs(owners: Record<string, string>, onPost?: (post: { threadId: str
   }
 }
 
-function setup(options: { users?: UserTokens; owners?: Record<string, string>; githubUsers?: UserTokens; onPost?: Parameters<typeof slackAs>[1]; url?: string | undefined; slackRender?: ProviderOptions['render']; githubRender?: ProviderOptions['render'] } = {}) {
+function setup(options: { users?: UserTokens; owners?: Record<string, string>; githubUsers?: UserTokens; onPost?: Parameters<typeof slackAs>[1]; url?: string | undefined; slackRender?: ProviderOptions['render'] } = {}) {
   const as = slackAs(options.owners ?? {}, options.onPost)
   const s = fakePlatform('slack', as.extend)
   const g = fakePlatform('github')
@@ -86,7 +86,7 @@ function setup(options: { users?: UserTokens; owners?: Record<string, string>; g
         channels: { C1: 'firehose' },
         render: options.slackRender,
       }),
-      github: github({ adapter: options.githubUsers ? withUserTokens(g.adapter, options.githubUsers) : g.adapter, repos: { 'basehub-ai/vboard': 'prs' }, render: options.githubRender }),
+      github: github({ adapter: options.githubUsers ? withUserTokens(g.adapter, options.githubUsers) : g.adapter, repos: { 'basehub-ai/vboard': 'prs' } }),
     },
     ...('url' in options ? { url: options.url } : {}),
   })
@@ -228,7 +228,7 @@ describe('linking accounts with a one-time code', () => {
     await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toContainEqual(expect.stringContaining('julianbenegas again')))
   })
 
-  it("keeps a renderer's own mentionOf mentions native, while the text's unknown handles still can't ping", async () => {
+  it("sends a renderer's mentionOf mention as it is, next to a handle no one has", async () => {
     const { board, s, webhook } = setup({
       slackRender: ({ message, mentionOf }) => `${message.text} · for ${mentionOf('vercel:user:u_julian') ?? 'julian'}`,
     })
@@ -240,29 +240,7 @@ describe('linking accounts with a one-time code', () => {
 
     await julian('POST', '/messages', { channel: 'firehose', text: 'ask @nobody' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
-    expect(JSON.parse(s.channelPosts[0]!.text).markdown).toBe('ask @\u2060nobody · for <@U_JULIAN>')
-  })
-
-  it("keeps only whole renderer mentions native: a longer handle that starts with one still can't ping", async () => {
-    const { board, g, webhook } = setup({
-      githubRender: ({ message, mentionOf }) => `${message.text} · for ${mentionOf('github:user:42') ?? 'nobody'}`,
-    })
-    const ada = caller(board.fetch, await personToken('u_ada'), { 'x-board-handle': 'ada' })
-    await webhook(
-      'github',
-      {
-        action: 'opened',
-        repository: { full_name: 'basehub-ai/vboard' },
-        sender: { login: 'julianbenegas', id: 42 },
-        pull_request: { number: 8, title: 'Links', html_url: 'https://github.com/basehub-ai/vboard/pull/8', draft: false, merged: false },
-      },
-      { 'x-github-event': 'pull_request', 'x-github-delivery': 'd1' },
-    )
-    await vi.waitFor(async () => expect(await read(ada, 'channel=prs')).toHaveLength(1))
-    const [root] = await read(ada, 'channel=prs')
-    await ada('POST', '/messages', { re: root!.id, text: 'ask @julianbenegas2 and @nobody' })
-    await vi.waitFor(() => expect(g.posts).toHaveLength(1))
-    expect(g.posts[0]!.text).toContain('ask @\u2060julianbenegas2 and @\u2060nobody · for @julianbenegas')
+    expect(JSON.parse(s.channelPosts[0]!.text).markdown).toBe('ask @nobody · for <@U_JULIAN>')
   })
 
   it('imports an expired, foreign, or already used code as a message, and the first account keeps it', async () => {
