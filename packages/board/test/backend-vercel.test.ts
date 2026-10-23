@@ -84,9 +84,13 @@ describe('vercel()', () => {
     expect(api.requests.filter((r) => /\/threads$/.test(r))).toHaveLength(1)
   })
 
-  it('says when the API names no board for these credentials', async () => {
-    const team = handleOn(fakeMessageboard({ boardId: null }))
-    await expect(team.post('dev', { text: 'hello' })).rejects.toMatchObject({ status: 404, code: 'no_board' })
+  it("makes the team's board the first time a person uses it, and tells a project it needs a grant", async () => {
+    const pong = handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production')
+    await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({ status: 404, code: 'no_board' })
+    const api = fakeMessageboard({ boardId: null })
+    await handleOn(api).post('dev', { text: 'hello' })
+    expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
+    expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
   it("refuses watchers and sync when it's made, since the API runs neither yet", () => {

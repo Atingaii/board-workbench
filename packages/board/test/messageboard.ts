@@ -51,7 +51,7 @@ class Refused extends Error {
 
 export function fakeMessageboard(options: { teamId?: string; boardId?: string | null } = {}) {
   const teamId = options.teamId ?? 'team_test'
-  const boardId = options.boardId === undefined ? 'brd_test' : options.boardId
+  let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
   const threads = new Map<string, Thread>()
   const posts = new Map<string, string>()
@@ -183,6 +183,12 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     if (method !== 'GET' && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     if (method === 'GET' && path === '/me') return { teamId, actor }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
+    if (method === 'POST' && path === '/boards/default') {
+      // Board creates record a person's event, so project tokens can't.
+      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
+      boardId ??= 'brd_default'
+      return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
+    }
     const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
     if (!onBoard || onBoard[1] !== boardId) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''

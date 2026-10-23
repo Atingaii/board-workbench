@@ -212,13 +212,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   let board: Promise<string> | null = null
-  /** The board's ID: the one given, or the team's, which the API names only to those it lets in. */
+  /**
+   * The board's ID: the one given, or the team's, which the API names only to those it lets in. A
+   * team with none gets one the first time a person uses it, as the API asks of its clients; a
+   * project can't make it, and needs a person to grant it the board anyway.
+   */
   const boardId = (who: Who) =>
     (board ??= options.board
       ? Promise.resolve(options.board)
-      : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(({ defaultBoardId }) => {
-          if (!defaultBoardId) throw new HttpError(404, 'no_board', "Vercel's API names no board for this team that these credentials may use: ask the team to grant this project its board, or pass `board`")
-          return defaultBoardId
+      : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
+          if (defaultBoardId) return defaultBoardId
+          if ((await self(who)).actor.principal.type === 'project')
+            throw new HttpError(404, 'no_board', "Vercel's API names no board this project may use: ask someone on the team to grant it the team's board, or pass `board`")
+          const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
+          return made.id
         })).catch((error: unknown) => {
       board = null
       throw error
