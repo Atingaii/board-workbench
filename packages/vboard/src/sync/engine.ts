@@ -771,8 +771,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /**
    * A message's text for a platform: each mention it resolved reads natively where the
    * actor is the platform's own, and as their plain name anywhere else. A handle it
-   * didn't resolve gets a word joiner after its `@`: it reads the same, but a platform
-   * that links typed handles (GitHub) can't ping whoever has that login there.
+   * didn't resolve goes out as written.
    */
   function textFor(platform: SyncProvider, message: MessageView, actors: Actors, text = message.text): string {
     const mentioned = message.mentions.map((id) => actors.byId[id]).filter((actor) => actor !== undefined)
@@ -782,7 +781,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           ? mentioned.find((candidate) => candidate.id === token.actor)
           : mentioned.find((candidate) => candidate.handle.toLowerCase() === token.handle)
       if (actor) return nativeMention(platform, actor.id, actors) ?? actor.name
-      return token.kind === 'handle' ? `@⁠${written.slice(1)}` : null
+      return null
     })
   }
 

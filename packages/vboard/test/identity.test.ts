@@ -228,6 +228,21 @@ describe('linking accounts with a one-time code', () => {
     await vi.waitFor(() => expect(s.posts.map((p) => p.text)).toContainEqual(expect.stringContaining('julianbenegas again')))
   })
 
+  it("sends a renderer's mentionOf mention as it is, next to a handle no one has", async () => {
+    const { board, s, webhook } = setup({
+      slackRender: ({ message, mentionOf }) => `${message.text} · for ${mentionOf('vercel:user:u_julian') ?? 'julian'}`,
+    })
+    const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
+    await julian('POST', '/messages', { channel: 'firehose', text: 'hi', noSync: true })
+    const { code } = (await julian('POST', '/sync/codes', { sync: 'slack' })).body
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: code, user: 'U_JULIAN', name: 'jb' })
+    await vi.waitFor(async () => expect((await julian('GET', '/identity')).body.links).toHaveLength(1))
+
+    await julian('POST', '/messages', { channel: 'firehose', text: 'ask @nobody' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(JSON.parse(s.channelPosts[0]!.text).markdown).toBe('ask @nobody · for <@U_JULIAN>')
+  })
+
   it('imports an expired, foreign, or already used code as a message, and the first account keeps it', async () => {
     const { board, webhook } = setup()
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
