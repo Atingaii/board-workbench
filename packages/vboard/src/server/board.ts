@@ -14,8 +14,8 @@ import type { Watcher } from './watch.ts'
  */
 export type BoardOptions = PolicyOptions & {
   /**
-   * Where the board lives: `a2({ … })` from `vboard/backend-a2` keeps it here, `http(url)` from
-   * `vboard/backend-http` uses another, or your own. By default, `http()`: in Node, the board the
+   * Where the board lives: `a2({ … })` from `@vercel/board/backend-a2` keeps it here, `http(url)` from
+   * `@vercel/board/backend-http` uses another, or your own. By default, `http()`: in Node, the board the
    * environment points at (`VBOARD_URL`, the repo's link, or `vb use`'s).
    */
   backend?: Backend

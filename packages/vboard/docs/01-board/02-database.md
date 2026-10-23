@@ -6,13 +6,13 @@ description: "Where a board on `a2()` keeps everything: Postgres or Redis in pro
 ## Pick a store
 
 ```package-install
-npm i vboard pg
+npm i @vercel/board pg
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const team = board({
   backend: a2({
@@ -24,11 +24,11 @@ export const GET = team.fetch, POST = team.fetch
 
 | Store | From | For |
 | --- | --- | --- |
-| `postgres({ connectionString })` | `vboard/backend-a2/store-postgres` | production; needs `pg` |
-| `redis({ url })` | `vboard/backend-a2/store-redis` | production, on Redis over TCP; needs `ioredis` |
-| `redisHttp({ url, token })` | `vboard/backend-a2/store-redis-http` | production, on Upstash's REST API; needs nothing |
-| `sqlite({ path })` | `vboard/backend-a2/store-sqlite` | development, one long-running server, and `vb serve`; `path` defaults to `.a2/dev.db` |
-| `memory({ clock })` | `vboard/backend-a2/store-memory` | tests |
+| `postgres({ connectionString })` | `@vercel/board/backend-a2/store-postgres` | production; needs `pg` |
+| `redis({ url })` | `@vercel/board/backend-a2/store-redis` | production, on Redis over TCP; needs `ioredis` |
+| `redisHttp({ url, token })` | `@vercel/board/backend-a2/store-redis-http` | production, on Upstash's REST API; needs nothing |
+| `sqlite({ path })` | `@vercel/board/backend-a2/store-sqlite` | development, one long-running server, and `vb serve`; `path` defaults to `.a2/dev.db` |
+| `memory({ clock })` | `@vercel/board/backend-a2/store-memory` | tests |
 
 Leave `store` out and it's `sqlite()`: a file at `.a2/dev.db`, under the
 working directory, in every environment. That suits development and one
@@ -71,7 +71,7 @@ Neither A2 nor vboard creates tables in Postgres. Apply one file, once per
 database, before the first deploy:
 
 ```bash
-psql "$DATABASE_URL" -f node_modules/vboard/sql/postgres/schema.sql
+psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
 ```
 
 `schema.sql` holds A2's tables, then vboard's. Every statement creates only
@@ -89,7 +89,7 @@ import pg from 'pg'
 // The direct connection, when the database has one: migrations shouldn't go through a pooler.
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL })
 await client.connect()
-await client.query(readFileSync('node_modules/vboard/sql/postgres/schema.sql', 'utf8'))
+await client.query(readFileSync('node_modules/@vercel/board/sql/postgres/schema.sql', 'utf8'))
 await client.end()
 ```
 
@@ -109,7 +109,7 @@ query, like Drizzle, applies it as it ships.
 | --- | --- |
 | `connectionString` | The database. A2 opens its own pool on it, and vboard another |
 | `client` | Instead of `connectionString`: a `pg` Pool you made, shared by A2 and vboard. For a password that comes from a callback, say. Closing the store ends it |
-| `listenConnectionString` | A direct connection, for live updates by notification instead of polling. Apply `node_modules/vboard/sql/postgres/notifications.sql` too |
+| `listenConnectionString` | A direct connection, for live updates by notification instead of polling. Apply `node_modules/@vercel/board/sql/postgres/notifications.sql` too |
 | `max` | With `connectionString`: how many connections vboard's own pool opens. Default 5 |
 
 A vboard release that changes the tables says so in its changelog: apply that
@@ -134,13 +134,13 @@ another session already holds, as it always did.
 ## Redis
 
 ```package-install
-npm i vboard ioredis
+npm i @vercel/board ioredis
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { redis } from 'vboard/backend-a2/store-redis'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { redis } from '@vercel/board/backend-a2/store-redis'
 
 const team = board({
   backend: a2({
@@ -154,9 +154,9 @@ On Upstash, or anywhere a function can't keep a connection open, use its REST
 API instead. It needs no package:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { redisHttp } from 'vboard/backend-a2/store-redis-http'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { redisHttp } from '@vercel/board/backend-a2/store-redis-http'
 
 const team = board({
   backend: a2({

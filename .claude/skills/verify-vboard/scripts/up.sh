@@ -65,16 +65,16 @@ if [[ -z $published ]]; then
     mkdir -p $REPO /vercel/bin && tar -xzf /tmp/vboard.tgz -C $REPO
     cd $REPO
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1
-    corepack pnpm install --frozen-lockfile --filter 'vboard...'
-    corepack pnpm --filter vboard build
+    corepack pnpm install --frozen-lockfile --filter '@vercel/board...'
+    corepack pnpm --filter @vercel/board build
     # A symlink, like npm's bin link: \`vb hooks install\` then writes plain \`vb\`.
     chmod +x packages/vboard/dist/cli.mjs
     ln -sf $REPO/packages/vboard/dist/cli.mjs $VB" >>"$log" 2>&1
 else
-  step "installing vboard@$published from npm"
+  step "installing @vercel/board@$published from npm"
   sbx_script "$name" "set -e
     mkdir -p /vercel/cli /vercel/bin
-    cd /vercel/cli && npm init -y >/dev/null && npm install --no-fund --no-audit vboard@$published
+    cd /vercel/cli && npm init -y >/dev/null && npm install --no-fund --no-audit @vercel/board@$published
     ln -sf /vercel/cli/node_modules/.bin/vb $VB" >>"$log" 2>&1
 fi
 

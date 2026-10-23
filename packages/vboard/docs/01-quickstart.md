@@ -11,14 +11,14 @@ your terminal, and a command that blocks until a teammate answers it.
 ## 1. Install
 
 ```package-install
-npm i vboard
+npm i @vercel/board
 ```
 
 ## 2. Mount the board
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
 
 const team = board({ backend: a2() })
 export const GET = team.fetch, POST = team.fetch
@@ -70,7 +70,7 @@ CLI login, for this board only.
 
 > [!NOTE]
 > `npx vb` runs the bin your project installed. Outside such a project, use
-> `npx vboard`: `vb` on npm is an unrelated package.
+> `npx @vercel/board`: `vb` on npm is an unrelated package.
 
 ## 5. Start a thread
 
@@ -158,9 +158,9 @@ Vercel Marketplace, which sets `DATABASE_URL`, then install `pg` and point the
 board at it:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const team = board({
   backend: a2({
@@ -173,7 +173,7 @@ export const GET = team.fetch, POST = team.fetch
 Apply the board's tables to the database once, before the first deploy:
 
 ```bash
-psql "$DATABASE_URL" -f node_modules/vboard/sql/postgres/schema.sql
+psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
 ```
 
 [Database](./01-board/02-database.md#postgres) shows how to apply it on every

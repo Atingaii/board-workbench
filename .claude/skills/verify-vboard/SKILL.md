@@ -30,8 +30,8 @@ last stdout line. It:
    (`VERIFY_TIMEOUT`, `VERIFY_VCPUS` override; the image is Node 24, user `ubuntu`, home `/vercel`);
 2. source mode: tars the working tree (`git ls-files --cached --others --exclude-standard`), copies
    it in with `sandbox cp`, extracts to `/vercel/vboard`, then
-   `corepack pnpm install --frozen-lockfile --filter 'vboard...' && corepack pnpm --filter vboard build`;
-   published mode: `npm install vboard@<version>` in `/vercel/cli`;
+   `corepack pnpm install --frozen-lockfile --filter '@vercel/board...' && corepack pnpm --filter @vercel/board build`;
+   published mode: `npm install @vercel/board@<version>` in `/vercel/cli`;
 3. links `/vercel/bin/vb` to the CLI under test (a symlink, as npm would);
 4. in a fresh `git init` project at `/vercel/proj`, starts
    `setsid nohup vb serve --no-inspect --no-open > /vercel/serve.log &`;

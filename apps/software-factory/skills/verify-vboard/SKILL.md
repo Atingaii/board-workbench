@@ -32,7 +32,7 @@ It prints the board's URL, the vb version it built, and the run's transcript.
 Each `--name` is its own run with its own board and port, so `before` and
 `after` can be up side by side. Building takes a few seconds; a `--ref` run
 installs its own dependencies first. Iterating on this checkout, build it
-yourself (`pnpm --filter vboard build`) and `up --no-build`.
+yourself (`pnpm --filter @vercel/board build`) and `up --no-build`.
 
 ## 2. Drive it
 

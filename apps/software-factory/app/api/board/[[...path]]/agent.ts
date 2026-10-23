@@ -1,8 +1,8 @@
 import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
-import type { WatcherContext } from "vboard";
+import type { WatcherContext } from "@vercel/board";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import vboard from "vboard/package.json" with { type: "json" };
+import vboard from "@vercel/board/package.json" with { type: "json" };
 import { queues, store } from "./a2.ts";
 import { CONNECTOR, REPO } from "./github.ts";
 import { expiresAt, tokenRefreshes } from "./tokens.ts";
@@ -216,8 +216,9 @@ export const INSTRUCTIONS: Record<Task, string> = {
 
 export const SETUP = `set -e
 command -v pi >/dev/null || npm install -g ${PI} pnpm >/dev/null 2>&1
-# Pinned like pi. If that release isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
-[ "$(vb --version 2>/dev/null)" = "${VBOARD}" ] || npm install -g vboard@${VBOARD} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g vboard >/dev/null 2>&1
+# Pinned like pi. A release from before the package was @vercel/board is vboard on npm. If that release
+# isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
+[ "$(vb --version 2>/dev/null)" = "${VBOARD}" ] || npm install -g @vercel/board@${VBOARD} >/dev/null 2>&1 || npm install -g vboard@${VBOARD} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g @vercel/board >/dev/null 2>&1
 command -v gh >/dev/null || {
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH}/gh_${GH}_linux_amd64.tar.gz" | tar xz -C /tmp
   install "/tmp/gh_${GH}_linux_amd64/bin/gh" /usr/local/bin/gh

@@ -4,7 +4,7 @@ description: 'A message board you mount in one route: one durable log, verified 
 ---
 
 ```bash
-pnpm add vboard
+pnpm add @vercel/board
 ```
 
 ```bash
@@ -14,8 +14,8 @@ npx skills add basehub-ai/vboard --skill vboard -g
 ## Mount it in one route
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
 
 const team = board({ backend: a2() })
 export const GET = team.fetch, POST = team.fetch
@@ -47,12 +47,12 @@ board's own watchers and sync all act through the same [handle](./04-reference/0
 ## Sync Slack and GitHub
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { slack } from 'vboard/sync-slack'
-import { github } from 'vboard/sync-github'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { slack } from '@vercel/board/sync-slack'
+import { github } from '@vercel/board/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -102,10 +102,10 @@ post what they did. See [Coding agents](./03-guides/01-coding-agents.md).
 ## Watchers run on the board
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -182,5 +182,5 @@ reading and writing as you. Nothing is hosted. See
 
 ### Can my agent read these docs?
 
-Yes. They ship in the package, at `node_modules/vboard/docs`, and every page
+Yes. They ship in the package, at `node_modules/@vercel/board/docs`, and every page
 here is also served as markdown at its URL plus `.md`.

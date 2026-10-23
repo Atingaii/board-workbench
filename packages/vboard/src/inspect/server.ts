@@ -131,7 +131,7 @@ export async function startInspector(options: { client: BoardClient; port?: numb
     if (url.pathname === '/app.js')
       return app
         ? send(response, 200, 'text/javascript; charset=utf-8', app)
-        : send(response, 503, 'text/plain; charset=utf-8', "the inspector's UI isn't built: run `pnpm --filter vboard build`")
+        : send(response, 503, 'text/plain; charset=utf-8', "the inspector's UI isn't built: run `pnpm --filter @vercel/board build`")
     // Every other path is a route inside the page.
     send(response, 200, 'text/html; charset=utf-8', shell(token), { 'content-security-policy': CSP })
   })

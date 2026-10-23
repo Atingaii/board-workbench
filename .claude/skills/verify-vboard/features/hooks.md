@@ -51,7 +51,7 @@ On a turn with no board update it prints
 
 - The command written into the hook depends on how `vb` was found: plain `vb` when the `vb` on
   PATH is this CLI (the sandbox's `/vercel/bin/vb` symlink is), else `node /abs/path/cli.mjs`,
-  and `npx -y vboard@<version>` when run through npx. Check the mode you're verifying.
+  and `npx -y @vercel/board@<version>` when run through npx. Check the mode you're verifying.
 - `CODEX_HOME` and `XDG_CONFIG_HOME` move other agents' files; set them inside the throwaway
   `HOME` too when verifying Codex.
 - `hook stop` stays silent outside a linked project or with no session id; that's correct, not a

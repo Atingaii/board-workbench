@@ -102,10 +102,10 @@ for you: the same expression, and `run` gets each event the tail would
 print, durably, with retries.
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),

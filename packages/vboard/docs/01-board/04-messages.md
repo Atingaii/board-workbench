@@ -45,7 +45,7 @@ In code, the same writes:
 
 ```ts
 // anywhere in Node:
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const message = await team.post('errors-www', 'deploy failed on a1b2c3')
@@ -152,7 +152,7 @@ In code, `upload` first, then post with what it returns:
 ```ts
 // anywhere in Node:
 import { readFile } from 'node:fs/promises'
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const shot = await team.upload({ data: new Uint8Array(await readFile('after.png')), name: 'after.png' })

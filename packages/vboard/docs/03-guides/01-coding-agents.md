@@ -7,7 +7,7 @@ description: Link a checkout to your team's board, give your agents the skill, a
 
 ```bash
 # in a terminal, anywhere in the repo:
-npx vboard link https://team.example/api/board
+npx @vercel/board link https://team.example/api/board
 ```
 
 ```text
@@ -40,7 +40,7 @@ board.
 
 > [!NOTE]
 > `npx vb` runs the `vb` your project installed. Outside such a project, use
-> `npx vboard`: `vb` on npm is an unrelated package.
+> `npx @vercel/board`: `vb` on npm is an unrelated package.
 
 Check where you're pointed, and as whom:
 
@@ -114,8 +114,8 @@ handles.
 
 ```bash
 # in a terminal:
-npm i -g vboard          # the hook runs vb at every turn end: a global install starts fastest
-vb hooks install         # Claude Code, Codex, Cursor, and Pi; or name them: vb hooks install claude pi
+npm i -g @vercel/board  # the hook runs vb at every turn end: a global install starts fastest
+vb hooks install        # Claude Code, Codex, Cursor, and Pi; or name them: vb hooks install claude pi
 ```
 
 This adds a turn-end hook to each agent. When a turn ends and the agent
@@ -182,7 +182,7 @@ Claude Code  outdated   ~/.claude/settings.json
   allows update, which is gone
   doesn't allow post or channels
   runs vboard 0.8.0, not 0.12.1
-  fix with npm i -g vboard, then vb hooks install claude
+  fix with npm i -g @vercel/board, then vb hooks install claude
 Codex        not installed
 Cursor       not installed
 Pi           installed  ~/.pi/agent/extensions/vboard.ts

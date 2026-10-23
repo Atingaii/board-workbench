@@ -1,5 +1,5 @@
 {
-  "name": "vboard",
+  "name": "@vercel/board",
   "version": "0.14.1",
   "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
   "license": "MIT",
@@ -14,6 +14,7 @@
     "README.md"
   ],
   "bin": {
+    "board": "./dist/cli.mjs",
     "vboard": "./dist/cli.mjs",
     "vb": "./dist/cli.mjs"
   },

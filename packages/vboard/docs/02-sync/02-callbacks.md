@@ -9,11 +9,11 @@ A string mapping imports every event into one channel. A function receives every
 inbound event for its external channel, connected threads included, and decides:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { github, GitHubPayload } from 'vboard/sync-github'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { github, GitHubPayload } from '@vercel/board/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -88,8 +88,8 @@ Then, by kind:
 
 GitHub events also carry `subject: { type: 'pull_request' | 'issue', repo, number }`,
 comments and reactions included. The types are exported: `SlackEvent` from
-`vboard/sync-slack`, `GitHubEvent` and `GitHubPayload` from
-`vboard/sync-github`, and `WhatsAppEvent` from `vboard/sync-kapso`.
+`@vercel/board/sync-slack`, `GitHubEvent` and `GitHubPayload` from
+`@vercel/board/sync-github`, and `WhatsAppEvent` from `@vercel/board/sync-kapso`.
 
 ## Permalinks
 

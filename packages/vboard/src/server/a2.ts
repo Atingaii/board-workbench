@@ -69,22 +69,22 @@ import { VERSION } from '../version.ts'
 export type A2Options = {
   /**
    * Where the board keeps its log and tables: `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or
-   * `memory()` from `vboard/backend-a2/store-*`. Omitted: SQLite at `.a2/dev.db` in the working
+   * `memory()` from `@vercel/board/backend-a2/store-*`. Omitted: SQLite at `.a2/dev.db` in the working
    * directory, everywhere, which suits development and a single long-running server. Serverless
    * functions can't write there: pass a store, and the board's requests say so until you do.
    */
   store?: BoardStore
   /**
-   * What gives the board a clock: `vercelQueues()` or `qstash()` from `vboard/backend-a2/scheduler-*`,
-   * or `localScheduler()` from `vboard/backend-a2/scheduler-local` in a long-running process. Mount
+   * What gives the board a clock: `vercelQueues()` or `qstash()` from `@vercel/board/backend-a2/scheduler-*`,
+   * or `localScheduler()` from `@vercel/board/backend-a2/scheduler-local` in a long-running process. Mount
    * the backend's `scheduler` as `POST` in its own route. Without one, the consumers (the tables,
    * watchers, sync) run in the request that writes, a failure is tried again on the next write, and
    * scheduling answers 501 `no_scheduler`.
    */
   scheduler?: A2Scheduler
   /**
-   * Where attachments live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`, or `fsBlob()` and
-   * `memoryBlob()` from `vboard/backend-a2`. Without one, the board keeps no files: uploads, and
+   * Where attachments live: `vercelBlob()` from `@vercel/board/backend-a2/blob-vercel`, or `fsBlob()` and
+   * `memoryBlob()` from `@vercel/board/backend-a2`. Without one, the board keeps no files: uploads, and
    * posts that carry them, answer 501 `no_files`, and sync links a platform's files where they are.
    */
   blob?: BlobStore

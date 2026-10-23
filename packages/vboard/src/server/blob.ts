@@ -6,7 +6,7 @@ import { badRequest, HttpError, notFound } from './errors.ts'
 
 /**
  * Where attachments' bytes live. The board writes each file once, under a key
- * it chose, and never overwrites it; `vercelBlob()` from `vboard/backend-a2/blob-vercel` is the
+ * it chose, and never overwrites it; `vercelBlob()` from `@vercel/board/backend-a2/blob-vercel` is the
  * production one.
  */
 export type BlobStore = {

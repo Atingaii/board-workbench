@@ -23,7 +23,7 @@ import type { ProjectIdentity } from './identity.ts'
 /** Who may use a board, and what they may do: `board()`'s options for it. */
 export type PolicyOptions = {
   /**
-   * Who a request is: `oidcTokens()` from `vboard/access` by default, which checks its bearer token
+   * Who a request is: `oidcTokens()` from `@vercel/board/access` by default, which checks its bearer token
    * for the board's URL (pass it `local` for `vb serve`'s, or test issuers). Or a host's own
    * verifier, `(request) => ({ id, kind, handle })`: who the request is in the board's ID scheme,
    * from its credential or its headers (a session cookie). It replaces the built-in one, so no
@@ -34,7 +34,7 @@ export type PolicyOptions = {
   /**
    * Who besides the board's people and its own deployments in the environment it runs in may use
    * it, and what they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from
-   * `vboard/access`, and functions of your own, `(principal) => can`, for principals your
+   * `@vercel/board/access`, and functions of your own, `(principal) => can`, for principals your
    * `authenticate` returns. The first rule that matches decides; a function's undefined leaves it to
    * the next. A production board's previews need a rule, as
    * `vercelProject({ project: 'self', environments: ['preview'], can })`.

@@ -1,4 +1,4 @@
-// `vboard/backend-http` outside Node: the board at `url`, through the `fetch` you give it.
+// `@vercel/board/backend-http` outside Node: the board at `url`, through the `fetch` you give it.
 import { createHttp, type HttpBackend, type HttpOptions } from '../server/backend-http.ts'
 
 /**

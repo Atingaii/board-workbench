@@ -1,4 +1,4 @@
-import type { Watcher } from "vboard";
+import type { Watcher } from "@vercel/board";
 import { sourceLink } from "./agent.ts";
 import { github, prNumber, type GitHubOptions } from "./github.ts";
 import { threadOfBranch } from "./owner.ts";

@@ -1,4 +1,4 @@
-// What `vboard` exports beside board(), the same in every build.
+// What `@vercel/board` exports beside board(), the same in every build.
 export type { Board, BoardOptions } from './board.ts'
 export type { Backend, BackendRoute, BoardBinding, Caller, Identity, InboxDelivery, ProtocolMethods, SelfCaller, Subscription, VerifiedCaller } from './backend.ts'
 export type { CallerRequest, Claims } from './auth.ts'

@@ -1,5 +1,5 @@
-import { board } from "vboard";
-import { http } from "vboard/backend-http";
+import { board } from "@vercel/board";
+import { http } from "@vercel/board/backend-http";
 
 /** The commit this deployment runs, as its replies say. */
 export const COMMIT = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "local";

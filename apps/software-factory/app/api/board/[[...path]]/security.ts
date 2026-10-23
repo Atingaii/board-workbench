@@ -1,4 +1,4 @@
-import type { Watcher } from "vboard";
+import type { Watcher } from "@vercel/board";
 import type { tellPi } from "./agent";
 import { prNumber, REPO } from "./github.ts";
 

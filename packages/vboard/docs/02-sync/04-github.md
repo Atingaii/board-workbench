@@ -10,11 +10,11 @@ connector and a map of repos to [mappings](./01-overview.md#mappings). vboard
 builds the Chat SDK adapter and people's sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { github } from 'vboard/sync-github'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { github } from '@vercel/board/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -168,11 +168,11 @@ Without Connect, pass the App's credentials to a Chat SDK adapter
 
 ```ts app/api/board/[[...path]]/route.ts
 import { createGitHubAdapter } from '@chat-adapter/github'
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { github } from 'vboard/sync-github'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { github } from '@vercel/board/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),

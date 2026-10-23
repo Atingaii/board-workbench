@@ -38,11 +38,11 @@ it in: `error: this token can't use this board: add githubActions({ repository:
 ## Configure it
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { githubActions, oidc, vercelProject } from 'vboard/access'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { githubActions, oidc, vercelProject } from '@vercel/board/access'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -110,9 +110,9 @@ serves its own callers as a gateway to the board it uses: it verifies and
 limits them, then acts on that board as its project.
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
-import type { CallerRequest } from 'vboard/access'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
+import type { CallerRequest } from '@vercel/board/access'
 
 /** Whoever the app's session cookie names, or null for a request without one. */
 async function session(request: CallerRequest) {
@@ -155,18 +155,18 @@ team's board sees the project, labeled with who it was: Ada via support.
 ## A host's own verifier
 
 `board({ authenticate })` says who a request is. It's one function,
-`oidcTokens()` from `vboard/access` by default, and composing verifiers is
+`oidcTokens()` from `@vercel/board/access` by default, and composing verifiers is
 plain code. Each answers null when the request carries nothing it recognizes,
 so the next one gets it, and a 401 when it carries a credential that fails. A
 board on an app's own site can take the app's session cookie, from its staff
 and its customers, and `vb`'s tokens, from people, agents, and deployments:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { vercelProject, oidcTokens, type CallerRequest } from 'vboard/access'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { vercelProject, oidcTokens, type CallerRequest } from '@vercel/board/access'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const tokens = oidcTokens()
 
@@ -244,11 +244,11 @@ replaces `oidcTokens()`, and a function as `access` says what each principal
 may do:
 
 ```ts lib/boards.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { redis } from 'vboard/backend-a2/store-redis'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { redis } from '@vercel/board/backend-a2/store-redis'
 
 /** One team's board. Make each once, and cache it. */
 export function teamBoard(teamId: string) {
@@ -295,7 +295,7 @@ its own code, `{ self, origin }`. A backend of your own trusts the first, since
 only `board()` makes one, and honors what it may do in each channel:
 
 ```ts lib/backend.ts
-import { HttpError, type Caller } from 'vboard'
+import { HttpError, type Caller } from '@vercel/board'
 
 /** What a caller may read: every method that shows messages asks. */
 export function readable(caller: Caller, channel: string) {
@@ -314,7 +314,7 @@ carry, and the actor it writes as. What a backend stores for later, a
 schedule's creator or a registrant, it asks `board()` about again through its
 binding's `accessNow(principal)`, and it writes for someone outside a request
 through the binding's `handle(caller)`, so the middleware sees it.
-`vboard/access` has the pieces `board()` uses:
+`@vercel/board/access` has the pieces `board()` uses:
 
 | Export | What it does |
 | --- | --- |

@@ -9,7 +9,7 @@ export type PgPool = PgQueryable & {
   end(): Promise<void>
 }
 
-export const SCHEMA_FILE = 'node_modules/vboard/sql/postgres/schema.sql'
+export const SCHEMA_FILE = 'node_modules/@vercel/board/sql/postgres/schema.sql'
 
 /** The board's own error for tables that aren't there: the fix is a file to apply. */
 export class TablesNotConfiguredError extends Error {

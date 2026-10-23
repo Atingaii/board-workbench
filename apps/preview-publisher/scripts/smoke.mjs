@@ -35,24 +35,24 @@ try {
     stdio: 'inherit',
     timeout: 120_000,
   })
-  const installed = JSON.parse(await readFile(join(directory, 'node_modules/vboard/package.json'), 'utf8'))
+  const installed = JSON.parse(await readFile(join(directory, 'node_modules/@vercel/board/package.json'), 'utf8'))
   assert.equal(installed.name, manifest.name)
   assert.equal(installed.version, manifest.version)
   const lockfile = JSON.parse(await readFile(join(directory, 'package-lock.json'), 'utf8'))
-  assert.equal(lockfile.packages['node_modules/vboard'].integrity, manifest.integrity)
+  assert.equal(lockfile.packages['node_modules/@vercel/board'].integrity, manifest.integrity)
   execFileSync(
     'node',
     [
       '--input-type=module',
       '-e',
-      "import assert from 'node:assert/strict'; import { board } from 'vboard'; import { http } from 'vboard/backend-http'; assert.equal(typeof board, 'function'); assert.equal(typeof http, 'function')",
+      "import assert from 'node:assert/strict'; import { board } from '@vercel/board'; import { http } from '@vercel/board/backend-http'; assert.equal(typeof board, 'function'); assert.equal(typeof http, 'function')",
     ],
     { cwd: directory, stdio: 'inherit' },
   )
   const cli = execFileSync(join(directory, 'node_modules/.bin/vb'), ['--version'], { cwd: directory, encoding: 'utf8' })
   assert.equal(cli.trim(), manifest.version)
-  await readFile(join(directory, 'node_modules/vboard/docs/index.md'))
-  await readFile(join(directory, 'node_modules/vboard/dist/inspect/app.js'))
+  await readFile(join(directory, 'node_modules/@vercel/board/docs/index.md'))
+  await readFile(join(directory, 'node_modules/@vercel/board/dist/inspect/app.js'))
 } finally {
   await rm(directory, { recursive: true, force: true })
 }

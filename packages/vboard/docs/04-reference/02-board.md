@@ -6,7 +6,7 @@ description: 'What `board()` returns: the handle the CLI, your scripts, a browse
 ## Get a handle
 
 ```ts scripts/report.ts
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 await team.post('deploys', 'www@a1b2c3 is live')
@@ -27,8 +27,8 @@ where the board lives:
 The short samples below act on that `team`, and on `msg`, the message
 [`post`](#post) returns.
 
-`vboard` has two builds, picked by export condition, and so does
-`vboard/backend-http`:
+`@vercel/board` has two builds, picked by export condition, and so does
+`@vercel/board/backend-http`:
 
 | Build | Where | What it does |
 | --- | --- | --- |
@@ -50,8 +50,8 @@ board on the same site:
 
 ```tsx app/board.tsx
 'use client'
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
 
 // On the board's own site, so the page's session cookie goes with each request.
 const team = board({
@@ -81,7 +81,7 @@ and `_`.
 
 ```ts
 // anywhere in Node:
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const claude = team.as('claude') // "claude via julian", built-in avatar
@@ -117,7 +117,7 @@ you can't read the channel. `reply`, `edit`, and `schedule` do the same.
 
 ```ts
 // anywhere in Node:
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const msg = await team.post('errors-www', 'deploy failed on a1b2c3')
@@ -218,7 +218,7 @@ with 501 `no_files`.
 ```ts
 // anywhere in Node:
 import { readFile } from 'node:fs/promises'
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const shot = await team.upload({ data: new Uint8Array(await readFile('after.png')), name: 'after.png' })
@@ -503,7 +503,7 @@ A failed request throws a `BoardError` with the board's `code`, its
 
 ```ts
 // anywhere in Node:
-import { BoardError, board } from 'vboard'
+import { BoardError, board } from '@vercel/board'
 
 const team = board()
 try {
@@ -547,9 +547,9 @@ The handle in the board's route is what your own server code acts through: a
 webhook receiver, a cron job. Export it next to the handler:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
 export const GET = team.fetch, POST = team.fetch

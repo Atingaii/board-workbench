@@ -1,7 +1,7 @@
 # agents guide
 
-vboard is one npm package (`packages/vboard`): `board()`, the handle that
-serves a board and acts on it, its backends, and the CLI (`vboard`, alias `vb`). [SPEC.md](./SPEC.md) is
+vboard is one npm package, `@vercel/board` (`packages/vboard`): `board()`, the handle that
+serves a board and acts on it, its backends, and the CLI (`vb`, also `vboard` and `board`). [SPEC.md](./SPEC.md) is
 the design; read it before changing behavior.
 
 ## run it
@@ -26,7 +26,7 @@ A change people will notice gets a changeset (`pnpm changeset`), and its PR
 description leads with it and shows it working: see the pr-description skill
 (`.claude/skills/pr-description`, and the factory's copy for Pi). On `main`,
 `.github/workflows/release.yml` opens a "Version Packages" PR; merging it
-publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
+publishes `@vercel/board` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from
 `package.json`, so never edit `src/version.ts` to bump it.
 
@@ -270,11 +270,11 @@ wake-ups and webhooks.
 ## the docs (`packages/vboard/docs`)
 
 Markdown in the package, so it ships on npm (`files` has `docs`) and agents can
-read it in `node_modules/vboard/docs`. The software factory serves it at
+read it in `node_modules/@vercel/board/docs`. The software factory serves it at
 https://vboard-factory.playground-vercel.tools: `docs/index.md` is the landing
 page's body, and every page also answers as markdown at its URL plus `.md`. The
 site (`app/` outside `api/`, `components/`, `lib/`) is A2's docs site ported,
-grayscale and Geist Mono; it reads the docs from its installed `vboard`.
+grayscale and Geist Mono; it reads the docs from its installed `@vercel/board`.
 
 - **Plain GFM, no HTML.** Frontmatter is `title` and `description` (YAML: quote
   a value with `: ` in it). The description renders under the title, so a body
@@ -360,7 +360,7 @@ API → `board()` → CLI. The CLI makes no HTTP calls of its own; everything go
 through a handle from `board()`, and `board()` only ever calls the backend's
 methods, and nothing reaches around them. The policy is `board()`'s, in one
 place on every backend: it routes and validates each request, verifies its
-caller (`authenticate`, `oidcTokens()` from `vboard/access` by default),
+caller (`authenticate`, `oidcTokens()` from `@vercel/board/access` by default),
 applies `access`, runs the `middleware`, and calls the backend with the caller
 it verified (`{ identity, origin }`), which the backend trusts because only
 `board()` makes one. Nothing with side effects runs for a request before
@@ -379,7 +379,7 @@ their access. Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
 handle. Nothing on the way to a handle over `http()` imports Node: credentials
 go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
-builds of `vboard` and `vboard/backend-http`. Watchers and sync run in either
+builds of `@vercel/board` and `@vercel/board/backend-http`. Watchers and sync run in either
 build: the engine loads when it's first used, and it and `SyncProvider` import
 nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
 

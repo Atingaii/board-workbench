@@ -10,11 +10,11 @@ connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), 
 [mappings](./01-overview.md#mappings):
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { slack } from 'vboard/sync-slack'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { slack } from '@vercel/board/sync-slack'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -56,11 +56,11 @@ Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
 
 ```ts app/api/board/[[...path]]/route.ts
 import { createSlackAdapter } from '@chat-adapter/slack'
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { slack } from 'vboard/sync-slack'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { slack } from '@vercel/board/sync-slack'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),

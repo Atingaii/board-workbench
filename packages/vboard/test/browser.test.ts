@@ -29,7 +29,7 @@ async function nodeImports(dir: string): Promise<string[]> {
 }
 
 /**
- * `lines`, bundled for a browser as a page's bundler would: inside the package, so `vboard`
+ * `lines`, bundled for a browser as a page's bundler would: inside the package, so `@vercel/board`
  * resolves to itself through its exports, with a browser's conditions. Each file's text, by name.
  */
 async function bundle(lines: string[], check: (dir: string, files: Record<string, string>) => Promise<void>) {
@@ -61,8 +61,8 @@ describe('board() in a browser', () => {
   it('bundles with http() and nothing from Node, as a browser resolves the package', async () => {
     await bundle(
       [
-        "import { board } from 'vboard'",
-        "import { http } from 'vboard/backend-http'",
+        "import { board } from '@vercel/board'",
+        "import { http } from '@vercel/board/backend-http'",
         "export const team = board({ backend: http('https://board.example.com/api/board') })",
         "export const posted = (text: string) => team.as('page').post('dev', text)",
       ],
@@ -83,9 +83,9 @@ describe('board() in a browser', () => {
   it('bundles a board that syncs and watches, with a provider of its own, and nothing from Node', async () => {
     await bundle(
       [
-        "import { board } from 'vboard'",
-        "import { http } from 'vboard/backend-http'",
-        "import { SyncProvider } from 'vboard/sync'",
+        "import { board } from '@vercel/board'",
+        "import { http } from '@vercel/board/backend-http'",
+        "import { SyncProvider } from '@vercel/board/sync'",
         'class Push extends SyncProvider {',
         "  constructor() { super({ platform: 'push', canStartThreads: true }) }",
         "  async receive() { return new Response('ok') }",

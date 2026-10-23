@@ -14,9 +14,9 @@ VBOARD_URL=https://board.example.com/api/board vb conformance
 Or call it from code, with a handle on the board:
 
 ```ts scripts/conformance.ts
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
-import { conformance } from 'vboard/conformance'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
+import { conformance } from '@vercel/board/conformance'
 
 const report = await conformance(board({ backend: http('https://board.example.com/api/board') }))
 for (const check of report.checks) console.log(check.status, check.group, check.name, check.detail ?? '')

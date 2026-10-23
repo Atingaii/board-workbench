@@ -1,8 +1,8 @@
-import { board } from "vboard";
-import { a2, fsBlob } from "vboard/backend-a2";
-import { slack } from "vboard/sync-slack";
-import { github } from "vboard/sync-github";
-import { vercelBlob } from "vboard/backend-a2/blob-vercel";
+import { board } from "@vercel/board";
+import { a2, fsBlob } from "@vercel/board/backend-a2";
+import { slack } from "@vercel/board/sync-slack";
+import { github } from "@vercel/board/sync-github";
+import { vercelBlob } from "@vercel/board/backend-a2/blob-vercel";
 import { queues, store } from "./a2";
 import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";

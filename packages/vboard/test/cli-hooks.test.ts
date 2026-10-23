@@ -105,10 +105,10 @@ describe('cli hooks', () => {
     it(`reminds with plain vb when the vb on PATH is a ${pnpm} shim for this CLI`, async () => {
       const home = await tmp('vboard-home-')
       const bin = join(home, 'pnpm', 'bin')
-      await mkdir(join(home, 'pnpm', 'global', 'node_modules'), { recursive: true })
+      await mkdir(join(home, 'pnpm', 'global', 'node_modules', '@vercel'), { recursive: true })
       await mkdir(bin)
-      await symlink(dirname(dirname(CLI)), join(home, 'pnpm', 'global', 'node_modules', 'vboard'))
-      await writeFile(join(bin, 'vb'), `${shim('../global/node_modules/vboard/cli/main.ts').join('\n')}\n`, { mode: 0o755 })
+      await symlink(dirname(dirname(CLI)), join(home, 'pnpm', 'global', 'node_modules', '@vercel', 'board'))
+      await writeFile(join(bin, 'vb'), `${shim('../global/node_modules/@vercel/board/cli/main.ts').join('\n')}\n`, { mode: 0o755 })
       const at = { HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}` }
 
       expect(await vb(['hooks', 'install', 'claude'], at)).toMatchObject({ code: 0, stderr: '' })
@@ -140,7 +140,7 @@ describe('cli hooks', () => {
     await mkdir(join(home, '.claude'))
     const settings = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'vb hook stop --agent claude 2>/dev/null || true', timeout: 10 }] }] } }
     await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ ...settings, permissions: { allow: ['Bash(vb update:*)', 'Bash(vb reply:*)', 'Bash(vb read:*)'] } }))
-    // Codex's hook pins this version through npx, with a flag installs no longer write.
+    // Codex's hook pins this version through npx, by the package's name before `@vercel/board`, with a flag installs no longer write.
     await mkdir(join(home, '.codex'))
     await writeFile(join(home, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `npx -y vboard@${version} hook stop --agent codex --channel dev 2>/dev/null || true` }] }] } }))
 
@@ -152,7 +152,7 @@ describe('cli hooks', () => {
         '  allows update, which is gone',
         "  doesn't allow post or channels",
         `  runs vboard 0.8.0, not ${version}`,
-        '  fix with npm i -g vboard, then vb hooks install claude',
+        '  fix with npm i -g @vercel/board, then vb hooks install claude',
         'Codex        outdated   ~/.codex/hooks.json',
         '  runs an older hook command',
         '  fix with vb hooks install codex',

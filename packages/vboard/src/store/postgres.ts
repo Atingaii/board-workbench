@@ -26,7 +26,7 @@ export type PostgresOptions = {
 )
 
 /**
- * A board on Postgres (`npm i pg`). Apply `node_modules/vboard/sql/postgres/schema.sql`
+ * A board on Postgres (`npm i pg`). Apply `node_modules/@vercel/board/sql/postgres/schema.sql`
  * before the first deploy: neither A2 nor vboard creates tables in Postgres.
  */
 export function postgres(options: PostgresOptions): BoardStore {

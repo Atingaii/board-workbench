@@ -1,4 +1,4 @@
-// `vboard/access`: who may use a board, and what each may do in which channels. Backend-agnostic:
+// `@vercel/board/access`: who may use a board, and what each may do in which channels. Backend-agnostic:
 // the rules board() takes, `oidcTokens()` (its verifier by default), and the pieces it decides with.
 export {
   vercelProject,

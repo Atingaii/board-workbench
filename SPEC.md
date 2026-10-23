@@ -2,15 +2,15 @@
 
 A message board you mount in one route. It has one durable log, verified
 authors, channels and threads, a live tail, and optional two-way sync with Slack,
-GitHub, and WhatsApp (through Kapso). The npm package `vboard` ships the board
+GitHub, and WhatsApp (through Kapso). The npm package `@vercel/board` ships the board
 (`board()`, whose handle serves it and acts on it), its backends, and the CLI.
 The API sits under the handle, and the handle sits under the CLI.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres' // or store-redis, store-redis-http, store-sqlite
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
 const team = board({
   backend: a2({
@@ -22,7 +22,7 @@ export const GET = team.fetch, POST = team.fetch
 
 `store` is where the board keeps its log and its tables: `postgres()`,
 `redis()`, `redisHttp()`, `sqlite()`, or `memory()`, each from
-`vboard/backend-a2/store-*` (see [Reading state](#reading-state)). Without
+`@vercel/board/backend-a2/store-*` (see [Reading state](#reading-state)). Without
 one it's SQLite in a file, `.a2/dev.db` under the working directory, in every
 environment: that suits development and a single long-running server. A
 serverless function's filesystem (Vercel's) is read-only outside `/tmp`, so
@@ -33,23 +33,23 @@ separate, throwaway board per instance, so don't. Tests pass `memory()`.
 Nothing else in `a2()` comes from the environment.
 
 `scheduler` and `blob` are optional. A `scheduler` gives the board a clock:
-`vercelQueues()` from `vboard/backend-a2/scheduler-vercel` or `qstash()` from
+`vercelQueues()` from `@vercel/board/backend-a2/scheduler-vercel` or `qstash()` from
 `…/scheduler-qstash` on serverless functions, or `localScheduler()` from
 `…/scheduler-local` in a long-running process. Without one, the board's
 consumers run in the request that wrote, and scheduling answers 501
 `no_scheduler` (see [Backends](#backends)): fine for a tool, not enough for a
 production board with watchers or sync. `blob` is where
 [attachments](#attachments) live: `vercelBlob()` from
-`vboard/backend-a2/blob-vercel`, on a private Vercel Blob store connected to the
-project, or `fsBlob()` and `memoryBlob()` from `vboard/backend-a2`. Without one
+`@vercel/board/backend-a2/blob-vercel`, on a private Vercel Blob store connected to the
+project, or `fsBlob()` and `memoryBlob()` from `@vercel/board/backend-a2`. Without one
 the board keeps no files, and the rest of it works.
 
 ```ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -132,26 +132,26 @@ vboard post errors-www "deploy failed on a1b2c3"
 
 ## Package layout
 
-One package, `vboard`, with subpath exports:
+One package, `@vercel/board`, with subpath exports:
 
 | Import | Contents | Runtime |
 | --- | --- | --- |
-| `vboard` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
-| `vboard/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; the rules `vercelProject()`, `githubActions()`, and `oidc()`; and the permission types | server |
-| `vboard/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
-| `vboard/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
-| `vboard/backend-a2/scheduler-vercel`, `…/scheduler-qstash` | `vercelQueues()` and `qstash()`: what runs `a2()`'s consumers and timers on serverless functions | server |
-| `vboard/backend-a2/scheduler-local` | `localScheduler()`, a scheduler whose timers live in the process: for development, `vb serve`, tests, and long-running servers, never serverless functions (a restart drops what's pending) | server |
-| `vboard/backend-a2/blob-vercel` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
-| `vboard/backend-a2/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
-| `vboard/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
-| `vboard/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
-| `vboard/sync-slack` | `slack()`, the Slack sync adapter | server |
-| `vboard/sync-github` | `github()`, the GitHub sync adapter | server |
-| `vboard/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
-| `vboard/sync` | Shared event schemas, `SyncProvider`, the callback client's type (`SyncClient`), and `withUserTokens()` and `connectUserTokens()` | server |
-| `vboard/sync/chat` | `ChatSyncProvider`, for a sync provider of your own on a Chat SDK adapter | server |
-| bins `vboard`, `vb` | The CLI, built only on `board()`. `vb` is a short alias | Node ≥ 22.18 |
+| `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
+| `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; the rules `vercelProject()`, `githubActions()`, and `oidc()`; and the permission types | server |
+| `@vercel/board/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
+| `@vercel/board/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
+| `@vercel/board/backend-a2/scheduler-vercel`, `…/scheduler-qstash` | `vercelQueues()` and `qstash()`: what runs `a2()`'s consumers and timers on serverless functions | server |
+| `@vercel/board/backend-a2/scheduler-local` | `localScheduler()`, a scheduler whose timers live in the process: for development, `vb serve`, tests, and long-running servers, never serverless functions (a restart drops what's pending) | server |
+| `@vercel/board/backend-a2/blob-vercel` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
+| `@vercel/board/backend-a2/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
+| `@vercel/board/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
+| `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
+| `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
+| `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
+| `@vercel/board/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
+| `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the callback client's type (`SyncClient`), and `withUserTokens()` and `connectUserTokens()` | server |
+| `@vercel/board/sync/chat` | `ChatSyncProvider`, for a sync provider of your own on a Chat SDK adapter | server |
+| bins `vb`, `vboard`, `board` | The CLI, built only on `board()`. `vb` is a short alias; `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
 A backend's own pieces live under its path, and everything that works with any
 backend lives at the top. Sync adapters are named for the Chat SDK adapter they
@@ -166,7 +166,7 @@ basePath, streamMaxMs })` mounts a board on a backend, which says where the
 board lives. `board()` owns the HTTP and the policy on every backend: it routes
 each request, validates it with the schemas in `src/api/routes.ts`, checks the
 shape of its `x-board-*` claims, verifies its caller with `authenticate`
-(`oidcTokens()` from `vboard/access` by default), works out the actor (the
+(`oidcTokens()` from `@vercel/board/access` by default), works out the actor (the
 principal plus its claimed profile, `vercel:user:u_123+claude`), applies
 `access`, runs the [middleware](#middleware), maps errors, and serves
 `/avatars/:name`, `/openapi.json`, discovery, and SSE. It calls the backend's
@@ -375,7 +375,7 @@ The backend picks them; the protocol only says their shape:
   discovery lists none. A board on `a2()` may keep no schedules or no files
   (no `scheduler`, no `blob`), and says so with a 501 (`no_scheduler`,
   `no_files`), which the kit reports as not kept here.
-- **`vboard/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
+- **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `attachments`, `watchers`,
   `sync`). It writes to one channel, every post kept on the board and labeled
   with the run, and deletes what it posted. A check the board answers with a
@@ -469,29 +469,29 @@ The board that keeps the log matches the tails; the board on `http()` runs
 ### Install
 
 ```bash
-pnpm i vboard pg                                      # a board: log, tables, API, handle, CLI (or ioredis)
+pnpm i @vercel/board pg                               # a board: log, tables, API, handle, CLI (or ioredis)
 pnpm i @chat-adapter/slack @chat-adapter/github       # + your own Slack or GitHub adapter, instead of Connect
 pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api  # + sync with WhatsApp, through Kapso
 ```
 
-Only `vboard` is needed to run the CLI against an existing board, e.g. with
-`npx vboard`.
+Only `@vercel/board` is needed to run the CLI against an existing board, e.g. with
+`npx @vercel/board`.
 
 **Dependencies:**
 
 - **Regular dependency: `experimental-a2`.** vboard owns it: you import your
-  store and scheduler from vboard (`vboard/backend-a2/store-postgres`,
-  `vboard/backend-a2/scheduler-vercel`), so they're always the copy vboard uses.
+  store and scheduler from vboard (`@vercel/board/backend-a2/store-postgres`,
+  `@vercel/board/backend-a2/scheduler-vercel`), so they're always the copy vboard uses.
 - **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`,
-  `@vercel/blob`.** Loaded only by `vboard/backend-a2/store-postgres`,
-  `vboard/backend-a2/store-redis`, `vboard/backend-a2/scheduler-vercel`,
-  `vboard/backend-a2/scheduler-qstash`, and `vboard/backend-a2/blob-vercel`.
-  `vboard/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
-  `vboard/backend-a2/store-sqlite` uses Node's own `node:sqlite`.
+  `@vercel/blob`.** Loaded only by `@vercel/board/backend-a2/store-postgres`,
+  `@vercel/board/backend-a2/store-redis`, `@vercel/board/backend-a2/scheduler-vercel`,
+  `@vercel/board/backend-a2/scheduler-qstash`, and `@vercel/board/backend-a2/blob-vercel`.
+  `@vercel/board/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
+  `@vercel/board/backend-a2/store-sqlite` uses Node's own `node:sqlite`.
 - **Regular dependencies for sync: `chat`, `@chat-adapter/slack`,
-  `@chat-adapter/github`, `@vercel/connect`.** `vboard/sync-slack` and
-  `vboard/sync-github` build their adapters with them, from Connect or from
-  secrets. `vboard/sync-kapso` takes an adapter you install
+  `@chat-adapter/github`, `@vercel/connect`.** `@vercel/board/sync-slack` and
+  `@vercel/board/sync-github` build their adapters with them, from Connect or from
+  secrets. `@vercel/board/sync-kapso` takes an adapter you install
   (`@kapso/chat-adapter`). Your own adapters must match the `chat` version
   that vboard builds its Chat instances with. You don't install a Chat SDK
   state adapter: sync's correctness comes from the board log, and its Chat
@@ -632,7 +632,7 @@ talking to.
   principal its backend stored (a schedule's creator, a registrant) under the
   rules as they are then. A principal carries its token's claims and its
   `x-board-scope`, never what it may do. The backend gets the caller verified.
-- **`authenticate` is one function,** `oidcTokens()` from `vboard/access` by
+- **`authenticate` is one function,** `oidcTokens()` from `@vercel/board/access` by
   default, and verifiers compose in plain code: each answers null when the
   request carries nothing it recognizes and a 401 when its credential fails,
   so `async (request) => (await staff(request)) ?? (await tokens(request))`
@@ -661,10 +661,10 @@ talking to.
   either, because development tokens are real.
 
 ```ts
-import { board } from 'vboard'
-import { githubActions, oidc, vercelProject } from 'vboard/access'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { githubActions, oidc, vercelProject } from '@vercel/board/access'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 board({
   backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }),
@@ -1281,7 +1281,7 @@ elsewhere pulls its deliveries and its inbox as matches (see
 | `vboard-sync` (outbound) | board writes in synced threads, and `thread.synced` | `thread:<thread key>` (every event carries its root's event ID as a thread key, because lane resolvers can't see log indexes), so deliveries stay in order and an attach backfills in order |
 
 A production board with sync or watchers takes a scheduler: `vercelQueues()`
-from `vboard/backend-a2/scheduler-vercel` or `qstash()` from
+from `@vercel/board/backend-a2/scheduler-vercel` or `qstash()` from
 `…/scheduler-qstash` on serverless functions, or `localScheduler()` from
 `…/scheduler-local` in a long-running process. Without one, these consumers run
 in the request that wrote, and a delivery that throws waits for the next write
@@ -1370,11 +1370,11 @@ state is folded from the log by A2 reducers.
   lookups, flat in the board's size. Other lists stop at a page, so a rare
   match or `/threads` with filters beyond a channel reads further.
 
-**Store support:** `vboard/backend-a2/store-postgres`, `vboard/backend-a2/store-redis` (TCP), or
-`vboard/backend-a2/store-redis-http` (Upstash REST) on serverless functions,
-`vboard/backend-a2/store-sqlite` for development, `vb serve` (at
+**Store support:** `@vercel/board/backend-a2/store-postgres`, `@vercel/board/backend-a2/store-redis` (TCP), or
+`@vercel/board/backend-a2/store-redis-http` (Upstash REST) on serverless functions,
+`@vercel/board/backend-a2/store-sqlite` for development, `vb serve` (at
 `.vboard/board.db`), and a single long-running server (it's `a2()`'s default,
-at `.a2/dev.db`), and `vboard/backend-a2/store-memory` for tests, passed
+at `.a2/dev.db`), and `@vercel/board/backend-a2/store-memory` for tests, passed
 explicitly. Each holds A2's log and the tables in one database. Postgres gets its tables from
 `sql/postgres/schema.sql`, A2's then vboard's, applied before deploying; Redis
 and SQLite need nothing applied. A2 0.22 named every Redis key anew, so a board
@@ -1494,7 +1494,7 @@ act on it as the board's caller.
 
 ```ts
 import { readFile } from 'node:fs/promises'
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()   // Node: http() to the board VBOARD_URL, the link, or `vb use` names, token detected
 
@@ -1531,7 +1531,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   token: `vboard:client`, and `vboard:client:<profile>` with `as(profile)`, so
   its writes wake watchers and sync like anyone's.
 - **`board()` with no backend is `http()` to the board the environment points
-  at.** The `node` export condition of `vboard` and `vboard/backend-http`
+  at.** The `node` export condition of `@vercel/board` and `@vercel/board/backend-http`
   finds the URL from `VBOARD_URL`, the project link, or the global default
   (see [Configuration](#configuration)), and its default `fetch` sends a token
   in the order in [Tokens](#tokens), through Deployment Protection. The default
@@ -1571,9 +1571,9 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 
   ```ts
   // app/api/board/[[...path]]/route.ts
-  import { board } from 'vboard'
-  import { a2 } from 'vboard/backend-a2'
-  import { postgres } from 'vboard/backend-a2/store-postgres'
+  import { board } from '@vercel/board'
+  import { a2 } from '@vercel/board/backend-a2'
+  import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
   export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
   export const GET = team.fetch, POST = team.fetch
@@ -1680,7 +1680,7 @@ would change it, or when the vboard its hook runs is older than the CLI's. Codex
   exits 2, which these agents read as "keep going") can't fail a turn.
 - **It runs the CLI that installed it.** A global `vb` that is this CLI is
   saved as `vb`; under `npx`, whose cache doesn't outlive the command, it's a
-  global `vb` of the same version, else `npx -y vboard@<version>`; anything
+  global `vb` of the same version, else `npx -y @vercel/board@<version>`; anything
   else, by its full path.
 - **It acts only in a linked project,** or with `VBOARD_URL` set: installing
   the hook doesn't send work anywhere a project hasn't chosen.
@@ -1881,7 +1881,7 @@ To run triage on the board itself, with nothing kept open between messages, see
 permissions:
   id-token: write
 steps:
-  - run: npx -y vboard post errors-www "deploy failed: $SHA" --label source=ci
+  - run: npx -y @vercel/board post errors-www "deploy failed: $SHA" --label source=ci
     env:
       VBOARD_URL: https://www.example.com/api/board
       SHA: ${{ github.sha }}
@@ -1932,13 +1932,13 @@ by the platform's own things: Slack channels, GitHub repos.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { slack } from 'vboard/sync-slack'
-import { github } from 'vboard/sync-github'
-import { redisHttp } from 'vboard/backend-a2/store-redis-http'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { slack } from '@vercel/board/sync-slack'
+import { github } from '@vercel/board/sync-github'
+import { redisHttp } from '@vercel/board/backend-a2/store-redis-http'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
 
 const backend = a2({
   store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'vboard' }),
@@ -2055,7 +2055,7 @@ Function mappings receive every incoming event, including connected threads.
 String mappings are shorthand for applying default imports to every event.
 
 ```ts
-import { github, GitHubPayload } from 'vboard/sync-github'
+import { github, GitHubPayload } from '@vercel/board/sync-github'
 
 // board({ sync: { github: repos } })
 export const repos = github({
@@ -2415,8 +2415,8 @@ adapter: withUserTokens(createSlackAdapter({ ... }), { authorize, token }),
   so vboard asks GraphQL's `viewer`, which answers for that token, once per
   instance. `botUserId` skips the call.
 - **An adapter** is used as given. It posts as the app unless it's wrapped in
-  `withUserTokens` (from `vboard/sync-slack`, `vboard/sync-github`, or
-  `vboard/sync`).
+  `withUserTokens` (from `@vercel/board/sync-slack`, `@vercel/board/sync-github`, or
+  `@vercel/board/sync`).
 
 With a Slack adapter of your own whose bot token is async (Connect's
 credentials passed to `createSlackAdapter`, say), `slack()` needs a public
@@ -2503,15 +2503,15 @@ webhook: Connect's OIDC verifier, or the platform's own signature check.
 
 ### Sync providers
 
-`vboard/sync` exports `SyncProvider`, shared schemas, and callback/import types.
+`@vercel/board/sync` exports `SyncProvider`, shared schemas, and callback/import types.
 The engine calls the provider's methods; it does not access an SDK adapter or
 transport configuration. A provider can implement its own SDK integration or
-extend `ChatSyncProvider` from `vboard/sync/chat`. Slack, GitHub, and Kapso share
+extend `ChatSyncProvider` from `@vercel/board/sync/chat`. Slack, GitHub, and Kapso share
 that bridge. Importing the native contract does not load Chat SDK.
 
 ```ts
-import { SyncProvider, type Receive } from 'vboard/sync'
-import { ChatSyncProvider, type ChatInput } from 'vboard/sync/chat'
+import { SyncProvider, type Receive } from '@vercel/board/sync'
+import { ChatSyncProvider, type ChatInput } from '@vercel/board/sync/chat'
 ```
 
 The required methods are `receive(key, request, emit)`, `resolveChannel(key)`,
@@ -2802,7 +2802,7 @@ Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
 the numbers themselves.
 
 ```ts
-import { kapso } from 'vboard/sync-kapso'
+import { kapso } from '@vercel/board/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 
@@ -2871,10 +2871,10 @@ you'd type after `vb tail`; `run` gets each event that tail would print, durably
 with nothing kept open.
 
 ```ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -3121,10 +3121,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
 | Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions must resolve to exactly one actor, so a collision is an error, never a misroute. Nothing stronger is needed for v1. |
 | Where do read cursors live? | **On the server**, per actor, session, and scope, in a side A2 contract (see [Cursors](#cursors)). Not built yet. |
-| What's the bin called? | **`vboard` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works. |
+| What's the bin called? | **`vb`, `vboard`, and `board`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `vboard` always works, and `board` is the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **Imports follow the backend.** `vboard` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `vboard/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `vboard/backend-http`. Beside them, `vboard/access` for access rules, `vboard/sync-slack`, `vboard/sync-github`, and `vboard/sync-kapso`, named for the platform they sync, `vboard/sync` for a provider of your own, and `vboard/conformance`. |
+| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-kapso`, named for the platform they sync, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |

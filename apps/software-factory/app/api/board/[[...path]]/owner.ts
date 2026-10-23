@@ -1,4 +1,4 @@
-import type { Watcher } from "vboard";
+import type { Watcher } from "@vercel/board";
 import { github, prNumber, type GitHubOptions } from "./github.ts";
 
 /**

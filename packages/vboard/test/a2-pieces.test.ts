@@ -174,7 +174,7 @@ describe('a2() takes a scheduler and a blob store only if you pass them', () => 
 describe('localScheduler()', () => {
   it('comes from vboard/backend-a2/scheduler-local, and sends a scheduled message', async () => {
     // Resolved as an app resolves it, through the package's exports, to what the build put there.
-    const entry = createRequire(import.meta.url).resolve('vboard/backend-a2/scheduler-local')
+    const entry = createRequire(import.meta.url).resolve('@vercel/board/backend-a2/scheduler-local')
     expect(entry).toMatch(/dist\/backend-a2\/scheduler-local\.mjs$/)
     const { localScheduler } = (await import(pathToFileURL(entry).href)) as typeof import('../src/scheduler/local.ts')
     const board = testBoard({ scheduler: localScheduler() })

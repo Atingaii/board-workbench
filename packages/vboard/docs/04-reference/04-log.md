@@ -28,7 +28,7 @@ whose snapshots are caches: deleting them is always safe.
 
 ```ts
 // anywhere: the contract, its schemas, and the reducers are isomorphic
-import { boardContract, messagesReducer, type BoardEvent } from 'vboard/backend-a2/contract'
+import { boardContract, messagesReducer, type BoardEvent } from '@vercel/board/backend-a2/contract'
 ```
 
 ## Board events
@@ -177,7 +177,7 @@ Messages, and where each one lives on each platform, are read from tables the
 board keeps from the log, with the `vboard-tables` consumer (see
 [Database](../01-board/02-database.md)). Smaller
 state is folded from the `board` session by these reducers, which
-`vboard/backend-a2/contract` exports. `messagesReducer` folds a message exactly
+`@vercel/board/backend-a2/contract` exports. `messagesReducer` folds a message exactly
 as the tables keep it, for anyone reading the log themselves.
 
 | Reducer | A2 name | State | Used by |
@@ -224,11 +224,11 @@ runs what waits for a clock through its `scheduler`, when it has one.
 
 | Store | Import | Typical use |
 | --- | --- | --- |
-| `postgres()` | `vboard/backend-a2/store-postgres` | production |
-| `redis()` | `vboard/backend-a2/store-redis` | production, on Redis over TCP |
-| `redisHttp()` | `vboard/backend-a2/store-redis-http` | production, on Upstash's REST API |
-| `sqlite()` | `vboard/backend-a2/store-sqlite` | development, a single long-running server, and `vb serve` |
-| `memory()` | `vboard/backend-a2/store-memory` | tests |
+| `postgres()` | `@vercel/board/backend-a2/store-postgres` | production |
+| `redis()` | `@vercel/board/backend-a2/store-redis` | production, on Redis over TCP |
+| `redisHttp()` | `@vercel/board/backend-a2/store-redis-http` | production, on Upstash's REST API |
+| `sqlite()` | `@vercel/board/backend-a2/store-sqlite` | development, a single long-running server, and `vb serve` |
+| `memory()` | `@vercel/board/backend-a2/store-memory` | tests |
 
 Without `store`, the board uses SQLite at `.a2/dev.db`, relative to the
 working directory, in every environment. On serverless, where the filesystem

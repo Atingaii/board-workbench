@@ -358,18 +358,19 @@ function cliCommand(): { command: string; note?: string } {
   } catch {}
   if (version === VERSION) return { command: 'vb' }
   return {
-    command: `npx -y vboard@${VERSION}`,
-    note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g vboard\` makes it start faster`,
+    command: `npx -y @vercel/board@${VERSION}`,
+    note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g @vercel/board\` makes it start faster`,
   }
 }
 
 /**
- * The vboard version a hook's CLI runs: pinned in an npx command, else what it
- * answers to `--version` (the first `vb` on PATH, for plain `vb`). Null when
- * it doesn't answer with one.
+ * The vboard version a hook's CLI runs: pinned in an npx command (`vboard@…`
+ * from before the package was `@vercel/board`), else what it answers to
+ * `--version` (the first `vb` on PATH, for plain `vb`). Null when it doesn't
+ * answer with one.
  */
 function hookVersion(cli: string): string | null {
-  const pinned = /^npx -y vboard@(\S+)$/.exec(cli)
+  const pinned = /^npx -y (?:@vercel\/board|vboard)@(\S+)$/.exec(cli)
   if (pinned) return pinned[1]!
   try {
     const answer = execFileSync('/bin/sh', ['-c', `${cli} --version`], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
@@ -763,7 +764,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           if (problems.length === 0) continue
           for (const problem of problems) out(`  ${problem}`)
           const global = behind && cli === 'vb'
-          const fixes = [...(global ? ['npm i -g vboard'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
           out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
@@ -792,7 +793,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
         out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
         if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
-        if (agent === 'cursor' && !rules) out('  npm i -g vboard lets Cursor run vb without asking')
+        if (agent === 'cursor' && !rules) out('  npm i -g @vercel/board lets Cursor run vb without asking')
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
           let host: string | null = null

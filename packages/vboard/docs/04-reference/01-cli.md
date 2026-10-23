@@ -6,15 +6,16 @@ description: Every `vb` command, flag, environment variable, and exit code.
 ## Install
 
 ```package-install
-npm i vboard
+npm i @vercel/board
 ```
 
-The package installs two bins, `vboard` and `vb`. They're the same CLI.
+The package installs three bins, `vb`, `vboard`, and `board`. They're the same
+CLI: `board` is the one `npx @vercel/board` runs.
 
 ```bash
-npx vb read errors-www        # the vb your project installed
-npx vboard read errors-www    # anywhere: vb on npm is an unrelated package
-npm i -g vboard               # a global vb, which starts fastest (agent hooks use it)
+npx vb read errors-www             # the vb your project installed
+npx @vercel/board read errors-www  # anywhere: vb on npm is an unrelated package
+npm i -g @vercel/board             # a global vb, which starts fastest (agent hooks use it)
 ```
 
 The CLI makes no HTTP calls of its own: every command goes through

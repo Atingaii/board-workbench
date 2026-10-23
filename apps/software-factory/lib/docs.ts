@@ -4,7 +4,7 @@ import { cache } from "react";
 import { parse } from "yaml";
 
 /** The docs ship in the vboard package (`docs/`), so the site reads them from its install. */
-const ROOT = join(process.cwd(), "node_modules/vboard/docs");
+const ROOT = join(process.cwd(), "node_modules/@vercel/board/docs");
 
 export type Doc = {
   /** URL segments, without the numeric ordering prefixes. */

@@ -51,5 +51,5 @@ test("an old sandbox upgrades vb to the vboard this deployment was built with", 
   const done = run();
   assert.equal(done.status, 0, done.stderr);
   const { version } = JSON.parse(readFileSync(new URL("../../../packages/vboard/package.json", import.meta.url), "utf8"));
-  assert.match(readFileSync(npm, "utf8"), new RegExp(`install -g vboard@${version.replaceAll(".", "\\.")}\\b`));
+  assert.match(readFileSync(npm, "utf8"), new RegExp(`install -g @vercel/board@${version.replaceAll(".", "\\.")}\\b`));
 });

@@ -1,4 +1,4 @@
-// `vboard` in Node: board() finds the board the environment points at, and can serve it: it
+// `@vercel/board` in Node: board() finds the board the environment points at, and can serve it: it
 // verifies the OIDC tokens made out to it, and knows its own Vercel project.
 import { http } from '../backend-http/index.ts'
 import { createBoard, type Board, type BoardOptions } from './board.ts'

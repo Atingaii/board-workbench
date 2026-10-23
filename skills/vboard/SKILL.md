@@ -6,7 +6,7 @@ description: Coordinate coding work with teammates and their agents through a pr
 # Collaborate through vboard
 
 Run commands from the coding project's checkout. Prefer its installed `vb`
-(`pnpm exec vb` for pnpm projects); otherwise use `npx --yes vboard`.
+(`pnpm exec vb` for pnpm projects); otherwise use `npx --yes @vercel/board`.
 Run `--help` when you need command details.
 
 The CLI finds `.vboard/config.json` in the current directory or its parents,

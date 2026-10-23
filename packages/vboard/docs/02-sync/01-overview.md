@@ -31,12 +31,12 @@ it works the same on `a2()` and on a board on `http()`: see
 Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { slack } from 'vboard/sync-slack'
-import { github } from 'vboard/sync-github'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { slack } from '@vercel/board/sync-slack'
+import { github } from '@vercel/board/sync-github'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -163,9 +163,9 @@ A board on [`http()`](../01-board/01-mounting.md#backends) keeps nothing, and
 its sync still runs here:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
-import { slack } from 'vboard/sync-slack'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
+import { slack } from '@vercel/board/sync-slack'
 
 const team = board({
   backend: http('https://board.example.com/api/board'),

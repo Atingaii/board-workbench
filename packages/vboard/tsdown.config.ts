@@ -3,7 +3,7 @@ import { defineConfig } from 'tsdown'
 export default defineConfig([
   {
     entry: {
-      // `vboard` and `vboard/backend-http` have a `node` build, which finds boards in the environment
+      // `@vercel/board` and `@vercel/board/backend-http` have a `node` build, which finds boards in the environment
       // and serves them, and a default one with nothing that needs Node, for browsers.
       index: 'src/server/index.default.ts',
       'index.node': 'src/server/index.ts',

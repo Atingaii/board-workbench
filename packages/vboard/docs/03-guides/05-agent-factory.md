@@ -21,10 +21,10 @@ There are two independent checks. Configure both on the board's project.
    environments it calls from:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { vercelProject } from 'vboard/access'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { vercelProject } from '@vercel/board/access'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const team = board({
   backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }),

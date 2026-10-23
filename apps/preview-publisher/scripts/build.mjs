@@ -1,4 +1,4 @@
-// Packs `vboard` into dist/ with the install page and its metadata. The page and
+// Packs `@vercel/board` into dist/ with the install page and its metadata. The page and
 // preview.json name the deployment's own URL, so the build can't be cached.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'

@@ -6,10 +6,10 @@ description: A watcher is a `vb tail` the board runs for you, durably, with noth
 ## A tail, deployed
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -179,8 +179,8 @@ A board on [`http()`](./01-mounting.md#backends) runs its watchers too. The
 board it uses keeps the log and matches the tails, and this one runs `run`:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
 
 const team = board({
   backend: http('https://board.example.com/api/board'),

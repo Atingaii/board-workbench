@@ -6,13 +6,13 @@ description: "One `board()` call in one route, on a backend: `a2()` keeps the bo
 ## One route
 
 ```package-install
-npm i vboard
+npm i @vercel/board
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
 export const GET = team.fetch, POST = team.fetch
@@ -51,8 +51,8 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 `board()`'s too.
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
 
 export const team = board({ backend: http('https://board.example.com/api/board') })
 export const GET = team.fetch, POST = team.fetch
@@ -97,8 +97,8 @@ any backend:
 | Option | What it does |
 | --- | --- |
 | `backend` | `a2({ … })`, `http(url)`, or your own. Default `http()`: in Node, the board the environment points at, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
-| `authenticate` | Who a request is. Default `oidcTokens()` from `vboard/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
-| `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `vboard/access`, and functions of your own. Or a host's own function of the principal: see [Access](./09-access.md). On `http()`, it opens a gateway: none serves no requests |
+| `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
+| `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `@vercel/board/access`, and functions of your own. Or a host's own function of the principal: see [Access](./09-access.md). On `http()`, it opens a gateway: none serves no requests |
 | `middleware` | Runs on every post and edit before it reaches the backend, whatever it came from. See [Middleware](./08-middleware.md) |
 | `project` | `{ id, teamId? }`: the board's Vercel project, whose people its development tokens are, which discovery names. Defaults to `VERCEL_PROJECT_ID`, then `.vercel/project.json`. The team scopes `vercelProject()` rules named without one |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
@@ -113,9 +113,9 @@ production.
 
 | Option | What it does |
 | --- | --- |
-| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or `memory()` from `vboard/backend-a2/store-*`. See [Database](./02-database.md). Default: SQLite at `.a2/dev.db` in the working directory, everywhere. See [Without a store](#without-a-store) |
-| `scheduler` | The board's clock, for retries, leases, wake-ups, and scheduled messages: `vercelQueues()` from `vboard/backend-a2/scheduler-vercel`, `qstash()` from `vboard/backend-a2/scheduler-qstash`, or `localScheduler()` from `vboard/backend-a2/scheduler-local`. See [Without a scheduler](#without-a-scheduler) |
-| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `vboard/backend-a2/blob-vercel`, with an optional `prefix` to share one store between boards, or `fsBlob(dir)` and `memoryBlob()` from `vboard/backend-a2`. See [Without a blob store](#without-a-blob-store) |
+| `store` | Where the board keeps its log and the tables it reads: `postgres()`, `redis()`, `redisHttp()`, `sqlite()`, or `memory()` from `@vercel/board/backend-a2/store-*`. See [Database](./02-database.md). Default: SQLite at `.a2/dev.db` in the working directory, everywhere. See [Without a store](#without-a-store) |
+| `scheduler` | The board's clock, for retries, leases, wake-ups, and scheduled messages: `vercelQueues()` from `@vercel/board/backend-a2/scheduler-vercel`, `qstash()` from `@vercel/board/backend-a2/scheduler-qstash`, or `localScheduler()` from `@vercel/board/backend-a2/scheduler-local`. See [Without a scheduler](#without-a-scheduler) |
+| `blob` | Where [attachments](./04-messages.md#attachments) live: `vercelBlob()` from `@vercel/board/backend-a2/blob-vercel`, with an optional `prefix` to share one store between boards, or `fsBlob(dir)` and `memoryBlob()` from `@vercel/board/backend-a2`. See [Without a blob store](#without-a-blob-store) |
 
 `http(url, { fetch })` takes the other board's URL, and how requests reach it
 with credentials it recognizes:
@@ -135,11 +135,11 @@ refuses one whose discovery names another.
 ## A production board
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { vercelBlob } from 'vboard/backend-a2/blob-vercel'
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 // SSE streams close just before this, and clients reconnect where they left off.
 export const maxDuration = 300
@@ -191,16 +191,16 @@ pass the same scheduler to `a2()` and to them, export the backend's `servers`
 from the board's route, and hand them to its handler yourself:
 
 ```ts lib/queue.ts
-import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
+import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
 
 // One scheduler for the board and your own A2 servers.
 export const queue = vercelQueues({ topic: 'vboard' })
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 import { queue } from '@/lib/queue'
 
 const backend = a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }), scheduler: queue })
@@ -221,9 +221,9 @@ export const POST = queue.handler(...servers /*, ordersServer */)
 ## A dev server
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { a2, fsBlob } from 'vboard/backend-a2'
-import { localScheduler } from 'vboard/backend-a2/scheduler-local'
+import { board } from '@vercel/board'
+import { a2, fsBlob } from '@vercel/board/backend-a2'
+import { localScheduler } from '@vercel/board/backend-a2/scheduler-local'
 
 // SQLite at .a2/dev.db, files in .a2/attachments, and timers in this process.
 export const team = board({ backend: a2({ scheduler: localScheduler(), blob: fsBlob() }) })
@@ -329,7 +329,7 @@ does.
 `board()` with no backend is `http()` to the board the environment points at:
 
 ```ts scripts/report.ts
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 await team.post('deploys', 'www@a1b2c3 is live')
@@ -348,7 +348,7 @@ Its calls go through `board()` like any handle's: `board()` runs its
 middleware and calls `http()`'s methods, and they call the other board, whose
 middleware sees its posts too.
 
-`vboard` and `vboard/backend-http` have two builds each, picked by export
+`@vercel/board` and `@vercel/board/backend-http` have two builds each, picked by export
 condition: the `node` one finds boards and credentials as above, and the
 default one, for browsers, finds none in the environment; the rest runs the
 same. There, `fetch` sends the page's own session to a board on the same
@@ -356,8 +356,8 @@ site:
 
 ```tsx app/board.tsx
 'use client'
-import { board } from 'vboard'
-import { http } from 'vboard/backend-http'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
 
 // On the board's own site, so the page's session cookie goes with each request.
 const team = board({
@@ -387,9 +387,9 @@ answers with that status and code; anything else is a 500.
 The shortest one is another backend with a method changed:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board, HttpError, type Backend } from 'vboard'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board, HttpError, type Backend } from '@vercel/board'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const kept = a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) })
 
@@ -410,7 +410,7 @@ What a backend has:
 
 | Field | What it is |
 | --- | --- |
-| `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `vboard` says what each takes and answers |
+| `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
 | `keeps` | Whether the board lives here. `true` lets the board's people and own deployments in when `access` is left out; `false`, as on `http()`, serves no requests then but wake-ups and webhooks |
 | `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O |

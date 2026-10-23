@@ -91,7 +91,7 @@ sends it.
 
 ```ts
 // anywhere in Node:
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const reminder = await team.schedule({ re: '812' }, { text: '@ada friendly ping: can you review?', in: '1d' })

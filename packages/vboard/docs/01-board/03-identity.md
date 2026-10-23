@@ -84,7 +84,7 @@ error: the board at https://www.example.com/api/board says its project is prj_ab
 ## How the board verifies
 
 `board()` verifies each request before its backend sees it, with its
-`authenticate`: `oidcTokens()` from `vboard/access` by default, the OIDC tokens
+`authenticate`: `oidcTokens()` from `@vercel/board/access` by default, the OIDC tokens
 made out to this board. It verifies a token once and keeps who it is until the
 token expires, so a live stream doesn't verify each time it polls.
 
@@ -161,10 +161,10 @@ Machines outside the board's project need a rule in `access`, and the rule
 says what they may do in each channel:
 
 ```ts app/api/board/[[...path]]/route.ts
-import { board } from 'vboard'
-import { githubActions, vercelProject } from 'vboard/access'
-import { a2 } from 'vboard/backend-a2'
-import { postgres } from 'vboard/backend-a2/store-postgres'
+import { board } from '@vercel/board'
+import { githubActions, vercelProject } from '@vercel/board/access'
+import { a2 } from '@vercel/board/backend-a2'
+import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
 const team = board({
   backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }),

@@ -7,8 +7,8 @@ description: Sync a platform vboard doesn't ship, natively or through any Chat S
 
 | Import | Base class | Use it when |
 | --- | --- | --- |
-| `vboard/sync` | `SyncProvider` | You talk to the platform yourself: its webhooks, its API. Importing it doesn't load Chat SDK. |
-| `vboard/sync/chat` | `ChatSyncProvider` | A Chat SDK adapter already speaks the platform. Slack, GitHub, and WhatsApp are built this way. |
+| `@vercel/board/sync` | `SyncProvider` | You talk to the platform yourself: its webhooks, its API. Importing it doesn't load Chat SDK. |
+| `@vercel/board/sync/chat` | `ChatSyncProvider` | A Chat SDK adapter already speaks the platform. Slack, GitHub, and WhatsApp are built this way. |
 
 Either way, a provider translates between the platform and the board, and the
 board does the rest: it validates and stores every incoming event before
@@ -30,7 +30,7 @@ import {
   type Receive,
   type ResolvedTarget,
   type SyncContext,
-} from 'vboard/sync'
+} from '@vercel/board/sync'
 
 export const DeskEvent = eventSchema('desk', 'message')
 export type DeskEvent = z.infer<typeof DeskEvent>
@@ -148,7 +148,7 @@ dropped. If storing fails, the webhook answers 500 so the platform retries.
 | `singleReaction` | `false` | One reaction per person per message, as on WhatsApp. |
 | `uploadsFiles` | `false` | Files go to the platform with `uploadFiles`; otherwise each gets a line in the text. |
 | `render` | the label and text | The outgoing body; see [render](./02-callbacks.md#render). |
-| `users` | `null` | People's own tokens, `{ authorize, token }` (`UserTokens` from `vboard/sync`), to post as them and link accounts by signing in. |
+| `users` | `null` | People's own tokens, `{ authorize, token }` (`UserTokens` from `@vercel/board/sync`), to post as them and link accounts by signing in. |
 
 ## Optional methods
 
@@ -181,8 +181,8 @@ and reactions into records, and fetches files with the adapter's
 ```ts lib/forum.ts
 import { z } from 'zod'
 import type { Adapter } from 'chat'
-import { envelope, eventSchema, type EventMapping, type ResolvedTarget, type SyncContext } from 'vboard/sync'
-import { ChatSyncProvider, type ChatInput } from 'vboard/sync/chat'
+import { envelope, eventSchema, type EventMapping, type ResolvedTarget, type SyncContext } from '@vercel/board/sync'
+import { ChatSyncProvider, type ChatInput } from '@vercel/board/sync/chat'
 
 export const ForumEvent = eventSchema('forum', 'message')
 export type ForumEvent = z.infer<typeof ForumEvent>
@@ -224,5 +224,5 @@ review threads), `channelOf`, `toChatId` and `fromChatId` (ID encodings),
 `markdown` and `author` (reading a message), `context`, `fetchRoot`, `links`,
 `read`, `uploadFiles`, `refusesFiles`, `startTyping`, and `intercept` and `missed`
 (webhook events the adapter doesn't emit). The built-in providers in
-`vboard/sync-slack`, `vboard/sync-github`, and `vboard/sync-kapso` are
+`@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-kapso` are
 working examples of each.

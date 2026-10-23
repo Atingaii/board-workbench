@@ -1,4 +1,4 @@
-// `vboard/backend-a2/contract`: the board log's contract, its entity schemas, and the views
+// `@vercel/board/backend-a2/contract`: the board log's contract, its entity schemas, and the views
 // people read. Sync bookkeeping, side contracts, and the folds stay internal.
 export {
   ATTACHMENT_BYTES_MAX,

@@ -158,7 +158,7 @@ The same reads, from a handle on the board:
 
 ```ts
 // anywhere in Node:
-import { board } from 'vboard'
+import { board } from '@vercel/board'
 
 const team = board()
 const page = await team.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 50 })
