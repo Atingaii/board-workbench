@@ -42,7 +42,7 @@ const PROFILE_RULE = 'ids start with a letter and use up to 32 letters, numbers,
  * principal (editing, deleting, scheduling, and uploading, since a file is its uploader's to read
  * and attach until a message carries it), which the board it uses can't tell them apart for.
  */
-const PROJECTS_OWN = new Set<Method>([
+export const PROJECTS_OWN = new Set<Method>([
   'identity', 'edit', 'delete', 'schedule', 'cancelSchedule', 'upload', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack',
   'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'syncRoots', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
   'syncCode', 'syncAccount', 'syncUnlink',
@@ -63,7 +63,7 @@ function profileOf(handle: string): string {
  * middleware's): a write by a watcher's profile never wakes that watcher. One that would be gets a
  * number, `fix-2`.
  */
-function callerProfile(handle: string, own: Iterable<string>): string {
+export function callerProfile(handle: string, own: Iterable<string>): string {
   const taken = new Set([...own, 'middleware', 'client'].map((name) => name.toLowerCase()))
   const base = profileOf(handle)
   let name = base

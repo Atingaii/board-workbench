@@ -22,6 +22,8 @@ export default defineConfig([
       'backend-a2/scheduler-local': 'src/scheduler/local.ts',
       'backend-http': 'src/backend-http/index.default.ts',
       'backend-http.node': 'src/backend-http/index.ts',
+      'backend-vercel': 'src/backend-vercel/index.default.ts',
+      'backend-vercel.node': 'src/backend-vercel/index.ts',
       sync: 'src/sync/index.ts',
       'sync.chat': 'src/sync/chat-provider.ts',
       'sync-slack': 'src/sync/slack.ts',

@@ -1,0 +1,820 @@
+import type { Method, Protocol } from '../api/protocol.ts'
+import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView, ThreadSummaryView } from '../api/routes.ts'
+import type { ProfileOption } from '../client/client.ts'
+import { derivedId, sha256 } from '../client/ids.ts'
+import type { Author, Labels } from '../contract/schemas.ts'
+import { VERSION } from '../version.ts'
+import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
+import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
+import { forbidden, HttpError, notFound } from './errors.ts'
+import { METHODS } from './routing.ts'
+
+// The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
+// private to Vercel's monorepo, so these are written out: conformance catches drift.
+type ApiPrincipal =
+  | { type: 'user'; userId: string; clientId?: string }
+  | { type: 'app'; clientId: string }
+  | { type: 'project'; projectId: string; environment: string }
+type ApiActor = { id: string; principal: ApiPrincipal; profile?: { name: string; avatar?: string }; session?: string }
+type ApiChannel = { id: string; name: string }
+type ApiThread = {
+  id: string
+  channelId: string
+  messageCount: number
+  lastActivityAt: number
+  lastMessage?: { id: string; sequence: number; createdAt: number; createdBy: ApiActor }
+  createdAt: number
+  createdBy: ApiActor
+  labels?: Labels
+}
+type ApiMessage = {
+  id: string
+  threadId: string
+  sequence: number
+  replyTo?: number
+  text: string
+  version: number
+  createdAt: number
+  createdBy: ApiActor
+  editedAt?: number
+  deletedAt?: number
+  reactions?: Record<string, number>
+  labels?: Labels
+}
+type ApiChange = {
+  type: string
+  channelId: string
+  actor: ApiActor
+  createdAt: number
+  messageId?: string
+  emoji?: string
+  labels?: Record<string, { from?: string; to?: string }>
+}
+type ApiMe = { teamId: string; actor: ApiActor; project?: { id: string; environment: string } }
+
+export type VercelOptions = {
+  /** The team whose board it is (`team_…`). In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
+  team?: string
+  /** The board's ID. By default the team's board, which `GET /boards` names. */
+  board?: string
+  /** Vercel's API, `https://api.vercel.com` by default. */
+  api?: string
+  /**
+   * How requests reach the API, with credentials it takes. In Node it defaults to `VERCEL_TOKEN`,
+   * a deployment's OIDC token, or your `vercel login`. Elsewhere, pass one that sends them.
+   */
+  fetch?: typeof fetch
+}
+
+/** What finds the API's credentials and the team, in the Node build. A browser has none. */
+export type VercelEnvironment = {
+  /** A fetch that adds the credentials. */
+  fetch(): typeof fetch
+  /** The team, when the environment says which. */
+  team(): Promise<string | null>
+  /** The profile the environment picks (`BOARD_AS`, or the coding agent it runs in), and that agent's session. */
+  profile(): { profile: ProfileOption; session: string | null }
+}
+
+/** Who a request to the API is from, beside its credentials: a label it shows, never who it is. */
+type Who = { profile: { name: string; avatar?: string } | null; session: string | null }
+
+const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
+const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
+const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
+/** A cursor this backend made: a time, then the position it names, in base 36. */
+const CURSOR = /^([0-9a-z]+)(?:\.([0-9a-z]+))?$/
+
+/** What the API keeps none of: a check that gets one of these is told it isn't kept here. */
+const UNKEPT: Partial<Record<Method, [code: string, message: string]>> = {
+  schedule: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
+  schedules: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
+  cancelSchedule: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
+  upload: ['no_files', "Vercel's boards keep no files yet"],
+  attachment: ['no_files', "Vercel's boards keep no files yet"],
+}
+
+const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
+
+/** A UUIDv7, which the API takes as an operation ID. */
+function operationId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  const now = BigInt(Date.now())
+  for (let i = 0; i < 6; i++) bytes[i] = Number((now >> BigInt(8 * (5 - i))) & 0xffn)
+  bytes[6] = (bytes[6]! & 0x0f) | 0x70
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+const iso = (ms: number) => new Date(ms).toISOString()
+const idAt = (threadId: string, sequence: number) => `msg_${threadId.slice('thr_'.length)}_${sequence}`
+
+/** Where a message ID points: its thread and its place in it. Null for one that isn't a message's. */
+function locate(id: string): { threadId: string; sequence: number } | null {
+  const found = MESSAGE_ID.exec(id)
+  return found ? { threadId: `thr_${found[1]}`, sequence: Number(found[2]) } : null
+}
+
+/** A principal as board names it: `vercel:user:<id>`, `vercel:app:<id>`, `vercel:project:<id>:<env>`. */
+function principalId(principal: ApiPrincipal): string {
+  if (principal.type === 'user') return `vercel:user:${principal.userId}`
+  if (principal.type === 'app') return `vercel:app:${principal.clientId}`
+  return `vercel:project:${principal.projectId}:${principal.environment}`
+}
+
+const authorOf = (actor: ApiActor): Author => ({
+  actor: actor.id,
+  principal: principalId(actor.principal),
+  profile: actor.profile?.name ?? null,
+  session: actor.session ?? null,
+})
+
+/** The API names nobody, so an actor's handle is its profile, or a short form of its principal. */
+function actorView(actor: ApiActor): ActorView & { id: string } {
+  const { principal } = actor
+  const base =
+    principal.type === 'user'
+      ? `user-${principal.userId.slice(0, 6).toLowerCase()}`
+      : principal.type === 'app'
+        ? `app-${principal.clientId.slice(0, 6).toLowerCase()}`
+        : principal.environment === 'production'
+          ? principal.projectId
+          : `${principal.projectId}@${principal.environment}`
+  const handle = actor.profile?.name ?? base
+  const kind = actor.profile ? 'agent' : principal.type === 'user' ? 'person' : principal.type === 'project' ? 'deployment' : 'workflow'
+  return { id: actor.id, kind, handle, name: handle, avatar: actor.profile?.avatar ?? null }
+}
+
+type Filters = Protocol['messages']['input']
+
+/**
+ * Vercel's board for your team, in Vercel's API: this deployment keeps nothing and reads and writes
+ * it as itself, its people as themselves. Messages, threads, reactions, labels, and a channel's
+ * changes work; what the API keeps none of yet (schedules, files, watchers, sync) answers 501.
+ */
+export function createVercel(options: VercelOptions, environment: VercelEnvironment | null) {
+  const origin = (options.api ?? 'https://api.vercel.com').replace(/\/+$/, '')
+  if (!/^https:\/\/[^/]+$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) throw new Error(`vercel: ${origin} isn't Vercel's API: pass an https origin`)
+  if (!options.fetch && !environment) throw new Error("vercel: pass a fetch that sends credentials: outside Node there's no environment to find them in")
+  const doFetch: typeof fetch = options.fetch ?? environment!.fetch()
+  let binding: BoardBinding | null = null
+  /** This board's own code's names, which a caller here never takes as its profile. */
+  const own = new Set<string>()
+
+  let team: Promise<string | null> | null = null
+  const teamId = () => (team ??= options.team ? Promise.resolve(options.team) : (environment?.team() ?? Promise.resolve(null)))
+
+  /** One request to the API, as `who`. Its errors are the API's own, with its status and code. */
+  async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | undefined>; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+    const url = new URL(`${origin}/v1/messageboard${path}`)
+    const id = await teamId()
+    if (id) url.searchParams.set('teamId', id)
+    for (const [name, value] of Object.entries(init.query ?? {})) if (value !== undefined) url.searchParams.set(name, value)
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (who.profile) headers['x-board-profile'] = who.profile.name
+    if (who.profile?.avatar?.startsWith('https://')) headers['x-board-avatar'] = who.profile.avatar
+    if (who.session && SESSION.test(who.session)) headers['x-board-session'] = who.session
+    let response: Response
+    try {
+      response = await doFetch(url, {
+        method,
+        headers,
+        redirect: 'error',
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        ...(init.signal ? { signal: init.signal } : {}),
+      })
+    } catch (error) {
+      if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
+      throw new HttpError(502, 'unreachable', `Vercel's API didn't answer: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const text = await response.text()
+    let body: unknown
+    try {
+      body = text ? JSON.parse(text) : undefined
+    } catch {}
+    if (response.ok) return body as T
+    const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
+    throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
+  }
+
+  /** Every page of a list, in order. */
+  async function all<T>(who: Who, path: string, key: string, query: Record<string, string | undefined> = {}, signal?: AbortSignal): Promise<T[]> {
+    const out: T[] = []
+    let cursor: string | undefined
+    do {
+      const page = await api<Record<string, unknown> & { cursor: string | null }>(who, 'GET', path, { query: { ...query, cursor }, ...(signal ? { signal } : {}) })
+      out.push(...(page[key] as T[]))
+      cursor = page.cursor ?? undefined
+    } while (cursor)
+    return out
+  }
+
+  let board: Promise<string> | null = null
+  /** The board's ID: the one given, or the team's, which the API names only to those it lets in. */
+  const boardId = (who: Who) =>
+    (board ??= options.board
+      ? Promise.resolve(options.board)
+      : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(({ defaultBoardId }) => {
+          if (!defaultBoardId) throw new HttpError(404, 'no_board', "Vercel's API names no board for this team that these credentials may use: ask the team to grant this project its board, or pass `board`")
+          return defaultBoardId
+        })).catch((error: unknown) => {
+      board = null
+      throw error
+    })
+  const onBoard = async (who: Who, path = '') => `/boards/${encodeURIComponent(await boardId(who))}${path}`
+
+  // Channels are named on the board and addressed by ID in the API.
+  let channels: Promise<ApiChannel[]> | null = null
+  const loadChannels = async (who: Who, fresh = false): Promise<ApiChannel[]> => {
+    if (fresh) channels = null
+    channels ??= onBoard(who, '/channels').then((path) => all<ApiChannel>(who, path, 'channels'))
+    return channels.catch((error: unknown) => {
+      channels = null
+      throw error
+    })
+  }
+  /** The channel by `name`, which the API finds without listing the board's. */
+  const named = new Map<string, ApiChannel>()
+  async function channelNamed(who: Who, name: string): Promise<ApiChannel | null> {
+    const known = named.get(name)
+    if (known) return known
+    const { channels: [found] } = await api<{ channels: ApiChannel[] }>(who, 'GET', await onBoard(who, '/channels'), { query: { name } })
+    if (found) named.set(name, found)
+    return found ?? null
+  }
+  async function channelById(who: Who, id: string): Promise<ApiChannel> {
+    const found = (await loadChannels(who)).find((channel) => channel.id === id) ?? (await loadChannels(who, true)).find((channel) => channel.id === id)
+    if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
+    return found
+  }
+  /** A channel to post in, made the first time something posts to it, as on any board. */
+  async function channelToPost(who: Who, name: string): Promise<ApiChannel> {
+    const found = await channelNamed(who, name)
+    if (found) return found
+    try {
+      const { channel } = await api<{ channel: ApiChannel }>(who, 'POST', await onBoard(who, '/channels'), { body: { operationId: operationId(), name } })
+      channels = null
+      named.set(name, channel)
+      return channel
+    } catch (error) {
+      // Someone made it first.
+      if (error instanceof HttpError && error.code === 'channel_name_taken') {
+        const made = await channelNamed(who, name)
+        if (made) return made
+      }
+      throw error
+    }
+  }
+  /** The channels a filter names: one, a channel and those under it (`dev/`), or every one. */
+  async function channelsFor(who: Who, filter: string | undefined): Promise<ApiChannel[]> {
+    if (filter !== undefined && !filter.endsWith('/')) {
+      const found = await channelNamed(who, filter)
+      return found ? [found] : []
+    }
+    const listed = await loadChannels(who, true)
+    if (filter === undefined) return listed
+    const path = filter.slice(0, -1)
+    return listed.filter((channel) => channel.name === path || channel.name.startsWith(filter))
+  }
+
+  async function messageById(who: Who, id: string, signal?: AbortSignal): Promise<{ thread: ApiThread; message: ApiMessage }> {
+    if (!locate(id)) throw notFound(`message not found: ${id}`, 'message_not_found')
+    try {
+      return await api(who, 'GET', await onBoard(who, `/messages/${encodeURIComponent(id)}`), signal ? { signal } : {})
+    } catch (error) {
+      if (error instanceof HttpError && error.code === 'thread_not_found') throw notFound(`message not found: ${id}`, 'message_not_found')
+      throw error
+    }
+  }
+  const threadMessages = async (who: Who, threadId: string, signal?: AbortSignal) =>
+    all<ApiMessage>(who, await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`), 'messages', {}, signal)
+
+  /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
+  async function reactors(who: Who, message: ApiMessage): Promise<Record<string, string[]>> {
+    if (!message.reactions || Object.keys(message.reactions).length === 0) return {}
+    const path = await onBoard(who, `/threads/${encodeURIComponent(message.threadId)}/messages/${message.sequence}/reactions`)
+    const out: Record<string, string[]> = {}
+    for (const reaction of await all<{ emoji: string; actor: ApiActor }>(who, path, 'reactions')) (out[reaction.emoji] ??= []).push(reaction.actor.id)
+    return out
+  }
+
+  async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
+    const root = message.sequence === 1
+    return {
+      id: message.id,
+      channel,
+      text: message.text,
+      re: root ? null : idAt(message.threadId, 1),
+      replyTo: message.replyTo !== undefined && message.replyTo !== 1 ? idAt(message.threadId, message.replyTo) : null,
+      thread: message.threadId,
+      labels: { ...message.labels },
+      reactions: message.deletedAt === undefined ? await reactors(who, message) : {},
+      mentions: [],
+      by: authorOf(message.createdBy),
+      noSync: false,
+      origin: null,
+      from: null,
+      createdAt: iso(message.createdAt),
+      editedAt: message.editedAt === undefined ? null : iso(message.editedAt),
+      deleted: message.deletedAt !== undefined,
+      undelivered: {},
+      attachments: [],
+      links: [],
+      version: message.version,
+      author: actorView(message.createdBy),
+    }
+  }
+
+  // Cursors. A read's cursor says what it saw: the time of the newest message, and each channel's
+  // feed cursor then, for `events` to go on from. The API's feed cursors are opaque and per
+  // channel, more than fits in a cursor here, so a cursor names a position this process keeps,
+  // after its time. Another process reads it as the time alone, from each channel's oldest change.
+  type Feed = { at: string | null; skip: number }
+  type Position = { t: number; feeds: Record<string, Feed> }
+  const positions = new Map<string, Position>()
+  function cursorOf(position: Position): string {
+    const key = `${position.t.toString(36)}.${Math.floor(Math.random() * 36 ** 8).toString(36)}`
+    positions.set(key, position)
+    if (positions.size > 10_000) positions.delete(positions.keys().next().value!)
+    return key
+  }
+  function positionOf(cursor: string): Position {
+    const kept = positions.get(cursor)
+    if (kept) return kept
+    const found = CURSOR.exec(cursor)
+    if (!found) throw new HttpError(400, 'invalid_request', `after: ${cursor} isn't a cursor here or a message's ID`)
+    return { t: parseInt(found[1]!, 36), feeds: {} }
+  }
+  /** A time a read goes on from: a cursor's, or a message's own. */
+  async function timeOf(who: Who, after: string): Promise<number> {
+    return locate(after) ? (await messageById(who, after)).message.createdAt : positionOf(after).t
+  }
+  /** Each channel's feed now, taken before a read, so what's posted while it reads comes after. */
+  async function heads(who: Who, listed: ApiChannel[]): Promise<Record<string, Feed>> {
+    const path = await onBoard(who, '/changes')
+    const found = await Promise.all(listed.map((channel) => api<{ cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, from: 'latest' } })))
+    return Object.fromEntries(listed.map((channel, i) => [channel.id, { at: found[i]!.cursor, skip: 0 }]))
+  }
+
+  /** Whether a message matches a read's filters. A label matches on the message or its thread's root. */
+  function matches(filters: Omit<Filters, 'channel'>, message: ApiMessage, thread: ApiThread, me: string | null): boolean {
+    if (filters.re !== undefined && filters.re !== message.id && filters.re !== idAt(thread.id, 1)) return false
+    if (filters.by !== undefined) {
+      const { createdBy } = message
+      const names = [createdBy.id, principalId(createdBy.principal), createdBy.profile?.name]
+      if (!(filters.by === 'me' ? createdBy.id === me : names.includes(filters.by))) return false
+    }
+    // Nothing here resolves mentions yet, so a mention filter matches nothing.
+    if (filters.mentions !== undefined) return false
+    // Nothing syncs here: every message was written on the board.
+    if (filters.from !== undefined && filters.from !== 'board') return false
+    if (filters.text !== undefined && !message.text.toLowerCase().includes(filters.text.toLowerCase())) return false
+    for (const [key, values] of filters.label ?? []) {
+      const on = (labels: Labels | undefined) => labels !== undefined && Object.hasOwn(labels, key) && (values === null || values.includes(labels[key]!))
+      if (!on(message.labels) && !on(thread.labels)) return false
+    }
+    return true
+  }
+
+  /** The label the API's index can narrow a channel's threads by: a root's `key` or `key=value`. */
+  function indexed(filters: Filters): string | undefined {
+    const first = filters.label?.find(([, values]) => values === null || values.length === 1)
+    return first && (first[1] === null ? first[0] : `${first[0]}=${first[1][0]}`)
+  }
+
+  async function threadsOf(who: Who, channel: ApiChannel, filters: Filters, signal?: AbortSignal): Promise<ApiThread[]> {
+    const label = indexed(filters)
+    return all<ApiThread>(who, await onBoard(who, '/threads'), 'threads', { channelId: channel.id, label }, signal)
+  }
+
+  /**
+   * A channel's threads, as far as a read needs: the API lists them most recently active first, so
+   * it stops at the `limit` newest, or at the first not active since `after`. One it lists by a
+   * label comes oldest first, so it reads every page.
+   */
+  async function latestThreads(who: Who, channel: ApiChannel, label: string | undefined, page: { after?: number; limit: number }, signal: AbortSignal): Promise<ApiThread[]> {
+    const path = await onBoard(who, '/threads')
+    const out: ApiThread[] = []
+    let cursor: string | undefined
+    do {
+      const found = await api<{ threads: ApiThread[]; cursor: string | null }>(who, 'GET', path, { query: { channelId: channel.id, label, cursor }, signal })
+      out.push(...found.threads)
+      cursor = found.cursor ?? undefined
+      const last = out.at(-1)
+      if (label === undefined && (page.after !== undefined ? last !== undefined && last.lastActivityAt <= page.after : out.length >= page.limit)) break
+    } while (cursor)
+    return out
+  }
+
+  /** A thread at a glance: its root, its reply count, and its latest reply, read by reference. */
+  async function summary(who: Who, thread: ApiThread, channel: ApiChannel, signal: AbortSignal): Promise<ThreadSummaryView> {
+    const [root, last] = await Promise.all([
+      messageById(who, idAt(thread.id, 1), signal),
+      thread.lastMessage && thread.lastMessage.sequence > 1 ? messageById(who, thread.lastMessage.id, signal) : null,
+    ])
+    return {
+      message: await view(who, root.message, channel.name),
+      // The API counts deleted messages too.
+      replies: thread.messageCount - 1,
+      last: last && (await view(who, last.message, channel.name)),
+    }
+  }
+
+  let me: Promise<ApiMe> | null = null
+  /** Who these credentials are, asked once. */
+  const self = (who: Who) =>
+    (me ??= api<ApiMe>(who, 'GET', '/me')).catch((error: unknown) => {
+      me = null
+      throw error
+    })
+  /** The actor `who` writes as: the credentials' principal, and its profile, as the API names it. */
+  const actorOf = async (who: Who) => `${principalId((await self(who)).actor.principal)}${who.profile ? `+${who.profile.name.toLowerCase()}` : ''}`
+
+  /** Who a caller acts as there: its profile and session, beside this deployment's credentials. */
+  function whoOf(caller: Caller): Who {
+    if ('identity' in caller) {
+      const avatar = caller.identity.actor.avatar?.startsWith('https://') ? caller.identity.actor.avatar : undefined
+      return { profile: { name: callerProfile(caller.identity.actor.handle, own), ...(avatar ? { avatar } : {}) }, session: null }
+    }
+    const named = (profile: ProfileOption): Who['profile'] => {
+      if (profile === null) return null
+      const name = typeof profile === 'string' ? profile : profile.name
+      if (!PROFILE.test(name)) throw new HttpError(400, 'invalid_request', `as: ${name}: profiles start with a letter and use up to 32 letters, numbers, and hyphens`)
+      return typeof profile === 'string' || !profile.avatar ? { name } : { name, avatar: profile.avatar }
+    }
+    if (caller.origin.via?.kind === 'client') {
+      const asked = 'profile' in caller ? caller.profile : (caller.self ?? undefined)
+      const found = environment?.profile() ?? { profile: null, session: null }
+      if (asked === undefined) return { profile: named(found.profile), session: found.session }
+      return { profile: named(asked), session: asked === null ? null : found.session }
+    }
+    return { profile: named(caller.self ?? 'client'), session: null }
+  }
+
+  /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
+  const clientIdOf = async (id: string) => (CLIENT_ID.test(id) ? id : `h.${(await sha256(id)).slice(0, 64)}`)
+  /** A gateway caller's post IDs are its own, derived under who it is here, since the API sees this deployment. */
+  const postId = async (caller: Caller, id: string) => clientIdOf('identity' in caller ? await derivedId('board-gateway', caller.identity.principal.id, id) : id)
+
+  /** Messages a read covers, newest last: every thread's in the channels it names, or one thread's. */
+  async function collect(who: Who, filters: Filters, signal: AbortSignal) {
+    let listed: ApiChannel[]
+    let threads: { thread: ApiThread; channel: ApiChannel }[]
+    if (filters.re !== undefined) {
+      const found = await messageById(who, filters.re, signal).catch((error: unknown) => {
+        if (error instanceof HttpError && error.status === 404) return null
+        throw error
+      })
+      if (!found) return { messages: [], feeds: {}, newest: 0 }
+      const channel = await channelById(who, found.thread.channelId)
+      if (filters.channel !== undefined && !(await channelsFor(who, filters.channel)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
+      listed = [channel]
+      threads = [{ thread: found.thread, channel }]
+    } else {
+      listed = await channelsFor(who, filters.channel)
+      threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
+    }
+    const feeds = await heads(who, listed)
+    const mine = await actorOf(who)
+    let newest = 0
+    const messages: { message: ApiMessage; thread: ApiThread; channel: ApiChannel }[] = []
+    for (const { thread, channel } of threads) {
+      for (const message of await threadMessages(who, thread.id, signal)) {
+        newest = Math.max(newest, message.createdAt)
+        if (matches(filters, message, thread, mine)) messages.push({ message, thread, channel })
+      }
+    }
+    // A thread's messages are in order; across threads, by time, as a person reads a channel.
+    messages.sort((a, b) => a.message.createdAt - b.message.createdAt || a.thread.id.localeCompare(b.thread.id) || a.message.sequence - b.message.sequence)
+    return { messages, feeds, newest }
+  }
+
+  /** A change in the API's feed as a board event, with the message as it is now. Null for what isn't a message's. */
+  async function eventOf(who: Who, change: ApiChange, channel: string, cursor: string, filters: Filters, me: string): Promise<BoardEventView | null> {
+    if (!change.messageId || !change.type.startsWith('message.')) return null
+    const found = await messageById(who, change.messageId).catch((error: unknown) => {
+      if (error instanceof HttpError && error.status === 404) return null
+      throw error
+    })
+    if (!found || !matches(filters, found.message, found.thread, me)) return null
+    const message = await view(who, found.message, channel)
+    const by = authorOf(change.actor)
+    const base = { id: message.id, thread: message.thread }
+    let type: BoardEventView['type']
+    let payload: Record<string, unknown>
+    switch (change.type) {
+      case 'message.posted':
+        type = 'message.posted'
+        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: false, mentions: [], by, origin: null, from: null, attachments: [], links: [] }
+        break
+      case 'message.edited':
+        type = 'message.edited'
+        payload = { ...base, text: message.text, mentions: [], by, from: null }
+        break
+      case 'message.deleted':
+        type = 'message.deleted'
+        payload = { ...base, by, from: null }
+        break
+      case 'message.reaction_added':
+      case 'message.reaction_removed':
+        type = change.type === 'message.reaction_added' ? 'reaction.added' : 'reaction.removed'
+        payload = { ...base, emoji: change.emoji, by, from: null }
+        break
+      case 'message.labeled': {
+        const changed = Object.entries(change.labels ?? {})
+        type = 'labels.changed'
+        payload = {
+          ...base,
+          set: Object.fromEntries(changed.flatMap(([key, { to }]) => (to === undefined ? [] : [[key, to]]))),
+          unset: changed.flatMap(([key, { to }]) => (to === undefined ? [key] : [])),
+          by,
+        }
+        break
+      }
+      default:
+        return null
+    }
+    return { cursor, type, createdAt: iso(change.createdAt), payload, message, actor: actorView(change.actor) } as BoardEventView
+  }
+
+  /**
+   * One read of every channel's feed from `position`: its events, merged by time, each with the
+   * position right after it, and the position after them all.
+   */
+  async function read(who: Who, listed: ApiChannel[], position: Position, filters: Filters, signal: AbortSignal) {
+    const path = await onBoard(who, '/changes')
+    const pages = await Promise.all(
+      listed.map(async (channel) => {
+        const from = position.feeds[channel.id]
+        // A channel the position doesn't know reads from its oldest change kept, after the position's time.
+        const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, ...(from?.at ? { cursor: from.at } : {}) }, signal })
+        const skip = from?.skip ?? 0
+        const events = page.events.map((change, i) => ({ change, i })).slice(skip).filter(({ change }) => from || change.createdAt > position.t)
+        return { channel, at: from?.at ?? null, next: page.cursor, events }
+      }),
+    )
+    const mine = await actorOf(who)
+    const running: Record<string, Feed> = { ...position.feeds }
+    const merged = pages.flatMap((page) => page.events.map((event) => ({ ...event, page }))).sort((a, b) => a.change.createdAt - b.change.createdAt)
+    const events: BoardEventView[] = []
+    for (const { change, i, page } of merged) {
+      running[page.channel.id] = { at: page.at, skip: i + 1 }
+      const event = await eventOf(who, change, page.channel.name, cursorOf({ t: change.createdAt, feeds: { ...running } }), filters, mine)
+      if (event) events.push(event)
+    }
+    const after: Record<string, Feed> = { ...position.feeds }
+    for (const page of pages) after[page.channel.id] = { at: page.next, skip: 0 }
+    return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after } }
+  }
+
+  /** What a gateway caller does here, as this deployment: never what's the project's own. */
+  function checkCaller(method: Method, caller: Caller): void {
+    if ('identity' in caller && PROJECTS_OWN.has(method)) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: ${method} is the project's own to do there`)
+  }
+
+  const meOf = (identity: Identity): Me => {
+    const { principal, author, actor } = identity
+    return {
+      actor: actor.id,
+      principal: principal.id,
+      kind: actor.kind,
+      handle: actor.handle,
+      name: actor.name,
+      avatar: actor.avatar,
+      profile: author.profile,
+      session: author.session,
+      expiresAt: principal.expiresAt?.toISOString() ?? null,
+      can: principal.access.summary(),
+    }
+  }
+
+  const unsupported = Object.fromEntries(
+    METHODS.map((method) => [
+      method,
+      async () => {
+        const unkept = UNKEPT[method]
+        if (unkept) throw new HttpError(501, unkept[0], unkept[1])
+        throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
+      },
+    ]),
+  ) as unknown as ProtocolMethods
+
+  const methods: ProtocolMethods = {
+    ...unsupported,
+    async discovery() {
+      const who = { profile: null, session: null }
+      return {
+        version: VERSION,
+        url: `${origin}/v1/messageboard${await onBoard(who)}`,
+        audience: origin,
+        team_id: await teamId(),
+        project_id: null,
+        sync: [],
+      } satisfies Discovery
+    },
+    async me(caller) {
+      if ('identity' in caller) return meOf(caller.identity)
+      const who = whoOf(caller)
+      const found = await api<ApiMe>(who, 'GET', '/me')
+      const shown = actorView(found.actor)
+      // The API lists no permissions: a board that lets you in lets you read, post, react, and label everywhere.
+      return {
+        actor: found.actor.id,
+        principal: principalId(found.actor.principal),
+        kind: shown.kind,
+        handle: shown.handle,
+        name: shown.name,
+        avatar: shown.avatar,
+        profile: found.actor.profile?.name ?? null,
+        session: found.actor.session ?? null,
+        expiresAt: null,
+        can: { '*': ['read', 'post', 'react', 'label'] },
+      }
+    },
+    async channels(caller) {
+      const who = whoOf(caller)
+      // The API counts neither messages nor threads in a channel.
+      const listed: ChannelView[] = (await loadChannels(who, true)).map((channel) => ({ path: channel.name, lastIndex: 0, messages: 0, threads: 0 }))
+      return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
+    },
+    async messages(caller, query, signal) {
+      const who = whoOf(caller)
+      const { messages, feeds, newest } = await collect(who, query, signal)
+      const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
+      const before = query.before !== undefined ? await timeOf(who, query.before) : undefined
+      const limit = query.limit ?? 50
+      const bounded = messages.filter(({ message }) => (after === undefined || message.createdAt > after) && (before === undefined || message.createdAt < before))
+      const page = after !== undefined ? bounded.slice(0, limit) : bounded.slice(-limit)
+      return {
+        messages: await Promise.all(page.map(({ message, channel }) => view(who, message, channel.name))),
+        cursor: cursorOf({ t: newest, feeds }),
+      }
+    },
+    async threads(caller, query, signal) {
+      const who = whoOf(caller)
+      const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
+      const limit = query.limit ?? 50
+      const pick = <T extends { at: number }>(found: T[]) => {
+        const ordered = found.filter(({ at }) => after === undefined || at > after).sort((a, b) => a.at - b.at)
+        return after !== undefined ? ordered.slice(0, limit) : ordered.slice(-limit)
+      }
+      // A filter on what a message says, or who wrote it, reads every message in the channel.
+      const byMessage = query.re !== undefined || query.by !== undefined || query.mentions !== undefined || query.text !== undefined || (query.from !== undefined && query.from !== 'board')
+      if (byMessage) {
+        const { messages, feeds, newest } = await collect(who, query, signal)
+        // Each thread with a matching message, by its latest.
+        const latest = new Map<string, { thread: ApiThread; channel: ApiChannel; at: number }>()
+        for (const { message, thread, channel } of messages) latest.set(thread.id, { thread, channel, at: Math.max(latest.get(thread.id)?.at ?? 0, message.createdAt) })
+        const threads = await Promise.all(pick([...latest.values()]).map(({ thread, channel }) => summary(who, thread, channel, signal)))
+        return { threads, cursor: cursorOf({ t: newest, feeds }) }
+      }
+      // Otherwise the threads say enough: a label is matched on the root, whose labels the API
+      // keeps on its thread. A reply's own labels aren't indexed, so they don't find its thread here.
+      const listed = await channelsFor(who, query.channel)
+      const feeds = await heads(who, listed)
+      const label = indexed(query)
+      const found = (
+        await Promise.all(listed.map(async (channel) => (await latestThreads(who, channel, label, { ...(after !== undefined ? { after } : {}), limit }, signal)).map((thread) => ({ thread, channel, at: thread.lastActivityAt }))))
+      ).flat()
+      const rooted = found.filter(({ thread }) => (query.label ?? []).every(([key, values]) => thread.labels !== undefined && Object.hasOwn(thread.labels, key) && (values === null || values.includes(thread.labels[key]!))))
+      const newest = found.reduce((max, { at }) => Math.max(max, at), 0)
+      const threads = await Promise.all(pick(rooted).map(({ thread, channel }) => summary(who, thread, channel, signal)))
+      return { threads, cursor: cursorOf({ t: newest, feeds }) }
+    },
+    async message(caller, { id }, signal) {
+      const who = whoOf(caller)
+      const { thread } = await messageById(who, id, signal)
+      const channel = await channelById(who, thread.channelId)
+      const [root, ...replies] = await threadMessages(who, thread.id, signal)
+      if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
+      return {
+        message: await view(who, root, channel.name),
+        replies: await Promise.all(replies.map((reply) => view(who, reply, channel.name))),
+        cursor: cursorOf({ t: Math.max(root.createdAt, ...replies.map((reply) => reply.createdAt)), feeds: {} }),
+      }
+    },
+    async post(caller, input, signal) {
+      checkCaller('post', caller)
+      if (input.attachments?.length) throw new HttpError(501, 'no_files', "Vercel's boards keep no files yet")
+      if (input.sync?.length) throw notSupported('sync')
+      const who = whoOf(caller)
+      const clientId = input.id !== undefined ? await postId(caller, input.id) : undefined
+      let made: { thread: ApiThread; message: ApiMessage }
+      if (input.channel !== undefined) {
+        const channel = await channelToPost(who, input.channel)
+        made = await api(who, 'POST', await onBoard(who, '/threads'), {
+          body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}) },
+          signal,
+        })
+      } else {
+        const { thread, message: to } = await messageById(who, input.re!, signal)
+        made = await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
+          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}) },
+          signal,
+        })
+        // The API labels a new thread as it starts, and a reply after.
+        if (input.labels && Object.keys(input.labels).length) {
+          const labeled = await api<{ meta: { labels?: Labels; version: number } }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages/${made.message.sequence}/labels`), {
+            body: { operationId: operationId(), set: input.labels },
+            signal,
+          })
+          made = { ...made, message: { ...made.message, ...(labeled.meta.labels ? { labels: labeled.meta.labels } : {}), version: labeled.meta.version } }
+        }
+      }
+      const channel = await channelById(who, made.thread.channelId)
+      return { message: await view(who, made.message, channel.name) }
+    },
+    async posted(caller, { id }, signal) {
+      checkCaller('posted', caller)
+      const who = whoOf(caller)
+      const found = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'GET', await onBoard(who, `/posts/${encodeURIComponent(await postId(caller, id))}`), { signal })
+      const channel = await channelById(who, found.thread.channelId)
+      return { message: await view(who, found.message, channel.name) }
+    },
+    async edit(caller, { id, text }, signal) {
+      checkCaller('edit', caller)
+      const who = whoOf(caller)
+      const at = locate(id)
+      if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      await api(who, 'PATCH', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}`), { body: { operationId: operationId(), text }, signal })
+      return { ok: true }
+    },
+    async delete(caller, { id }, signal) {
+      checkCaller('delete', caller)
+      const who = whoOf(caller)
+      const at = locate(id)
+      if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/delete`), { body: { operationId: operationId() }, signal })
+      return { ok: true }
+    },
+    async react(caller, { id, emoji, remove }, signal) {
+      checkCaller('react', caller)
+      const who = whoOf(caller)
+      const at = locate(id)
+      if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/reactions`), {
+        body: { operationId: operationId(), emoji, ...(remove ? { remove: true } : {}) },
+        signal,
+      })
+      return { ok: true }
+    },
+    async label(caller, { id, set, unset }, signal) {
+      checkCaller('label', caller)
+      const who = whoOf(caller)
+      const at = locate(id)
+      if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/labels`), {
+        body: { operationId: operationId(), ...(set ? { set } : {}), ...(unset ? { unset } : {}) },
+        signal,
+      })
+      return { ok: true }
+    },
+    async events(caller, query, signal) {
+      checkCaller('events', caller)
+      const who = whoOf(caller)
+      const listed = await channelsFor(who, query.channel)
+      // With no cursor, it starts now, as on any board.
+      let position: Position =
+        query.after === undefined
+          ? { t: Date.now(), feeds: await heads(who, listed) }
+          : locate(query.after)
+            ? { t: await timeOf(who, query.after), feeds: {} }
+            : positionOf(query.after)
+      const until = Date.now() + (query.wait ?? 0) * 1000
+      // The API's feed is polled: a long-poll asks again every second until something comes or it's done waiting.
+      for (;;) {
+        const page = await read(who, listed, position, query, signal)
+        position = page.position
+        if (page.events.length > 0 || Date.now() >= until || signal.aborted) return { events: page.events, cursor: cursorOf(position) }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000, until - Date.now())))
+      }
+    },
+    // Nothing syncs here, so no platform shows typing.
+    async typing() {
+      return { targets: [] }
+    },
+    async readSource(_caller, { key }) {
+      throw notFound(`this board doesn't run sync entry ${key}`, 'not_synced_here')
+    },
+  }
+
+  const backend = {
+    ...methods,
+    routes: [],
+    // The board is Vercel's: a board here serves requests only with an `access` of its own.
+    keeps: false,
+    bind(next: BoardBinding) {
+      if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
+      const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
+      if (kinds.includes('sync')) throw new Error("vercel: Vercel's boards don't run sync yet: leave `sync` out")
+      if (kinds.includes('tail')) throw new Error("vercel: Vercel's boards don't wake watchers yet: leave `watch` out")
+      for (const id of Object.keys(next.subscriptions)) own.add(id)
+      binding = next
+    },
+  }
+  return backend satisfies Backend
+}
+
+export type VercelBackend = ReturnType<typeof createVercel>
