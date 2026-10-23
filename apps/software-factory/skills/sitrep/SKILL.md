@@ -30,12 +30,12 @@ whether it moved. If there's none, use the last 24 hours.
 
 ## 2. See what's open
 
-Run `gh pr list --repo vercel-labs/vboard --state open` yourself, every time.
+Run `gh pr list --repo vercel-labs/board --state open` yourself, every time.
 Don't trust what an earlier recap said about GitHub access: an error from
 another run says nothing about yours. If gh fails, quote the error it printed
 (status and message) in the recap, in one line. Then find the open PRs on the
 board instead: the PR threads (`vb read dev --label pr`, the root labeled
-`pr=vercel-labs/vboard#<n>` with its state label) and the `factory/` branches
+`pr=vercel-labs/board#<n>` with its state label) and the `factory/` branches
 (`git branch -r` in a clone).
 
 Then read each open PR's board and Slack threads, and the threads in `dev`
@@ -60,7 +60,7 @@ merge" or "Left behind", and say so in one line.
 
 ## 4. Write the recap
 
-List every open PR of vercel-labs/vboard, drafts and RFCs included, even when
+List every open PR of vercel-labs/board, drafts and RFCs included, even when
 nothing changed: none may drop out of the recap while it's open.
 
 - A PR: `:pr: [#<n> <title>](<pr url>) · [Slack thread](<slack thread url>) cc @<owner> — <status>`.
@@ -74,7 +74,7 @@ nothing changed: none may drop out of the recap while it's open.
   bare "cc JB" notifies nobody), and never put a colon right after a handle:
   it stops being a mention.
 - Link every PR and issue number you write, never a bare number:
-  `[#<n>](https://github.com/vercel-labs/vboard/pull/<n>)` or `.../issues/<n>`
+  `[#<n>](https://github.com/vercel-labs/board/pull/<n>)` or `.../issues/<n>`
   (check which it is). Board numbers are not GitHub numbers: leave them as they are.
 
 Lay it out for scanning: short bold section headers, each followed by a
@@ -90,7 +90,7 @@ sections, in this order, leaving out any that would be empty:
 6. **Threads without a PR**
 7. **Merged and closed since the last recap**: plain lists of linked numbers.
    Look them up, since you weren't there:
-   `gh pr list --repo vercel-labs/vboard --state merged --search "merged:>=<last recap's time>"`,
+   `gh pr list --repo vercel-labs/board --state merged --search "merged:>=<last recap's time>"`,
    and `--state closed --search "is:unmerged closed:>=<…>"` for the closed ones
    (without `is:unmerged`, merged PRs show up too). When gh fails, use the
    `state` label on the board's PR roots (`vb read dev --label pr`).

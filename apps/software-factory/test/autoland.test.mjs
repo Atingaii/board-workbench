@@ -90,7 +90,7 @@ function event(over = {}) {
     message: {
       id: "59",
       re: null,
-      labels: { pr: "vercel-labs/vboard#53", land: "yes", "land.why": "fixes the bug", "land.sha": "abc123" },
+      labels: { pr: "vercel-labs/board#53", land: "yes", "land.why": "fixes the bug", "land.sha": "abc123" },
     },
     ...over,
   };
@@ -103,7 +103,7 @@ function harness(routes) {
     token: async () => "test-token",
     fetch: async (url) => {
       requests.push(url);
-      const path = url.replace("https://api.github.com/repos/vercel-labs/vboard", "");
+      const path = url.replace("https://api.github.com/repos/vercel-labs/board", "");
       const body = routes[path];
       assert.ok(body, `unexpected GitHub request: ${path}`);
       if (body instanceof Error) throw body;

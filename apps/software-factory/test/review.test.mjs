@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { piName } from "../app/api/board/[[...path]]/agent.ts";
 import { asksPi, isDraft, reviewStarts } from "../app/api/board/[[...path]]/review.ts";
 
-const root = (state) => ({ re: null, labels: { pr: "vercel-labs/vboard#170", ...(state ? { state } : {}) } });
+const root = (state) => ({ re: null, labels: { pr: "vercel-labs/board#170", ...(state ? { state } : {}) } });
 
 test("reviewStarts: a PR opened ready is reviewed when its thread opens", () => {
   assert.equal(reviewStarts({ type: "message.posted", payload: {}, message: root("open") }), true);

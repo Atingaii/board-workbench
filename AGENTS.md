@@ -38,13 +38,17 @@ line, pinned to that deployment. Nothing goes to npm; see its
 
 ## the software factory (`apps/software-factory`)
 
-vboard running on itself: the board for `vercel-labs/vboard` PRs and Vercel's
+vboard running on itself: the board for `vercel-labs/board` PRs and Vercel's
 Slack, on `vercel-internal-playground/vboard-factory` (vercel-labs has no Connect
 Slack app in Vercel's workspace). The app is only wiring,
 plus the [docs site](#the-docs-packagesvboarddocs) everywhere outside `/api`:
 the board route holds the whole config, and the A2 scheduler route re-exports
 the board's `scheduler`. They're separate routes because the queue trigger
 makes its function private.
+
+The repo was `vercel-labs/vboard` until 2026-10-23. The GitHub sync keys threads
+by the repo's name, so a PR thread from before then (`pr=vercel-labs/vboard#N`)
+no longer hears from GitHub, and the watchers don't act on it.
 
 ```bash
 cd apps/software-factory

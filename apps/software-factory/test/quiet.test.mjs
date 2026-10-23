@@ -16,7 +16,7 @@ test("merges, reopens and other PR events still reach Slack", () => {
 });
 
 test("inline review comments stay off Slack", () => {
-  assert.equal(boardOnly({ subthread: "github:vercel-labs/vboard:40:rc:9", type: "comment" }), true);
+  assert.equal(boardOnly({ subthread: "github:vercel-labs/board:40:rc:9", type: "comment" }), true);
 });
 
 const comment = (thread, subthread = null) => ({ kind: "message", type: "comment", thread, subthread });
@@ -32,15 +32,15 @@ const boardWith = (prs) => {
 };
 
 test("a comment on a PR the board has no thread for stays on GitHub", async () => {
-  const board = boardWith(["vercel-labs/vboard#180"]);
-  assert.equal(await unseenPr(comment("github:vercel-labs/vboard:114"), board, "dev"), true);
-  assert.equal(await unseenPr(comment("github:vercel-labs/vboard:114", "github:vercel-labs/vboard:114:rc:9"), board, "dev"), true);
-  assert.deepEqual(board.queries[0], { channel: "dev", label: { pr: "vercel-labs/vboard#114" }, limit: 1 });
+  const board = boardWith(["vercel-labs/board#180"]);
+  assert.equal(await unseenPr(comment("github:vercel-labs/board:114"), board, "dev"), true);
+  assert.equal(await unseenPr(comment("github:vercel-labs/board:114", "github:vercel-labs/board:114:rc:9"), board, "dev"), true);
+  assert.deepEqual(board.queries[0], { channel: "dev", label: { pr: "vercel-labs/board#114" }, limit: 1 });
 });
 
 test("comments on known PRs, and PR events, still sync", async () => {
-  const board = boardWith(["vercel-labs/vboard#180"]);
-  assert.equal(await unseenPr(comment("github:vercel-labs/vboard:180"), board, "dev"), false);
-  assert.equal(await unseenPr({ kind: "lifecycle", type: "pr.opened", thread: "github:vercel-labs/vboard:181", subthread: null }, board, "dev"), false);
+  const board = boardWith(["vercel-labs/board#180"]);
+  assert.equal(await unseenPr(comment("github:vercel-labs/board:180"), board, "dev"), false);
+  assert.equal(await unseenPr({ kind: "lifecycle", type: "pr.opened", thread: "github:vercel-labs/board:181", subthread: null }, board, "dev"), false);
   assert.equal(board.queries.length, 1);
 });
