@@ -17,7 +17,7 @@ Factory environment, and workflows to enable. Use immutable `prj_…` and `team_
 IDs. Confirm the selected project before applying any Vercel CLI mutation.
 Keep unrelated uncommitted work intact.
 
-For `vercel-labs/vboard`, read `packages/vboard/docs/03-guides/05-agent-factory.md`
+For `vercel-labs/board`, read `packages/vboard/docs/03-guides/05-agent-factory.md`
 and `apps/software-factory/app/api/board/[[...path]]/route.ts`. For
 `vercel-labs/agent-factory`, read `docs/repository-workflows.md` and
 `factory/lib/workflow-board.ts`. These paths are relative to their own checkout;

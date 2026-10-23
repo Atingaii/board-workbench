@@ -3,13 +3,13 @@ import { getToken } from "@vercel/connect";
 // The factory's GitHub: its repo, its bot, and its API calls as the factory GitHub App.
 // Watchers that read or merge PRs (shipit, owner, autoland) share it.
 
-export const REPO = "vercel-labs/vboard";
+export const REPO = "vercel-labs/board";
 
 /** The factory GitHub App's Connect connector. */
 export const CONNECTOR = "github/vboard-factory";
 
 const PR = new RegExp(`^${REPO.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}#([1-9]\\d*)$`);
-/** The PR number on a PR thread's root, from its `pr=vercel-labs/vboard#N` label. Other repos' PRs give none. */
+/** The PR number on a PR thread's root, from its `pr=vercel-labs/board#N` label. Other repos' PRs give none. */
 export const prNumber = (labels: Record<string, string>) => labels.pr?.match(PR)?.[1];
 
 /** What a watcher takes to reach GitHub, so tests can stand in for the token and the network. */

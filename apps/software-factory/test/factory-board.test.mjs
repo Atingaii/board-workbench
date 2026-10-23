@@ -109,7 +109,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
     ...options,
     sync: {
       slack: slack({ adapter: slackPlatform.adapter, channels: { C1: "dev" } }),
-      github: github({ adapter: githubPlatform.adapter, repos: { "vercel-labs/vboard": { pulls: "dev", issues: "dev" } } }),
+      github: github({ adapter: githubPlatform.adapter, repos: { "vercel-labs/board": { pulls: "dev", issues: "dev" } } }),
     },
     watch: Object.fromEntries(Object.entries(watchers).map(([name, watcher]) => [name, {
       ...watcher, run: ({ event }) => { watched.push([name, event.message?.channel]); },
@@ -117,7 +117,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   });
   const operator = caller(board.fetch, await personToken());
   const factory = caller(board.fetch, await token());
-  const labels = { pr: "vercel-labs/vboard#123", kind: "bug" };
+  const labels = { pr: "vercel-labs/board#123", kind: "bug" };
   const posted = await factory("POST", "/messages", { channel: "factory/project/repo/ci-health", text: "Review evidence", labels, noSync: true });
   assert.equal(posted.status, 201);
   await operator("POST", `/messages/${posted.body.message.id}/reactions`, { emoji: "shipit" });
@@ -135,8 +135,8 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   assert.match(slackPlatform.channelPosts[0].text, /Existing dev behavior/);
   await board.fetch(new Request(`${URL}/webhooks/github`, {
     method: "POST", headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-github-delivery": "existing-dev-pr" },
-    body: JSON.stringify({ action: "opened", repository: { full_name: "vercel-labs/vboard" }, sender: { login: "reviewer", id: 42 },
-      pull_request: { number: 123, title: "Existing GitHub work", html_url: "https://github.com/vercel-labs/vboard/pull/123", draft: false, merged: false } }),
+    body: JSON.stringify({ action: "opened", repository: { full_name: "vercel-labs/board" }, sender: { login: "reviewer", id: 42 },
+      pull_request: { number: 123, title: "Existing GitHub work", html_url: "https://github.com/vercel-labs/board/pull/123", draft: false, merged: false } }),
   }));
   let githubRoot;
   const until = Date.now() + 5000;
