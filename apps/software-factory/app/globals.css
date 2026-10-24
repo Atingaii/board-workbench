@@ -43,6 +43,9 @@
 
 html {
   min-height: 100%;
+  /* iOS enlarges text it judges too small, which breaks fixed-width layouts. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   /* The home page's rules are 100vw wide, which counts a classic scrollbar. */
   overflow-x: clip;
   scroll-padding-top: calc(var(--header) + 1.5rem);
@@ -568,6 +571,13 @@ kbd {
   tab-size: 2;
 }
 
+/* Without a title bar the copy button sits beside the code, so the code
+   scrolls in the space left of it instead of under it. */
+.code > pre:first-child {
+  margin-right: 2rem;
+  padding-right: 0.25rem;
+}
+
 .copy {
   position: absolute;
   top: 0.35rem;
@@ -818,6 +828,8 @@ kbd {
 
 .diagram {
   margin: 3rem 0 0;
+  /* The diagram sizes its text to the width it's given, not the viewport's. */
+  container-type: inline-size;
 }
 
 /* Geist Mono draws `─` at different heights depending on its neighbours,
@@ -830,8 +842,9 @@ kbd {
   color: var(--faint);
   font-family:
     ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
-  /* 76 columns at ~0.6em each, shrunk to fit narrow screens. */
-  font-size: clamp(0.45rem, (100vw - 2.5rem) / 46, 1rem);
+  /* 76 columns at ~0.6em each, shrunk to fit narrow screens. The divisor
+     leaves room for fonts a little wider than 0.6em, like iOS's. */
+  font-size: clamp(0.4rem, 100cqi / 47.5, 1rem);
   line-height: 1.4;
 }
 
