@@ -741,6 +741,28 @@ describe('sync', () => {
   })
 
   it.each([
+    { name: 'PR', key: 'pull_request', event: 'pull_request', kind: 'PR' },
+    { name: 'issue', key: 'issue', event: 'issues', kind: 'Issue' },
+  ])("says a retitled $name's new title on its root, and the copies of the root say it too", async ({ key, event, kind }) => {
+    const { board, s, g, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() }, issues: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const item = { number: 42, title: 'Old title', html_url: `https://github.com/basehub-ai/vboard/pull/42`, draft: false, merged: false }
+    const send = (action: string, extra: Record<string, unknown>, delivery: string) =>
+      webhook('github', { action, repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' }, ...extra }, { 'x-github-event': event, 'x-github-delivery': delivery })
+    await send('opened', { [key]: item }, 'retitle-opened')
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    const [root] = await read(julian, 'prs')
+    expect(root!.text).toBe(`${kind} #42: Old title\n${item.html_url}`)
+
+    // A new description isn't on the board; a new title is.
+    await send('edited', { [key]: { ...item, body: 'more detail' }, changes: { body: { from: '' } } }, 'retitle-body')
+    await send('edited', { [key]: { ...item, title: 'New title' }, changes: { title: { from: 'Old title' } } }, 'retitle-title')
+    await vi.waitFor(async () => expect((await julian('GET', `/messages/${root!.id}`)).body.message.text).toBe(`${kind} #42: New title\n${item.html_url}`))
+    await vi.waitFor(() => expect(s.edits.map((edit) => edit.text)).toEqual([expect.stringContaining('New title')]))
+    expect(g.edits).toEqual([]) // GitHub's own title never goes back to GitHub
+  })
+
+  it.each([
     { name: 'PR', key: 'pull_request', event: 'pull_request' },
     { name: 'issue', key: 'issue', event: 'issues' },
   ])('puts a reaction on a $name root on the $name itself, not on a comment', async ({ key, event }) => {

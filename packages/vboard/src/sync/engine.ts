@@ -755,6 +755,12 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
           if (root && !root.deleted && (Object.keys(set).length || unset.length)) await setLabels(event.author, set, unset)
+          // A root that came from the platform says its thread's title, as one it made now would.
+          if (event.retitled && root && !root.deleted && root.from === key && root.origin) {
+            const text = clampText(overrides.text ?? rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw }).text)
+            if (root.text !== text)
+              await screened(await call('syncImport', { op: 'edit', author: event.author, from: key, origin: { thread: root.origin.thread, message: root.origin.message }, text }))
+          }
           if (event.reply) return result(await post({ author: event.author, re: rootId, text: clampText(overrides.text ?? event.reply!), ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
           return { root: rootId, message: createdHere ? rootId : null }
         }

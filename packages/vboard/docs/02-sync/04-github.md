@@ -77,6 +77,7 @@ issue. Resolving review conversations isn't synced.
 | Event | What the mirror does |
 | --- | --- |
 | `pr.opened` | A root labeled `pr=owner/repo#123` and `state=open` or `state=draft` |
+| `pr.edited`, `issue.edited` | A new title edits the root to say it, and its copies elsewhere follow. A new description changes nothing |
 | `pr.ready`, `pr.draft` | Sets `state` to `open` or `draft` |
 | `pr.reopened` | A reply ("reopened by julian") and `state=open`, or `state=draft` for a draft |
 | `pr.closed` | A reply ("merged by julian" or "closed by julian") and `state=merged` or `state=closed` |
