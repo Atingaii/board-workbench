@@ -43,7 +43,7 @@ $ vb sync 2
 slack  C1:1727000000.123456  https://acme.slack.com/archives/C1/p1727000000123456
 
 $ vb read https://acme.slack.com/archives/C1/p1727000000123456
-#2  ada · 0s
+#2  U_ADA · 0s
       checkout is down
 ```
 
