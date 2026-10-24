@@ -20,16 +20,16 @@ const manifest = await (await get(new URL('/preview.json', baseUrl))).json()
 assert.equal(manifest.name, '@vercel/board')
 assert.match(manifest.commit, /^[a-f0-9]{40}$/)
 if (process.env.EXPECTED_COMMIT) assert.equal(manifest.commit, process.env.EXPECTED_COMMIT)
-assert.equal(new URL(manifest.url).pathname, '/vboard.tgz')
+assert.equal(new URL(manifest.url).pathname, '/board.tgz')
 const tarball = Buffer.from(await (await get(manifest.url)).arrayBuffer())
 assert.equal(tarball[0], 0x1f)
 assert.equal(tarball[1], 0x8b)
 assert.equal(`sha512-${createHash('sha512').update(tarball).digest('base64')}`, manifest.integrity)
 
-const directory = await mkdtemp(join(tmpdir(), 'vboard-preview-smoke-'))
+const directory = await mkdtemp(join(tmpdir(), 'board-preview-smoke-'))
 try {
   await writeFile(join(directory, 'package.json'), '{"private":true,"type":"module"}\n')
-  // npm installs vboard's dependencies, its own copy of A2 included, as an application would have them.
+  // npm installs board's dependencies, its own copy of A2 included, as an application would have them.
   execFileSync('npm', ['install', manifest.url, '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: directory,
     stdio: 'inherit',

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const output = fileURLToPath(new URL('../dist/', import.meta.url))
-const packageDirectory = fileURLToPath(new URL('../../../packages/vboard/', import.meta.url))
+const packageDirectory = fileURLToPath(new URL('../../../packages/board/', import.meta.url))
 if (process.env.VERCEL && !process.env.VERCEL_GIT_COMMIT_SHA) {
   throw new Error('Set VERCEL_GIT_COMMIT_SHA when deploying with the CLI. Git deployments provide it automatically.')
 }
@@ -19,7 +19,7 @@ if (process.env.VERCEL && !host) throw new Error('VERCEL_URL is required on Verc
 if (host && !/^[a-z0-9.-]+$/.test(host)) throw new Error('Invalid VERCEL_URL')
 
 const baseUrl = host ? `https://${host}` : 'http://localhost:4173'
-const filename = 'vboard.tgz'
+const filename = 'board.tgz'
 const url = `${baseUrl}/${filename}`
 const { name, version } = JSON.parse(await readFile(`${packageDirectory}package.json`, 'utf8'))
 

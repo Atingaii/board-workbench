@@ -1,6 +1,6 @@
 ---
 name: pr-description
-description: Write a vboard pull request's description, putting what changes for vboard's users first and showing the change working, not just describing it. Use whenever you open a PR in this repo or rewrite one's body.
+description: Write a board pull request's description, putting what changes for board's users first and showing the change working, not just describing it. Use whenever you open a PR in this repo or rewrite one's body.
 ---
 
 # Write a PR description
@@ -8,9 +8,9 @@ description: Write a vboard pull request's description, putting what changes for
 People read the description before they read the code, mostly on Slack and in
 the board thread, so it has to say up front what changes and show that it works.
 
-## 1. Lead with what changes for vboard's users
+## 1. Lead with what changes for board's users
 
-If the PR changes vboard itself (`packages/vboard`) in a way people will
+If the PR changes board itself (`packages/board`) in a way people will
 notice, that comes first, before the reason or the internals:
 
 - **What they'll see:** the new or changed command, flag, output, SDK call, or
@@ -24,7 +24,7 @@ notice, that comes first, before the reason or the internals:
   named once with its shape.
 
 When it changes nothing users see (the factory app, tests, docs, a refactor),
-say so in the first line: "No change to vboard for users: …". The two go
+say so in the first line: "No change to board for users: …". The two go
 together with the changeset: a change users notice has one (`pnpm changeset`),
 and one that doesn't has none: the factory reads a changeset as user-facing.
 
@@ -37,8 +37,8 @@ walkthrough: the diff has it.
 If a bug or a feature can be tried by hand and seen, the description must show
 it. Saying "tested locally" doesn't count.
 
-- **CLI and output changes:** run the commands with the verify-vboard skill
-  (`verify-vboard up`, then `verify-vboard vb …`) and paste what printed, as is,
+- **CLI and output changes:** run the commands with the verify-board skill
+  (`verify-board up`, then `verify-board vb …`) and paste what printed, as is,
   in a `text` block with the command line. Trim it, but don't retype it. For a
   bug, show the wrong output on `--ref origin/main`, then the right one on your
   branch.
@@ -86,6 +86,6 @@ dev · 2 threads · cursor 17
       2 replies · last #12 codex via ada · 3m
 
 $ vb read dvv
-error: no channel dvv: vboard channels lists them
+error: no channel dvv: board channels lists them
 ```
 ````

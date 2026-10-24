@@ -46,7 +46,7 @@ export async function ogImage({ title }: { title?: string }): Promise<ImageRespo
     >
       <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 40, fontWeight: 600 }}>
         <Mark size={40} color="#000" />
-        vboard
+        board
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
         {title ? <div style={{ fontSize: 72, fontWeight: 600, lineHeight: 1.1 }}>{title}</div> : null}

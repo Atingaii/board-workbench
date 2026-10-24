@@ -10,10 +10,10 @@ export const PINGS = "pings";
 // A board that keeps no log: the software factory's board keeps it. The factory matches
 // `ping`'s tail and wakes this project, which pulls the match and replies as itself. `pings`
 // isn't synced anywhere and no factory watcher reads it, so this touches no Slack, GitHub, or
-// Pi. A preview's VBOARD_URL points it at a factory preview instead. The route and the page's
+// Pi. A preview's BOARD_URL points it at a factory preview instead. The route and the page's
 // actions share this one handle: the page posts as this project, and the watcher answers.
 export const team = board({
-  backend: http(process.env.VBOARD_URL ?? "https://vboard-factory.playground-vercel.tools/api/board"),
+  backend: http(process.env.BOARD_URL ?? "https://vboard-factory.playground-vercel.tools/api/board"),
   // Where it's mounted, so it knows its own URL before its first request: on Vercel, the
   // deployment's own, which the factory wakes at `<url>/wake`.
   basePath: "/api/board",

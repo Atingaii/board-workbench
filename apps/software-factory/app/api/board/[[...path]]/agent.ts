@@ -2,7 +2,7 @@ import type { NetworkPolicy, Sandbox } from "@vercel/sandbox";
 import type { WatcherContext } from "@vercel/board";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import vboard from "@vercel/board/package.json" with { type: "json" };
+import pkg from "@vercel/board/package.json" with { type: "json" };
 import { queues, store } from "./a2.ts";
 import { CONNECTOR, REPO } from "./github.ts";
 import { expiresAt, tokenRefreshes } from "./tokens.ts";
@@ -19,10 +19,10 @@ const MODEL = "anthropic/claude-opus-5.5";
 /** The first Pi release that knows MODEL on AI Gateway. */
 const PI = "@earendil-works/pi-coding-agent@1.0.0";
 /**
- * The `vb` Pi runs: the vboard this deployment was built with, so each release reaches Pi
+ * The `vb` Pi runs: the board this deployment was built with, so each release reaches Pi
  * with no hand-made bump. A thread's sandbox outlives releases, so setup upgrades it in place.
  */
-const VBOARD: string = vboard.version;
+const BOARD_VERSION: string = pkg.version;
 /**
  * The `gh` a new sandbox gets, pinned too: asking GitHub's API for the latest release goes out without
  * credentials (setup runs before the network policy), and sandboxes share that rate limit, so new
@@ -37,14 +37,14 @@ const FFMPEG_STATIC = "5.2.0";
 const PI_USER = "vercel-sandbox";
 /**
  * What Pi gets on top of its own, written into `~/.pi/agent` every turn from this app's folders of the same names:
- * the ui-video skill, and the computer tool (an extension) it records, the verify-vboard skill, which runs
- * vboard on a local board to reproduce and check changes to it, the sitrep skill, and the pr-description skill, for the PRs Pi opens.
+ * the ui-video skill, and the computer tool (an extension) it records, the verify-board skill, which runs
+ * board on a local board to reproduce and check changes to it, the sitrep skill, and the pr-description skill, for the PRs Pi opens.
  */
 const PI_FILES = [
   "skills/ui-video/SKILL.md",
   "skills/ui-video/scripts/ui-video",
-  "skills/verify-vboard/SKILL.md",
-  "skills/verify-vboard/scripts/verify-vboard",
+  "skills/verify-board/SKILL.md",
+  "skills/verify-board/scripts/verify-board",
   "skills/sitrep/SKILL.md",
   "skills/pr-description/SKILL.md",
   "extensions/computer/index.ts",
@@ -130,7 +130,7 @@ export const byPi = (thread: string, by: { principal: string; profile: string | 
  * Whether a message is one of the board's watchers' own notes (a crosspost, `:security:`'s answer, or saying Pi
  * couldn't start), not a person's: it doesn't wake Pi or triage.
  */
-export const byWatcher = (by: { actor: string }) => by.actor.startsWith("vboard:watch:");
+export const byWatcher = (by: { actor: string }) => by.actor.startsWith("board:watch:");
 
 /**
  * Whether a message was written by an agent profile (someone's coding agent, like `julian/claude`, or a Pi), not
@@ -181,9 +181,9 @@ const DIRECTION = `Your initial task is a starting point. People can redirect yo
 A person's :shipit: or :approved: reaction is a request to complete the merge. Inspect the PR, resolve the blockers you can, mark it ready if needed, and merge it when GitHub's checks and review requirements allow. Carry that intent through without requiring another reaction. If you need someone else's action, ask them in the thread and explain what's still blocking it.
 A person's :security: reaction on a PR is a request for a deepsec review of its diff. React :secure: on the root only when deepsec exits 0.`;
 
-const THREAD = `You own bug reports, feature requests, and questions for vboard (github.com/${REPO}, private), a message board library and CLI.
+const THREAD = `You own bug reports, feature requests, and questions for board (github.com/${REPO}, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack or GitHub when the thread is synced), vb label <id> k=v labels it. Run vb help for the rest.
-A thread's kind label (bug, feature, question, task) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone ${REPO}; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named factory/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
+A thread's kind label (bug, feature, question, task) says what it is; judge it yourself from the whole thread too. Clone with gh repo clone ${REPO}; the repo uses pnpm (pnpm install, pnpm test). Any change you make goes on a branch named board/<thread id> (never main), in a pull request opened with gh pr create, and you reply with the PR link.
 Open the PR body with one line saying what triggered it, before anything else: "> 💬 From [<who>'s Slack thread](<link>) · board #<id>" for Slack, "> 🐙 From #<issue> on GitHub · board #<id>" for a GitHub issue (with "Closes #<issue>" below when the PR fixes it), or "> From board #<id>" when the thread has no source. Your task message gives the source link and who posted it.
 Before you plan or build for a bug or feature, look for related work: search earlier threads with vb read dev --text <keywords> and pull requests with gh pr list --state all --search <keywords>. If a thread or PR already covers it, link it in your reply and build on it (comment there, push to its branch, or ask to merge it) instead of starting over with a duplicate.
 For a bug report:
@@ -198,15 +198,15 @@ vb read lists a message's files as file lines with an ID; vb download <id> saves
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you.
 Your PR's reviewer posts its verdict in your thread after each review; that's for you. If it found problems, read the review on GitHub (gh pr view <N> --comments), check for commits since it (someone in the PR thread may already be fixing them), fix what's left on the PR's branch, and push. Then reply in the PR's board thread (the root labeled pr=${REPO}#<N>) in one line saying what you pushed: a push alone doesn't reach the board, and that reply is what gets the reviewer to look again. Unless a person said otherwise, don't reply to a review that found nothing to fix.`;
 
-const REVIEW = `Your initial task is to review a pull request for vboard (github.com/${REPO}, private), a message board library and CLI.
+const REVIEW = `Your initial task is to review a pull request for board (github.com/${REPO}, private), a message board library and CLI.
 The board is how you talk to people. vb read <id> shows a thread, vb reply <id> "<text>" answers in it (and reaches Slack and the PR on GitHub), vb label <id> k=v labels it. Run vb help for the rest.
 For a pull request (its board thread's root has a pr=owner/repo#N label):
 Before anything else, react to the PR thread's root with vb react <root id> looking-bunny, so people see a review is underway, also when you start reviewing again after new commits. Take it off with vb react <root id> looking-bunny --remove once you've labeled land in step 4.
 1. Clone with gh repo clone ${REPO}, then gh pr checkout <N>. Read gh pr view <N> and gh pr diff <N>, and SPEC.md and AGENTS.md for the parts it touches.
 2. Run pnpm install and pnpm check. Try the change where you can: a test that should fail without it, or the CLI by hand.
 3. Put the detail on GitHub, attached to the code: submit one review with gh api repos/${REPO}/pulls/<N>/reviews --input review.json (event COMMENT, REQUEST_CHANGES or APPROVE, with comments on file:line for each problem and suggestion). You review as the factory GitHub App's bot, and GitHub rejects APPROVE and REQUEST_CHANGES on that account's own PRs, so on a PR it opened use COMMENT and put the verdict in the body. Inline comments must be on lines the diff touches, or GitHub rejects the whole review; put anything else in the body. Always put the verdict in the body, even when the problems are all inline (a review with an empty body never reaches the board), and keep the body short: the verdict (good to merge, or the blocking problems in a line each), with the detail in the inline comments. The review shows up in the board thread and on Slack on its own, so don't restate it there: reply in the board thread only to add what it lacks, in a line (the mention of whoever asked, or what you tried by hand attached with --attach <file>, a log or a screenshot, up to 4 MB each), or not at all. vb read lists files people attached as file lines; vb download <id> saves one.
-4. After each review, say whether the PR could land without a person, in one command on the PR thread's root: vb label <root id> land=yes|no land.why="<one line>" land.sha=<the head SHA you reviewed>. Say yes only when all of these hold: it fixes a bug or does what a person clearly asked for (not something you or its author had to interpret); your review found nothing to fix; and it has no caveats, open questions, or negative tradeoffs (in its body, in the thread, or that you see). Otherwise say no, and land.why says which one failed. When unsure, say no. The board checks the rest itself: who opened it, CI, and whether it changes vboard core for users.
-5. Tell the thread the work started in. When the PR was built for another board thread (its branch is factory/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
+4. After each review, say whether the PR could land without a person, in one command on the PR thread's root: vb label <root id> land=yes|no land.why="<one line>" land.sha=<the head SHA you reviewed>. Say yes only when all of these hold: it fixes a bug or does what a person clearly asked for (not something you or its author had to interpret); your review found nothing to fix; and it has no caveats, open questions, or negative tradeoffs (in its body, in the thread, or that you see). Otherwise say no, and land.why says which one failed. When unsure, say no. The board checks the rest itself: who opened it, CI, and whether it changes board core for users.
+5. Tell the thread the work started in. When the PR was built for another board thread (its branch is board/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you: answer questions, and review again if new commits landed (gh pr view <N> --json commits), labeling land again.`;
 
 export const INSTRUCTIONS: Record<Task, string> = {
@@ -216,16 +216,9 @@ export const INSTRUCTIONS: Record<Task, string> = {
 
 export const SETUP = `set -e
 command -v pi >/dev/null || npm install -g ${PI} pnpm >/dev/null 2>&1
-# Pinned like pi. Releases from before the package was @vercel/board are vboard on npm, and both
-# install vb, so npm won't add one over the other: vboard goes, but only once the release is on npm.
-# If it isn't yet, a vb already here stays, and a new sandbox gets the latest.
-if [ "$(vb --version 2>/dev/null)" != "${VBOARD}" ]; then
-  if npm view @vercel/board@${VBOARD} version >/dev/null 2>&1; then
-    npm rm -g vboard >/dev/null 2>&1; npm install -g @vercel/board@${VBOARD} >/dev/null 2>&1
-  else
-    npm install -g vboard@${VBOARD} >/dev/null 2>&1
-  fi || command -v vb >/dev/null || npm install -g @vercel/board >/dev/null 2>&1
-fi
+# Pinned like pi, and --force, so it takes over a vb that another package installed. If that release
+# isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
+[ "$(vb --version 2>/dev/null)" = "${BOARD_VERSION}" ] || npm install -g --force @vercel/board@${BOARD_VERSION} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g @vercel/board >/dev/null 2>&1
 command -v gh >/dev/null || {
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH}/gh_${GH}_linux_amd64.tar.gz" | tar xz -C /tmp
   install "/tmp/gh_${GH}_linux_amd64/bin/gh" /usr/local/bin/gh
@@ -256,11 +249,11 @@ cd ~ && exec flock ~/.pi/lock bash -c '
     --append-system-prompt "$INSTRUCTIONS" "$MESSAGE"' >> ~/pi.log 2>&1`;
 
 /**
- * The preview of Pi's own branch, `factory/<thread>`: its branch URL on the factory's preview domain, which spells
+ * The preview of Pi's own branch, `board/<thread>`: its branch URL on the factory's preview domain, which spells
  * the branch's `/` as `-`. Pi's network policy gets it past Vercel Authentication. Only this host:
  * `*.playground-vercel.tools` would also hand the bypass secret to every other deployment on that domain.
  */
-export const piPreview = (thread: string) => `vboard-factory-git-factory-${thread}.playground-vercel.tools`;
+export const piPreview = (thread: string) => `vboard-factory-git-board-${thread}.playground-vercel.tools`;
 
 /**
  * The board routes Pi's `vb` calls, as an RE2 regex: discovery, and reading and writing messages, schedules and
@@ -347,7 +340,7 @@ const RETRY_MS = 5_000;
 
 /**
  * Runs `start` until it works, up to TRIES times, and if it never does, says so in the thread instead of throwing.
- * A watcher that throws gets 5 tries in about 15 seconds, then vboard drops that event without a word in the thread:
+ * A watcher that throws gets 5 tries in about 15 seconds, then board drops that event without a word in the thread:
  * one bad start (setup hitting GitHub's rate limit) would leave a reply unanswered, with no reason given. Saying so
  * tells the thread, and the next reply tries again.
  */
@@ -394,7 +387,7 @@ type PiMessage = {
  * A thread's sandbox. Not `pi-<thread>`: those belong to threads on the board before its store moved, and new threads
  * reuse their IDs.
  */
-export const piSandbox = (thread: string) => `factory-${thread}`;
+export const piSandbox = (thread: string) => `board-${thread}`;
 
 /** Puts fresh tokens in a running sandbox's network policy, and says when they die. */
 async function giveTokens(sandbox: Sandbox, thread: string) {
@@ -436,8 +429,8 @@ async function deliver({ task, thread, key, message }: PiMessage) {
     snapshotExpiration: SNAPSHOT_MS,
     env: {
       AI_GATEWAY_API_KEY: "from-the-network-policy",
-      VBOARD_URL: BOARD,
-      VBOARD_TOKEN: "from-the-network-policy",
+      BOARD_URL: BOARD,
+      BOARD_TOKEN: "from-the-network-policy",
       GH_TOKEN: "from-the-network-policy",
     },
     ...GIT,

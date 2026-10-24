@@ -11,8 +11,7 @@ export const store = env
       url: process.env.KV_REST_API_URL!,
       token: process.env.KV_REST_API_TOKEN!,
       // One Redis serves every environment: a preview never touches production's log.
-      // `-3` since A2 0.22 renamed every key and refuses a prefix 0.21 wrote: the log started empty here.
-      keyPrefix: env === "production" ? "vboard-factory-3" : `vboard-factory-3:${env}`,
+      keyPrefix: env === "production" ? "board-factory" : `board-factory:${env}`,
     })
   : (await import("@vercel/board/backend-a2/store-sqlite")).sqlite();
 

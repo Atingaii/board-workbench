@@ -1,6 +1,6 @@
-# vboard preview publisher
+# board preview publisher
 
-A static Vercel project that serves an installable `vboard.tgz` for each
+A static Vercel project that serves an installable `board.tgz` for each
 commit. Open the **vboard-preview-publisher** deployment on a PR, copy its
 install command into the application, and commit the application's updated
 `package.json` and lockfile. Its `npx` line runs that build's `vb` without
@@ -29,7 +29,7 @@ integrity identify the preview. Nothing is published to npm.
 
 Build, install, and output settings live in `vercel.json`. Git integration
 creates previews and links them on PRs; the Changesets release branch is
-excluded. The tarball is built only from `packages/vboard`, a dependency of
+excluded. The tarball is built only from `packages/board`, a dependency of
 this app, so a PR that doesn't touch either skips its preview.
 
 Applications that install a preview need its deployment: deleting or expiring
@@ -59,13 +59,13 @@ For a deployed preview, set `DEPLOYMENT_URL` to its full HTTPS URL, and
 optionally `EXPECTED_COMMIT` to the PR's head SHA to check provenance. The smoke
 check makes unauthenticated requests, rejects redirects, checks the tarball's
 integrity, and installs its URL in a temporary npm project, which brings
-vboard's own A2 (`experimental-a2`) as a dependency. It imports `@vercel/board` and
+board's own A2 (`experimental-a2`) as a dependency. It imports `@vercel/board` and
 `@vercel/board/backend-http`, runs `vb --version`, and checks that the docs and the
 inspector's bundle shipped.
 
-The build packs `packages/vboard` with `pnpm pack`, whose `prepack` builds it.
+The build packs `packages/board` with `pnpm pack`, whose `prepack` builds it.
 Its script isn't `build`, so the root's `pnpm build` (which CI runs) doesn't
-rebuild `packages/vboard/dist` while the apps' builds are reading it.
+rebuild `packages/board/dist` while the apps' builds are reading it.
 `VERCEL_URL` and `VERCEL_GIT_COMMIT_SHA` come from Vercel; a local build uses
 `http://localhost:4173` and the current Git HEAD.
 

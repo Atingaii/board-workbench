@@ -19,10 +19,10 @@ export function vercelTrustedSources(value: string | undefined) {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected valid JSON");
+    throw new Error("Invalid BOARD_TRUSTED_SOURCES: expected valid JSON");
   }
   const result = sourcesSchema.safeParse(parsed);
-  if (!result.success) throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected projectId, teamId and optional environments");
+  if (!result.success) throw new Error("Invalid BOARD_TRUSTED_SOURCES: expected projectId, teamId and optional environments");
   return result.data.map(({ projectId, teamId, environments }) => {
     const rule = vercelProject({
       project: projectId,
