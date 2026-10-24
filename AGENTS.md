@@ -72,6 +72,10 @@ miss. Nothing else.
   never retyped) or the SDK call with only the lines that matter; the protocol
   gets signatures and shapes (`GET /links?url= → ThreadView`). A breaking
   change says who breaks and what to do instead.
+- **Imports, always.** Every SDK sample starts with its imports, each
+  `vboard/*` one included, before and after alike: which entry point a name
+  comes from is part of the API, and a reviewer judges it from the sample
+  (`import { channels, slack } from 'vboard/sync-slack'`).
 - **Evidence matches the claim.** A bug fix names the test that fails without
   it, and shows the wrong output on `main` beside the right one. A UI change
   gets a screenshot, or a short video for a flow. Mocking vboard's own code

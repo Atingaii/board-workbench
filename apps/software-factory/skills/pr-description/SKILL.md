@@ -24,5 +24,8 @@ after them. This says how to get the evidence in your sandbox.
   without the change, or the check you ran, in one line.
 - **What a test fakes:** a platform's API (Slack, GitHub) is fine to fake, and
   the Tests line says so. A test that mocks vboard's own code tests the mock.
+- **SDK samples start with their imports,** every `vboard/*` one included:
+  copy them from the file the sample came from, so the sample shows where each
+  name lives.
 - **Users is `none` exactly when there's no changeset:** the factory reads a
   changeset as user-facing.
