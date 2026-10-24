@@ -2,7 +2,9 @@ import { createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { memory } from '../src/store/memory.ts'
-import { kapso } from '../src/sync/kapso.ts'
+import { kapso, numbers as byNumber, type WhatsAppEvent } from '../src/sync/kapso.ts'
+import { render as rendered, type SyncUnit } from '../src/sync/fn.ts'
+import type { Renderer } from '../src/sync/provider.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
@@ -12,7 +14,7 @@ const NUMBER = '16315558151'
 const JANE = '15551234567'
 
 /** The real Kapso adapter, sending through a fake WhatsApp client that records what it sends. */
-function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'support' }, store?: ReturnType<typeof memory>, render?: import('../src/sync/kapso.ts').KapsoOptions['render']) {
+function setup(numbers: Record<string, SyncUnit<WhatsAppEvent>> = { [NUMBER]: 'support' }, store?: ReturnType<typeof memory>, render?: Renderer) {
   const reads: { phoneNumberId: string; messageId: string; typingIndicator?: { type: string } }[] = []
   const texts: { phoneNumberId: string; to: string; body: string }[] = []
   const reactions: { phoneNumberId: string; to: string; reaction: { messageId: string; emoji?: string } }[] = []
@@ -47,7 +49,7 @@ function setup(numbers: Parameters<typeof kapso>[0]['numbers'] = { [NUMBER]: 'su
     },
   }
   const adapter = createKapsoAdapter({ client: client as never, webhookSecret: SECRET, phoneNumberId: NUMBER })
-  const board = testBoard({ sync: { kapso: kapso({ adapter, numbers, render, markRead: (input) => client.messages.markRead(input) }) }, ...(store ? { store } : {}) })
+  const board = testBoard({ sync: { kapso: kapso({ adapter, markRead: (input) => client.messages.markRead(input) }, render ? rendered(render, byNumber(numbers)) : byNumber(numbers)) }, ...(store ? { store } : {}) })
 
   let next = 0
   /** A `whatsapp.message.received` delivery, signed as Kapso signs it. */
@@ -82,7 +84,7 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
 describe('kapso sync', () => {
   it('requires the public read operation at setup', () => {
     const adapter = createKapsoAdapter({ client: { isKapsoProxy: () => true } as never, webhookSecret: SECRET, phoneNumberId: NUMBER })
-    expect(() => kapso({ adapter, numbers: {} } as unknown as import('../src/sync/kapso.ts').KapsoOptions)).toThrow('public markRead operation')
+    expect(() => kapso({ adapter } as unknown as import('../src/sync/kapso.ts').KapsoOptions, byNumber({}))).toThrow('public markRead operation')
   })
 
 
@@ -205,9 +207,10 @@ describe('kapso sync', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { board, texts, text } = setup({
       '+1 631-555-8151': 'support',
-      [NUMBER]: async ({ event, board }) => {
-        if (event.kind !== 'message') return
-        await board.sync('leads', event, { text: `${event.author.name}: ${event.text}` })
+      [NUMBER]: async (sync) => {
+        if (sync.direction === 'out') return sync.deliver()
+        if (sync.event.kind !== 'message') return
+        await sync.import('leads', { text: `${sync.event.author.name}: ${sync.event.text}` })
       },
     })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })

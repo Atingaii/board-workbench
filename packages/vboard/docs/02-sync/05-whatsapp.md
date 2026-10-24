@@ -9,17 +9,18 @@ description: Sync WhatsApp conversations on a business number with board threads
 npm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api
 ```
 
-`kapso({ adapter, markRead, numbers })` takes
+`kapso({ adapter, markRead }, sync)` takes
 [Kapso's Chat SDK adapter](https://chat-sdk.dev/adapters/vendor-official/kapso),
-a read operation, and a map of WhatsApp phone number IDs to
-[mappings](./01-overview.md#mappings):
+a read operation, and a [sync function](./02-functions.md). `numbers` makes one
+from a map of WhatsApp phone number IDs to board channels (two-way mirrors) or
+functions of your own:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 import { postgres } from 'vboard/backend-a2/store-postgres'
-import { kapso } from 'vboard/sync-kapso'
+import { kapso, numbers } from 'vboard/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 
@@ -36,11 +37,13 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    kapso: kapso({
-      adapter: createKapsoAdapter({ client }),
-      markRead: (input) => client.messages.markRead(input),
-      numbers: { '16315558151': 'support' },
-    }),
+    kapso: kapso(
+      {
+        adapter: createKapsoAdapter({ client }),
+        markRead: (input) => client.messages.markRead(input),
+      },
+      numbers({ '16315558151': 'support' }),
+    ),
   },
 })
 export const GET = team.fetch, POST = team.fetch
@@ -73,8 +76,8 @@ in Kapso. Writing again after that starts a new board thread.
 - **The board never starts a conversation.** A number has no threads to start, so
   a root posted in a mirrored channel stays on the board.
 - **Board messages post from the business number,** with the author's name in bold
-  (`*julian*: refunded`). To post the text alone, pass
-  `render: ({ message }) => message.text`; see [render](./02-callbacks.md#render).
+  (`*julian*: refunded`). To post the text alone, wrap the function in
+  `render(({ message }) => message.text, …)`; see [render](./02-functions.md#render).
 
 ## Reply within the window
 
@@ -117,19 +120,20 @@ WhatsApp shows no status text, so a status is ignored.
 
 ## Route by function
 
-A function mapping receives every event for its number. Importing a message into a
-channel connects its conversation, so board replies in that thread reach the
-contact:
+A function for a number receives every event for it, both ways. Importing a
+message into a channel connects its conversation, and delivering sends board
+replies in that thread to the contact:
 
 ```ts
-// in kapso({ numbers: { … } }):
-'16315558151': async ({ event, board }) => {
-  if (event.kind !== 'message') return
-  await board.sync('leads', event, { text: `${event.author.name}: ${event.text}` })
+// in kapso({ … }, numbers({ … })):
+'16315558151': async (sync) => {
+  if (sync.direction === 'out') return sync.deliver()
+  if (sync.event.kind !== 'message') return
+  await sync.import('leads', { text: `${sync.event.author.name}: ${sync.event.text}` })
 },
 ```
 
-See [callbacks](./02-callbacks.md) for the event and the overrides.
+See [sync functions](./02-functions.md) for the event and the overrides.
 
 ## What doesn't sync
 

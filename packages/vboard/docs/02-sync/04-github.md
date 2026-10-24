@@ -5,16 +5,17 @@ description: Turn each PR and issue into a board thread, with its comments, revi
 
 ## Configure it
 
-`github({ adapter, repos })` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
-connector and a map of repos to [mappings](./01-overview.md#mappings). vboard
-builds the Chat SDK adapter and people's sign-in from the connector name:
+`github(app, sync)` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
+connector and a [sync function](./02-functions.md). `repos` makes one from a map
+of repos to board channels. vboard builds the Chat SDK adapter and people's
+sign-in from the connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 import { postgres } from 'vboard/backend-a2/store-postgres'
-import { github } from 'vboard/sync-github'
+import { github, repos } from 'vboard/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -24,23 +25,37 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    github: github({
-      adapter: 'github/acme',
-      repos: {
-        'acme/www': 'dev',                                 // PRs and issues, both in dev
-        'acme/docs': { pulls: 'docs-prs' },                // PRs only; issues aren't synced
-        'acme/api': { pulls: 'prs', issues: 'issues' },
-      },
-    }),
+    github: github('github/acme', repos({
+      'acme/www': 'dev',                                   // PRs and issues, both in dev
+      'acme/docs': { pulls: 'docs-prs' },                  // PRs only; issues aren't synced
+      'acme/api': { pulls: 'prs', issues: 'issues' },
+    })),
   },
 })
 export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
-A value is a board channel or a [function](./02-callbacks.md) for the repo's PRs
+A value is a board channel or a [function](./02-functions.md) for the repo's PRs
 and issues alike, or `{ pulls, issues }` to send each somewhere else. Leave one out
 to skip it.
+
+## What goes back to GitHub
+
+A board channel brings PRs and issues in, and sends nothing back: GitHub is often
+public, and what's said in Slack or on the board may not be. To send some of it,
+deliver it from the function. This sends what's written on the board, by people
+and their agents, and keeps what was said in Slack out:
+
+```ts
+// in board({ sync: { … } }):
+github: github('github/acme', async (sync) => {
+  await repos({ 'acme/www': 'dev' })(sync)
+  if (sync.direction === 'out' && sync.message.from === null) await sync.deliver()
+}),
+```
+
+`mirror('dev')` as a repo's value sends everything back, Slack included.
 
 | Thing | ID |
 | --- | --- |
@@ -56,7 +71,8 @@ to skip it.
    with its link, labeled `pr=acme/www#123` and `state=open` (or `state=draft`).
    If the channel also mirrors a Slack channel, the root starts a Slack thread
    there too.
-2. **Comments, Slack replies, and board replies** all reach each other.
+2. **Comments** reach the board and its Slack thread. Board and Slack replies
+   reach GitHub only as [the function sends them](#what-goes-back-to-github).
 3. **Inline review comments** arrive as replies in the same thread, with their
    file and line (`src/auth.ts:42`). A board reply to one goes back into that
    review thread on GitHub, and into the PR's Slack thread as written.
@@ -134,8 +150,8 @@ is the PR's whole conversation. Label changes are ordinary events: a PR leaving
 A comment on a PR or issue that opened before you mapped the repo still lands.
 The board fetches the PR or issue through the adapter's `octokit`, creates its root
 with its author, state, labels, and assignees, then posts the comment as a reply. A
-failed fetch retries the event. A [function](./02-callbacks.md) that doesn't call
-`board.sync` skips the fetch too.
+failed fetch retries the event. A [function](./02-functions.md) that doesn't call
+`import` skips the fetch too.
 
 ## Vercel's deployment comment
 
@@ -172,7 +188,7 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 import { postgres } from 'vboard/backend-a2/store-postgres'
-import { github } from 'vboard/sync-github'
+import { github, repos } from 'vboard/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -182,15 +198,17 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    github: github({
-      adapter: createGitHubAdapter({
-        appId: process.env.GITHUB_APP_ID!,
-        privateKey: process.env.GITHUB_PRIVATE_KEY!,
-        installationId: Number(process.env.GITHUB_INSTALLATION_ID),
-        webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
-      }),
-      repos: { 'acme/www': 'dev' },
-    }),
+    github: github(
+      {
+        adapter: createGitHubAdapter({
+          appId: process.env.GITHUB_APP_ID!,
+          privateKey: process.env.GITHUB_PRIVATE_KEY!,
+          installationId: Number(process.env.GITHUB_INSTALLATION_ID),
+          webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
+        }),
+      },
+      repos({ 'acme/www': 'dev' }),
+    ),
   },
 })
 export const GET = team.fetch, POST = team.fetch

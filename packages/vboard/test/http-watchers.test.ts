@@ -7,6 +7,7 @@ import { fakeQueue } from './queue.ts'
 import { LEASE_MS, SWEEP_MS, wakeBackoff } from '../src/server/registered.ts'
 import { canonicalWatchers } from '../src/server/watchers-hash.ts'
 import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
@@ -537,7 +538,7 @@ describe('pulling matches', () => {
     let can: Can = 'all'
     const remote = testBoard({
       access: [(principal) => (principal.id === V0 ? can : undefined), vercelProject({ project: 'prj_sync', can: 'all' })],
-      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'feedback', C2: 'security' } }) },
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'feedback', C2: 'security' })) },
     })
     const webhook = (body: unknown) =>
       remote.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { slack, withoutHtml, type SlackClient } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 
 const thread = 'C1:1700000000.000100'
 
@@ -32,7 +33,7 @@ function slackWith() {
     chat: { postMessage: async (args) => (posted.push(args), { ts: '1700000000.000200' }) },
     auth: { test: async () => ({ response_metadata: { scopes: ['chat:write.customize'] } }) },
   }
-  return { provider: slack({ adapter, client: async () => client, channels: {} }), sent, posted }
+  return { provider: slack({ adapter, client: async () => client }, channels({})), sent, posted }
 }
 
 describe('GitHub HTML in Slack', () => {

@@ -119,8 +119,9 @@ reply in an existing thread rather than starting one.
   tables (`<prefix>:{<prefix>:vboard}:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-3`, its
   previews' `vboard-factory-3:preview`: A2 0.22 refuses a prefix 0.21 wrote, so
   the log started empty there and `vboard-factory-2` is never read.
-  Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
-  PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
+  Slack channel `C0C8XN8SQRG` (#development-messageboard) mirrors `dev`, and
+  GitHub PRs and issues come into it; what's written on the board reaches
+  GitHub, and what's said in Slack doesn't (`fromBoard` in `quiet.ts`). Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
   app's bot (its login and commit

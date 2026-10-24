@@ -3,6 +3,7 @@ import { setImmediate } from 'node:timers/promises'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { afterEach, expect, it, vi } from 'vitest'
 import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import type { ReceivedEvent } from '../src/sync/provider.ts'
 
 afterEach(() => vi.restoreAllMocks())
@@ -27,7 +28,7 @@ it('waits for reaction intake registered after the Slack webhook returns', async
     throw new Error(`Unexpected Slack API call: ${method}`)
   })
   const adapter = createSlackAdapter(config)
-  const provider = slack({ adapter, channels: { C1: 'dev' } })
+  const provider = slack({ adapter }, channels({ C1: 'dev' }))
   const timestamp = String(Math.floor(Date.now() / 1000))
   const body = JSON.stringify({
     type: 'event_callback', team_id: 'T1', event_id: 'Ev1',

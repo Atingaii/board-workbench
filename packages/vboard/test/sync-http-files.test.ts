@@ -4,6 +4,7 @@ import { vercelProject } from '../src/access/index.ts'
 import { http as httpBackend } from '../src/backend-http/index.ts'
 import { memoryBlob, type BlobStore } from '../src/server/blob.ts'
 import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { bearer, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { serve } from './http.ts'
 import { fakePlatform } from './sync-fixtures.ts'
@@ -57,7 +58,7 @@ async function setup(blob: BlobStore) {
   const backend = httpBackend(TEAM_URL, { fetch: bearer(limited, () => deploymentToken('support', 'prj_support', 'production', { audience: TEAM_URL })) })
   closers.push(async () => backend.close())
   const s = fakePlatform('slack')
-  const project = board({ backend, url: PROJECT_URL, sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) } })
+  const project = board({ backend, url: PROJECT_URL, sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
   await backend.registerWatchers()
   const julian = caller(team.fetch, await personToken('u_julian', TEAM_URL))
   const video = new Uint8Array(Math.round(10.9 * 1024 * 1024)).fill(7)

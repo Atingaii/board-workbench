@@ -17,6 +17,14 @@ export function boardOnly(event: Pick<GitHubEvent, "subthread" | "type" | "label
 }
 
 /**
+ * Delivers to GitHub only what was written on the board, by people and their agents: what's said
+ * in Slack stays in Slack and on the board, since a public repo would show it.
+ */
+export function fromBoard(sync: { message: { from: string | null }; deliver(): Promise<void> }): Promise<void> | undefined {
+  return sync.message.from === null ? sync.deliver() : undefined;
+}
+
+/**
  * Whether a GitHub comment is on a PR the board has no thread for: one opened before the
  * board was, or while it wasn't listening. Syncing it would open a new Slack thread for an
  * old PR (a "closing as stale" comment did, for each PR it closed), so it stays on GitHub.

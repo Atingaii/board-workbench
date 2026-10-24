@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { expect, it } from 'vitest'
-import { github } from '../src/sync/github.ts'
+import { github, repos } from '../src/sync/github.ts'
 import type { ReceivedEvent } from '../src/sync/provider.ts'
 
 const secret = 'test-secret'
@@ -10,7 +10,7 @@ const vercel = { id: 35613825, login: 'vercel[bot]', type: 'Bot' }
 
 function setup() {
   const adapter = createGitHubAdapter({ token: 'ghp_test', webhookSecret: secret, userName: 'vboard-factory[bot]', botUserId: 1 })
-  const provider = github({ adapter, repos: { 'basehub-ai/vboard': 'dev' } })
+  const provider = github({ adapter }, repos({ 'basehub-ai/vboard': 'dev' }))
   return async (event: string, payload: unknown) => {
     const body = JSON.stringify(payload)
     const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`

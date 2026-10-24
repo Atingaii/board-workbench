@@ -438,7 +438,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     if (fromRequest(caller) && body.id?.startsWith('sync:'))
       throw badRequest('id: sync:… IDs are what sync imports, under the principal that imports them')
     const attachments = await attachmentsFor(principal, body.attachments)
-    const { schedule, config } = caller.origin
+    const { schedule } = caller.origin
     const { unknownMentions, ...message } = await writePost(writes, {
       attachments,
       identity,
@@ -450,7 +450,6 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       noSync: body.noSync,
       id: body.id,
       sync: body.sync,
-      config,
       // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
       ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
     })
@@ -795,7 +794,6 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
             lenientMentions: true,
             attachments,
             links: await linksOf(principal, body.links),
-            config: caller.origin.config,
           })
           return posted.id
         }

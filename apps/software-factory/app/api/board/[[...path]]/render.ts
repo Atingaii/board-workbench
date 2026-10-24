@@ -1,7 +1,5 @@
-import type { slack } from "vboard/sync-slack";
+import type { RenderInput } from "vboard/sync";
 import { CROSSPOST_ACTOR } from "./crosspost.ts";
-
-type RenderInput = Parameters<NonNullable<Parameters<typeof slack>[0]["render"]>>[0];
 
 /** A PR's state as the workspace's PR emoji. */
 const STATE_EMOJI: Record<string, string> = {

@@ -28,7 +28,7 @@ export type BoardOptions = PolicyOptions & {
   /** Tails the board runs for you, keyed by an id you choose: `{ triage: { tail: 'firehose', run } }`. */
   watch?: Record<string, Watcher>
   /**
-   * Two-way sync, keyed by a name you choose: `{ slack: slack({...}), github: github({...}) }`. It
+   * Two-way sync, keyed by a name you choose: `{ slack: slack('slack/acme', channels({...})) }`. It
    * runs here, wherever the board lives: webhooks land at `<board>/webhooks/<key>`, and what the
    * board's channels say goes out to the platforms. On `http()`, the board it uses must let this
    * deployment `sync` in those channels.

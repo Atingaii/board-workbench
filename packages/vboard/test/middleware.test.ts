@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fakePlatform } from './sync-fixtures.ts'
 import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import type { Middleware, WriteSource } from '../src/server/index.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { vercelProject } from '../src/access/index.ts'
@@ -171,7 +172,7 @@ describe('middleware', () => {
     const s = fakePlatform('slack')
     const sources: WriteSource[] = []
     const board = testBoard({
-      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) },
       middleware: [
         async (context) => {
           sources.push(context.source)
@@ -197,7 +198,7 @@ describe('middleware', () => {
   it('sees what Slack sends before it lands, and what it passes on is what the board keeps', async () => {
     const s = fakePlatform('slack')
     const quiet: Middleware = async ({ write, next }) => next({ text: write.text.replace(/\s*hunter2/g, '') })
-    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) }, middleware: [quiet] })
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) }, middleware: [quiet] })
     const julian = await person(board)
     const webhook = (body: unknown) =>
       board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
@@ -215,19 +216,14 @@ describe('middleware', () => {
     let runs = 0
     const board = testBoard({
       sync: {
-        slack: slack({
-          adapter: s.adapter,
-          channels: {
-            C1: {
-              channel: 'firehose',
-              run: async ({ event, board }) => {
-                const { root } = await board.sync('firehose', event)
-                await board.reply(root!, 'Thanks!')
-                if (runs++ === 0) throw new Error('interrupted after its reply')
-              },
-            },
+        slack: slack({ adapter: s.adapter }, channels({
+          C1: async (sync) => {
+            if (sync.direction === 'out') return sync.deliver()
+            const { root } = await sync.import('firehose')
+            await sync.board.reply(root!, 'Thanks!')
+            if (runs++ === 0) throw new Error('interrupted after its reply')
           },
-        }),
+        })),
       },
       // Lets the reply through once, and would drop it after.
       middleware: [async ({ write, next }) => (write.text !== 'Thanks!' ? next() : acks.push(write.text) === 1 ? next() : undefined)],

@@ -114,7 +114,7 @@ const backend = a2({
 
 const team = board({
   backend,
-  // sync: { slack: slack({ … }) }, mirroring Slack's #firehose into `firehose`
+  // sync: { slack: slack('slack/acme', channels({ '#firehose': 'firehose' })) },
   watch: {
     triage: {
       tail: 'firehose --from slack',

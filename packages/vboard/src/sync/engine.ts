@@ -16,7 +16,8 @@ import { waitUntil } from '../server/wait-until.ts'
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import { ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderMapping, type ProviderSender, type SyncContext } from './provider.ts'
+import { ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
+import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
 
@@ -219,36 +220,36 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   const linkedTo = (actors: Actors, person: string) => Object.entries(actors.links).filter(([, to]) => to === person).map(([actor]) => actor)
 
-  // --- mappings ---------------------------------------------------------------
+  // --- channels ---------------------------------------------------------------
 
-  type Mapping = ProviderMapping
-  /** How long a key that didn't resolve (say, a Slack channel that doesn't exist yet) waits before another try. */
+  /** How long a name that didn't resolve (say, a Slack channel that doesn't exist yet) waits before another try. */
   const RETRY_MS = 60_000
-  const resolved = new Map<string, { map: Promise<Map<string, Mapping>>; complete: boolean; at: number }>()
+  const resolutions = new Map<string, { id: Promise<string>; failed: boolean; at: number }>()
   /**
-   * External channel → board channel or inbound function, for one entry. Each key
-   * resolves on its own: one that can't is logged and skipped, and the rest sync.
+   * A platform channel's ID from its name, on entry `key`: what sync functions route by. Each
+   * resolves once (on Slack, that joins it); one that can't is logged, and tried again a minute later.
    */
-  const mappings = (key: string) => {
-    const cached = resolved.get(key)
-    if (cached && (cached.complete || Date.now() - cached.at < RETRY_MS)) return cached.map
-    const platform = platformOf(key)
-    const pairs = Object.entries(platform.mappings)
-    const entry = { complete: true, at: Date.now(), map: Promise.resolve(new Map<string, Mapping>()) }
-    entry.map = Promise.allSettled(pairs.map(([raw]) => platform.resolveChannel(raw))).then((results) => {
-      const map = new Map<string, Mapping>()
-      results.forEach((result, i) => {
-        const [raw, target] = pairs[i]!
-        if (result.status === 'fulfilled') map.set(`${key}:${result.value}`, target)
-        else {
-          entry.complete = false
-          console.warn(`[vboard] sync ${key}: skipping ${raw}: ${(result.reason as Error).message}`)
-        }
-      })
-      return map
+  function resolve(key: string, name: string): Promise<string> {
+    const cached = resolutions.get(`${key}:${name}`)
+    if (cached && (!cached.failed || Date.now() - cached.at < RETRY_MS)) return cached.id
+    const entry = { id: platformOf(key).resolveChannel(name), failed: false, at: Date.now() }
+    entry.id.catch((error: unknown) => {
+      entry.failed = true
+      console.warn(`[vboard] sync ${key}: skipping ${name}: ${(error as Error).message}`)
     })
-    resolved.set(key, entry)
-    return entry.map
+    resolutions.set(`${key}:${name}`, entry)
+    return entry.id
+  }
+
+  /** The platform channel a target is in, as the platform names it; null when its provider can't tell. */
+  function channelIn(key: string, target: string): string | null {
+    if (!isThreadTarget(target)) return native(target)
+    try {
+      const channel = platformOf(key).inboxChannel(key, target)
+      return channel === null ? null : native(channel)
+    } catch {
+      return null
+    }
   }
 
   /** A synced platform's user with this email, for `@[ada@vercel.com]`. */
@@ -258,16 +259,6 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       if (author) return { id: author.id, kind: 'external', handle: author.handle, name: author.name, avatar: author.avatar }
     }
     return null
-  }
-
-  /** External channels a new root in this board channel starts threads in. */
-  async function configTargets(channel: string): Promise<SyncTarget[]> {
-    const targets: SyncTarget[] = []
-    for (const [key, platform] of Object.entries(entries)) {
-      if (!platform.canStartThreads) continue
-      for (const [external, target] of await mappings(key)) if (target.channel === channel) targets.push({ target: external, kind: 'channel' })
-    }
-    return targets
   }
 
   /** Validates a requested target and resolves names (`slack:#prs`) to IDs. */
@@ -291,8 +282,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const { event, raw, dedupe } = ReceivedEvent.parse(storableJson({ ...received, raw: jsonSafe(received.raw) }))
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
-    const map = await mappings(key)
-    if (!map.has(event.channel) && !(await syncsThread(event.thread))) return
+    // Only what the sync function hears, and threads the board syncs, are kept.
+    const hears = platformOf(key).hears(native(event.channel), (name) => resolve(key, name))
+    if (hears && !(await hears) && !(await syncsThread(event.thread))) return
     await call('inboxPush', { key, events: [{ id: dedupe, event, raw }] })
   }
 
@@ -462,11 +454,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     return { attachments, notes }
   }
 
-  /** One platform event from the inbox, onto the board. `id` is its ID there, which its writes derive theirs from. */
+  /** One platform event from the inbox, through its entry's sync function. `id` is its ID there, which its writes derive theirs from. */
   async function inbound(key: string, item: InboxDelivery, meta: { id: string; attempt: number }) {
     const { event, raw } = item
     const platform = platformOf(key)
-    const mapping = (await mappings(key)).get(event.channel)
     const linked = (await find({ thread: event.thread })).thread ?? undefined
     if (event.kind === 'message') {
       const copied = (await find({ thread: event.subthread ?? event.thread, message: event.message })).message
@@ -479,45 +470,53 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       if (code && (await claimCode(key, event, code))) return
     }
     const author: ExternalAuthor = 'author' in event ? event.author : { id: `${platform.platform}:system`, handle: platform.platform, name: platform.platform, avatar: null, isBot: true }
-    const board = host().client({ author, key, ...originOf(key, event) }, meta.id)
-    let applied: Promise<SyncResult> | undefined
+    // Built when it's first read: an import that never reads it never needs what its schema asks of the payload.
+    let typed: ProviderEvent | undefined
+    const typedEvent = () => (typed ??= immutable(platform.event({ id: meta.id, key, event, raw })))
+    let imported: Promise<SyncResult> | undefined
+    let link: Promise<string | null> | undefined
     let active = true
-    const context: SyncContext = {
-      id: meta.id, key, event, raw, board,
-      apply(channel, overrides = {}) {
-        if (!active) throw badRequest('the sync callback has finished')
-        if (applied) throw badRequest('an event can only be imported once per callback')
-        applied = applyIncoming(key, item, meta, ChannelPath.parse(channel), SyncOverrides.parse(overrides)).catch(async (error: unknown): Promise<SyncResult> => {
-          if (!(error instanceof DroppedError)) throw error
-          // Dropped: nothing of it is on the board, though a root fetched for it may be.
-          const thread = (await find({ thread: event.thread })).thread
-          const root = thread === null ? null : ((await syncOf(thread))?.root ?? null)
-          return { root, message: null }
-        })
-        return applied
+    const sync: SyncIn = {
+      direction: 'in',
+      key,
+      channel: native(event.channel),
+      get event() {
+        return typedEvent()
       },
-      client<E extends ProviderEvent>(publicEvent: E) {
-        function sync(id: string, target: string): ReturnType<BoardClient['sync']>
-        function sync(channel: string, event: E, overrides?: SyncOverrides): Promise<SyncResult>
-        async function sync(first: string, second: string | E, overrides?: SyncOverrides) {
-          if (!active) throw badRequest('the sync callback has finished')
-          // A message's ID and a target, or a channel and the event: the second says which.
-          if (typeof second === 'string') return board.sync(first, second)
-          if (typeof first !== 'string' || second !== publicEvent) throw badRequest('sync only accepts the current verified event')
-          return platform.sync(context, first, overrides)
-        }
-        return { ...board, sync }
+      board: host().client({ author, key, ...originOf(key, event) }, meta.id),
+      import(channel, overrides = {}) {
+        if (!active) throw badRequest('the sync function has finished')
+        imported ??= importEvent(key, item, meta, linked, channel, overrides)
+        return imported
       },
+      permalink() {
+        const promise = link ?? platform.permalink(typedEvent())
+        link = promise
+        promise.catch(() => { if (link === promise) link = undefined })
+        return promise
+      },
+      resolve: (name) => resolve(key, name),
     }
     try {
-      if (mapping?.run) {
-        await mapping.run(context)
-        return
-      }
-      const channel = mapping?.channel ?? (linked ? (await syncOf(linked))?.channel : undefined)
-      if (channel) await platform.sync(context, channel)
+      await platform.sync(sync)
+      await imported
     } finally {
       active = false
+    }
+  }
+
+  /** The import `sync.import` makes: into the event's board thread, or a new root in `channel`. */
+  async function importEvent(key: string, item: InboxDelivery, meta: { id: string; attempt: number }, linked: string | undefined, channel: string | undefined, overrides: SyncOverrides): Promise<SyncResult> {
+    const where = channel ?? (linked ? (await syncOf(linked))?.channel : undefined)
+    if (where === undefined) return { root: null, message: null }
+    try {
+      return await applyIncoming(key, item, meta, ChannelPath.parse(where), SyncOverrides.parse(overrides))
+    } catch (error) {
+      if (!(error instanceof DroppedError)) throw error
+      // Dropped: nothing of it is on the board, though a root fetched for it may be.
+      const thread = (await find({ thread: item.event.thread })).thread
+      const root = thread === null ? null : ((await syncOf(thread))?.root ?? null)
+      return { root, message: null }
     }
   }
 
@@ -645,10 +644,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       id: string
     }
     // A reply lands in its root's channel: the thread's, or `channel` for a root just made there.
-    // A new root lands with the targets its channel syncs with, as a post through board() does.
     const post = async ({ attachments = [], ...input }: Post): Promise<{ id: string; re: string | null }> => {
-      const where = input.channel ?? synced?.channel ?? channel
-      const caller: Caller = input.re === undefined ? { ...me, origin: { ...me.origin, config: await configTargets(where) } } : me
       const message = await screened(
         await call('syncImport', {
           op: 'post',
@@ -657,7 +653,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           ...input,
           origin: input.origin ?? null,
           ...(attachments.length ? { attachments: attachments.map((file) => file.id) } : {}),
-        }, NEVER, caller),
+        }),
       )
       return { id: message!, re: input.re ?? null }
     }
@@ -853,15 +849,15 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     }
   }
 
-  /** A board message as markdown for a platform, which converts it to its own format. */
-  function render(key: string, target: string, message: MessageView, actors: Actors): { markdown: string; as?: ProviderSender } {
+  /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
+  function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): { markdown: string; as?: ProviderSender } {
     const actor = actors.byId[message.by.actor]
     let name = actor?.name ?? message.by.actor
     if (message.by.profile && actor?.handle.includes('/')) name = `${actor.name} via ${actor.handle.split('/')[0]}`
     // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
     if (message.from) name = `${name} (${entries[message.from]?.platform ?? message.by.actor.slice(0, message.by.actor.indexOf(':'))})`
     const platform = platformOf(key)
-    const body = platform.render(immutable({
+    const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
       author: actor ? { ...actor } : null,
       mentionOf: (id: string) => nativeMention(platform, id, actors),
@@ -896,20 +892,20 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * `render`, with a line per file where the files won't follow: on a platform
    * that takes no uploads, or one that refused them (`noted`).
    */
-  const renderFor = (target: string, message: MessageView, actors: Actors, noted = false) => {
+  const renderFor = (target: string, message: MessageView, actors: Actors, noted = false, renderer?: Renderer) => {
     const key = keyOf(target)
-    const { markdown, as } = render(key, target, message, actors)
+    const { markdown, as } = render(key, target, message, actors, renderer)
     const lines = message.attachments.length > 0 && (noted || !platformOf(key).uploadsFiles)
     return { markdown: lines ? `${markdown}\n${attachmentNotes(message)}` : markdown, ...(as ? { as } : {}) }
   }
 
-  async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors) {
+  async function postReply(message: MessageView, target: string, externalThread: string, actors: Actors, renderer?: Renderer) {
     const replyCopy = message.replyTo === null ? undefined : (await copiesOf([message.replyTo]))[message.replyTo]?.[target]
     // A reply to a message in a platform sub-thread goes into that sub-thread; elsewhere into the main thread, as written.
     const inSubthread = replyCopy !== undefined && replyCopy.thread !== externalThread
     const place = inSubthread ? replyCopy.thread : externalThread
     const platform = platformOf(keyOf(target))
-    let body = renderFor(target, message, actors)
+    let body = renderFor(target, message, actors, false, renderer)
     let files: string[] | null | undefined
     let sentId: string
     if (!body.markdown.trim() && message.attachments.length && platform.uploadsFiles) {
@@ -920,7 +916,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       } catch (error) {
         // A platform that won't take them, or a board that no longer keeps them: the text says they were there.
         if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error
-        body = renderFor(target, message, actors, true)
+        body = renderFor(target, message, actors, true, renderer)
         sentId = (await platform.post(native(place), 'thread', body)).message
         files = null
       }
@@ -967,7 +963,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * receipt comes first, so a retry sends only what's missing. If the platform
    * refuses files, the text gets a line for each; any other failure retries.
    */
-  async function deliverFiles(message: MessageView, target: string, copy: ExternalCopy, actors: Actors) {
+  async function deliverFiles(message: MessageView, target: string, copy: ExternalCopy, actors: Actors, renderer?: Renderer) {
     const platform = platformOf(keyOf(target))
     if (!platform.uploadsFiles || message.attachments.length === 0 || copy.files !== undefined) return
     let ids: string[] | null
@@ -979,7 +975,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         throw Object.assign(new Error(`files: ${describe(error)}`), { cause: error, data: { error: `files: ${describe(error)}` } })
       console.warn(`[vboard] ${target} won't take #${message.id}'s files (${describe(error)}); noting them in its text`)
       ids = null
-      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, true)).catch((edit: unknown) =>
+      await platform.edit(native(copy.thread), copy.message, renderFor(target, message, actors, true, renderer)).catch((edit: unknown) =>
         console.warn(`[vboard] couldn't note #${message.id}'s files on ${target}:`, describe(edit)),
       )
     }
@@ -987,27 +983,82 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     await call('syncReceipt', { kind: 'files', message: message.id, target, files: ids })
   }
 
-  type Failure = { id: string; target: string; error: unknown }
+  /** What failed for a message, and where: a target, or none for a new root's sync function. */
+  type Failure = { id: string; target: string | null; error: unknown }
+
+  /** Records a failure once: a delivery's own and the sync function that passed it on are one. */
+  const failed = (failures: Failure[], id: string, target: string | null, error: unknown) => {
+    if (!failures.some((failure) => failure.error === error)) failures.push({ id, target, error })
+  }
 
   async function settle(attempt: number, failures: Failure[]) {
     if (failures.length === 0) return
     if (attempt < DELIVERY_ATTEMPTS || afterRetry(attempt)) throw failures[0]!.error
     for (const { id, target, error } of failures) {
-      console.error(`[vboard] gave up delivering #${id} to ${target}:`, describe(error))
-      await call('syncReceipt', { kind: 'failed', message: id, target, error: describe(error) })
+      console.error(`[vboard] gave up ${target === null ? `syncing #${id}` : `delivering #${id} to ${target}`}:`, describe(error))
+      if (target !== null) await call('syncReceipt', { kind: 'failed', message: id, target, error: describe(error) })
     }
   }
 
   /**
-   * A new root: the targets its channel syncs with. A root that came through this board landed
-   * with them; one that came another way (straight to the board this one uses) gets them now.
+   * Hands one board event, for one target, to its entry's sync function: `send` is what its
+   * `deliver` does, at most once. A throw, the function's or the delivery's, comes back here.
    */
-  async function configure(message: MessageView) {
-    if (message.re !== null || message.noSync) return
-    const originChannel = message.origin ? message.origin.channel ?? channelOf(message.origin.thread) : null
-    for (const target of await configTargets(message.channel))
-      if (target.target !== originChannel)
-        await call('syncReceipt', { kind: 'thread', message: message.id, target: target.target, targetKind: target.kind, cause: 'config' })
+  async function offer(key: string, event: SyncEvent, message: MessageView, target: string | null, send: (renderer?: Renderer) => Promise<void>) {
+    let sent: Promise<void> | undefined
+    let active = true
+    const finished = () => badRequest('the sync function has finished')
+    const sync: SyncOut = {
+      direction: 'out',
+      key,
+      channel: target === null ? null : channelIn(key, target),
+      event: immutable(structuredClone(event)),
+      message: immutable(structuredClone(message)),
+      target,
+      deliver(options = {}) {
+        if (!active) throw finished()
+        sent ??= target === null ? Promise.resolve() : send(options.render)
+        return sent
+      },
+      start(channel) {
+        if (!active) throw finished()
+        return startThread(key, message, channel)
+      },
+      resolve: (name) => resolve(key, name),
+    }
+    try {
+      await platformOf(key).sync(sync)
+      await sent
+    } finally {
+      active = false
+    }
+  }
+
+  /** Syncs a message's thread with a platform channel, as a sync function asked: never the channel it came from. */
+  async function startThread(key: string, message: MessageView, channel: string) {
+    const { target, kind } = await normalizeTarget(`${key}:${channel}`)
+    const root = message.re === null ? message : await messageOf(message.re)
+    if (!root || root.deleted || root.noSync) return
+    const origin = root.origin ? root.origin.channel ?? channelOf(root.origin.thread) : null
+    if (target === origin) return
+    await call('syncReceipt', { kind: 'thread', message: root.id, target, targetKind: kind, cause: 'config' })
+  }
+
+  /** A new root, offered to each platform that can start threads: its sync function may `start` one there. */
+  async function deliverRoot(event: Extract<SyncEvent, { type: 'message.posted' }>, attempt: number) {
+    const starters = Object.keys(entries).filter((key) => entries[key]!.canStartThreads)
+    if (event.payload.noSync || starters.length === 0) return
+    const root = await messageOf(event.message!.id)
+    if (!root || root.deleted) return
+    const failures: Failure[] = []
+    for (const key of starters) {
+      try {
+        await offer(key, event, root, null, async () => {})
+      } catch (error) {
+        failed(failures, root.id, null, error)
+      }
+    }
+    await settle(attempt, failures)
   }
 
   async function deliverThread(event: Extract<SyncEvent, { type: 'thread.synced' }>, attempt: number) {
@@ -1018,13 +1069,31 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const synced = await syncOf(thread)
     const [root, ...replies] = synced ? await threadOf(synced.root) : []
     if (!synced || !root || root.id !== synced.root || root.deleted) return
+    const failures: Failure[] = []
+    try {
+      await offer(keyOf(target), event, root, target, (renderer) => backfill(synced, root, replies, target, failures, renderer))
+    } catch (error) {
+      failed(failures, root.id, target, error)
+    }
+    await settle(attempt, failures)
+  }
+
+  /**
+   * A thread's root into a platform channel, then what's been said in it, each once. A reply
+   * waits for its root; every reply is tried, and the first failure is thrown.
+   */
+  async function backfill(synced: SyncThreadView, root: MessageView, replies: MessageView[], target: string, failures: Failure[], renderer?: Renderer) {
     const actors = await actorsNow()
     const copies = await copiesOf([root.id, ...replies.map((reply) => reply.id)])
+    const rootFailed = (error: unknown) => {
+      failures.push({ id: root.id, target, error })
+      return error
+    }
     let externalThread = synced.external[target]
     if (!externalThread) {
       try {
         const platform = platformOf(keyOf(target))
-        const body = renderFor(target, root, actors)
+        const body = renderFor(target, root, actors, false, renderer)
         const mediaOnly = !body.markdown.trim() && root.attachments.length > 0 && platform.uploadsFiles
         if (!body.markdown.trim() && !mediaOnly) throw badRequest('a renderer must return text unless the message has media')
         let uploaded: string[] | null | undefined
@@ -1045,37 +1114,38 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           } catch (error) {
             if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error
             uploaded = null
-            return platform.post(native(target), 'channel', renderFor(target, root, actors, true))
+            return platform.post(native(target), 'channel', renderFor(target, root, actors, true, renderer))
           }
         }
         const sent = await post()
         externalThread = `${keyOf(target)}:${sent.thread}`
         const external: ExternalCopy = { thread: externalThread, message: sent.message, ...(uploaded !== undefined ? { files: uploaded } : {}), ...(postedAsPerson ? { asUser: true as const } : {}) }
         await recordDelivery(root, target, external)
-        await deliverFiles(root, target, external, actors)
+        await deliverFiles(root, target, external, actors, renderer)
       } catch (error) {
-        return settle(attempt, [{ id: root.id, target, error }])
+        throw rootFailed(error)
       }
     } else {
       const copy = copies[root.id]?.[target]
       if (copy)
         try {
-          await deliverFiles(root, target, copy, actors)
+          await deliverFiles(root, target, copy, actors, renderer)
         } catch (error) {
-          return settle(attempt, [{ id: root.id, target, error }])
+          throw rootFailed(error)
         }
     }
-    const failures: Failure[] = []
+    const mine: Failure[] = []
     for (const reply of replies) {
       if (reply.deleted || reply.noSync || cameFrom(reply, target)) continue
       try {
-        const copy = copies[reply.id]?.[target] ?? (await postReply(reply, target, externalThread, actors))
-        await deliverFiles(reply, target, copy, actors)
+        const copy = copies[reply.id]?.[target] ?? (await postReply(reply, target, externalThread, actors, renderer))
+        await deliverFiles(reply, target, copy, actors, renderer)
       } catch (error) {
-        failures.push({ id: reply.id, target, error })
+        mine.push({ id: reply.id, target, error })
       }
     }
-    await settle(attempt, failures)
+    failures.push(...mine)
+    if (mine.length) throw mine[0]!.error
   }
 
   /** Never deliver a message back to the platform it came from. */
@@ -1084,7 +1154,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 
   async function deliverPost(event: Extract<SyncEvent, { type: 'message.posted' }>, attempt: number) {
     if (!event.message) return
-    if (event.message.re === null) return configure(event.message)
+    if (event.message.re === null) return deliverRoot(event, attempt)
     if (event.payload.noSync) return
     const synced = await syncOf(event.payload.thread)
     if (!synced || synced.targets.length === 0) return
@@ -1099,10 +1169,12 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       if (!ours(target) || !externalThread) continue // the root isn't there yet; its thread.synced delivery backfills
       if (cameFrom(message, target)) continue
       try {
-        const copy = (await copiesOf([message.id]))[message.id]?.[target] ?? (await postReply(message, target, externalThread, actors))
-        await deliverFiles(message, target, copy, actors)
+        await offer(keyOf(target), event, message, target, async (renderer) => {
+          const copy = (await copiesOf([message.id]))[message.id]?.[target] ?? (await postReply(message, target, externalThread, actors, renderer))
+          await deliverFiles(message, target, copy, actors, renderer)
+        })
       } catch (error) {
-        failures.push({ id: message.id, target, error })
+        failed(failures, message.id, target, error)
       }
     }
     await settle(attempt, failures)
@@ -1114,32 +1186,34 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (Object.keys(copies).length === 0) return
     // An edit renders the message as it is now, so one that goes out late sends nothing its author
     // has since changed or deleted: their later edit or delete is on its way too.
-    const message = event.type === 'message.edited' ? await messageOf(event.payload.id) : event.message
-    if (event.type === 'message.edited' && (!message || message.deleted)) return
+    const message = event.type === 'message.edited' ? await messageOf(event.payload.id) : (event.message ?? (await messageOf(event.payload.id)))
+    if (!message || (event.type === 'message.edited' && message.deleted)) return
     const actors = await actorsNow()
     for (const [target, copy] of Object.entries(copies)) {
       if (!ours(target) || (event.payload.from !== null && keyOf(target) === event.payload.from)) continue
       try {
-        const platform = platformOf(keyOf(target))
-        const thread = native(copy.thread)
-        // A copy posted as its author is theirs to change: only their token can.
-        const theirs = copy.asUser && message && (event.type === 'message.edited' || event.type === 'message.deleted')
-        const token = theirs ? await personToken(platform, message, false) : null
-        if (theirs && !token) {
-          console.warn(`[vboard] skipped ${event.type} on ${target}: #${message.id} was posted as its author, and their token is gone`)
-          continue
-        }
-        if (event.type === 'message.edited' && message)
-          if (token) await platform.editAs(token, thread, copy.message, renderAsPerson(target, message, actors))
-          else await platform.edit(thread, copy.message, renderFor(target, message, actors, copy.files === null))
-        else if (event.type === 'message.deleted') {
-          if (token) await platform.deleteAs(token, thread, copy.message)
-          else await platform.delete(thread, copy.message)
-          // The files went as a message of their own.
-          if (copy.files?.length) await platform.deleteFiles(copy.files)
-        }
-        else if (event.type === 'reaction.added') await platform.react(thread, copy.message, canonicalEmoji(event.payload.emoji), true)
-        else if (event.type === 'reaction.removed') await platform.react(thread, copy.message, canonicalEmoji(event.payload.emoji), false)
+        await offer(keyOf(target), event, message, target, async (renderer) => {
+          const platform = platformOf(keyOf(target))
+          const thread = native(copy.thread)
+          // A copy posted as its author is theirs to change: only their token can.
+          const theirs = copy.asUser && (event.type === 'message.edited' || event.type === 'message.deleted')
+          const token = theirs ? await personToken(platform, message, false) : null
+          if (theirs && !token) {
+            console.warn(`[vboard] skipped ${event.type} on ${target}: #${message.id} was posted as its author, and their token is gone`)
+            return
+          }
+          if (event.type === 'message.edited')
+            if (token) await platform.editAs(token, thread, copy.message, renderAsPerson(target, message, actors))
+            else await platform.edit(thread, copy.message, renderFor(target, message, actors, copy.files === null, renderer))
+          else if (event.type === 'message.deleted') {
+            if (token) await platform.deleteAs(token, thread, copy.message)
+            else await platform.delete(thread, copy.message)
+            // The files went as a message of their own.
+            if (copy.files?.length) await platform.deleteFiles(copy.files)
+          }
+          else if (event.type === 'reaction.added') await platform.react(thread, copy.message, canonicalEmoji(event.payload.emoji), true)
+          else await platform.react(thread, copy.message, canonicalEmoji(event.payload.emoji), false)
+        })
       } catch (error) {
         console.warn(`[vboard] skipped ${event.type} on ${target}:`, (error as Error).message)
       }
@@ -1165,9 +1239,11 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     for (const [target, copy] of Object.entries(copies)) {
       if (!ours(target)) continue
       try {
-        const body = renderFor(target, message, actors, copy.files === null)
-        if (body.markdown === renderFor(target, previous, actors, copy.files === null).markdown) continue
-        await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
+        await offer(keyOf(target), event, message, target, async (renderer) => {
+          const body = renderFor(target, message, actors, copy.files === null, renderer)
+          if (body.markdown === renderFor(target, previous, actors, copy.files === null, renderer).markdown) return
+          await platformOf(keyOf(target)).edit(native(copy.thread), copy.message, body)
+        })
       } catch (error) {
         console.warn(`[vboard] skipped labels.changed on ${target}:`, describe(error))
       }
@@ -1264,7 +1340,6 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     deliver,
     receive: inbound,
     pull,
-    configTargets,
     normalizeTarget,
     findByEmail,
     handleWebhook,

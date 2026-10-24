@@ -98,8 +98,9 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const { owner } = await import("../app/api/board/[[...path]]/owner.ts");
   const { crosspost } = await import("../app/api/board/[[...path]]/crosspost.ts");
   const { fakePlatform } = await import("../../../packages/vboard/test/sync-fixtures.ts");
-  const { slack } = await import("../../../packages/vboard/src/sync/slack.ts");
-  const { github } = await import("../../../packages/vboard/src/sync/github.ts");
+  const { channels, slack } = await import("../../../packages/vboard/src/sync/slack.ts");
+  const { github, repos } = await import("../../../packages/vboard/src/sync/github.ts");
+  const { fromBoard } = await import("../app/api/board/[[...path]]/quiet.ts");
   const slackPlatform = fakePlatform("slack");
   const githubPlatform = fakePlatform("github");
   const watched = [];
@@ -108,8 +109,8 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const board = testBoard({
     ...options,
     sync: {
-      slack: slack({ adapter: slackPlatform.adapter, channels: { C1: "dev" } }),
-      github: github({ adapter: githubPlatform.adapter, repos: { "vercel-labs/board": { pulls: "dev", issues: "dev" } } }),
+      slack: slack({ adapter: slackPlatform.adapter }, channels({ C1: "dev" })),
+      github: github({ adapter: githubPlatform.adapter }, repos({ "vercel-labs/board": async (sync) => (sync.direction === "in" ? sync.import("dev") : fromBoard(sync)) })),
     },
     watch: Object.fromEntries(Object.entries(watchers).map(([name, watcher]) => [name, {
       ...watcher, run: ({ event }) => { watched.push([name, event.message?.channel]); },

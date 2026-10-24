@@ -120,13 +120,13 @@ cursors are next.
 
 ## Connect, and post as yourself
 
-With Vercel Connect, a sync entry's `adapter` is just the connector's name;
-vboard builds the Chat SDK adapter, so the app installs no `chat` packages:
+With Vercel Connect, a sync entry's app is just the connector's name; vboard
+builds the Chat SDK adapter, so the app installs no `chat` packages:
 
 ```ts
 sync: {
-  slack: slack({ adapter: 'slack/acme', channels: { '#prs': 'prs' } }),
-  github: github({ adapter: 'github/acme', repos: { 'acme/www': 'prs' } }),
+  slack: slack('slack/acme', channels({ '#prs': 'prs' })),
+  github: github('github/acme', repos({ 'acme/www': 'prs' })),
 }
 ```
 
@@ -148,33 +148,33 @@ to post as people through your own OAuth. See
 
 ## Customize sync
 
-String mappings keep the automatic mirror. Function mappings receive every
-incoming event, and delegate what you want to keep:
+Each platform takes one sync function, called for every event in both
+directions. `channels`, `repos`, and `numbers` build it from a map; a value can
+be a function of your own:
 
 ```ts
-import { github } from 'vboard/sync-github'
+import { github, repos } from 'vboard/sync-github'
 
-github({
-  adapter: 'github/acme',
-  repos: {
-    'acme/www': async ({ event, board }) => {
-      const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
-      await board.sync(channel, event, { labels: { area: 'www' } })
-    },
+github('github/acme', repos({
+  'acme/www': async (sync) => {
+    if (sync.direction !== 'in') return
+    const channel = sync.event.subject.type === 'pull_request' ? 'prs' : 'issues'
+    await sync.import(channel, { labels: { area: 'www' } })
   },
-})
+}))
 ```
 
-The callback client imports the current verified event with normal provenance,
+`sync.import` brings the current verified event in with normal provenance,
 media, state reconciliation, and retries. `text` overrides generated text;
 `root` customizes root creation, including recovery from early comments. A
-callback that does not delegate skips that event. `board.sync(messageId, target)`
-still attaches a thread; the event-taking overload exists only in a callback.
+function that doesn't import skips that event. Going out, `sync.deliver()`
+sends a board event to the platform thread, and `sync.start(channel)` starts a
+new root's thread; a function that calls neither sends nothing.
 
-Providers also accept `render: ({ message }) => message.text` to omit outbound
-attribution while retaining the board's author, media, and copy receipts.
-`vboard/sync` exports shared event schemas and the native `SyncProvider`
-contract. `vboard/sync/chat` adds `ChatSyncProvider` for Chat SDK integrations.
-Providers own stable native event identity; callbacks receive a durable `event.id`
-for their own idempotency. See the [sync contract](../../SPEC.md#event-callbacks-and-default-imports)
-for callback lifecycle, required SDK client operations, and extension examples.
+`render(renderer, fn)` from `vboard/sync` changes outbound attribution for what
+`fn` delivers, while retaining the board's author, media, and copy receipts.
+`vboard/sync` exports shared event schemas, the helpers, and the native
+`SyncProvider` contract. `vboard/sync/chat` adds `ChatSyncProvider` for Chat SDK
+integrations. Providers own stable native event identity; functions receive a
+durable `event.id` for their own idempotency. See the [sync contract](../../SPEC.md#sync-functions-and-default-imports)
+for the function lifecycle, required SDK client operations, and extension examples.

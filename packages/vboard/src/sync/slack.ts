@@ -3,7 +3,7 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type SyncHandler, type EventMapping, type RenderInput, type ReceivedEvent, type FetchedLink } from './provider.ts'
+import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
 import type { SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/contract.ts'
@@ -11,6 +11,7 @@ import { MESSAGE_TEXT_MAX } from '../contract/schemas.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { connectSlackAdapter } from '@vercel/connect/chat'
 import { connectUserTokens, withUserTokens } from './users.ts'
+import type { SyncFn } from './fn.ts'
 
 type SlackChannel = { id?: string; name?: string; is_member?: boolean; is_private?: boolean; is_im?: boolean; is_mpim?: boolean; is_ext_shared?: boolean }
 export type SlackClient = {
@@ -265,7 +266,6 @@ export function slackFileName(filename: string, mimeType?: string): string {
 export const SlackEvent = eventSchema('slack', 'message')
 export type SlackEvent = z.infer<typeof SlackEvent>
 
-export type SlackHandler = SyncHandler<SlackEvent>
 export type SlackOptions = {
   /**
    * A Vercel Connect connector (`'slack/acme'`): vboard builds the Slack adapter,
@@ -273,20 +273,18 @@ export type SlackOptions = {
    * Or your own Chat SDK adapter, wrapped in `withUserTokens` to post as people.
    */
   adapter: Adapter | string
-  render?: (input: RenderInput) => string
   /** Not needed with a connector. */
   client?: () => Promise<SlackClient>
-  channels: Record<string, EventMapping<SlackEvent>>
 }
 
 /**
- * Syncs Slack channels with board channels. Keys are channels by name
- * (`'#prs'`) or ID (`'C0123ABC'`); values are a board channel (a two-way
- * mirror) or a callback that handles every incoming event. The app joins public
- * channels it isn't in; private ones need an invite.
+ * Syncs a Slack workspace with the board: `app` is a Vercel Connect connector
+ * (`'slack/acme'`) or the options, and `sync` is what each event does, both ways,
+ * like `channels({ '#prs': 'prs' })`. The app joins public channels as it
+ * resolves them; private ones need an invite.
  */
-export function slack(options: SlackOptions): SlackProvider {
-  return new SlackProvider(options)
+export function slack(app: string | SlackOptions, sync: SyncFn<SlackEvent>): SlackProvider {
+  return new SlackProvider(typeof app === 'string' ? { adapter: app } : app, sync)
 }
 
 type SlackWithTokens = Adapter & { webClient?: SlackClient; withBotToken?<T>(token: string, fn: () => T): T }
@@ -304,7 +302,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   private readonly web: () => Promise<SlackClient | undefined>
   private customize: Promise<boolean> | undefined
 
-  constructor(given: SlackOptions) {
+  constructor(given: SlackOptions, sync: SyncFn<SlackEvent>) {
     const connected = typeof given.adapter === 'string' ? fromConnector(given.adapter) : null
     const options = connected ? { ...given, adapter: connected.adapter, client: given.client ?? connected.client } : { ...given, adapter: given.adapter as Adapter }
     const tokens = options.adapter as SlackWithTokens
@@ -460,7 +458,6 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const { teamId: _team, enterpriseId: _enterprise, isEnterpriseInstall: _install, ...rest } = file.fetchMetadata
         return { ...file, fetchMetadata: rest }
       },
-      render: options.render,
       platform: 'slack',
       adapter: options.adapter,
       canStartThreads: true,
@@ -667,8 +664,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         const channel = await this.resolveChannel(at === -1 ? target : target.slice(0, at))
         return { target: at === -1 ? channel : `${channel}:${target.slice(at + 1)}`, channel, kind: at === -1 ? 'channel' : 'thread' }
       },
-    })
-    for (const [key, value] of Object.entries(options.channels)) this.map(key, value)
+    }, sync)
     this.web = client
   }
 
@@ -764,8 +760,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     return `reaction:${key}:${this.toNative(reaction.threadId)}|${reaction.messageId}|${reaction.rawEmoji}|${reaction.user.userId}|${reaction.added}|${stamp}`
   }
 
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): SlackEvent {
+  override event(context: SyncContext): SlackEvent {
     return SlackEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }
 export { withUserTokens, type UserTokens } from './users.ts'
+export { channels } from './fn.ts'

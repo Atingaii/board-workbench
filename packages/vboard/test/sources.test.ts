@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { slack, type SlackClient } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { formatSourceRead } from '../src/cli/format.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { githubActions } from '../src/server/auth.ts'
@@ -52,7 +53,7 @@ function setup() {
   const s = fakePlatform('slack', withSlackClient(web, false))
   const board = testBoard({
     access: [githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] })],
-    sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient, channels: { C1: 'firehose' } }) },
+    sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient }, channels({ C1: 'firehose' })) },
   })
   const webhook = (body: unknown) =>
     board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))

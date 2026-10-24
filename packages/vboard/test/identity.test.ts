@@ -8,9 +8,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Adapter } from 'chat'
 import { fakePlatform } from './sync-fixtures.ts'
 import { slack } from '../src/sync/slack.ts'
-import { github } from '../src/sync/github.ts'
+import { github, repos } from '../src/sync/github.ts'
+import { channels, mirror, render } from '../src/sync/fn.ts'
 import { withUserTokens, type UserTokens } from '../src/sync/users.ts'
-import type { ProviderOptions } from '../src/sync/provider.ts'
+import type { Renderer } from '../src/sync/provider.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 
 type Read = { id: number; text: string; by: { actor: string }; author: { handle: string; person?: { id: string; handle: string } } | null }
@@ -74,19 +75,20 @@ function slackAs(owners: Record<string, string>, onPost?: (post: { threadId: str
   }
 }
 
-function setup(options: { users?: UserTokens; owners?: Record<string, string>; githubUsers?: UserTokens; onPost?: Parameters<typeof slackAs>[1]; url?: string | undefined; slackRender?: ProviderOptions['render'] } = {}) {
+function setup(options: { users?: UserTokens; owners?: Record<string, string>; githubUsers?: UserTokens; onPost?: Parameters<typeof slackAs>[1]; url?: string | undefined; slackRender?: Renderer } = {}) {
   const as = slackAs(options.owners ?? {}, options.onPost)
   const s = fakePlatform('slack', as.extend)
   const g = fakePlatform('github')
   const board = testBoard({
     sync: {
-      slack: slack({
-        adapter: options.users ? withUserTokens(s.adapter, options.users) : s.adapter,
-        client: async () => (s.adapter as unknown as { webClient: never }).webClient,
-        channels: { C1: 'firehose' },
-        render: options.slackRender,
-      }),
-      github: github({ adapter: options.githubUsers ? withUserTokens(g.adapter, options.githubUsers) : g.adapter, repos: { 'basehub-ai/vboard': 'prs' } }),
+      slack: slack(
+        {
+          adapter: options.users ? withUserTokens(s.adapter, options.users) : s.adapter,
+          client: async () => (s.adapter as unknown as { webClient: never }).webClient,
+        },
+        options.slackRender ? render(options.slackRender, channels({ C1: 'firehose' })) : channels({ C1: 'firehose' }),
+      ),
+      github: github({ adapter: options.githubUsers ? withUserTokens(g.adapter, options.githubUsers) : g.adapter }, repos({ 'basehub-ai/vboard': mirror('prs') })),
     },
     ...('url' in options ? { url: options.url } : {}),
   })

@@ -51,8 +51,8 @@ import { board } from 'vboard'
 import { a2 } from 'vboard/backend-a2'
 import { vercelQueues } from 'vboard/backend-a2/scheduler-vercel'
 import { postgres } from 'vboard/backend-a2/store-postgres'
-import { slack } from 'vboard/sync-slack'
-import { github } from 'vboard/sync-github'
+import { channels, slack } from 'vboard/sync-slack'
+import { github, repos } from 'vboard/sync-github'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -62,14 +62,9 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    slack: slack({
-      adapter: 'slack/acme', // a Vercel Connect connector
-      channels: { '#errors-www': 'errors-www', '#prs': 'prs' },
-    }),
-    github: github({
-      adapter: 'github/acme',
-      repos: { 'acme/www': 'prs' },
-    }),
+    // A Vercel Connect connector, and what each event does.
+    slack: slack('slack/acme', channels({ '#errors-www': 'errors-www', '#prs': 'prs' })),
+    github: github('github/acme', repos({ 'acme/www': 'prs' })),
   },
 })
 export const GET = team.fetch, POST = team.fetch
