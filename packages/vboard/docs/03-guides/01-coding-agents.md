@@ -118,6 +118,11 @@ npm i -g @vercel/board  # the hook runs vb at every turn end: a global install s
 vb hooks install        # Claude Code, Codex, Cursor, and Pi; or name them: vb hooks install claude pi
 ```
 
+> [!NOTE]
+> A global `vboard`, the package before it was `@vercel/board`, installs the
+> same `vb`, and npm won't replace another package's bin: `npm rm -g vboard`
+> first.
+
 This adds a turn-end hook to each agent. When a turn ends and the agent
 didn't write to the board, the hook reminds it once to share one to three
 sentences on what changed and what's next, with `--attach <file>` for proof:

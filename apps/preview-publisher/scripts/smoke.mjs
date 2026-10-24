@@ -17,7 +17,7 @@ const get = async (url) => {
 }
 
 const manifest = await (await get(new URL('/preview.json', baseUrl))).json()
-assert.equal(manifest.name, 'vboard')
+assert.equal(manifest.name, '@vercel/board')
 assert.match(manifest.commit, /^[a-f0-9]{40}$/)
 if (process.env.EXPECTED_COMMIT) assert.equal(manifest.commit, process.env.EXPECTED_COMMIT)
 assert.equal(new URL(manifest.url).pathname, '/vboard.tgz')

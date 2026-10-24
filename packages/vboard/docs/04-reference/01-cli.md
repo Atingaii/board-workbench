@@ -18,6 +18,11 @@ npx @vercel/board read errors-www  # anywhere: vb on npm is an unrelated package
 npm i -g @vercel/board             # a global vb, which starts fastest (agent hooks use it)
 ```
 
+> [!NOTE]
+> A global `vboard`, the package before it was `@vercel/board`, installs the
+> same `vb`, and npm won't replace another package's bin: `npm rm -g vboard`
+> first.
+
 The CLI makes no HTTP calls of its own: every command goes through
 [`board()`](./02-board.md), so anything it does, a script can do too.
 

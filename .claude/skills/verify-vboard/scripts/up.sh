@@ -71,10 +71,13 @@ if [[ -z $published ]]; then
     chmod +x packages/vboard/dist/cli.mjs
     ln -sf $REPO/packages/vboard/dist/cli.mjs $VB" >>"$log" 2>&1
 else
-  step "installing @vercel/board@$published from npm"
+  step "installing $published from npm"
+  # Releases from before the package was @vercel/board are vboard on npm.
   sbx_script "$name" "set -e
     mkdir -p /vercel/cli /vercel/bin
-    cd /vercel/cli && npm init -y >/dev/null && npm install --no-fund --no-audit @vercel/board@$published
+    pkg=@vercel/board
+    npm view \$pkg@$published version >/dev/null 2>&1 || pkg=vboard
+    cd /vercel/cli && npm init -y >/dev/null && npm install --no-fund --no-audit \$pkg@$published
     ln -sf /vercel/cli/node_modules/.bin/vb $VB" >>"$log" 2>&1
 fi
 

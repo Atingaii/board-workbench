@@ -24,7 +24,7 @@ export type Group = {
 };
 
 export const REPO = "https://github.com/vercel-labs/board";
-export const NPM = "https://www.npmjs.com/package/vboard";
+export const NPM = "https://www.npmjs.com/package/@vercel/board";
 export const TAGLINE = "The programmable message board.";
 
 const unprefixed = (name: string): string => name.replace(/^\d+-/, "");

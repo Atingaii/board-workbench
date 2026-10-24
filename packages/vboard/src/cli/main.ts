@@ -318,26 +318,50 @@ function globalVb(): string | null {
 }
 
 /**
- * Whether `bin` runs the CLI at `self`: a symlink to it (npm), or a shell
- * shim that execs node on it (pnpm, through `$basedir`- or `$basedir_abs`-relative paths).
+ * What `bin` runs: the file it links to (npm), and for a shell shim, the
+ * files it execs node on (pnpm, through `$basedir`- or `$basedir_abs`-relative paths).
  */
-function runsCli(bin: string, self: string): boolean {
+function binTargets(bin: string): string[] {
   try {
     const real = realpathSync(bin)
-    if (real === self) return true
-    if (statSync(real).size > 64 * 1024) return false
+    if (statSync(real).size > 64 * 1024) return [real]
     const script = readFileSync(real, 'utf8')
-    if (!script.startsWith('#!')) return false
+    if (!script.startsWith('#!')) return [real]
     const basedir = dirname(bin)
     // pnpm 10 quotes "$basedir/…"; pnpm 11 quotes "$basedir_abs/…" and notes `# cmd-shim-target=<path>`.
     const paths = [
       ...[...script.matchAll(/"([^"\n]+)"/g)].map(([, quoted]) => quoted!.replace(/^\$(?:\{basedir(?:_abs)?\}|basedir(?:_abs)?)(?=\/)/, basedir)),
       ...[...script.matchAll(/^# cmd-shim-target=(.+)$/gm)].map(([, target]) => target!.trim()),
     ]
-    for (const path of paths) if (isAbsolute(path) && existsSync(path) && realpathSync(path) === self) return true
-  } catch {}
+    return [real, ...paths.filter((path) => isAbsolute(path) && existsSync(path)).map((path) => realpathSync(path))]
+  } catch {
+    return []
+  }
+}
+
+/** Whether `bin` runs the CLI at `self`. */
+const runsCli = (bin: string, self: string) => binTargets(bin).includes(self)
+
+/** Whether `bin` comes from the `vboard` package: this CLI from before it was `@vercel/board`. */
+function fromVboard(bin: string): boolean {
+  for (const target of binTargets(bin)) {
+    for (let dir = dirname(target); dir !== dirname(dir); dir = dirname(dir)) {
+      const manifest = join(dir, 'package.json')
+      if (!existsSync(manifest)) continue
+      try {
+        if ((JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown }).name === 'vboard') return true
+      } catch {}
+      break
+    }
+  }
   return false
 }
+
+/**
+ * How to install this CLI globally. Both `vboard` and `@vercel/board` install
+ * `vb`, and npm won't replace another package's bin, so a global `vboard` goes first.
+ */
+const installGlobally = (installed: string | null) => `${installed && fromVboard(installed) ? 'npm rm -g vboard && ' : ''}npm i -g @vercel/board`
 
 /**
  * How an agent's hook should run this CLI, long after this command exits:
@@ -359,7 +383,7 @@ function cliCommand(): { command: string; note?: string } {
   if (version === VERSION) return { command: 'vb' }
   return {
     command: `npx -y @vercel/board@${VERSION}`,
-    note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`npm i -g @vercel/board\` makes it start faster`,
+    note: `the hook runs vboard ${VERSION} through npx${installed ? ` (your vb is ${version || 'older'})` : ''}; \`${installGlobally(installed)}\` makes it start faster`,
   }
 }
 
@@ -764,7 +788,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           if (problems.length === 0) continue
           for (const problem of problems) out(`  ${problem}`)
           const global = behind && cli === 'vb'
-          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          const fixes = [...(global ? [installGlobally(globalVb())] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
           out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
@@ -793,7 +817,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
         out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
         if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
-        if (agent === 'cursor' && !rules) out('  npm i -g @vercel/board lets Cursor run vb without asking')
+        if (agent === 'cursor' && !rules) out(`  ${installGlobally(globalVb())} lets Cursor run vb without asking`)
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
           let host: string | null = null

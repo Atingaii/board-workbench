@@ -52,9 +52,12 @@ case "$cmd" in
     # The board's project: a scratch repo, so `vb serve` links it and not the checkout Pi works in.
     git -C "$RUN/work" init -q
     if [ -n "$published" ]; then
-      echo "installing @vercel/board@$published" >&2
-      npm install --silent --prefix "$RUN/pkg" "@vercel/board@$published" >"$RUN/build.log" 2>&1 || die "install failed, see $RUN/build.log"
-      echo "$RUN/pkg/node_modules/@vercel/board/dist/cli.mjs" > "$RUN/cli"
+      # Releases from before the package was @vercel/board are vboard on npm.
+      pkg=@vercel/board
+      npm view "$pkg@$published" version >/dev/null 2>&1 || pkg=vboard
+      echo "installing $pkg@$published" >&2
+      npm install --silent --prefix "$RUN/pkg" "$pkg@$published" >"$RUN/build.log" 2>&1 || die "install failed, see $RUN/build.log"
+      echo "$RUN/pkg/node_modules/$pkg/dist/cli.mjs" > "$RUN/cli"
       echo "$published" > "$RUN/version"
     else
       repo=$(git rev-parse --show-toplevel 2>/dev/null) || die "run it inside the vboard checkout, or pass --published"
@@ -68,7 +71,7 @@ case "$cmd" in
       fi
       if [ "$build" = 1 ] || [ -n "$ref" ]; then
         echo "building vboard in $src" >&2
-        (cd "$src" && pnpm install --frozen-lockfile --filter @vercel/board... && pnpm --filter @vercel/board build) >"$RUN/build.log" 2>&1 \
+        (cd "$src" && pnpm install --frozen-lockfile --filter ./packages/vboard... && pnpm --filter ./packages/vboard build) >"$RUN/build.log" 2>&1 \
           || die "build failed, see $RUN/build.log"
       fi
       [ -f "$src/packages/vboard/dist/cli.mjs" ] || die "vboard isn't built in $src: drop --no-build"

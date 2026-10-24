@@ -134,9 +134,14 @@ describe('cli hooks', () => {
     const extension = join(home, 'pi-agent', 'extensions', 'vboard.ts')
     await writeFile(extension, (await readFile(extension, 'utf8')).replace('let reminded = false', 'let reminded = 0'))
     // What vboard 0.8.0 wrote for Claude Code: a `vb` that's still 0.8.0, `vb update` allowed, no post or channels.
+    // That `vb` is npm's global install of the package by its old name, `vboard`.
     const old = join(home, 'old-bin')
+    const installed = join(home, 'old-global', 'lib', 'node_modules', 'vboard')
     await mkdir(old)
-    await writeFile(join(old, 'vb'), '#!/bin/sh\necho 0.8.0\n', { mode: 0o755 })
+    await mkdir(join(installed, 'dist'), { recursive: true })
+    await writeFile(join(installed, 'package.json'), JSON.stringify({ name: 'vboard', version: '0.8.0' }))
+    await writeFile(join(installed, 'dist', 'cli.mjs'), '#!/bin/sh\necho 0.8.0\n', { mode: 0o755 })
+    await symlink(join(installed, 'dist', 'cli.mjs'), join(old, 'vb'))
     await mkdir(join(home, '.claude'))
     const settings = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'vb hook stop --agent claude 2>/dev/null || true', timeout: 10 }] }] } }
     await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ ...settings, permissions: { allow: ['Bash(vb update:*)', 'Bash(vb reply:*)', 'Bash(vb read:*)'] } }))
@@ -152,7 +157,7 @@ describe('cli hooks', () => {
         '  allows update, which is gone',
         "  doesn't allow post or channels",
         `  runs vboard 0.8.0, not ${version}`,
-        '  fix with npm i -g @vercel/board, then vb hooks install claude',
+        '  fix with npm rm -g vboard && npm i -g @vercel/board, then vb hooks install claude',
         'Codex        outdated   ~/.codex/hooks.json',
         '  runs an older hook command',
         '  fix with vb hooks install codex',

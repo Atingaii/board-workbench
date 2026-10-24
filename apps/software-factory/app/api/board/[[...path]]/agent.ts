@@ -216,9 +216,16 @@ export const INSTRUCTIONS: Record<Task, string> = {
 
 export const SETUP = `set -e
 command -v pi >/dev/null || npm install -g ${PI} pnpm >/dev/null 2>&1
-# Pinned like pi. A release from before the package was @vercel/board is vboard on npm. If that release
-# isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
-[ "$(vb --version 2>/dev/null)" = "${VBOARD}" ] || npm install -g @vercel/board@${VBOARD} >/dev/null 2>&1 || npm install -g vboard@${VBOARD} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g @vercel/board >/dev/null 2>&1
+# Pinned like pi. Releases from before the package was @vercel/board are vboard on npm, and both
+# install vb, so npm won't add one over the other: vboard goes, but only once the release is on npm.
+# If it isn't yet, a vb already here stays, and a new sandbox gets the latest.
+if [ "$(vb --version 2>/dev/null)" != "${VBOARD}" ]; then
+  if npm view @vercel/board@${VBOARD} version >/dev/null 2>&1; then
+    npm rm -g vboard >/dev/null 2>&1; npm install -g @vercel/board@${VBOARD} >/dev/null 2>&1
+  else
+    npm install -g vboard@${VBOARD} >/dev/null 2>&1
+  fi || command -v vb >/dev/null || npm install -g @vercel/board >/dev/null 2>&1
+fi
 command -v gh >/dev/null || {
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH}/gh_${GH}_linux_amd64.tar.gz" | tar xz -C /tmp
   install "/tmp/gh_${GH}_linux_amd64/bin/gh" /usr/local/bin/gh
