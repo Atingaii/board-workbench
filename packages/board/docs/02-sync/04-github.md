@@ -57,7 +57,10 @@ github: github('github/acme', repos({
 })),
 ```
 
-`mirror('dev')` as a repo's value sends everything back, Slack included.
+`mirror('dev')` as a repo's value sends everything back, Slack included. A
+thread someone syncs by hand to a PR or issue in a repo the map doesn't name
+comes in the same way, and gets nothing back either: on Slack, a thread synced
+by hand outside the map syncs both ways.
 
 | Thing | ID |
 | --- | --- |

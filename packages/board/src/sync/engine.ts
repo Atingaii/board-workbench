@@ -1318,7 +1318,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /** The status for what a platform wouldn't read: the caller's mistake, missing, refused, or the platform failing. */
   const unreadableStatus = (code: string) => {
     if (code === 'unsupported' || code === 'invalid_target') return 400
-    if (code === 'channel_not_found' || code === 'channel_unlisted') return 404
+    if (code === 'channel_not_found') return 404
     if (code === 'ratelimited') return 429
     if (['no_client', 'list_failed', 'internal_error', 'fatal_error', 'service_unavailable', 'request_timeout'].includes(code)) return 502
     return 403

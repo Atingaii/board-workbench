@@ -164,9 +164,17 @@ describe('sync functions', () => {
     warn.mockRestore()
   })
 
-  it("keeps a thread synced by hand going when a channel the map names doesn't exist", async () => {
+  const missingScope = Object.assign(new Error('An API error occurred: missing_scope'), { data: { error: 'missing_scope' } })
+  it.each([
+    { why: "doesn't exist", list: async () => ({ channels: [] }) },
+    // Without groups:read, Slack won't list private channels, so a private one's name never resolves.
+    { why: "is private on an app without groups:read", list: async ({ types }: { types: string }) => {
+      if (types.includes('private_channel')) throw missingScope
+      return { channels: [] }
+    } },
+  ])("keeps a thread synced by hand going when a channel the map names $why", async ({ list }) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const conversations = { list: vi.fn(async () => ({ channels: [] })), info: vi.fn(async () => ({ channel: { id: 'C9', is_member: true } })), join: vi.fn() }
+    const conversations = { list: vi.fn(list), info: vi.fn(async () => ({ channel: { id: 'C9', is_member: true } })), join: vi.fn() }
     const s = fakePlatform('slack', withSlackClient({ conversations }, false))
     const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => ({ conversations }) as never }, channels({ '#missing': into('support') })) } })
     const julian = caller(board.fetch, await personToken())

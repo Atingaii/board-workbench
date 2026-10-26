@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { boardOnly, unseenPr } from "../app/api/board/[[...path]]/quiet.ts";
+import { boardOnly, fromBoard, unseenPr } from "../app/api/board/[[...path]]/quiet.ts";
 
 const lifecycle = (type, labels = {}) => ({ subthread: null, type, labels });
 
@@ -43,4 +43,19 @@ test("comments on known PRs, and PR events, still sync", async () => {
   assert.equal(await unseenPr(comment("github:vercel-labs/board:180"), board, "dev"), false);
   assert.equal(await unseenPr({ kind: "lifecycle", type: "pr.opened", thread: "github:vercel-labs/board:181", subthread: null }, board, "dev"), false);
   assert.equal(board.queries.length, 1);
+});
+
+test("GitHub gets what was written on the board, and reactions made there, not Slack's", async () => {
+  const delivered = [];
+  const out = (type, from, payloadFrom) => ({
+    event: { type, payload: { from: payloadFrom } },
+    message: { from },
+    deliver: async () => void delivered.push(`${type}:${from}:${payloadFrom}`),
+  });
+  await fromBoard(out("message.posted", null, null));
+  await fromBoard(out("message.posted", "slack", "slack"));
+  // A Slack user's reaction on a board-written comment stays off GitHub, and a board reaction on a Slack message goes.
+  await fromBoard(out("reaction.added", null, "slack"));
+  await fromBoard(out("reaction.added", "slack", null));
+  assert.deepEqual(delivered, ["message.posted:null:null", "reaction.added:slack:null"]);
 });

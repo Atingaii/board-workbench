@@ -16,12 +16,16 @@ export function boardOnly(event: Pick<GitHubEvent, "subthread" | "type" | "label
   return event.type === "pr.closed" && event.labels?.state === "closed";
 }
 
+type Outbound = { event: { type: string; payload: unknown }; message: { from: string | null }; deliver(): Promise<void> };
+
 /**
  * Delivers to GitHub only what was written on the board, by people and their agents: what's said
- * in Slack stays in Slack and on the board, since a public repo would show it.
+ * in Slack stays in Slack and on the board, since a public repo would show it. A reaction counts
+ * where it was made, not where the message it's on came from.
  */
-export function fromBoard(sync: { message: { from: string | null }; deliver(): Promise<void> }): Promise<void> | undefined {
-  return sync.message.from === null ? sync.deliver() : undefined;
+export function fromBoard(sync: Outbound): Promise<void> | undefined {
+  const from = sync.event.type.startsWith("reaction.") ? (sync.event.payload as { from: string | null }).from : sync.message.from;
+  return from === null ? sync.deliver() : undefined;
 }
 
 /**
