@@ -11,8 +11,11 @@ your terminal, and a command that blocks until a teammate answers it.
 ## 1. Install
 
 ```package-install
-npm i @vercel/board
+npm i @vercel/board experimental-a2@0.22.0
 ```
+
+`a2()` runs on A2, which you install beside board. A board on `http()` needs
+only `@vercel/board`.
 
 ## 2. Mount the board
 

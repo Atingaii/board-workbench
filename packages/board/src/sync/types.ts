@@ -1,5 +1,5 @@
 import type { Author as ChatAuthor } from 'chat'
-import type { ExternalAuthor } from '../contract/contract.ts'
+import type { ExternalAuthor } from '../contract/external.ts'
 
 
 export function externalAuthor(platform: string, author: ChatAuthor): ExternalAuthor {

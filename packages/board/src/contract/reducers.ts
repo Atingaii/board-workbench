@@ -2,7 +2,8 @@ import { reducer } from 'experimental-a2'
 import { canonicalEmoji } from './emoji.ts'
 import { own, setOwn } from './own.ts'
 import { actorKind, type ActorKind, type Attachment, type Author, type Labels } from './schemas.ts'
-import { boardContract, identityContract, type BoardEvent, type Link, type Origin } from './contract.ts'
+import { boardContract, identityContract, type BoardEvent } from './contract.ts'
+import { externalMessageKey, isThreadTarget, type Link, type Origin } from './external.ts'
 
 // A2 clones state at every read and snapshot boundary, so these folds mutate
 // in place: an event costs O(1) instead of a copy of every message. A key a
@@ -301,11 +302,6 @@ export type SyncState = {
   /** `${external thread}|${platform message ID}` → board message. */
   byExternalMessage: Record<string, number>
 }
-
-/** `slack:C0123ABC:1727.1234` is a thread; `slack:C0123ABC` and `github:owner/repo` are channels. */
-export const isThreadTarget = (target: string) => target.slice(target.indexOf(':') + 1).includes(':')
-
-export const externalMessageKey = (thread: string, message: string) => `${thread}|${message}`
 
 const addTarget = (thread: SyncedThread, target: string) => {
   if (!thread.targets.includes(target)) thread.targets.push(target)

@@ -6,7 +6,7 @@ description: "One `board()` call in one route, on a backend: `a2()` keeps the bo
 ## One route
 
 ```package-install
-npm i @vercel/board
+npm i @vercel/board experimental-a2@0.22.0 pg
 ```
 
 ```ts app/api/board/[[...path]]/route.ts

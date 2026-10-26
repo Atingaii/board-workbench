@@ -193,6 +193,16 @@ serving a local board at http://127.0.0.1:4100/api/board as local:user:ada, its 
 inspector at http://127.0.0.1:4747
 ```
 
+The board runs on A2, which `@vercel/board` doesn't install. Put it beside
+board, at the version board pins: `npm i -g experimental-a2@0.22.0` next to a
+global install, or once with `npx -p @vercel/board -p experimental-a2@0.22.0 board serve`.
+Without it, `vb serve` says so:
+
+```text
+$ vb serve
+error: board serve needs experimental-a2 beside it: npm i -g experimental-a2@0.22.0
+```
+
 - **It keeps everything in `.board/`** at the Git checkout's root, or in
   `--dir`: the log in SQLite (`board.db`) and files in `attachments/`. It runs
   a scheduler in the process, so schedules send while it runs, and passes every

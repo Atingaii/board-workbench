@@ -13,8 +13,9 @@ import {
   platformAvatar,
   storable,
 } from '../contract/schemas.ts'
-import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/contract.ts'
-import type { BoardEvent, Link } from '../contract/contract.ts'
+import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
+import type { BoardEvent } from '../contract/contract.ts'
+import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/reducers.ts'
 import type { AccessSummary } from '../server/access.ts'
 

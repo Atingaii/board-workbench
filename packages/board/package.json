@@ -110,24 +110,26 @@
     "pretest": "tsdown --log-level warn"
   },
   "dependencies": {
-    "@chat-adapter/github": "^4.41.1",
-    "@chat-adapter/slack": "^4.41.1",
-    "@vercel/connect": "^2.3.4",
     "@vercel/oidc": "^3.8.9",
-    "chat": "^4.41.1",
-    "experimental-a2": "0.22.0",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
   },
   "peerDependencies": {
+    "@chat-adapter/github": "^4.41.1",
+    "@chat-adapter/slack": "^4.41.1",
     "@upstash/qstash": "^2.11.0",
     "@vercel/blob": "^2.8.0",
+    "@vercel/connect": "^2.3.4",
     "@vercel/queue": "*",
+    "chat": "^4.41.1",
+    "experimental-a2": "0.22.0",
     "ioredis": "^5.4.0",
     "pg": "^8.11.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
+    "@chat-adapter/github": "^4.41.1",
+    "@chat-adapter/slack": "^4.41.1",
     "@chat-adapter/tests": "^4.41.1",
     "@electric-sql/pglite": "0.3.15",
     "@kapso/chat-adapter": "^0.1.1",
@@ -136,7 +138,10 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vercel/blob": "^2.8.0",
+    "@vercel/connect": "^2.3.4",
     "ai": "^7.0.130",
+    "chat": "^4.41.1",
+    "experimental-a2": "0.22.0",
     "ioredis": "5.11.1",
     "lucide-react": "^1.49.0",
     "pg": "^8.16.3",
@@ -150,13 +155,28 @@
     "vitest": "^5.0.3"
   },
   "peerDependenciesMeta": {
+    "@chat-adapter/github": {
+      "optional": true
+    },
+    "@chat-adapter/slack": {
+      "optional": true
+    },
     "@upstash/qstash": {
       "optional": true
     },
     "@vercel/blob": {
       "optional": true
     },
+    "@vercel/connect": {
+      "optional": true
+    },
     "@vercel/queue": {
+      "optional": true
+    },
+    "chat": {
+      "optional": true
+    },
+    "experimental-a2": {
       "optional": true
     },
     "ioredis": {

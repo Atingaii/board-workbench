@@ -430,6 +430,9 @@ go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
 builds of `@vercel/board` and `@vercel/board/backend-http`. Watchers and sync run in either
 build: the engine loads when it's first used, and it and `SyncProvider` import
 nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
+`experimental-a2`, the Chat SDK, its adapters, and `@vercel/connect` are optional
+peers: only `backend-a2` and the `sync-*` subpaths load them, never a handle over
+`http()` (the same test checks), so a project on `http()` installs none of them.
 
 ## invariants
 

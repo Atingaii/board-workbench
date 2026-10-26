@@ -1,6 +1,8 @@
-import { idempotentId } from 'experimental-a2'
-import type { BoardEvent, Link, Origin } from '../contract/contract.ts'
-import { actorsReducer, foldMessages, isThreadTarget, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
+import { derivedId } from '../client/ids.ts'
+import type { BoardEvent } from '../contract/contract.ts'
+import type { Link, Origin } from '../contract/external.ts'
+import { actorsReducer, foldMessages, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
+import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
@@ -297,7 +299,7 @@ async function commitPost(
   const synced = await Promise.all(
     targets.map(async ({ target, kind, cause }) => ({
       type: 'thread.synced' as const,
-      id: await idempotentId('board', thread, 'sync', target),
+      id: await derivedId('board', thread, 'sync', target),
       payload: { thread, target, kind, cause, by: identity.author },
     })),
   )
@@ -367,14 +369,6 @@ async function unclaimed(ctx: WriteContext, target: SyncTarget, thread: string, 
   const synced = await ctx.reads.tables.syncOf(owner)
   const which = synced && access.readable(synced.channel) ? `#${synced.root}` : 'another thread'
   throw new HttpError(409, 'already_synced', `${target.target} is already synced with ${which}`)
-}
-
-/** `slack:C0123ABC:1727.1` → `slack:C0123ABC`; `github:o/r:12` → `github:o/r`. */
-export const channelOf = (externalThread: string) => {
-  const at = externalThread.indexOf(':')
-  const rest = externalThread.slice(at + 1)
-  const colon = rest.indexOf(':')
-  return colon === -1 ? externalThread : externalThread.slice(0, at + 1 + colon)
 }
 
 /**
@@ -534,7 +528,7 @@ export async function writeAttach(
   // Applied before it answers, so replies from the platform thread find it at once.
   await untilApplied(ctx, await ctx.session.append({
     type: 'thread.synced',
-    id: await idempotentId('board', message.thread, 'sync', target),
+    id: await derivedId('board', message.thread, 'sync', target),
     payload: { thread: message.thread, target, kind, cause: input.cause, by: input.identity.author },
   }))
   return { attached: true }

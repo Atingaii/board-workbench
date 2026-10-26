@@ -3,22 +3,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { z } from 'zod'
 import { A2Error, idempotentId, reducer } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type ConsumerContext } from 'experimental-a2/server'
-import {
-  boardContract,
-  BOARD_SESSION,
-  IDENTITY_SESSION,
-  identityContract,
-  inboxContract,
-  INBOXES_SESSION,
-  inboxSession,
-  SCHEDULES_SESSION,
-  type BoardEvent,
-  type BoardEvents,
-  type ExternalAuthor,
-  type InboxEvent,
-  type Link,
-  type Origin,
-} from '../contract/contract.ts'
+import { boardContract, BOARD_SESSION, IDENTITY_SESSION, identityContract, inboxContract, INBOXES_SESSION, inboxSession, SCHEDULES_SESSION, type BoardEvent, type BoardEvents, type InboxEvent } from '../contract/contract.ts'
+import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, LinkedAccount, Me, ScheduleView } from '../api/routes.ts'

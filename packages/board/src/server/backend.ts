@@ -1,7 +1,7 @@
 import type { Protocol } from '../api/protocol.ts'
 import type { MessageView, SourceRead } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
-import type { ExternalEvent } from '../contract/contract.ts'
+import type { ExternalEvent } from '../contract/external.ts'
 import type { Actor } from '../contract/reducers.ts'
 import type { Author } from '../contract/schemas.ts'
 import type { Access } from './access.ts'

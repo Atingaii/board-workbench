@@ -1,6 +1,7 @@
 import type { z } from 'zod'
 import type { ActorView, Filters, LinkView, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
-import type { BoardEvent, Link } from '../contract/contract.ts'
+import type { BoardEvent } from '../contract/contract.ts'
+import type { Link } from '../contract/external.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import { hasCriteria } from './watch-spec.ts'
 import {

@@ -33,7 +33,7 @@ import {
   type MessageView,
 } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
-import type { ExternalAuthor } from '../contract/contract.ts'
+import type { ExternalAuthor } from '../contract/external.ts'
 import type { Actor } from '../contract/reducers.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import type { SyncEvent } from '../sync/engine.ts'

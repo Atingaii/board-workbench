@@ -4,7 +4,7 @@ export type { Backend, BackendRoute, BoardBinding, Caller, Identity, InboxDelive
 export type { CallerRequest, Claims } from './auth.ts'
 export type { Method, Protocol } from '../api/protocol.ts'
 export { HttpError } from './errors.ts'
-export { type Watcher, type WatcherContext } from './watch.ts'
+export type { Watcher, WatcherContext } from './watch.ts'
 export {
   DroppedError,
   type Middleware,

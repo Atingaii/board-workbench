@@ -5,6 +5,10 @@ description: Mirror Slack channels into board channels, with threads, reactions,
 
 ## Configure it
 
+```package-install
+npm i chat @chat-adapter/slack @vercel/connect
+```
+
 `slack(app, sync)` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
 connector and a [sync function](./02-functions.md). `channels` makes one from a map
 of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to board channels

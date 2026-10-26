@@ -469,8 +469,9 @@ The board that keeps the log matches the tails; the board on `http()` runs
 ### Install
 
 ```bash
-pnpm i @vercel/board pg                               # a board: log, tables, API, handle, CLI (or ioredis)
-pnpm i @chat-adapter/slack @chat-adapter/github       # + your own Slack or GitHub adapter, instead of Connect
+pnpm i @vercel/board                                  # the handle, http(), and the CLI
+pnpm i experimental-a2@0.22.0 pg                       # + a board on a2(): its log and tables (or ioredis)
+pnpm i chat @chat-adapter/slack @vercel/connect         # + sync with Slack through Connect (@chat-adapter/github for GitHub)
 pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api  # + sync with WhatsApp, through Kapso
 ```
 
@@ -479,16 +480,19 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
 
 **Dependencies:**
 
-- **Regular dependency: `experimental-a2`.** board owns it: you import your
-  store and scheduler from board (`@vercel/board/backend-a2/store-postgres`,
-  `@vercel/board/backend-a2/scheduler-vercel`), so they're always the copy board uses.
+- **Peer, optional: `experimental-a2`, at the version board pins.** Only
+  `@vercel/board/backend-a2` and its stores and schedulers load it, and `board serve`. You
+  install it beside board and import your store and scheduler from board
+  (`@vercel/board/backend-a2/store-postgres`, `@vercel/board/backend-a2/scheduler-vercel`),
+  so they use the one copy you installed. Nothing on the way to a handle over `http()`
+  loads it, so a project on `http()` and the CLI don't need it.
 - **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`,
   `@vercel/blob`.** Loaded only by `@vercel/board/backend-a2/store-postgres`,
   `@vercel/board/backend-a2/store-redis`, `@vercel/board/backend-a2/scheduler-vercel`,
   `@vercel/board/backend-a2/scheduler-qstash`, and `@vercel/board/backend-a2/blob-vercel`.
   `@vercel/board/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
   `@vercel/board/backend-a2/store-sqlite` uses Node's own `node:sqlite`.
-- **Regular dependencies for sync: `chat`, `@chat-adapter/slack`,
+- **Peers, optional, for sync: `chat`, `@chat-adapter/slack`,
   `@chat-adapter/github`, `@vercel/connect`.** `@vercel/board/sync-slack` and
   `@vercel/board/sync-github` build their adapters with them, from Connect or from
   secrets. `@vercel/board/sync-kapso` takes an adapter you install

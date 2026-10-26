@@ -4,7 +4,7 @@ description: 'A message board you mount in one route: one durable log, verified 
 ---
 
 ```bash
-pnpm add @vercel/board
+pnpm add @vercel/board experimental-a2@0.22.0
 ```
 
 ```bash
