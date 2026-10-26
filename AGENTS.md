@@ -22,9 +22,9 @@ an injected JWKS; there is no bypass.
 
 ## release it
 
-A change people will notice gets a changeset (`pnpm changeset`), and its PR
-description leads with it and shows it working: see the pr-description skill
-(`.claude/skills/pr-description`, and the factory's copy for Pi). On `main`,
+A change people will notice gets a changeset (`pnpm changeset`); its PR is
+titled and described as [pr titles and descriptions](#pr-titles-and-descriptions)
+says. On `main`,
 `.github/workflows/release.yml` opens a "Version Packages" PR; merging it
 publishes `@vercel/board` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from
@@ -35,6 +35,54 @@ To try a commit before it's released, install its tarball from the
 static project on `vercel-internal-playground`): its page has the `pnpm add`
 line, pinned to that deployment. Nothing goes to npm; see its
 [README](./apps/preview-publisher/README.md).
+
+## pr titles and descriptions
+
+People read these on Slack and in the board thread before the code, so both
+say plainly what changes, and briefly.
+
+**Title:** `<type>(<area>): <what it does>`, in the imperative, about 60
+characters at most: `fix(store): split big redisTables writes into bounded scripts`.
+
+- `type` is `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, or `chore`,
+  with `!` when it breaks someone: `feat(protocol)!: …`.
+- `area`, when one fits, is where people would look: `cli`, `sdk`, `protocol`,
+  `sync`, `backend-a2`, `backend-http`, `backend-vercel`, `inspector`,
+  `factory`, `docs`.
+- No narration ("X does Y", "X is Y") and no second clause: two changes are
+  two PRs.
+
+**Body:** one line on what it does and for whom, opening with the link to the
+board thread, Slack thread, or issue it came from when there is one. Then four
+answers, each `none` when nothing applies, so a reviewer sees at a glance what
+to look at:
+
+```markdown
+- **Users:** none | the new or changed command, flag, output, or SDK call; "breaking" if it is.
+- **Protocol / backends:** none | new or changed routes and methods, what a backend must implement, conformance checks added.
+- **Performance / I/O:** none | what each affected call now costs: board reads and writes, platform calls, polling, payload size.
+- **Tests:** what's covered and at what level (the CLI as a subprocess, an in-process board, the real API), and what's faked and why.
+```
+
+Then `### Users` and `### Protocol / backends` for the answers that need more
+than their line, and `### Open` for tradeoffs or follow-ups a reviewer must not
+miss. Nothing else.
+
+- **Code, not prose.** Users get a transcript pasted from a real run (trimmed,
+  never retyped) or the SDK call with only the lines that matter; the protocol
+  gets signatures and shapes (`GET /links?url= → ThreadView`). A breaking
+  change says who breaks and what to do instead.
+- **Evidence matches the claim.** A bug fix names the test that fails without
+  it, and shows the wrong output on `main` beside the right one. A UI change
+  gets a screenshot, or a short video for a flow. Mocking board's own code
+  doesn't count as testing it.
+- **One screen.** One sentence per fact, no paragraph over three lines, and
+  nothing the diff already says: no file lists, no renames nobody calls.
+- **Users is `none` exactly when there's no changeset.** The factory reads a
+  changeset as user-facing.
+
+The pr-description skill (`.claude/skills/pr-description`, and the factory's
+copy for Pi) says how to get the evidence where it runs, with an example.
 
 ## the software factory (`apps/software-factory`)
 
