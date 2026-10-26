@@ -6,7 +6,7 @@ description: "Where a board on `a2()` keeps everything: Postgres or Redis in pro
 ## Pick a store
 
 ```package-install
-npm i @vercel/board experimental-a2@0.22.0 pg
+npm i @vercel/board pg
 ```
 
 ```ts app/api/board/[[...path]]/route.ts
@@ -134,7 +134,7 @@ another session already holds, as it always did.
 ## Redis
 
 ```package-install
-npm i @vercel/board experimental-a2@0.22.0 ioredis
+npm i @vercel/board ioredis
 ```
 
 ```ts app/api/board/[[...path]]/route.ts

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { slack } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import { fakePlatform } from './sync-fixtures.ts'
-import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
+import { BOARD_URL, caller, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoard } from './harness.ts'
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
 
@@ -174,11 +174,22 @@ describe('a2() takes a scheduler and a blob store only if you pass them', () => 
 
 describe('localScheduler()', () => {
   it('comes from board/backend-a2/scheduler-local, and sends a scheduled message', async () => {
-    // Resolved as an app resolves it, through the package's exports, to what the build put there.
-    const entry = createRequire(import.meta.url).resolve('@vercel/board/backend-a2/scheduler-local')
-    expect(entry).toMatch(/dist\/backend-a2\/scheduler-local\.mjs$/)
-    const { localScheduler } = (await import(pathToFileURL(entry).href)) as typeof import('../src/scheduler/local.ts')
-    const board = testBoard({ scheduler: localScheduler() })
+    // Resolved as an app resolves it, through the package's exports, to what the build put there. The
+    // board and its store come from the build too: it inlines A2, once, for every entry that runs on it.
+    const require = createRequire(import.meta.url)
+    const built = async <T,>(spec: string) => (await import(pathToFileURL(require.resolve(spec)).href)) as T
+    expect(require.resolve('@vercel/board/backend-a2/scheduler-local')).toMatch(/dist\/backend-a2\/scheduler-local\.mjs$/)
+    const { localScheduler } = await built<typeof import('../src/scheduler/local.ts')>('@vercel/board/backend-a2/scheduler-local')
+    const { board: mounted } = await built<typeof import('../src/server/index.ts')>('@vercel/board')
+    const { a2 } = await built<typeof import('../src/backend-a2/index.ts')>('@vercel/board/backend-a2')
+    const { memory } = await built<typeof import('../src/store/memory.ts')>('@vercel/board/backend-a2/store-memory')
+    const { oidcTokens } = await built<typeof import('../src/access/index.ts')>('@vercel/board/access')
+    const board = mounted({
+      backend: a2({ store: memory(), scheduler: localScheduler() }),
+      authenticate: oidcTokens(testAuth),
+      project: { id: PROJECT_ID, teamId: TEAM_ID },
+      url: BOARD_URL,
+    })
     const julian = caller(board.fetch, await personToken())
     const { body } = await julian('POST', '/messages', { channel: 'dev', text: 'PR #12 is open' })
     expect((await julian('POST', '/schedules', { re: body.message.id, text: 'friendly ping: review?', in: '1s' })).status).toBe(201)

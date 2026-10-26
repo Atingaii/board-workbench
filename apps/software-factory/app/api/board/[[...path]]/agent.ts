@@ -3,7 +3,7 @@ import type { WatcherContext } from "@vercel/board";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import pkg from "@vercel/board/package.json" with { type: "json" };
-import { queues, store } from "./a2.ts";
+import { tokensQueue, tokensStore } from "./a2.ts";
 import { CONNECTOR, REPO } from "./github.ts";
 import { expiresAt, tokenRefreshes } from "./tokens.ts";
 
@@ -408,8 +408,8 @@ async function giveTokens(sandbox: Sandbox, thread: string) {
 
 /** Pi's OIDC tokens can die before its session does (`tokens.ts`), so these give it new ones first. */
 export const piTokens = tokenRefreshes({
-  store: store.log,
-  scheduler: queues,
+  store: tokensStore,
+  scheduler: tokensQueue,
   give: async (thread) => {
     const { Sandbox } = await import("@vercel/sandbox");
     const sandbox = await Sandbox.get({ name: piSandbox(thread) });

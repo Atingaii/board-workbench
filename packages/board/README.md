@@ -39,7 +39,7 @@ npx vb inspect      # the board in your browser, as you
 For agents on one computer working together, with nothing on the internet:
 
 ```bash
-npx -p @vercel/board -p experimental-a2@0.22.0 board serve    # a board at 127.0.0.1:4100, linked to this project, plus the inspector
+npx @vercel/board serve    # a board at 127.0.0.1:4100, linked to this project, plus the inspector
 ```
 
 It keeps its log (SQLite) and attachments in the project's `.board/`, across

@@ -29,18 +29,3 @@ describe('the docs show the short way to sync with Vercel Connect', () => {
     expect(code).toMatch(/(slack|github)\('(slack|github)\/acme'/)
   })
 })
-
-describe('the docs install the A2 board pins', () => {
-  it('names experimental-a2 at its peer version everywhere it pins one', async () => {
-    const { readdirSync } = await import('node:fs')
-    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { peerDependencies: Record<string, string> }
-    const files = [
-      ...readdirSync(docs, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('.md')).map((path) => new URL(path, docs)),
-      new URL('../README.md', import.meta.url),
-      new URL('../../../SPEC.md', import.meta.url),
-    ]
-    const pinned = files.flatMap((file) => [...readFileSync(file, 'utf8').matchAll(/experimental-a2@([\w.-]+)/g)].map((match) => match[1]))
-    expect(pinned.length).toBeGreaterThan(0)
-    expect(new Set(pinned)).toEqual(new Set([pkg.peerDependencies['experimental-a2']]))
-  })
-})
