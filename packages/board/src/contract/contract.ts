@@ -293,6 +293,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     reply: z.string().nullable(),
     /** Create the root if the board hasn't seen this thread. */
     createRoot: z.boolean(),
+    /** The thread's title changed on the platform: a root that came from it says the new one. */
+    retitled: z.boolean().optional(),
     author: ExternalAuthor,
   }),
 ])

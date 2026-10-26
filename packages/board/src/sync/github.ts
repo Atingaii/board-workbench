@@ -123,6 +123,10 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
           user: sender ?? {},
           lifecycle: { ...base, type: 'pr.opened', labels: { ...pr_label, state: pr.draft ? 'draft' : 'open' }, reply: null, createRoot: true },
         }
+      // A new title is the root's; an edit to only the description isn't on the board.
+      case 'edited':
+        if (!(body.changes as { title?: unknown } | undefined)?.title) return null
+        return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.edited', labels: {}, reply: null, createRoot: false, retitled: true } }
       case 'ready_for_review':
         return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.ready', labels: { ...pr_label, state: 'open' }, reply: null, createRoot: true } }
       case 'converted_to_draft':
@@ -181,6 +185,8 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
       return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: `issue.${action}`, labels: {}, reply: null, createRoot: false } }
     if (action === 'opened')
       return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: 'issue.opened', labels: { ...label, state: 'open' }, reply: null, createRoot: true } }
+    if (action === 'edited' && (body.changes as { title?: unknown } | undefined)?.title)
+      return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: 'issue.edited', labels: {}, reply: null, createRoot: false, retitled: true } }
     if (action === 'closed')
       return { number: issue.number, user: sender ?? {}, lifecycle: { ...base, type: 'issue.closed', labels: { state: 'closed' }, reply: `closed by ${sender?.login ?? 'someone'}`, createRoot: false } }
     if (action === 'reopened')
@@ -196,8 +202,8 @@ const NativeItem = z.looseObject({
   base: z.looseObject({ ref: z.string() }).optional(), head: z.looseObject({ ref: z.string() }).optional(),
 })
 export const GitHubPayload = z.looseObject({ pull_request: NativeItem.optional(), issue: NativeItem.optional(), action: z.string().optional() })
-const prTypes = ['pr.opened', 'pr.ready', 'pr.draft', 'pr.reopened', 'pr.closed', 'pr.labeled', 'pr.unlabeled', 'pr.assigned', 'pr.unassigned', 'review.submitted', 'review.dismissed'] as const
-const issueTypes = ['issue.opened', 'issue.closed', 'issue.reopened', 'issue.labeled', 'issue.unlabeled', 'issue.assigned', 'issue.unassigned'] as const
+const prTypes = ['pr.opened', 'pr.edited', 'pr.ready', 'pr.draft', 'pr.reopened', 'pr.closed', 'pr.labeled', 'pr.unlabeled', 'pr.assigned', 'pr.unassigned', 'review.submitted', 'review.dismissed'] as const
+const issueTypes = ['issue.opened', 'issue.edited', 'issue.closed', 'issue.reopened', 'issue.labeled', 'issue.unlabeled', 'issue.assigned', 'issue.unassigned'] as const
 const [messageEvent, editedEvent, deletedEvent, reactionEvent, lifecycleEvent] = eventSchema('github', 'comment').options
 const githubFields = { subject: GitHubSubject, raw: GitHubPayload }
 const prLifecycle = <T extends string>(type: T) => lifecycleEvent.extend({

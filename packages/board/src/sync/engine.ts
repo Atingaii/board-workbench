@@ -756,6 +756,13 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
           const unset = Object.keys(root?.labels ?? {}).filter((key) => !(key in desired) && (event.unset.includes(key) || overrides.unset?.includes(key) || owned(key)))
           if (root && !root.deleted && (Object.keys(set).length || unset.length)) await setLabels(event.author, set, unset)
+          // A root this PR or issue made says its new title, as one it made now would, with the labels it has:
+          // a root another thread made, which this one joined, keeps its own.
+          if (event.retitled && root && !root.deleted && root.from === key && root.origin?.thread === event.thread) {
+            const text = clampText(overrides.text ?? rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: root.labels, author: event.author, raw }).text)
+            if (root.text !== text)
+              await screened(await call('syncImport', { op: 'edit', author: event.author, from: key, origin: { thread: root.origin.thread, message: root.origin.message }, text }))
+          }
           if (event.reply) return result(await post({ author: event.author, re: rootId, text: clampText(overrides.text ?? event.reply!), ...(overrides.noSync ? { noSync: true } : {}), id: await writeId(1) }))
           return { root: rootId, message: createdHere ? rootId : null }
         }
