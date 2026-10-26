@@ -1,7 +1,7 @@
 import type { BoardClient } from '../client/client.ts'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import type { ProviderEvent, SyncOverrides, SyncResult } from './events.ts'
-import type { Renderer } from './provider.ts'
+import { channelMissing, type Renderer } from './provider.ts'
 
 /** An event coming in from the platform. */
 export type SyncIn<E extends ProviderEvent = ProviderEvent> = {
@@ -106,28 +106,35 @@ const follow = async (sync: Sync) => {
  * Routes each event by its platform channel. Keys are platform channels, by name (`'#dev'`) or
  * ID (`'C0123ABC'`); values are a board channel to `mirror`, or a sync function. A new root goes
  * to every channel's function, with `channel` set to that one. A thread the board syncs outside
- * these channels (someone ran `vb sync` on it) stays synced both ways. A key that doesn't resolve
- * is skipped, and tried again a minute later.
+ * these channels (someone ran `vb sync` on it) stays synced both ways. A key the platform says
+ * doesn't exist is skipped. While one can't be checked, an event outside the resolved channels
+ * throws, so it's retried, rather than going past that key's function to the default. A new root
+ * starts only in the channels that resolved.
  */
 export function channels<E extends ProviderEvent = ProviderEvent>(map: Record<string, SyncUnit<E>>): SyncFn<E> {
   const units = Object.entries(map).map(([name, unit]) => [name, typeof unit === 'string' ? mirror(unit) : unit] as const)
   const resolved = async (resolve: (name: string) => Promise<string>) => {
     const ids = await Promise.allSettled(units.map(([name]) => resolve(name)))
     const found = new Map<string, SyncFn<E>>()
+    let unchecked: { reason: unknown } | undefined
     ids.forEach((id, i) => {
       if (id.status === 'fulfilled') found.set(id.value, units[i]![1])
+      else if (!channelMissing(id.reason)) unchecked ??= { reason: id.reason }
     })
-    return found
+    return { found, unchecked }
   }
   const fn: SyncFn<E> = async (sync) => {
-    const found = await resolved(sync.resolve)
+    const { found, unchecked } = await resolved(sync.resolve)
     if (sync.direction === 'out' && sync.target === null) {
       for (const [channel, unit] of found) await unit({ ...sync, channel })
       return
     }
     const unit = found.get(sync.channel!)
-    await (unit ? unit(sync) : follow(sync))
+    if (unit) return void (await unit(sync))
+    // The channel that couldn't be checked may be this one: its function decides once it resolves.
+    if (unchecked) throw unchecked.reason
+    await follow(sync)
   }
-  fn.hears = async (channel, resolve) => (await resolved(resolve)).has(channel)
+  fn.hears = async (channel, resolve) => (await resolved(resolve)).found.has(channel)
   return fn
 }

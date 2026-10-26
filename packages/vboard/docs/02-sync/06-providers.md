@@ -118,7 +118,7 @@ sync: {
 | Method | Does |
 | --- | --- |
 | `receive(key, request, emit)` | Authenticates the request, then emits normalized `{ event, raw, dedupe }` records, and answers what the platform expects. |
-| `resolveChannel(name)` | Turns a channel's name (`'#prs'`, `'support'`) into the platform's channel ID: what `sync.resolve` and `channels` use. |
+| `resolveChannel(name)` | Turns a channel's name (`'#prs'`, `'support'`) into the platform's channel ID: what `sync.resolve` and `channels` use. Throw `UnreadableError('channel_not_found', …)` (from `vboard/sync`) when there's no such channel; any other throw means it couldn't tell, and `channels` holds what that channel might be in. |
 | `resolveTarget(target)` | Turns a sync target into `{ target, channel, kind }`, where `kind` is `channel` or `thread`. |
 | `post(target, kind, body)` | Posts `body` (`{ markdown, files?, as? }`) and returns `{ thread, message, files? }`. |
 | `event(context)` | Builds the typed envelope sync functions read as `sync.event`, usually `envelope(…)` parsed by an `eventSchema`. |

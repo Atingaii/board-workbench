@@ -103,9 +103,10 @@ Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
 
 - Slack names resolve through one cached channel listing. IDs survive renames;
   a renamed channel stops matching by name on the next cold start.
-- Each key resolves on its own. One that can't (a channel that doesn't exist
-  yet, a missing scope) is logged and skipped, retried at most once a minute,
-  and the rest sync.
+- Each key resolves on its own. A channel that doesn't exist yet is logged and
+  skipped, retried at most once a minute, and the rest sync. One Slack couldn't
+  check (a failed listing) holds what it might be in; see
+  [Helpers](./02-functions.md#helpers).
 
 ## The rules
 

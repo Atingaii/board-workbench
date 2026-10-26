@@ -2060,9 +2060,13 @@ adapter decides the platform. The key appears in external IDs
 **Map keys** can be names (`'#prs'`) or IDs (`'C0123ABC'`). Names are the
 default.
 - Slack events carry IDs, so names resolve through one cached channel listing.
-- Each key resolves on its own. One that can't (a channel that doesn't exist
-  yet, a missing scope) is logged and skipped, and retried at most once a
-  minute; the rest sync.
+- Each key resolves on its own. One the platform says doesn't exist
+  (`channel_not_found`) is logged and skipped, and retried at most once a
+  minute; the rest sync. One it couldn't check (a failed listing, or a name the
+  app can't list without `groups:read`, `channel_unlisted`) is asked again on
+  every call, and meanwhile `channels` throws for any event outside the
+  channels that resolved, so it's retried instead of reaching the fallback past
+  that key's function. A new root starts only in the channels that resolved.
 - A name stops matching after a rename, on the next cold start. IDs survive
   renames.
 - Each external channel or repo should appear at most once per entry. Nothing

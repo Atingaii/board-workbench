@@ -368,13 +368,10 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       } catch (error) {
         throw new UnreadableError('list_failed', `can't list Slack channels to find #${name} (${slackError(error)}); use its ID instead`)
       }
-      if (!found)
-        throw new UnreadableError(
-          'channel_not_found',
-          publicOnly
-            ? `no public Slack channel named #${name} (the app lacks groups:read, so a private channel needs its ID)`
-            : `no Slack channel named #${name} (a private channel shows up once the app is invited)`,
-        )
+      // Without groups:read, a private channel the app is in isn't listed, though its events arrive.
+      if (!found && publicOnly)
+        throw new UnreadableError('channel_unlisted', `no public Slack channel named #${name} (the app lacks groups:read, so a private channel needs its ID)`)
+      if (!found) throw new UnreadableError('channel_not_found', `no Slack channel named #${name} (a private channel shows up once the app is invited)`)
       return found
     }
 

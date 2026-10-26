@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fakePlatform } from './sync-fixtures.ts'
+import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { slack, type SlackEvent } from '../src/sync/slack.ts'
 import { github, repos } from '../src/sync/github.ts'
 import { channels, into, mirror, render, type Sync, type SyncFn } from '../src/sync/fn.ts'
@@ -119,6 +119,60 @@ describe('sync functions', () => {
     await julian('POST', '/messages', { re: root.id, text: 'one reply' })
     await vi.waitFor(() => expect(s.posts).toHaveLength(1))
     expect(() => late()).toThrow('sync function has finished')
+  })
+
+  it("holds what goes out to a channel it couldn't check, and asks again on each retry", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let listing = false
+    const conversations = {
+      // Slack's listing fails until it doesn't; #support is C9.
+      list: vi.fn(async () => {
+        if (!listing) throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } })
+        return { channels: [{ id: 'C9', name: 'support', is_member: true }] }
+      }),
+      info: vi.fn(async () => ({ channel: { id: 'C9', is_member: true } })),
+      join: vi.fn(async () => ({ ok: true })),
+    }
+    const s = fakePlatform('slack', withSlackClient({ conversations }, false))
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => ({ conversations }) as never }, channels({ '#support': into('support') })) } })
+    const julian = caller(board.fetch, await personToken())
+    const retry = async () => {
+      await board.skipHold(board.servers[0]!, 'board')
+      await board.servers[0]!.drain('board')
+    }
+    // A thread synced by hand to a Slack thread in #support, whose rule is to send nothing back.
+    const root = (await julian('POST', '/messages', { channel: 'support', text: 'refund issued' })).body.message
+    await julian('POST', `/messages/${root.id}/sync`, { target: 'slack:C9:900.1' })
+    const reply = (await julian('POST', '/messages', { re: root.id, text: 'stays on the board' })).body.message
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("couldn't resolve #support")))
+    const asked = conversations.list.mock.calls.length
+    await retry()
+    expect(conversations.list.mock.calls.length).toBeGreaterThan(asked)
+    expect(s.posts).toEqual([])
+
+    listing = true
+    await vi.waitFor(async () => {
+      await retry()
+      const { body } = await julian('GET', `/messages/${root.id}`)
+      expect(body.replies.find((m: { id: string }) => m.id === reply.id)).toMatchObject({ undelivered: {} })
+      expect(conversations.list.mock.results.at(-1)?.type).toBe('return')
+    })
+    expect(s.posts).toEqual([])
+    warn.mockRestore()
+  })
+
+  it("keeps a thread synced by hand going when a channel the map names doesn't exist", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const conversations = { list: vi.fn(async () => ({ channels: [] })), info: vi.fn(async () => ({ channel: { id: 'C9', is_member: true } })), join: vi.fn() }
+    const s = fakePlatform('slack', withSlackClient({ conversations }, false))
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => ({ conversations }) as never }, channels({ '#missing': into('support') })) } })
+    const julian = caller(board.fetch, await personToken())
+    const root = (await julian('POST', '/messages', { channel: 'random', text: 'deploy is out' })).body.message
+    await julian('POST', `/messages/${root.id}/sync`, { target: 'slack:C9:900.1' })
+    await julian('POST', '/messages', { re: root.id, text: 'rolling back' })
+    await vi.waitFor(() => expect(s.posts.map((post) => post.threadId)).toEqual(['slack:C9:900.1']))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('skipping #missing'))
+    warn.mockRestore()
   })
 
   it("never starts a thread back in the channel a root came from", async () => {

@@ -158,10 +158,15 @@ A PR's inline review threads stay on GitHub and the board, out of Slack:
 },
 ```
 
-Keys resolve on their own. One that can't (a channel that doesn't exist yet, a
-missing scope) is logged and skipped, tried again a minute later, and the rest
-sync. Slack names resolve through one cached channel listing, and the app joins
-public channels as it resolves them; private ones need an invite.
+Keys resolve on their own. A channel that doesn't exist yet is logged and
+skipped, tried again a minute later, and the rest sync. A name the platform
+couldn't check (its listing failed, or the app can't list private channels)
+might be any channel, so until it resolves, an event outside the channels that
+did throws and is retried, rather than reaching the fallback past that key's
+function, and a new root starts only where its channel resolved. Each retry
+asks again. Slack names resolve through one cached channel listing, and the app
+joins public channels as it resolves them; private ones need an invite. IDs
+never wait: a key like `'C0123ABC'` needs no listing.
 
 ## What the webhook keeps
 
