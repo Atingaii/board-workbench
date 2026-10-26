@@ -133,12 +133,39 @@ describe("Slack's and GitHub's links", () => {
     expect(provider.locate('https://github.com/acme/www/pull/12')).toEqual({ thread: 'acme/www:12', message: null })
     expect(provider.locate('https://github.com/acme/www/pull/12#issuecomment-301')).toEqual({ thread: 'acme/www:12', message: '301' })
     expect(provider.locate('https://github.com/acme/www/issues/3#issuecomment-4')).toEqual({ thread: 'acme/www:issue:3', message: '4' })
-    expect(provider.locate('https://github.com/acme/www/pull/12/files#discussion_r345')).toEqual({ thread: 'acme/www:12:rc:345', message: '345' })
+    // A review comment's link names only the comment, so it's read in the PR's thread, where the board finds it.
+    expect(provider.locate('https://github.com/acme/www/pull/12/files#discussion_r345')).toEqual({ thread: 'acme/www:12', message: '345' })
+    expect(provider.locate('https://github.com/acme/www/issues/3#discussion_r345')).toBeNull()
     expect(provider.locate('https://acme.slack.com/archives/C0123ABC/p1727000000123456')).toBeNull()
     expect(await provider.url('acme/www:12', 'root:delivery-1')).toBe('https://github.com/acme/www/pull/12')
     expect(await provider.url('acme/www:12', '301')).toBe('https://github.com/acme/www/pull/12#issuecomment-301')
     expect(await provider.url('acme/www:issue:3', '4')).toBe('https://github.com/acme/www/issues/3#issuecomment-4')
     expect(await provider.url('acme/www:12:rc:345', '346')).toBe('https://github.com/acme/www/pull/12#discussion_r346')
+  })
+})
+
+describe('a GitHub review comment, by its own link', () => {
+  it("finds a reply in a review thread, which its link names only by the reply's ID, and the thread's first comment", async () => {
+    const g = fakePlatform('github')
+    const board = testBoard({ sync: { github: github({ adapter: g.adapter as never }, repos({ 'acme/www': 'dev' })) } })
+    const ada = caller(board.fetch, await personToken())
+    const webhook = (body: unknown, headers: Record<string, string> = {}) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/github`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }))
+    await webhook(
+      { action: 'opened', repository: { full_name: 'acme/www' }, sender: { id: 42, login: 'ada' }, pull_request: { number: 12, title: 'Links', html_url: 'https://github.com/acme/www/pull/12', draft: false, merged: false } },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 'review-links-opened' },
+    )
+    // A review thread is named by its first comment, 345; 346 replies in it.
+    await webhook({ type: 'message', threadId: 'github:acme/www:12:rc:345', id: '345', text: 'nit: rename this', user: '43', raw: { path: 'src/a.ts', line: 3 } })
+    await webhook({ type: 'message', threadId: 'github:acme/www:12:rc:345', id: '346', text: 'done', user: '42' })
+    await vi.waitFor(async () => expect((await ada('GET', '/messages?channel=dev')).body.messages).toHaveLength(3))
+    const root = (await ada('GET', '/messages?channel=dev')).body.messages.find((message: { re: string | null }) => message.re === null).id
+    for (const comment of ['345', '346']) {
+      const { status, body } = await ada('GET', linked(`https://github.com/acme/www/pull/12#discussion_r${comment}`))
+      expect(status, comment).toBe(200)
+      expect(body.message.id).toBe(root)
+    }
+    expect((await ada('GET', linked('https://github.com/acme/www/pull/12#discussion_r999'))).status).toBe(404)
   })
 })
 

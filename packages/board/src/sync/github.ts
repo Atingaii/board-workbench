@@ -338,13 +338,14 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
       channelOf,
       isRoot: () => false,
       // A PR's or issue's page is its thread; `#issuecomment-…` is a comment in it, and `#discussion_r…`
-      // a review thread's comment, which names the review thread only when it's the thread's first.
+      // a review comment, which names its review thread only when it's the thread's first: so it's read
+      // as a comment in the PR's thread, and the board finds it among that thread's replies.
       locate(url) {
         const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(pull|issues)\/(\d+)[^#\s]*(?:#(issuecomment-|discussion_r)(\d+))?$/.exec(url.trim())
         if (!match) return null
         const [, owner, repo, kind, number, anchor, id] = match
         const thread = `${owner}/${repo}:${kind === 'issues' ? 'issue:' : ''}${number}`
-        if (anchor === 'discussion_r') return kind === 'pull' ? { thread: `${thread}:rc:${id}`, message: id! } : null
+        if (anchor === 'discussion_r' && kind !== 'pull') return null
         return { thread, message: anchor ? id! : null }
       },
       // A root's copy is the PR or issue itself: its ID isn't a comment's.
