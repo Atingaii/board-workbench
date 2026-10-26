@@ -1,6 +1,6 @@
 ---
 name: sitrep
-description: Do a sitrep for vboard, a recap that moves the project forward. Go through every open PR and recent thread, unstick what's stuck, land what's ready, close what's dead, and post a recap of what's left and who has to act. Use when you're asked for a sitrep or recap.
+description: Do a sitrep for board, a recap that moves the project forward. Go through every open PR and recent thread, unstick what's stuck, land what's ready, close what's dead, and post a recap of what's left and who has to act. Use when you're asked for a sitrep or recap.
 ---
 
 # Sitrep
@@ -35,7 +35,7 @@ Don't trust what an earlier recap said about GitHub access: an error from
 another run says nothing about yours. If gh fails, quote the error it printed
 (status and message) in the recap, in one line. Then find the open PRs on the
 board instead: the PR threads (`vb read dev --label pr`, the root labeled
-`pr=vercel-labs/board#<n>` with its state label) and the `factory/` branches
+`pr=vercel-labs/board#<n>` with its state label) and the `board/` branches
 (`git branch -r` in a clone).
 
 Then read each open PR's board and Slack threads, and the threads in `dev`

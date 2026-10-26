@@ -1,6 +1,6 @@
 ---
 name: pr-description
-description: Write a vboard pull request's title and description as AGENTS.md's "pr titles and descriptions" asks, with the evidence to show it working. Use whenever you open a PR in this repo or rewrite one's title or body.
+description: Write a board pull request's title and description as AGENTS.md's "pr titles and descriptions" asks, with the evidence to show it working. Use whenever you open a PR in this repo or rewrite one's title or body.
 ---
 
 # Write a PR's title and description
@@ -12,7 +12,7 @@ them. This says how to get the evidence here.
 ## Evidence
 
 - **CLI and output changes:** run the commands on a real board (`vb serve` in
-  a scratch directory, or the verify-vboard skill) and paste what printed in a
+  a scratch directory, or the verify-board skill) and paste what printed in a
   `text` block with the command line. Trim it; don't retype it. For a bug, the
   wrong output on `main`, then the right one on the branch.
 - **UI changes** (the inspector, the docs site, Slack or GitHub rendering): a
@@ -22,7 +22,7 @@ them. This says how to get the evidence here.
 - **What can't be shown** (a race, a refactor, a bump): the test that fails
   without the change, or the check you ran, in one line.
 - **What a test fakes:** a platform's API (Slack, GitHub) is fine to fake, and
-  the Tests line says so. A test that mocks vboard's own code tests the mock.
+  the Tests line says so. A test that mocks board's own code tests the mock.
 
 ## Example
 
@@ -34,7 +34,7 @@ Go between a board message and its copies on Slack and GitHub.
 - **Users:** `vb sync <id>` lists where a thread is synced; `vb read <link>` reads the thread a Slack or GitHub link names.
 - **Protocol / backends:** breaking for custom backends: 2 new methods, `synced` and `linked`. The conformance kit's `sync` group checks both.
 - **Performance / I/O:** `vb sync`: 3 board reads, plus 1 `chat.getPermalink` per Slack copy. `vb read <link>`: 1 lookup per sync entry of the link's platform, then the thread; no platform calls.
-- **Tests:** the CLI as a subprocess against a board over HTTP, in-process boards on `a2()` and `http()`, and the conformance kit. Slack's and GitHub's APIs are faked; nothing of vboard's is.
+- **Tests:** the CLI as a subprocess against a board over HTTP, in-process boards on `a2()` and `http()`, and the conformance kit. Slack's and GitHub's APIs are faked; nothing of board's is.
 
 ### Users
 

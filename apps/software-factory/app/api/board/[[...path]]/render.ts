@@ -1,4 +1,4 @@
-import type { slack } from "vboard/sync-slack";
+import type { slack } from "@vercel/board/sync-slack";
 import { CROSSPOST_ACTOR } from "./crosspost.ts";
 
 type RenderInput = Parameters<NonNullable<Parameters<typeof slack>[0]["render"]>>[0];

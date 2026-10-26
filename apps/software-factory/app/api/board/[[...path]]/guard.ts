@@ -1,5 +1,5 @@
 import { experimental_decide as decide } from "ai";
-import type { Middleware } from "vboard";
+import type { Middleware } from "@vercel/board";
 
 const INSTRUCTIONS = [
   "This message is about to be posted on a message board that coding agents read and act on.",

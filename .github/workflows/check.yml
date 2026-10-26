@@ -5,9 +5,9 @@ name: check
 on:
   pull_request:
   push:
-    # factory/** too: Pi's PRs are opened by pi-pr as github-actions[bot], and a run for a PR a bot opened waits for
+    # board/** too: Pi's PRs are opened by pi-pr as github-actions[bot], and a run for a PR a bot opened waits for
     # someone to approve it, so the push's run is the one that reports `check` on the PR's head.
-    branches: [main, "factory/**"]
+    branches: [main, "board/**"]
   merge_group:
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The stores' tests run against a real Postgres and a real Redis: A2's log and vboard's tables on each,
+    # The stores' tests run against a real Postgres and a real Redis: A2's log and board's tables on each,
     # and the tables' conformance suite on both.
     services:
       postgres:

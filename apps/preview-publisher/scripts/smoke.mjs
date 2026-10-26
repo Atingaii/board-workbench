@@ -17,42 +17,42 @@ const get = async (url) => {
 }
 
 const manifest = await (await get(new URL('/preview.json', baseUrl))).json()
-assert.equal(manifest.name, 'vboard')
+assert.equal(manifest.name, '@vercel/board')
 assert.match(manifest.commit, /^[a-f0-9]{40}$/)
 if (process.env.EXPECTED_COMMIT) assert.equal(manifest.commit, process.env.EXPECTED_COMMIT)
-assert.equal(new URL(manifest.url).pathname, '/vboard.tgz')
+assert.equal(new URL(manifest.url).pathname, '/board.tgz')
 const tarball = Buffer.from(await (await get(manifest.url)).arrayBuffer())
 assert.equal(tarball[0], 0x1f)
 assert.equal(tarball[1], 0x8b)
 assert.equal(`sha512-${createHash('sha512').update(tarball).digest('base64')}`, manifest.integrity)
 
-const directory = await mkdtemp(join(tmpdir(), 'vboard-preview-smoke-'))
+const directory = await mkdtemp(join(tmpdir(), 'board-preview-smoke-'))
 try {
   await writeFile(join(directory, 'package.json'), '{"private":true,"type":"module"}\n')
-  // npm installs vboard's dependencies, its own copy of A2 included, as an application would have them.
+  // npm installs board's dependencies, its own copy of A2 included, as an application would have them.
   execFileSync('npm', ['install', manifest.url, '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: directory,
     stdio: 'inherit',
     timeout: 120_000,
   })
-  const installed = JSON.parse(await readFile(join(directory, 'node_modules/vboard/package.json'), 'utf8'))
+  const installed = JSON.parse(await readFile(join(directory, 'node_modules/@vercel/board/package.json'), 'utf8'))
   assert.equal(installed.name, manifest.name)
   assert.equal(installed.version, manifest.version)
   const lockfile = JSON.parse(await readFile(join(directory, 'package-lock.json'), 'utf8'))
-  assert.equal(lockfile.packages['node_modules/vboard'].integrity, manifest.integrity)
+  assert.equal(lockfile.packages['node_modules/@vercel/board'].integrity, manifest.integrity)
   execFileSync(
     'node',
     [
       '--input-type=module',
       '-e',
-      "import assert from 'node:assert/strict'; import { board } from 'vboard'; import { http } from 'vboard/backend-http'; assert.equal(typeof board, 'function'); assert.equal(typeof http, 'function')",
+      "import assert from 'node:assert/strict'; import { board } from '@vercel/board'; import { http } from '@vercel/board/backend-http'; assert.equal(typeof board, 'function'); assert.equal(typeof http, 'function')",
     ],
     { cwd: directory, stdio: 'inherit' },
   )
   const cli = execFileSync(join(directory, 'node_modules/.bin/vb'), ['--version'], { cwd: directory, encoding: 'utf8' })
   assert.equal(cli.trim(), manifest.version)
-  await readFile(join(directory, 'node_modules/vboard/docs/index.md'))
-  await readFile(join(directory, 'node_modules/vboard/dist/inspect/app.js'))
+  await readFile(join(directory, 'node_modules/@vercel/board/docs/index.md'))
+  await readFile(join(directory, 'node_modules/@vercel/board/dist/inspect/app.js'))
 } finally {
   await rm(directory, { recursive: true, force: true })
 }

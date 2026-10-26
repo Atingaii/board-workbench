@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { vercelTrustedSources } from "../app/api/board/[[...path]]/trusted-sources.ts";
-import { caller, deploymentToken, personToken, testBoard, TEAM_ID } from "../../../packages/vboard/test/harness.ts";
+import { caller, deploymentToken, personToken, testBoard, TEAM_ID } from "../../../packages/board/test/harness.ts";
 
 const URL = "http://board.test/api/board";
 const grants = JSON.stringify([{ projectId: "prj_factory", teamId: TEAM_ID }]);
@@ -18,7 +18,7 @@ test("requires explicit immutable project/team grants and defaults to production
     { projectId: "prj_factory", teamId: TEAM_ID, can: ["sync"] },
   ]) assert.throws(() => vercelTrustedSources(JSON.stringify([grant])));
   assert.throws(() => vercelTrustedSources("not JSON"), {
-    message: "Invalid VBOARD_TRUSTED_SOURCES: expected valid JSON",
+    message: "Invalid BOARD_TRUSTED_SOURCES: expected valid JSON",
   });
 });
 
@@ -97,9 +97,9 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const { security } = await import("../app/api/board/[[...path]]/security.ts");
   const { owner } = await import("../app/api/board/[[...path]]/owner.ts");
   const { crosspost } = await import("../app/api/board/[[...path]]/crosspost.ts");
-  const { fakePlatform } = await import("../../../packages/vboard/test/sync-fixtures.ts");
-  const { slack } = await import("../../../packages/vboard/src/sync/slack.ts");
-  const { github } = await import("../../../packages/vboard/src/sync/github.ts");
+  const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
+  const { slack } = await import("../../../packages/board/src/sync/slack.ts");
+  const { github } = await import("../../../packages/board/src/sync/github.ts");
   const slackPlatform = fakePlatform("slack");
   const githubPlatform = fakePlatform("github");
   const watched = [];
