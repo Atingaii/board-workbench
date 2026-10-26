@@ -1,43 +1,16 @@
 import { z } from 'zod'
 import type { Actor } from '../contract/reducers.ts'
-import type { BoardClient } from '../client/client.ts'
 import type { MessageView, SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
-import { immutable, type ProviderEvent, type SyncOverrides, type SyncResult, type SyncRoot } from './events.ts'
+import type { ProviderEvent, SyncRoot } from './events.ts'
+import { routesOf, type Routes, type Sync, type SyncFn } from './fn.ts'
 import type { UserTokens } from './users.ts'
 
 export const ResolvedTarget = z.object({ target: z.string().min(1), channel: z.string().min(1), kind: z.enum(['channel', 'thread']) }).strict()
 export type ResolvedTarget = z.infer<typeof ResolvedTarget>
 
-export type SyncClient<E extends ProviderEvent = ProviderEvent> = Omit<BoardClient, 'sync'> & {
-  sync(id: string, target: string): ReturnType<BoardClient['sync']>
-  sync(channel: string, event: E, overrides?: SyncOverrides): Promise<SyncResult>
-}
-
-export type SyncHandler<E extends ProviderEvent> = (args: {
-  event: E
-  board: SyncClient<E>
-  /**
-   * The platform's own link to the event's message (Slack's `chat.getPermalink`), fetched on
-   * the first call and kept for the rest of the callback. Null when the event has no single
-   * message or the platform has no links. It only reads the URL: nothing is synced or joined.
-   */
-  permalink(): Promise<string | null>
-}) => unknown
-export type SyncContext = {
-  id: string
-  key: string
-  event: ExternalEvent
-  raw: unknown
-  board: BoardClient
-  client<E extends ProviderEvent>(event: E): SyncClient<E>
-  apply(channel: string, overrides?: SyncOverrides): Promise<SyncResult>
-}
-
-export type ProviderMapping = {
-  channel?: string
-  run?: (context: SyncContext) => unknown
-}
+/** The fields a provider's `event` builds its typed event from. */
+export type SyncContext = { id: string; key: string; event: ExternalEvent; raw: unknown }
 
 export type RenderInput = {
   /** The message as clients see it: its IDs are refs. */
@@ -48,7 +21,8 @@ export type RenderInput = {
   label: string
   target: string
 }
-export type EventMapping<E extends ProviderEvent> = string | SyncHandler<E> | { channel: string; run: SyncHandler<E> }
+/** How a platform shows a board message: markdown, which the platform converts to its own format. */
+export type Renderer = (input: RenderInput) => string
 
 export type FileDelivery = { message: string; files: string[] }
 
@@ -64,6 +38,12 @@ export class UnreadableError extends Error {
   }
 }
 
+/**
+ * Whether `resolveChannel` failed because the platform has no such channel, so no event can be
+ * in it, rather than because it couldn't tell (a failed listing, a missing scope).
+ */
+export const channelMissing = (error: unknown) => error instanceof UnreadableError && error.code === 'channel_not_found'
+
 /** A file to send: its bytes (a Node `Buffer` is one), its name, and its type. */
 export type ProviderFile = { data: Uint8Array; filename: string; mimeType?: string }
 /**
@@ -78,7 +58,6 @@ export type ProviderOptions = {
   canStartThreads?: boolean
   singleReaction?: boolean
   uploadsFiles?: boolean
-  render?: (input: RenderInput) => string
   /** People's own tokens, to post as them and to link accounts by signing in. */
   users?: UserTokens | null
 }
@@ -87,17 +66,26 @@ export const ReceivedEvent = z.object({ event: ExternalEvent, raw: z.unknown(), 
 export type ReceivedEvent = z.infer<typeof ReceivedEvent>
 export type Receive = (received: ReceivedEvent) => Promise<void>
 
+const routed = new WeakMap<object, Routes>()
+/** The channels a provider's sync function routes, when a helper made it: the webhook keeps only theirs. */
+export const routesFor = (provider: object): Routes | undefined => routed.get(provider)
+
 export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   readonly platform: string
   readonly canStartThreads: boolean
   readonly singleReaction: boolean
   readonly uploadsFiles: boolean
-  readonly mappings: Record<string, ProviderMapping> = {}
+  // A method's parameter is checked both ways, so a SlackProvider is still a SyncProvider.
+  private readonly fn: { run(sync: Sync<E>): unknown }
   /** People's tokens, when the adapter has them: messages they write post as them. */
   readonly users: UserTokens | null
   protected readonly options: ProviderOptions
 
-  constructor(options: ProviderOptions) {
+  constructor(options: ProviderOptions, sync: SyncFn<E>) {
+    if (typeof sync !== 'function') throw new Error(`${options.platform} needs a sync function: what each event does, like channels({ '#dev': 'dev' })`)
+    this.fn = { run: sync }
+    const routes = routesOf(sync)
+    if (routes) routed.set(this, routes)
     this.options = options
     this.users = options.users ?? null
     this.platform = options.platform
@@ -151,35 +139,16 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     throw new Error(`${this.platform} does not support file uploads`)
   }
 
-  abstract event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): E
+  abstract event(context: SyncContext): E
 
-  sync(context: SyncContext, channel: string, overrides?: SyncOverrides): Promise<SyncResult> {
-    return context.apply(channel, overrides)
+  /** Runs the sync function the provider was made with: what every event does, both ways. */
+  sync(sync: Sync<E>): unknown {
+    return this.fn.run(sync)
   }
 
+
+  /** The default rendering: `**${label}**: ${text}`. A `Renderer` passed to `deliver` replaces it. */
   render(input: RenderInput): string {
-    return this.options.render?.(input) ?? `**${input.label}**: ${input.message.text}`
-  }
-
-  protected map(key: string, value: EventMapping<E>) {
-    if (typeof value === 'string') {
-      this.mappings[key] = { channel: value }
-      return
-    }
-    const handler = typeof value === 'function' ? value : value.run
-    this.mappings[key] = {
-      ...(typeof value === 'object' ? { channel: value.channel } : {}),
-      run: (context) => {
-        const event = immutable(this.event(context))
-        let link: Promise<string | null> | undefined
-        const permalink = () => {
-          const promise = link ?? this.permalink(event)
-          link = promise
-          promise.catch(() => { if (link === promise) link = undefined })
-          return promise
-        }
-        return handler({ event, board: context.client(event), permalink })
-      },
-    }
+    return `**${input.label}**: ${input.message.text}`
   }
 }

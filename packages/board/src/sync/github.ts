@@ -4,10 +4,11 @@ import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ReceivedEvent, ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput, ProviderPost, ProviderDelivery } from './provider.ts'
+import type { ReceivedEvent, ResolvedTarget, SyncContext, ProviderPost, ProviderDelivery } from './provider.ts'
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectGitHubAdapter } from '@vercel/connect/chat'
 import { connectUserTokens, withUserTokens } from './users.ts'
+import { into, withRoutes, type SyncFn, type SyncUnit } from './fn.ts'
 
 /** `owner/repo:12` (and its review threads) → `owner/repo:pulls`; `owner/repo:issue:3` → `owner/repo:issues`. */
 function channelOf(thread: string): string {
@@ -211,8 +212,7 @@ export const GitHubEvent = z.discriminatedUnion('type', [
 ])
 export type GitHubEvent = z.infer<typeof GitHubEvent>
 
-export type GitHubHandler = SyncHandler<GitHubEvent>
-export type GitHubRepo = EventMapping<GitHubEvent> | { pulls?: EventMapping<GitHubEvent>; issues?: EventMapping<GitHubEvent> }
+export type GitHubRepo = SyncUnit<GitHubEvent> | { pulls?: SyncUnit<GitHubEvent>; issues?: SyncUnit<GitHubEvent> }
 export type GitHubOptions = {
   /**
    * A Vercel Connect connector (`'github/acme'`): board builds the GitHub adapter
@@ -225,8 +225,6 @@ export type GitHubOptions = {
    * board looks it up from the installation token; set it to skip that call.
    */
   botUserId?: number
-  render?: (input: RenderInput) => string
-  repos: Record<string, GitHubRepo>
 }
 
 /** `owner/repo:12`, `owner/repo:issue:3`, or `owner/repo:12:rc:345` (a review comment thread). */
@@ -256,13 +254,37 @@ async function asPerson(token: string, method: string, path: string, body?: unkn
 }
 
 /**
- * Syncs GitHub repos with board channels. Keys are repos (`'owner/repo'`);
- * values are a board channel (PRs and issues become threads there), a
- * function, or `{ pulls, issues }` to send each somewhere else. Roots never
- * flow into GitHub: a board thread doesn't open an issue.
+ * Syncs GitHub with the board: `app` is a Vercel Connect connector
+ * (`'github/acme'`) or the options, and `sync` is what each event does, both
+ * ways, like `repos({ 'acme/www': 'prs' })`. A board thread never opens an
+ * issue: GitHub threads start on GitHub.
  */
-export function github(options: GitHubOptions): GitHubProvider {
-  return new GitHubProvider(options)
+export function github(app: string | GitHubOptions, sync: SyncFn<GitHubEvent>): GitHubProvider {
+  return new GitHubProvider(typeof app === 'string' ? { adapter: app } : app, sync)
+}
+
+/**
+ * Routes each event by its repo. Keys are repos (`'owner/repo'`); values are a board channel
+ * that PRs and issues are imported `into`, a sync function, or `{ pulls, issues }` to route
+ * each its own way. A string imports and sends nothing back: what's said on the board stays
+ * there unless a function delivers it. A thread the board syncs in another repo keeps
+ * importing.
+ */
+export function repos(map: Record<string, GitHubRepo>): SyncFn<GitHubEvent> {
+  const unit = (value: SyncUnit<GitHubEvent> | undefined) => (typeof value === 'string' ? into(value) : value)
+  const routes = new Map<string, SyncFn<GitHubEvent>>()
+  for (const [repo, value] of Object.entries(map)) {
+    const { pulls, issues } = typeof value === 'object' ? value : { pulls: value, issues: value }
+    const [forPulls, forIssues] = [unit(pulls), unit(issues)]
+    if (forPulls) routes.set(`${repo}:pulls`, forPulls)
+    if (forIssues) routes.set(`${repo}:issues`, forIssues)
+  }
+  const fn: SyncFn<GitHubEvent> = async (sync) => {
+    const route = sync.channel === null ? undefined : routes.get(sync.channel)
+    if (route) await route(sync)
+    else if (sync.direction === 'in') await sync.import()
+  }
+  return withRoutes(fn, async (channel) => routes.has(channel))
 }
 
 type Detecting = {
@@ -298,7 +320,7 @@ function fromConnector(connector: string, botUserId: number | undefined): Adapte
 export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
   private readonly body: (post: ProviderPost) => string
 
-  constructor(given: GitHubOptions) {
+  constructor(given: GitHubOptions, sync: SyncFn<GitHubEvent>) {
     const options = {
       ...given,
       adapter: typeof given.adapter === 'string'
@@ -306,7 +328,6 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
         : given.adapter,
     }
     super({
-      render: options.render,
       platform: 'github',
       adapter: options.adapter,
       canStartThreads: false,
@@ -412,7 +433,7 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
         const at = target.indexOf(':')
         return { target, channel: at === -1 ? target : channelOf(target), kind: at === -1 ? 'channel' : 'thread' }
       },
-    })
+    }, sync)
     // The adapter's own markdown rendering, so a comment posted as a person reads like one posted as the app.
     const converter = (options.adapter as { formatConverter?: { renderPostable(message: { markdown: string }): string } }).formatConverter
     this.body = (post) => {
@@ -421,11 +442,6 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
       } catch {
         return post.markdown
       }
-    }
-    for (const [repo, value] of Object.entries(options.repos)) {
-      const { pulls, issues } = typeof value === 'object' && !('run' in value) ? value : { pulls: value, issues: value }
-      if (pulls) this.map(`${repo}:pulls`, pulls)
-      if (issues) this.map(`${repo}:issues`, issues)
     }
   }
 
@@ -485,7 +501,7 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
     if (own) await reactions.deleteForIssue({ ...where, reaction_id: own.id })
   }
 
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): GitHubEvent {
+  override event(context: SyncContext): GitHubEvent {
     const match = /^([^:]+):(issue:)?(\d+)/.exec(context.event.thread.slice(context.key.length + 1))
     if (!match) throw new Error(`invalid GitHub thread: ${context.event.thread}`)
     const base = envelope(this.platform, context.key, context.event, context.raw ?? {}, context.id)

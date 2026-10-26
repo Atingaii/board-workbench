@@ -5,16 +5,17 @@ description: Mirror Slack channels into board channels, with threads, reactions,
 
 ## Configure it
 
-`slack({ adapter, channels })` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
-connector and a map of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to
-[mappings](./01-overview.md#mappings):
+`slack(app, sync)` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
+connector and a [sync function](./02-functions.md). `channels` makes one from a map
+of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to board channels
+(two-way mirrors) or functions of your own:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { a2 } from '@vercel/board/backend-a2'
 import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
 import { postgres } from '@vercel/board/backend-a2/store-postgres'
-import { slack } from '@vercel/board/sync-slack'
+import { channels, slack } from '@vercel/board/sync-slack'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -24,13 +25,10 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    slack: slack({
-      adapter: 'slack/acme',
-      channels: {
-        '#errors-www': 'errors-www',
-        C0123ABC: 'dev',
-      },
-    }),
+    slack: slack('slack/acme', channels({
+      '#errors-www': 'errors-www',
+      C0123ABC: 'dev',
+    })),
   },
 })
 export const GET = team.fetch, POST = team.fetch
@@ -51,8 +49,8 @@ The prefix is the entry's key, so a second workspace keyed `acme` reads
 
 ### Your own adapter
 
-Without Connect, pass a Chat SDK Slack adapter with the app's own secrets
-(`npm i chat @chat-adapter/slack`):
+Without Connect, pass the options, with a Chat SDK Slack adapter that has the
+app's own secrets (`npm i chat @chat-adapter/slack`):
 
 ```ts app/api/board/[[...path]]/route.ts
 import { createSlackAdapter } from '@chat-adapter/slack'
@@ -60,7 +58,7 @@ import { board } from '@vercel/board'
 import { a2 } from '@vercel/board/backend-a2'
 import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
 import { postgres } from '@vercel/board/backend-a2/store-postgres'
-import { slack } from '@vercel/board/sync-slack'
+import { channels, slack } from '@vercel/board/sync-slack'
 
 const backend = a2({
   store: postgres({ connectionString: process.env.DATABASE_URL! }),
@@ -70,13 +68,15 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    slack: slack({
-      adapter: createSlackAdapter({
-        botToken: process.env.SLACK_BOT_TOKEN!,
-        signingSecret: process.env.SLACK_SIGNING_SECRET!,
-      }),
-      channels: { '#prs': 'prs' },
-    }),
+    slack: slack(
+      {
+        adapter: createSlackAdapter({
+          botToken: process.env.SLACK_BOT_TOKEN!,
+          signingSecret: process.env.SLACK_SIGNING_SECRET!,
+        }),
+      },
+      channels({ '#prs': 'prs' }),
+    ),
   },
 })
 export const GET = team.fetch, POST = team.fetch

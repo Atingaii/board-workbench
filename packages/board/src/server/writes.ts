@@ -48,11 +48,6 @@ export type WriteOrigin = {
   via?: Via
   respond?: (text: string) => Promise<void>
   schedule?: { id: number; n: number }
-  /**
-   * The targets a new root's channel syncs with, as board()'s sync resolved them, so they land with
-   * it. Only board() sets it, in-process; sync records them later for a root that came another way.
-   */
-  config?: SyncTarget[]
 }
 
 /**
@@ -182,8 +177,6 @@ export type PostInput = WriteOrigin & {
   id?: string | undefined
   /** Targets the new thread starts with, as the board that syncs them resolved them; a plain one's kind goes by its shape. */
   sync?: (string | SyncTarget)[] | undefined
-  /** The targets its channel syncs with: `WriteOrigin.config`. */
-  config?: SyncTarget[] | undefined
   origin?: Origin | null
   from?: string | null
   /** Platform text: mentions the board can't resolve are left as plain text. */
@@ -280,11 +273,9 @@ async function commitPost(
   const { identity } = input
   const { channel, re, replyTo, thread, id, sent } = placed
   const { state: actors } = await ctx.session.state(actorsReducer)
-  // The targets its channel syncs with, but never back to where it came from, and the ones it asks for.
-  const targets: { target: string; kind: 'channel' | 'thread'; cause: 'config' | 'request' }[] = []
+  // The targets it asks for.
+  const targets: { target: string; kind: 'channel' | 'thread'; cause: 'request' }[] = []
   if (re === null) {
-    const originChannel = input.origin ? input.origin.channel ?? channelOf(input.origin.thread) : null
-    if (!input.noSync) for (const target of input.config ?? []) if (target.target !== originChannel) targets.push({ ...target, cause: 'config' })
     for (const requested of input.sync ?? []) {
       const target = syncTarget(requested)
       await unclaimed(ctx, target, thread, identity.principal.access)

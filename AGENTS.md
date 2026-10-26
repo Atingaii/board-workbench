@@ -72,6 +72,10 @@ miss. Nothing else.
   never retyped) or the SDK call with only the lines that matter; the protocol
   gets signatures and shapes (`GET /links?url= → ThreadView`). A breaking
   change says who breaks and what to do instead.
+- **Imports, always.** Every SDK sample starts with its imports, each
+  `@vercel/board/*` one included, before and after alike: which entry point a name
+  comes from is part of the API, and a reviewer judges it from the sample
+  (`import { channels, slack } from '@vercel/board/sync-slack'`).
 - **Evidence matches the claim.** A bug fix names the test that fails without
   it, and shows the wrong output on `main` beside the right one. A UI change
   gets a screenshot, or a short video for a flow. Mocking board's own code
@@ -114,8 +118,9 @@ reply in an existing thread rather than starting one.
   `vercelQueues()` everywhere. On Redis the store holds A2's log and the board's
   tables (`<prefix>:{<prefix>:board}:*`), which fill from the log on their own. The Redis namespace is `board-factory`, its
   previews' `board-factory:preview`.
-  Slack channel `C0C8XN8SQRG` (#development-messageboard), GitHub
-  PRs, and GitHub issues all mirror `dev`. Connect uses `slack/vboard-factory`,
+  Slack channel `C0C8XN8SQRG` (#development-messageboard) mirrors `dev`, and
+  GitHub PRs and issues come into it; what's written on the board reaches
+  GitHub, and what's said in Slack doesn't (`fromBoard` in `quiet.ts`). Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
   app's bot (its login and commit

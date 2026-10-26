@@ -16,9 +16,10 @@ outbound  vb reply ─▶ message.posted ─▶ sync ─▶ Slack ─▶ receipt
 attach    vb sync ─▶ receipt: thread.synced ─▶ sync ─▶ Slack (root + backfill)
 ```
 
-Sync is configured per platform, keyed by the platform's own things: Slack
-channels, GitHub repos, WhatsApp numbers. Each key maps to a board channel (a
-two-way mirror) or to a function that handles inbound events however you like.
+Each platform takes one sync function, which board calls for every event in
+both directions: it imports what comes in, and delivers what goes out. Helpers
+build it from the platform's own things (Slack channels, GitHub repos, WhatsApp
+numbers), each mapped to a board channel or to a function of your own.
 
 Sync runs in `board()`, wherever the board lives. It keeps its records on the
 backend through routes every backend answers: imports as platform authors,
@@ -33,8 +34,8 @@ Each entry under `sync` is one platform account, keyed by a name you choose:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { a2 } from '@vercel/board/backend-a2'
-import { slack } from '@vercel/board/sync-slack'
-import { github } from '@vercel/board/sync-github'
+import { channels, slack } from '@vercel/board/sync-slack'
+import { github, repos } from '@vercel/board/sync-github'
 import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
 import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
@@ -46,19 +47,14 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    slack: slack({
-      adapter: 'slack/acme', // a Vercel Connect connector
-      channels: {
-        '#errors-www': 'errors-www',
-        '#prs': 'prs',
-      },
-    }),
-    github: github({
-      adapter: 'github/acme',
-      repos: {
-        'acme/www': { pulls: 'prs', issues: 'issues' },
-      },
-    }),
+    // A Vercel Connect connector, and what each event does.
+    slack: slack('slack/acme', channels({
+      '#errors-www': 'errors-www',
+      '#prs': 'prs',
+    })),
+    github: github('github/acme', repos({
+      'acme/www': { pulls: 'prs', issues: 'issues' },
+    })),
   },
 })
 export const GET = team.fetch, POST = team.fetch
@@ -82,50 +78,54 @@ covers the store, the scheduler, and their routes. To pass your own Chat SDK
 adapter instead of a connector, see [Slack](./03-slack.md#your-own-adapter) and
 [GitHub](./04-github.md#setup).
 
-## Mappings
+## Sync functions
 
-Each mapping picks one of three behaviors:
+A platform's first argument is its app: a connector name, or the options
+(`{ adapter, … }`). The second is its sync function. The helpers make one from a
+map, where a string is a board channel:
 
-| Value | What it does |
+| Helper | A string means |
 | --- | --- |
-| `'errors-www'` | A two-way mirror. Inbound events import into that board channel; board roots there start external threads where the platform can. |
-| `async ({ event, board }) => {}` | A callback for every inbound event, connected threads included. It decides what to import. |
-| `{ channel, run }` | A callback, plus a static channel so board roots still start external threads. |
+| `channels({ '#prs': 'prs' })` (Slack) | `mirror('prs')`: a two-way mirror. What comes in lands in `prs`, and a root posted in `prs` starts a thread in #prs. |
+| `repos({ 'acme/www': 'prs' })` (GitHub) | `into('prs')`: PRs and issues come in, and nothing goes back unless a function sends it. |
+| `numbers({ '16315558151': 'support' })` (WhatsApp) | `mirror('support')`. |
 
-The function forms are covered in [Callbacks](./02-callbacks.md).
+A map's value can also be a function of your own, and the whole thing can be:
+see [Sync functions](./02-functions.md).
 
 **Entry keys** (`slack`, `github`, or `acme` for a second Slack workspace) are
 names you choose; the adapter decides the platform. The key appears in external
 IDs (`acme:C0999XYZ:1727.9`), in sync targets, in `--from` filters, and in the
 webhook path (`/webhooks/acme`).
 
-**Mapping keys** are the platform's names or IDs: `'#prs'` or `'C0123ABC'` for
+**Map keys** are the platform's names or IDs: `'#prs'` or `'C0123ABC'` for
 Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
 
 - Slack names resolve through one cached channel listing. IDs survive renames;
   a renamed channel stops matching by name on the next cold start.
-- Each key resolves on its own. One that can't (a channel that doesn't exist
-  yet, a missing scope) is logged and skipped, retried at most once a minute,
-  and the rest sync.
+- Each key resolves on its own. A channel that doesn't exist yet is logged and
+  skipped, retried at most once a minute, and the rest sync. One Slack couldn't
+  check (a failed listing) holds what it might be in; see
+  [Helpers](./02-functions.md#helpers).
 
 ## The rules
 
 1. **Delivery.** Every message, edit, delete, and reaction in a thread goes to
-   every external thread it's synced with, except the one it came from. Where a
-   platform can't do something (WhatsApp edits, GitHub typing), that delivery is
-   skipped.
+   the sync function once for each external thread it's synced with, except the
+   one it came from, and `deliver()` sends it. Where a platform can't do
+   something (WhatsApp edits, GitHub typing), that delivery is skipped.
 2. **Starting threads.** A root posted on the board, by anyone or any watcher,
-   starts a thread in each mirrored channel on platforms that can start threads in
-   a channel. Slack can. GitHub and WhatsApp can't, so roots never open an issue
-   or a conversation.
-3. **Inbound.** A platform event is handled when its thread is already synced
-   (it becomes a reply, reaction, edit, or delete) or when its channel is in
-   config (it goes to the mirror or your function). Everything else is ignored,
-   even in channels the bot belongs to.
-4. **Targets are resolved once,** when a root is posted. A root posted through
-   this board lands with them, as `thread.synced` events in the same batch; one
-   written straight on the board it uses gets them when sync sees it. Either
-   way, a deploy that changes mappings affects new threads only.
+   goes to the sync function of each platform that can start threads in a
+   channel, which may `start` one; `mirror` does in its channel. Slack can.
+   GitHub and WhatsApp can't, so roots never open an issue or a conversation.
+3. **Inbound.** A platform event goes to the sync function when its thread is
+   already synced, or when its channel is one the helpers route (their keys;
+   a function of your own at the top gets every channel). The function decides
+   whether it lands. Everything else is
+   dropped at the webhook, even in channels the bot belongs to.
+4. **Threads start once,** when their root is posted, or when someone syncs
+   them by hand. A deploy that changes a function changes what it does from
+   then on: threads it started stay synced, and what reaches them is up to it.
 5. **Attaching.** `vb sync <id> <target>` attaches an existing thread. A channel
    target gets the root and a backfill of every reply, in order. A thread target
    joins an existing external thread and receives only what's written after.
@@ -165,12 +165,12 @@ its sync still runs here:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { http } from '@vercel/board/backend-http'
-import { slack } from '@vercel/board/sync-slack'
+import { channels, slack } from '@vercel/board/sync-slack'
 
 const team = board({
   backend: http('https://board.example.com/api/board'),
   sync: {
-    slack: slack({ adapter: 'slack/acme', channels: { '#support': 'support' } }),
+    slack: slack('slack/acme', channels({ '#support': 'support' })),
   },
 })
 export const GET = team.fetch, POST = team.fetch
@@ -187,7 +187,7 @@ export const GET = team.fetch, POST = team.fetch
   and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
   in its `board({ access })`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
 
-A [callback](./02-callbacks.md)'s writes land on the other board as the
+A [sync function](./02-functions.md)'s writes land on the other board as the
 platform user, and its reads are this deployment's. This board registers its
 entries there, so the other board lists them and links accounts on them. People
 link the other board, so `vb identity link slack` gets its code there; this
@@ -254,7 +254,7 @@ and logs why.
 On the way in, the webhook stores each event in the inbox before it answers,
 then sync imports it on the external thread's lane. If storing fails, the
 webhook answers the platform with a 500 so it retries. On `a2()`, a
-[callback](./02-callbacks.md) that keeps throwing dead-letters after 10 tries,
+[sync function](./02-functions.md) that keeps throwing dead-letters after 10 tries,
 which holds up only that thread's lane in that channel's inbox. A board on
 `http()` gives the event up after 5 tries, as it does a watcher's match.
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { slack, slackIcon, withoutLabel, type SlackClient } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 
 const thread = 'C1:1700000000.000100'
 const as = { name: 'clever-lemur via vboard-factory', avatar: 'https://cdn.example.com/lemur.png' }
@@ -39,7 +40,7 @@ function slackWith(scopes: string[] | null, existing: { ts: string; username?: s
     },
     auth: { test: vi.fn(async () => (scopes ? { response_metadata: { scopes } } : {})) },
   }
-  const provider = slack({ adapter, client: async () => client, channels: {} })
+  const provider = slack({ adapter, client: async () => client }, channels({}))
   return { provider, posted, viaAdapter, edits, client }
 }
 

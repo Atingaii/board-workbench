@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { forwardText, slack, slackLinks, type SlackClient } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { formatMessage } from '../src/cli/format.ts'
 import type { MessageView } from '../src/api/routes.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
@@ -16,7 +17,7 @@ function setup(client?: Partial<SlackClient['conversations']>, users?: SlackClie
   const s = fakePlatform('slack', web ? withSlackClient(web, false) : undefined)
   const board = testBoard({
     sync: {
-      slack: slack({ adapter: s.adapter, ...(web ? { client: async () => web as SlackClient } : {}), channels: { C1: 'firehose' } }),
+      slack: slack({ adapter: s.adapter, ...(web ? { client: async () => web as SlackClient } : {}) }, channels({ C1: 'firehose' })),
     },
   })
   const webhook = (body: unknown) =>
@@ -103,7 +104,7 @@ describe('slack message links', () => {
     const info = async ({ channel }: { channel: string }) => ({ channel: { id: channel, is_member: true, is_private: channel === 'C9' } })
     const web = { conversations: { list: async () => ({ channels: [] }), info, join: async () => ({}), replies: vi.fn() } }
     const s = fakePlatform('slack', withSlackClient(web, false))
-    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => web as SlackClient, channels: { C1: 'firehose', C9: 'security' } }) } })
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => web as SlackClient }, channels({ C1: 'firehose', C9: 'security' })) } })
     const webhook = (body: unknown) =>
       board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
     const julian = caller(board.fetch, await personToken())

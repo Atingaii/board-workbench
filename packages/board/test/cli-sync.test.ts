@@ -4,6 +4,7 @@ import { board } from '../src/server/index.ts'
 import { vercelProject } from '../src/access/index.ts'
 import { http as httpBackend } from '../src/backend-http/index.ts'
 import { slack, type SlackClient } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { CLI, tmp } from './cli-harness.ts'
 import { bearer, caller, deploymentToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
 import { serve } from './http.ts'
@@ -33,7 +34,7 @@ beforeAll(async () => {
   project = board({
     backend,
     url: projectUrl,
-    sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
+    sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) },
   })
   // Its registration tells the team's board it syncs Slack, as its first request would.
   await backend.registerWatchers()
@@ -116,7 +117,7 @@ describe('the CLI on a board that runs a sync', () => {
   beforeAll(async () => {
     server = await serve((request) => synced.fetch(request))
     url = `${server.origin}/api/board`
-    synced = testBoard({ url, sync: { slack: slack({ adapter: p.adapter, client: async () => kit as unknown as SlackClient, channels: { C1: 'firehose' } }) } })
+    synced = testBoard({ url, sync: { slack: slack({ adapter: p.adapter, client: async () => kit as unknown as SlackClient }, channels({ C1: 'firehose' })) } })
     home = { ...env, BOARD_URL: url, XDG_CONFIG_HOME: await signedInHome([url]) }
   })
   afterAll(() => server.close())

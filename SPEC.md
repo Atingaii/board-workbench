@@ -101,7 +101,7 @@ board post errors-www "deploy failed on a1b2c3"
 - **Provenance is server-authored.** The `by`, `mentions`, `origin`, and
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
-- **Wiring is code; the log holds facts.** Sync mappings, callbacks, watchers,
+- **Wiring is code; the log holds facts.** Sync functions, watchers,
   and access live in `board()` and its backend's config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
   read: folds stay global, and filters are per reader. On `a2()`, log indexes
@@ -124,7 +124,7 @@ board post errors-www "deploy failed on a1b2c3"
   `blob` store. Every background job goes through its `scheduler`, or runs in
   the request that wrote when there's none. Sync needs no state store of its
   own.
-- **One handle.** The CLI, your scripts, watchers, and sync callbacks all act
+- **One handle.** The CLI, your scripts, watchers, and sync functions all act
   through a handle from `board()`. Only the backend and who it acts as differ.
 - **Fan-out is not a read path.** Consumers exist only to keep the tables and
   to work with external systems: running inbound mappings, delivering outbound
@@ -149,7 +149,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
-| `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the callback client's type (`SyncClient`), and `withUserTokens()` and `connectUserTokens()` | server |
+| `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`), and `withUserTokens()` and `connectUserTokens()` | server |
 | `@vercel/board/sync/chat` | `ChatSyncProvider`, for a sync provider of your own on a Chat SDK adapter | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
@@ -825,7 +825,7 @@ board({
   and then carries the board's own copy as its snapshot, never the import's
   text: its readers take that snapshot as the message's. Any other keeps its
   URL, and its snapshot as the platform's.
-- Sync callbacks are your own server code, so they're trusted. Their writes are
+- Sync functions are your own server code, so they're trusted. Their writes are
   authored by the external actor that triggered them (see
   [Inbound handling](#inbound-handling)). An import's author is always a
   platform user: never an ID the board authenticates, nor a host's principal
@@ -1230,7 +1230,7 @@ for its own sync, and answers with what the adapter answers.
 
 - **The event ID is derived from the platform's event or message ID.**
 - **It holds** the normalized event (a message, reaction, edit, or delete, or a
-  GitHub lifecycle event) plus the raw payload, which sync callbacks receive
+  GitHub lifecycle event) plus the raw payload, which sync functions receive
   as `raw`.
 - **It exists because consumers run later.** A pushed webhook can't be fetched
   again, so it has to be stored before the board answers. Storing it gives four
@@ -1569,7 +1569,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 - `post(channel, input)` and `reply(id, input)` accept a string or an object.
 - **This is the only client.** The CLI is built on it, watchers receive it as
   `board`, acting as the watcher, and the middleware as `board:middleware`.
-  Sync callbacks get a client with its methods, acting as the platform user.
+  Sync functions get a client with its methods, acting as the platform user.
   On `a2()` its schedules need a scheduler and its files a blob store, like
   anyone's: without them `schedule` and `upload` throw a `BoardError` with
   status 501.
@@ -1932,15 +1932,17 @@ CI walkthrough.
 ## Sync
 
 Sync connects the board to platforms in both directions. Each entry is a sync
-adapter for one platform account, keyed by a name you choose. It's configured
-by the platform's own things: Slack channels, GitHub repos.
+adapter for one platform account, keyed by a name you choose, and one sync
+function, called for every event both ways. Helpers build the function from the
+platform's own things: Slack channels, GitHub repos.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { a2 } from '@vercel/board/backend-a2'
-import { slack } from '@vercel/board/sync-slack'
-import { github } from '@vercel/board/sync-github'
+import { mirror } from '@vercel/board/sync'
+import { channels, slack } from '@vercel/board/sync-slack'
+import { github, repos } from '@vercel/board/sync-github'
 import { redisHttp } from '@vercel/board/backend-a2/store-redis-http'
 import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
 import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
@@ -1954,32 +1956,24 @@ const backend = a2({
 const team = board({
   backend,
   sync: {
-    slack: slack({
-      adapter: 'slack/basehub',                           // a Vercel Connect connector (see Adapters)
-      channels: {
-        '#errors-www': 'errors-www',
-        '#firehose-www': 'firehose-www',
-        '#prs': 'prs',
-        '#alerts': async ({ event, board }) => {
-          if (event.kind !== 'message') return
-          const project = event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
-          await board.sync(`alerts/${project}`, event)
-        },
+    slack: slack('slack/basehub', channels({              // a Vercel Connect connector (see Adapters)
+      '#errors-www': 'errors-www',
+      '#firehose-www': 'firehose-www',
+      '#prs': 'prs',
+      '#alerts': async (sync) => {
+        if (sync.direction === 'out') return sync.deliver()
+        if (sync.event.kind !== 'message') return
+        const project = sync.event.text.match(/project: (\S+)/)?.[1] ?? 'unknown'
+        await sync.import(`alerts/${project}`)
       },
-    }),
-    acme: slack({                                         // a second Slack workspace
-      adapter: 'slack/acme',
-      channels: { '#support': 'acme-support' },
-    }),
-    github: github({
-      adapter: 'github/basehub',
-      repos: {
-        'basehub-ai/www': { pulls: 'prs', issues: 'issues' },
-        'basehub-ai/docs': async ({ event, board }) => {
-          await board.sync('prs', event, { labels: { area: 'docs' } })
-        },
+    })),
+    acme: slack('slack/acme', channels({ '#support': 'acme-support' })), // a second Slack workspace
+    github: github('github/basehub', repos({
+      'basehub-ai/www': { pulls: mirror('prs'), issues: 'issues' },
+      'basehub-ai/docs': async (sync) => {
+        if (sync.direction === 'in') await sync.import('prs', { labels: { area: 'docs' } })
       },
-    }),
+    })),
   },
 })
 export const GET = team.fetch, POST = team.fetch
@@ -1994,7 +1988,7 @@ unlinking their own account:
 
 | Method | Route | What it keeps |
 | --- | --- | --- |
-| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key (null for a callback's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
+| `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key (null for a sync function's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
 | `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
 | `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
 | `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, the post an import made with a client ID, who an account is linked to and how, a person's accounts, whose a live code is |
@@ -2015,78 +2009,107 @@ a2() delivers its own sync's in-process on `board-inbox` and queues anyone
 else's in their registrant session. Outbound, sync is one of the board's
 subscriptions, beside its watchers: a2() delivers it on `board-sync`'s thread
 lanes, and a board on `http()` registers it (its sync entries) and pulls it as
-matches of watcher `@sync`. On `a2()`, a root posted through `board()` lands
-with its channel's config targets in the same batch; one that reaches the board
-any other way, a root posted through a board on `http()` included, gets them
-when sync sees it. Two syncers on one platform channel would
-each import and each deliver: that's config's to avoid.
+matches of watcher `@sync`. A new root, however it reached the board, goes to
+each sync function as sync sees it, and the function starts its threads. Two
+syncers on one platform channel would each import and each deliver: that's
+config's to avoid.
 
-**Each mapping chooses a default mirror or an event callback:**
+**Each platform takes its app and one sync function**: `slack(app, sync)`,
+where `app` is a connector name or the options. board calls the function with
+`sync`, for every event in both directions:
 
-- **A board channel (string): a two-way mirror.** Incoming events use default
-  imports. New board threads start external threads where supported, and replies,
-  reactions, edits, and deletes flow through the connection automatically.
-- **A function: a callback for every incoming event.** It receives `{ event,
-  board, permalink }`, including for connected threads. Call `board.sync(channel, event)` to
-  apply the default import, pass overrides, or use other board operations. Calling
-  no default sync skips that event. Once connected, outgoing delivery is automatic.
+- **In (`sync.direction === 'in'`):** a platform event, as `{ key, channel,
+  event, board, import, permalink, resolve }`. `import(channel?, overrides?)`
+  applies the default import; without a channel, only into a thread the board
+  already syncs. Calling it no time skips the event, and the connection stays.
   `permalink()` returns the platform's own link to the event's message, from
-  `SyncProvider.permalink(event)`: fetched on the first call, reused for the rest
-  of the callback, and forgotten after a failure so a retry asks again. It only
+  `SyncProvider.permalink(event)`: fetched on the first call, reused for the
+  rest of the call, and forgotten after a failure so a retry asks again. It only
   reads the URL; nothing is imported or joined. The base provider returns `null`.
-- **`{ channel, run }`: a callback with static reverse routing.** Incoming events
-  go through `run`. The declared channel also lets new board-created threads find
-  the external channel without executing the callback to discover routing.
+  `event` is built and frozen when it's first read, so an import that never
+  reads it never needs what its schema asks of the payload.
+- **Out (`sync.direction === 'out'`):** a board event, as `{ key, channel,
+  event, message, target, deliver, start, resolve }`, once per platform thread
+  the board thread syncs with, never back to where the message came from.
+  `deliver(options?)` sends it (a root and backfill for `thread.synced`, a
+  reply, a change, or a label change's re-render); `{ render }` replaces the
+  provider's rendering. A new root also comes once with `target: null` for each
+  platform that can start threads in a channel, and `start(channel)` syncs its
+  thread with one, which records `thread.synced` (cause `config`) unless the
+  root came from that channel; the backfill then comes back through `deliver`.
+- **Neither direction moves anything unless the function calls `import`,
+  `deliver`, or `start`.** Each of those runs once per call: a second call
+  answers what the first did, and one after the function returns throws.
+
+Helpers make the function from a map, keyed by platform channels: `channels`
+(Slack), `repos` (GitHub, or `{ pulls, issues }` per repo), and `numbers`
+(WhatsApp). A value is a sync function, or a board channel as a string:
+`mirror(channel)` under `channels` and `numbers` (imports, delivers, and starts
+a new root's thread in its channel), and `into(channel)` under `repos` (imports
+only: GitHub may be public, and what's said in Slack or on the board may not
+be). A thread synced by hand in a channel the map doesn't name keeps syncing:
+both ways under `channels` and `numbers`, in only under `repos`.
+`render(renderer, fn)` passes a renderer to every `deliver` in `fn`. They
+compose by calling each other, with no other mechanism.
+
+**What the webhook keeps.** An event goes to the inbox when the board syncs its
+thread, or when its channel is one the function's helpers route: `channels`,
+`repos`, and `numbers` mark the function with their keys, privately, and `render`
+keeps the mark. A function of your own at the top has none and keeps every event
+the platform sends, and each is stored.
 
 **Entry keys** are names you choose, such as `slack` and `acme`, and the sync
 adapter decides the platform. The key appears in external IDs
 (`acme:C0999XYZ:…`), in `--sync` targets, and in the webhook path
 (`/webhooks/<key>`).
 
-**Mapping keys** can be names (`'#prs'`) or IDs (`'C0123ABC'`). Names are the
+**Map keys** can be names (`'#prs'`) or IDs (`'C0123ABC'`). Names are the
 default.
 - Slack events carry IDs, so names resolve through one cached channel listing.
-- Each key resolves on its own. One that can't (a channel that doesn't exist
-  yet, a missing scope) is logged and skipped, and retried at most once a
-  minute; the rest sync.
+- Each key resolves on its own. One the platform says doesn't exist
+  (`channel_not_found`) is logged and skipped, and retried at most once a
+  minute; the rest sync. Without `groups:read`, a private channel's name counts
+  as one, since it never lists; its ID still maps it. One the platform couldn't
+  check (a failed listing) is asked again on every call, and meanwhile
+  `channels` throws for any event outside the channels that resolved, so it's
+  retried instead of reaching the fallback past that key's function. A new root
+  starts only in the channels that resolved.
 - A name stops matching after a rename, on the next cold start. IDs survive
   renames.
 - Each external channel or repo should appear at most once per entry. Nothing
   checks it: of two keys that resolve to the same channel, the later wins.
 
-### Event callbacks and default imports
+### Sync functions and default imports
 
-Function mappings receive every incoming event, including connected threads.
-String mappings are shorthand for applying default imports to every event.
+A function sees every incoming event the webhook keeps, connected threads included, and
+a board channel under a helper is shorthand for applying default imports to
+every event.
 
 ```ts
-import { github, GitHubPayload } from '@vercel/board/sync-github'
+import { github, repos, GitHubPayload } from '@vercel/board/sync-github'
 
-// board({ sync: { github: repos } })
-export const repos = github({
-  adapter: 'github/basehub',
-  repos: {
-    'vercel-labs/board': async ({ event, board }) => {
-      const channel = event.subject.type === 'pull_request' ? 'prs' : 'issues'
-      await board.sync(channel, event, {
-        labels: { area: 'board' },
-        root: ({ raw }) => {
-          const payload = GitHubPayload.parse(raw)
-          const item = payload.pull_request ?? payload.issue!
-          return { text: [item.title, item.body, item.html_url].filter(Boolean).join('\n\n') }
-        },
-      })
-    },
+// board({ sync: { github: basehub } })
+export const basehub = github('github/basehub', repos({
+  'vercel-labs/board': async (sync) => {
+    if (sync.direction !== 'in') return
+    const channel = sync.event.subject.type === 'pull_request' ? 'prs' : 'issues'
+    await sync.import(channel, {
+      labels: { area: 'board' },
+      root: ({ raw }) => {
+        const payload = GitHubPayload.parse(raw)
+        const item = payload.pull_request ?? payload.issue!
+        return { text: [item.title, item.body, item.html_url].filter(Boolean).join('\n\n') }
+      },
+    })
   },
-})
+}))
 ```
 
-The event-taking `sync` overload exists only on a callback's `board`. It
-accepts the current verified envelope, not a reconstructed object, and has no
-HTTP counterpart: a sync elsewhere pushes platform events to its inbox
-(`POST /inbox/:key`) and imports writes, and never submits an envelope. `board.sync(messageId, target)` retains its
-thread-attachment meaning everywhere; the second argument tells the two apart,
-a target string or the event.
+`sync.import` applies only to the event the function was called with, and has
+no HTTP counterpart: a sync elsewhere pushes platform events to its inbox
+(`POST /inbox/:key`) and imports writes, and never submits an envelope.
+`board.sync(messageId, target)` keeps its thread-attachment meaning everywhere,
+`sync.board` included.
 
 - `text` replaces the event's generated message or reply. If a lifecycle event
   creates both a root and a reply, it replaces the reply; `root` controls that
@@ -2099,16 +2122,16 @@ a target string or the event.
   labels, author, and native data. It runs both for opening webhooks and roots
   recovered from early comments. Its labels merge into the default draft; top-level
   `labels` then takes precedence, and `unset` finally removes named keys, including
-  keys added by `root`. The callback cannot change provenance or unset keys itself.
+  keys added by `root`. The function cannot change provenance or unset keys itself.
 - `noSync` keeps an imported reply, or a lifecycle's reply, on the board: no
   other platform gets it. A new root always syncs.
-- Calling no default sync skips that import event. It leaves the connection
-  intact. Each callback can import its event once, and must await its operations.
-- Callback retries retain trigger-derived write IDs. A default import that
-  already succeeded returns its existing message, allowing later callback work to
-  resume. Callbacks adding external I/O must make it idempotent themselves.
+- Not importing skips that event. It leaves the connection intact. A function
+  imports its event once, and must await its operations.
+- Retries retain trigger-derived write IDs. A default import that already
+  succeeded returns its existing message, allowing the function's later work to
+  resume. A function adding external I/O must make it idempotent itself.
 
-`board.sync` returns `{ root, message }`, message IDs as strings. `root`
+`sync.import` returns `{ root, message }`, message IDs as strings. `root`
 identifies the board thread's root; `message` identifies the imported message,
 the affected message for an edit/delete/reaction, or a generated lifecycle
 reply. A root-only lifecycle
@@ -2123,29 +2146,30 @@ and raw payload fields, plus the complete normalized operation. Message text,
 authors, files, and reaction data belong to their applicable variants. GitHub
 adds `subject: { type: 'pull_request' | 'issue', repo, number }`, including on
 comments, edits, and reactions. Its lifecycle union narrows native PR/issue data
-by `type`. Envelopes are validated and frozen before application callbacks.
-`event.id` stays the same on callback retries and can serve as an idempotency key
-for the callback's own service calls.
+by `type`. Envelopes are validated and frozen when a function first reads them.
+`event.id` stays the same on retries and can serve as an idempotency key for the
+function's own service calls.
 
-A bare function chooses a board channel at import time; the board cannot infer
-reverse routing for a new board-created thread from that function. A mapping may declare both a channel and a callback:
+Going out, the same function decides: a board root in `support` starts a Slack
+thread because the function calls `start` for it, and a reply reaches that
+thread because it calls `deliver`:
 
 ```ts
-// in slack({ adapter: 'slack/acme', channels: { … } }):
-'#support': {
-  channel: 'support',
-  run: async ({ event, board }) => { await board.sync('support', event) },
+// in slack('slack/acme', channels({ … })):
+'#support': async (sync) => {
+  if (sync.direction === 'in') return void (await sync.import('support'))
+  if (sync.target !== null) return sync.deliver()
+  if (sync.message.channel === 'support') await sync.start(sync.channel!)
 },
 ```
 
-That preserves automatic Slack thread creation from board roots. Incoming events
-still pass through the callback. Outgoing delivery continues through the existing
-connection; these callbacks do not run for every outgoing message.
+That's `mirror('support')`.
 
 ### Outgoing presentation
 
-Each provider accepts a synchronous `render` function, or a subclass can override
-its `render` method. It receives immutable copies of the board message (its text in the readable
+`deliver({ render })` takes a synchronous renderer, `render(renderer, fn)` passes
+one to every `deliver` in `fn`, and a subclass can override its provider's
+`render` method for the default. A renderer receives immutable copies of the board message (its text in the readable
 form for known bot messages) and actor,
 the default author label, the actual resolved destination, and
 `mentionOf(actor)`, which returns an actor's native mention there through linked
@@ -2156,12 +2180,10 @@ are converted to the destination's native form in the rendered body, after the
 custom renderer runs; code spans retain their usual treatment.
 
 ```ts
-kapso({
-  adapter,
-  markRead: (input) => client.messages.markRead(input),
-  numbers: { '16315558151': 'support' },
-  render: ({ message }) => message.text,
-})
+kapso(
+  { adapter, markRead: (input) => client.messages.markRead(input) },
+  render(({ message }) => message.text, numbers({ '16315558151': 'support' })),
+)
 ```
 
 This omits author attribution from WhatsApp delivery. Rendering is used for roots,
@@ -2183,19 +2205,19 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    board. Where a platform doesn't
    support something, that delivery is skipped.
 2. **Starting a thread.** A root posted on the board, including one posted by a
-   watcher, starts threads in its channel's mirrored channels, on every platform
-   that can start threads in a channel. Slack can; GitHub and WhatsApp can't.
-   `sync` targets are added on top, and `noSync` drops the mirrored channels.
-3. **Inbound events.** A platform event is handled if its thread is already
-   synced with a board thread, in which case it becomes a reply, reaction, edit,
-   or delete. It's also handled if its channel or repo is in config, in which
-   case it goes to the mirror or to your function. Anything else is ignored,
+   watcher, goes to the sync function of every platform that can start threads
+   in a channel (Slack can; GitHub and WhatsApp can't), which may `start` its
+   thread in one: `mirror` does in its channel. `sync` targets land with the
+   root on top, and `noSync` keeps it from the functions.
+3. **Inbound events.** A platform event goes to the sync function if its thread
+   is already synced with a board thread, or if its channel is one the helpers route.
+   The function decides what lands. Anything else is dropped at the webhook,
    even in channels the bot belongs to.
-4. **Targets are resolved once, when a root is appended.** They're written as
-   `thread.synced` events in the same batch as the root, or, for a root that
-   reached the board another way, as sync sees it. A deploy that changes the
-   mappings affects new threads only, and it can't reinterpret pending sync
-   work. A2 stores resolved lanes on events for the same reason.
+4. **Threads start once.** `start` writes `thread.synced` as sync handles the
+   root's `message.posted`, so it lands after anything already in the log
+   behind the root; the backfill posts the thread as it is by then. A deploy
+   that changes a function changes what it does from then on: threads it
+   started stay synced, and what reaches them is up to it.
 5. **Attaching an existing thread.** `sync <id> <target>` appends
    `thread.synced`. For a channel target, the outbound consumer then posts the
    root and backfills its replies, in order, on the thread's lane. A thread
@@ -2220,15 +2242,14 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    (`inbox:<key>:<channel>`). It answers 200 right away. That's well inside
    Slack's 3-second retry window, and platform retries do nothing.
 3. On a2(), the inbound consumer, `board-inbox`, hands each event back to
-   `board()`'s sync on the external thread's lane, and sync runs the mirror or
-   your function. On a board on `http()`, the deployment that pushed them pulls
+   `board()`'s sync on the external thread's lane, and sync runs the entry's
+   function. On a board on `http()`, the deployment that pushed them pulls
    them back right after (`inboxNext`, then `inboxAck`), one platform thread at
    a time and in order. Its writes are imports (`syncImport`) on the board
    that keeps the log.
 
-The `board` a function receives has the handle's methods, but not `fetch` or
-`as`, plus its own `sync`. Only how it reaches the board and its defaults
-differ:
+`sync.board` has the handle's methods, but not `fetch` or `as`. Only how it
+reaches the board and its defaults differ:
 
 - **Its calls reach `board()` in process,** with no token. `board()` then calls
   the backend as sync: on `http()`, a request to the board it uses, with this
@@ -2290,8 +2311,10 @@ dead-letters and holds up its thread's lane.
 ### Outbound handling
 
 - **On each board write in a synced thread**, sync, which gets every post,
-  change, and thread sync as a subscription, calls the provider's methods:
-  post, react, edit, or delete. It then records `message.synced` as a receipt
+  change, and thread sync as a subscription, hands it to the entry's function
+  once per target, and the function's `deliver` calls the provider's methods:
+  post, react, edit, or delete. A throw, the function's or the delivery's, is a
+  failed delivery. It then records `message.synced` as a receipt
   (`syncReceipt`), so later edits and reactions can find the platform's copy.
   On a2() the subscription runs on the `board-sync` consumer, and a receipt
   is that consumer's own append. A post or an edit renders the message as it
@@ -2508,7 +2531,7 @@ webhook: Connect's OIDC verifier, or the platform's own signature check.
 
 ### Sync providers
 
-`@vercel/board/sync` exports `SyncProvider`, shared schemas, and callback/import types.
+`@vercel/board/sync` exports `SyncProvider`, shared schemas, and the sync function's types and helpers.
 The engine calls the provider's methods; it does not access an SDK adapter or
 transport configuration. A provider can implement its own SDK integration or
 extend `ChatSyncProvider` from `@vercel/board/sync/chat`. Slack, GitHub, and Kapso share
@@ -2553,18 +2576,19 @@ permanent upload refusal from a retryable failure. Providers also declare
 reaction cardinality. All of these operations can be overridden as class methods;
 Chat-specific hooks remain inside the bridge.
 
-`SyncProvider` owns common mapping dispatch. Its `sync(context, channel,
-overrides)` default applies the validated internal operation directly, without
-projecting a callback envelope. A subclass needing richer native data can call
-`this.event(context)` explicitly. Envelopes are projected, validated, and frozen
-only for application callbacks. Subclasses can override `render(input)` or pass
-a renderer in their constructor options. Durable state belongs on the board,
-through its backend; SDK caches and credentials remain provider dependencies.
+`SyncProvider` takes its sync function as its constructor's second argument, and
+the engine runs it for every event. Envelopes are projected, validated, and
+frozen when a function first reads `sync.event`, so a default import applies the
+validated internal operation without them. `inboxChannel(key, thread)` names a
+thread's platform channel without calling the platform, for `sync.channel`
+going out. Subclasses can override `render(input)` for the default rendering.
+Durable state belongs on the board, through its backend; SDK caches and
+credentials remain provider dependencies.
 
 The same provider contract tests run against a native implementation and a Chat
 SDK bridge implementation. They cover authentication, duplicate delivery,
-distinct add/remove/add occurrences, callback and outgoing retries, stable
-callback IDs, concurrent entry contexts, opaque URL-like targets, static reverse routing, unsupported
+distinct add/remove/add occurrences, inbound and outgoing retries, stable
+event IDs, concurrent entry contexts, opaque URL-like targets, starting threads from a function, unsupported
 channel creation, thread attachment, and file fallback. The existing built-in
 suites cover GitHub lifecycle results across retries, media receipts, native
 mentions, and cross-instance Kapso read/typing.
@@ -2596,10 +2620,10 @@ board configures every Chat instance itself:
 
 ### Slack
 
-`slack({ adapter, channels })`. Keys are Slack channels, by name (`'#prs'`) or
+`slack(app, channels({ … }))`. Keys are Slack channels, by name (`'#prs'`) or
 ID (`'C0123ABC'`).
 
-**A function receives `{ event, board, permalink }`.** The shared envelope includes:
+**An event coming in is `sync.event`.** The shared envelope includes:
 - `text`
 - `author`
 - `channel`
@@ -2609,7 +2633,7 @@ ID (`'C0123ABC'`).
 `permalink()` calls `chat.getPermalink` with the provider's client, so the link
 has the workspace's own host (Enterprise Grid included) and a reply's
 `thread_ts`. It's `null` for a delete event, whose message Slack no longer
-has; any Slack refusal throws, and the callback retries.
+has; any Slack refusal throws, and the function retries.
 
 **Setup:**
 
@@ -2677,13 +2701,13 @@ can't list channels (`list_failed`), is 502; any other Slack refusal is 403
 with Slack's code; a target that isn't a channel, thread, or permalink is 400
 `invalid_target`. A board that doesn't run the entry answers 404
 `not_synced_here`. Nothing is stored, and reading a channel doesn't make the
-board listen to it: inbound events still only come from configured channels
-and synced threads. Because the app's token reads more than the caller might,
+board listen to it: inbound events still only come from channels the sync
+function's helpers route and synced threads. Because the app's token reads more than the caller might,
 it needs `manage` in every channel.
 
 **Rendering.** Messages use the common author-prefixed body by default.
-Configure `render` to change it; credentials and sender-account authorization
-remain separate from presentation.
+A renderer passed to `deliver` (or through `render`) changes it; credentials and
+sender-account authorization remain separate from presentation.
 
 **Assumed:** Chat SDK delivers other bots' messages to `onNewMessage`.
 Channels like `#alerts` and `#errors-www` are fed by bots such as Sentry and
@@ -2695,9 +2719,10 @@ Vercel alerts. Only the board's own bot is skipped.
 
 ### GitHub
 
-`github({ adapter, repos })`. Keys are repos (`'owner/repo'`). A value is a
-board channel or function for the repo's PRs and issues alike, or
-`{ pulls, issues }` to send each somewhere else; leave one out to skip it.
+`github(app, repos({ … }))`. Keys are repos (`'owner/repo'`). A value is a
+board channel (imported `into`, with nothing sent back) or a function for the
+repo's PRs and issues alike, or `{ pulls, issues }` to send each somewhere else;
+leave one out to skip it.
 The external channels are `github:owner/repo:pulls` and
 `github:owner/repo:issues`.
 
@@ -2763,12 +2788,12 @@ vb read issues --label tag.bug                     # issues labeled bug
   roots.** If someone changes them on the board, the next GitHub event
   overwrites them.
 - **Board labels never sync out to platforms.**
-- **Repo callbacks control whether defaults run.** Delegating through
-  `board.sync(channel, event)` imports state labels; callbacks can also supply
-  label overrides or call `board.label` themselves.
+- **Repo functions control whether defaults run.** `sync.import(channel)`
+  imports state labels; a function can also supply label overrides or call
+  `sync.board.label` itself.
 
-- **A function receives `{ event, board, permalink }`,** with `event` typed as the union
-  above. `permalink()` returns `null` on GitHub. Every event carries `thread`.
+- **An event coming in is `sync.event`,** typed as the union above.
+  `permalink()` returns `null` on GitHub. Every event carries `thread`.
 - **A comment on a PR or issue the board hasn't seen** fetches it through the
   adapter's `.octokit`, creates a root from its title and URL with its author,
   state, labels, and assignees, then posts the comment as a reply. Known threads
@@ -2800,14 +2825,14 @@ GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 
 ### WhatsApp (Kapso)
 
-`kapso({ adapter, markRead, numbers })`, plus `render` like the others, with
+`kapso({ adapter, markRead }, numbers({ … }))`, with
 [Kapso's Chat SDK adapter](https://chat-sdk.dev/adapters/vendor-official/kapso).
 `markRead` is required: `kapso()` throws without it.
 Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
 the numbers themselves.
 
 ```ts
-import { kapso } from '@vercel/board/sync-kapso'
+import { kapso, numbers } from '@vercel/board/sync-kapso'
 import { createKapsoAdapter } from '@kapso/chat-adapter'
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
 
@@ -2817,11 +2842,10 @@ const client = new WhatsAppClient({
 })
 
 sync: {
-  kapso: kapso({
-    adapter: createKapsoAdapter({ client }),
-    markRead: (input) => client.messages.markRead(input),
-    numbers: { '16315558151': 'support' },
-  }),
+  kapso: kapso(
+    { adapter: createKapsoAdapter({ client }), markRead: (input) => client.messages.markRead(input) },
+    numbers({ '16315558151': 'support' }),
+  ),
 },
 ```
 
@@ -2888,7 +2912,7 @@ const backend = a2({
 
 const team = board({
   backend,
-  // sync: { slack: slack({ … }) },
+  // sync: { slack: slack('slack/acme', channels({ … })) },
   watch: {
     triage: {
       tail: 'firehose --from slack',
@@ -2984,7 +3008,7 @@ a tool, and not enough for a production board with watchers, as for sync.
 
 `board({ middleware: [...] })` runs on every post and edit before it reaches
 the backend, from every source: the HTTP API (a board on `http()` using this
-one included), sync (default imports and callbacks' writes, as imports),
+one included), sync (default imports and sync functions' writes, as imports),
 watchers, the handle, and scheduled sends, which a2() sends through `board()`
 as their creator. It's `board()`'s, beside `access`, so it sees every write
 once on any backend, its backend's own writes for someone included. A board on
@@ -3015,7 +3039,7 @@ sync replies with it in the platform thread, whichever board keeps the log;
 otherwise it's the message of the `422 dropped` error the API answers with.
 A dropped scheduled send ends its schedule (`reason: 'dropped'`), since its text
 never changes. The middleware's own `board` writes as `board:middleware` and
-skips the middleware. Sync callbacks keep routing (which channel an event goes
+skips the middleware. Sync functions keep routing (which channel an event goes
 to, overrides); middleware decides whether it lands.
 
 ## Scheduled messages
@@ -3131,7 +3155,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
 | What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-kapso`, named for the platform they sync, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
-| Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync callbacks only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
+| Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |
 | Can Connect user tokens post as a person? | **Assumed yes, not yet verified with a real consent:** both factory connectors answer `user_authorization_required` and return real consent URLs (issue #6). Which scopes the tokens get is unverified until someone signs in; without them, delivery falls back to the app. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a board on `http()` registers the tails of the watchers it deployed, and its own `https` URL, which the board wakes with no event and no credential (see [Watchers over `http()`](#watchers-over-http)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |

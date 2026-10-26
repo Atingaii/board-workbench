@@ -507,28 +507,22 @@ export async function createServe(context: BoardContext): Promise<Serve> {
   }
 
   /**
-   * A post, with the emails it mentions resolved and the targets its channel syncs with landing
-   * beside it, once the caller may post there (and sync, for targets it names), through the
-   * middleware.
+   * A post, with the emails it mentions resolved once the caller may post there (and sync, for
+   * targets it names), through the middleware.
    */
   async function post(caller: Caller, input: Protocol['post']['input'], signal: AbortSignal): Promise<Protocol['post']['output']> {
     const send = (poster: Caller, body: Protocol['post']['input']) => screenPost(poster, body, signal, (patched) => backend.post(poster, patched, signal))
     // Without sync, nothing here calls a platform: its targets only take their shape.
     if (!engine) return send(caller, input.sync?.length ? { ...input, sync: await Promise.all(input.sync.map(resolveTarget)) } : input)
-    const work = (input.sync?.length ?? 0) > 0 || mentionsEmails(input.text) || (input.channel !== undefined && !input.noSync)
+    const work = (input.sync?.length ?? 0) > 0 || mentionsEmails(input.text)
     const allowed = work ? await mayPost(caller, input, signal) : null
     if (!allowed) return send(caller, input)
     const { access, channel } = allowed
     // A reply's targets are a mistake the backend names: only a new thread's go to the platform.
     const syncs = input.re === undefined && (input.sync?.length ?? 0) > 0 && (access === null || access.can('sync', channel))
     const body = syncs ? { ...input, sync: await Promise.all(input.sync!.map(resolveTarget)) } : input
-    let poster = caller
-    if (body.channel !== undefined && !body.noSync) {
-      const config = await engine.configTargets(body.channel)
-      if (config.length > 0) poster = { ...caller, origin: { ...caller.origin, config } } as Caller
-    }
     const text = await withEmails(body.text)
-    const answer = await send(poster, { ...body, text })
+    const answer = await send(caller, { ...body, text })
     // One that can't read where it posted gets back what it sent: who its emails are isn't its to see.
     return text !== input.text && access !== null && !access.readable(answer.message.channel) ? { ...answer, message: { ...answer.message, text: input.text } } : answer
   }
@@ -598,12 +592,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       if (found !== null) return { message: await read(found) }
     }
     const targets = await Promise.all((input.sync ?? []).map(resolveTarget))
-    // A new root lands with the targets its channel syncs with, as any post through board() does.
-    const config = input.channel !== undefined && !input.noSync ? await sync.configTargets(input.channel) : []
-    const importer: Caller = config.length > 0 ? { ...me, origin: { ...me.origin, config } } : me
     const message = await landed(
       caller,
-      await syncImport(importer, {
+      await syncImport(me, {
         op: 'post',
         author,
         from: null,

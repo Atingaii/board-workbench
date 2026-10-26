@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { board, type Middleware } from '../src/server/index.ts'
 import { vercelProject } from '../src/access/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { slack } from '../src/sync/slack.ts'
+import { slack, type SlackEvent } from '../src/sync/slack.ts'
+import { channels, type SyncUnit } from '../src/sync/fn.ts'
 import { withUserTokens, type UserTokens } from '../src/sync/users.ts'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoard } from './harness.ts'
@@ -25,7 +26,7 @@ type Read = { id: string; text: string; from: string | null; by: { actor: string
 /** Slack's Web API as a person's token sees it: every token is Julian's. */
 const juliansSlack = { auth: { test: async () => ({ user_id: 'U_JULIAN', user: 'jb' }) }, users: { info: async () => ({ user: { id: 'U_JULIAN', name: 'jb', profile: { display_name: 'jb', real_name: 'Julian' } } }) } }
 
-function setup(options: { can?: Parameters<typeof vercelProject>[0]['can']; channels?: Parameters<typeof slack>[0]['channels']; middleware?: Middleware[]; users?: UserTokens } = {}) {
+function setup(options: { can?: Parameters<typeof vercelProject>[0]['can']; channels?: Record<string, SyncUnit<SlackEvent>>; middleware?: Middleware[]; users?: UserTokens } = {}) {
   const queue = fakeQueue()
   // With people's tokens, Slack runs calls with one through `withBotToken`.
   const s = fakePlatform('slack', options.users ? (adapter) => void Object.assign(adapter, { withBotToken: <T>(_token: string, fn: () => T) => fn(), webClient: juliansSlack }) : undefined)
@@ -48,11 +49,13 @@ function setup(options: { can?: Parameters<typeof vercelProject>[0]['can']; chan
     backend,
     url: SUPPORT_URL,
     sync: {
-      slack: slack({
-        adapter: options.users ? withUserTokens(s.adapter, options.users) : s.adapter,
-        ...(options.users ? { client: async () => juliansSlack as never } : {}),
-        channels: options.channels ?? { C1: 'firehose' },
-      }),
+      slack: slack(
+        {
+          adapter: options.users ? withUserTokens(s.adapter, options.users) : s.adapter,
+          ...(options.users ? { client: async () => juliansSlack as never } : {}),
+        },
+        channels(options.channels ?? { C1: 'firehose' }),
+      ),
     },
   })
   const webhook = (body: unknown) =>
@@ -145,18 +148,17 @@ describe('sync on a board on http()', () => {
     const seen: string[] = []
     const { team, webhook, s } = setup({
       channels: {
-        C1: {
-          channel: 'firehose',
-          run: async ({ event, board }) => {
-            if (event.kind !== 'message') return
-            const { root } = await board.sync('firehose', event)
-            // Its reads are sync's own, and its writes are Ada's.
-            seen.push((await board.thread(root!)).message.text)
-            const ack = await board.reply(root!, 'Thanks! Tracking it.')
-            await board.label(root!, { set: { triaged: 'yes' } })
-            await board.react(root!, 'eyes')
-            await board.edit(ack.id, 'Thanks! Tracking it now.')
-          },
+        C1: async (sync) => {
+          if (sync.direction === 'out') return sync.deliver()
+          const { event, board } = sync
+          if (event.kind !== 'message') return
+          const { root } = await sync.import('firehose')
+          // Its reads are sync's own, and its writes are Ada's.
+          seen.push((await board.thread(root!)).message.text)
+          const ack = await board.reply(root!, 'Thanks! Tracking it.')
+          await board.label(root!, { set: { triaged: 'yes' } })
+          await board.react(root!, 'eyes')
+          await board.edit(ack.id, 'Thanks! Tracking it now.')
         },
       },
     })
@@ -217,7 +219,7 @@ describe('sync on a board on http()', () => {
     project = board({
       backend: http(BOARD_URL, { fetch: bearer(route, supportToken) }),
       url: SUPPORT_URL,
-      sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never, channels: { C1: 'firehose' } }) },
+      sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never }, channels({ C1: 'firehose' })) },
     })
     // Anyone, with any token: the project's board answers only wake-ups and webhooks.
     const anyone = caller((request) => project.fetch(new Request(request.url.replace(BOARD_URL, SUPPORT_URL), request)), await supportToken())
@@ -247,10 +249,10 @@ describe('sync on a board on http()', () => {
       scheduler: queue.scheduler,
       access: [vercelProject({ project: 'prj_support', can: 'all' })],
       transport: { post: (url, init) => route(url, { method: 'POST', headers: init.headers, body: init.body }) },
-      sync: { workspace: slack({ adapter: theirs.adapter, channels: { C1: 'firehose' } }) },
+      sync: { workspace: slack({ adapter: theirs.adapter }, channels({ C1: 'firehose' })) },
     })
     const backend = http(BOARD_URL, { fetch: bearer(route, supportToken) })
-    project = board({ backend, url: SUPPORT_URL, sync: { slack: slack({ adapter: ours.adapter, channels: { C2: 'firehose' } }) } })
+    project = board({ backend, url: SUPPORT_URL, sync: { slack: slack({ adapter: ours.adapter }, channels({ C2: 'firehose' })) } })
     await backend.registerWatchers()
     const julian = await julianOn(team.fetch)
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'hello, both' })).body.message
@@ -368,7 +370,7 @@ describe('the sync permission', () => {
     const s = fakePlatform('slack')
     const team = testBoard({
       access: [vercelProject({ project: 'prj_support', can: 'all' })],
-      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) },
     })
     const support = caller(team.fetch, await supportToken())
     expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
@@ -600,7 +602,7 @@ describe('whose records are whose', () => {
 
   it("keeps this board's own sync's keys its own: a sync elsewhere can't register one, or record under one it registered before", async () => {
     const s = fakePlatform('slack')
-    const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })], sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) } })
+    const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: 'all' })], sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
     const support = caller(team.fetch, await supportToken())
     const julian = await julianOn(team.fetch)
     expect(await support('POST', '/watchers', { watch: {}, sync: [entry] })).toEqual({

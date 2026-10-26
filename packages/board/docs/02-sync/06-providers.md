@@ -14,7 +14,7 @@ Either way, a provider translates between the platform and the board, and the
 board does the rest: it validates and stores every incoming event before
 answering, orders imports per external thread and deliveries per board thread,
 retries, skips echoes, records copy and file receipts, and runs the default
-imports and your [callbacks](./02-callbacks.md). Durable state lives on the
+imports and your [sync functions](./02-functions.md). Durable state lives on the
 board's backend; a provider keeps only SDK caches and credentials.
 
 ## A native provider
@@ -25,11 +25,11 @@ import {
   SyncProvider,
   envelope,
   eventSchema,
-  type EventMapping,
   type ProviderPost,
   type Receive,
   type ResolvedTarget,
   type SyncContext,
+  type SyncFn,
 } from '@vercel/board/sync'
 
 export const DeskEvent = eventSchema('desk', 'message')
@@ -47,10 +47,9 @@ type Delivery = {
 export class DeskProvider extends SyncProvider<DeskEvent> {
   private readonly secret: string
 
-  constructor(options: { secret: string; inboxes: Record<string, EventMapping<DeskEvent>> }) {
-    super({ platform: 'desk', canStartThreads: true })
+  constructor(options: { secret: string }, sync: SyncFn<DeskEvent>) {
+    super({ platform: 'desk', canStartThreads: true }, sync)
     this.secret = options.secret
-    for (const [inbox, mapping] of Object.entries(options.inboxes)) this.map(inbox, mapping)
   }
 
   override async receive(key: string, request: Request, emit: Receive): Promise<Response> {
@@ -91,23 +90,26 @@ export class DeskProvider extends SyncProvider<DeskEvent> {
     return { thread: kind === 'channel' ? `${target}:${sent.ticket}` : target, message: sent.message }
   }
 
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): DeskEvent {
+  override event(context: SyncContext): DeskEvent {
     return DeskEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
+  }
+
+  // The platform channel a thread is in, so `channels` can route what goes out to it.
+  override inboxChannel(key: string, thread: string): string {
+    return thread.split(':').slice(0, 2).join(':')
   }
 }
 ```
 
-Then use it like any built-in entry. Its webhook is `/webhooks/desk`:
+Then use it like any built-in entry, with any [sync function](./02-functions.md).
+Its webhook is `/webhooks/desk`:
 
 ```ts
-// in board():
+// in board(), with channels from '@vercel/board/sync':
 sync: {
-  desk: new DeskProvider({ secret: process.env.DESK_SECRET!, inboxes: { support: 'support' } }),
+  desk: new DeskProvider({ secret: process.env.DESK_SECRET! }, channels({ support: 'support' })),
 },
 ```
-
-`this.map(key, mapping)` registers a mapping, so your provider takes the same
-string, function, and `{ channel, run }` values as the built-in ones.
 
 ## The contract
 
@@ -116,10 +118,10 @@ string, function, and `{ channel, run }` values as the built-in ones.
 | Method | Does |
 | --- | --- |
 | `receive(key, request, emit)` | Authenticates the request, then emits normalized `{ event, raw, dedupe }` records, and answers what the platform expects. |
-| `resolveChannel(key)` | Turns a mapping key (`'#prs'`, `'support'`) into the platform's channel ID. |
+| `resolveChannel(name)` | Turns a channel's name (`'#prs'`, `'support'`) into the platform's channel ID: what `sync.resolve` and `channels` use. Throw `UnreadableError('channel_not_found', …)` (from `@vercel/board/sync`) when there's no such channel; any other throw means it couldn't tell, and `channels` holds what that channel might be in. |
 | `resolveTarget(target)` | Turns a sync target into `{ target, channel, kind }`, where `kind` is `channel` or `thread`. |
 | `post(target, kind, body)` | Posts `body` (`{ markdown, files?, as? }`) and returns `{ thread, message, files? }`. |
-| `event(context)` | Builds the typed envelope your callbacks receive, usually `envelope(…)` parsed by an `eventSchema`. |
+| `event(context)` | Builds the typed envelope sync functions read as `sync.event`, usually `envelope(…)` parsed by an `eventSchema`. |
 
 **IDs.** Incoming locations (`channel`, `thread`, `subthread`) carry the entry's key
 as a prefix: `desk:support:t_812`. A `subthread` extends its `thread`'s ID
@@ -136,8 +138,9 @@ identical action (a reaction added, removed, and added again) must produce a new
 one. Use the platform's delivery or event ID.
 
 **Intake.** The board validates each record and stores it before your `receive`
-returns. Events for channels you don't map and threads that aren't synced are
-dropped. If storing fails, the webhook answers 500 so the platform retries.
+returns. Events outside the channels the sync function's helpers route, and
+outside threads the board syncs, are dropped; see [What the webhook keeps](./02-functions.md#what-the-webhook-keeps).
+If storing fails, the webhook answers 500 so the platform retries.
 
 **Options** passed to `super()`:
 
@@ -147,7 +150,6 @@ dropped. If storing fails, the webhook answers 500 so the platform retries.
 | `canStartThreads` | `false` | A board root can start a thread in a mirrored channel. |
 | `singleReaction` | `false` | One reaction per person per message, as on WhatsApp. |
 | `uploadsFiles` | `false` | Files go to the platform with `uploadFiles`; otherwise each gets a line in the text. |
-| `render` | the label and text | The outgoing body; see [render](./02-callbacks.md#render). |
 | `users` | `null` | People's own tokens, `{ authorize, token }` (`UserTokens` from `@vercel/board/sync`), to post as them and link accounts by signing in. |
 
 ## Optional methods
@@ -162,14 +164,15 @@ Each has a default that does nothing, or says the platform can't:
 | `fetchFile(file)` | Files in |
 | `fetchRoot(thread)` | Recovering a root when a reply arrives in a thread the board hasn't seen |
 | `fetchLink(link)` | Reading a linked message the platform didn't describe |
-| `permalink(event)` | A callback's `permalink()`: the platform's own link to the event's message |
+| `permalink(event)` | A sync function's `permalink()`: the platform's own link to the event's message |
+| `inboxChannel(key, thread)` | The platform channel a thread is in (`desk:support` for `desk:support:t_812`), without calling the platform: `sync.channel` going out, which `channels` routes by |
 | `whoAmI(token)`, `postAs(token, target, kind, body)`, `editAs(…)`, `deleteAs(…)` | Posting as a person, with `users` |
 | `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
 | `mention(actor)` | A board mention in the platform's native form |
 | `findByEmail(email)` | `@[ada@acme.com]` mentions |
 
-`sync(context, channel, overrides)` applies the default import and `render(input)`
-builds the outgoing body; override either in a subclass.
+`render(input)` builds the outgoing body when `deliver` gets no renderer;
+override it in a subclass.
 
 ## Through Chat SDK
 
@@ -181,14 +184,14 @@ and reactions into records, and fetches files with the adapter's
 ```ts lib/forum.ts
 import { z } from 'zod'
 import type { Adapter } from 'chat'
-import { envelope, eventSchema, type EventMapping, type ResolvedTarget, type SyncContext } from '@vercel/board/sync'
+import { envelope, eventSchema, type ResolvedTarget, type SyncContext, type SyncFn } from '@vercel/board/sync'
 import { ChatSyncProvider, type ChatInput } from '@vercel/board/sync/chat'
 
 export const ForumEvent = eventSchema('forum', 'message')
 export type ForumEvent = z.infer<typeof ForumEvent>
 
 export class ForumProvider extends ChatSyncProvider<ForumEvent> {
-  constructor(options: { adapter: Adapter; channels: Record<string, EventMapping<ForumEvent>> }) {
+  constructor(options: { adapter: Adapter }, sync: SyncFn<ForumEvent>) {
     super({
       platform: 'forum',
       adapter: options.adapter,
@@ -198,8 +201,7 @@ export class ForumProvider extends ChatSyncProvider<ForumEvent> {
         const at = target.indexOf(':')
         return { target, channel: at === -1 ? target : target.slice(0, at), kind: at === -1 ? 'channel' : 'thread' }
       },
-    })
-    for (const [channel, mapping] of Object.entries(options.channels)) this.map(channel, mapping)
+    }, sync)
   }
 
   // A reaction has no stable identity in general: use the platform's ID for this occurrence.
@@ -208,7 +210,7 @@ export class ForumProvider extends ChatSyncProvider<ForumEvent> {
     return `reaction:${key}:${z.object({ id: z.string() }).parse(input.reaction.raw).id}`
   }
 
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): ForumEvent {
+  override event(context: SyncContext): ForumEvent {
     return ForumEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }

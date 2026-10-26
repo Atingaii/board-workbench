@@ -18,8 +18,8 @@ const USER_TOKENS = Symbol.for('board.userTokens')
 
 /**
  * Gives an adapter people's tokens, for your own OAuth: `slack({ adapter:
- * withUserTokens(createSlackAdapter(...), { authorize, token }) })`. A Connect
- * connector name (`adapter: 'slack/acme'`) does this for you.
+ * withUserTokens(createSlackAdapter(...), { authorize, token }) }, sync)`. A
+ * Connect connector name (`slack('slack/acme', sync)`) does this for you.
  */
 export function withUserTokens<A extends object>(adapter: A, tokens: UserTokens): A {
   Object.defineProperty(adapter, USER_TOKENS, { value: tokens, enumerable: false, configurable: true })

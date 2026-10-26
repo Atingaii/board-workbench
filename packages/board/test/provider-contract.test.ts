@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { ChatSyncProvider, type ChatInput } from '../src/sync/chat-provider.ts'
-import { SyncProvider, type ProviderPost, type Receive, type ResolvedTarget, type SyncContext, type SyncHandler } from '../src/sync/provider.ts'
+import { SyncProvider, type ProviderPost, type Receive, type ResolvedTarget, type SyncContext } from '../src/sync/provider.ts'
+import { channels, mirror, type SyncIn } from '../src/sync/fn.ts'
 import { envelope, eventSchema, type SyncResult } from '../src/sync/events.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
@@ -20,15 +21,18 @@ const resolve = (target: string): ResolvedTarget => ({
 })
 const author = { id: 'opaque:tenant:sample:user:42', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
 
+type Inbound = (sync: SyncIn<Event>) => unknown
+/** `run` for what comes in, and a mirror of `tickets` for what goes out. */
+const routed = (run: Inbound) => channels<Event>({ inbox: (sync) => (sync.direction === 'in' ? run(sync) : mirror('tickets')(sync)) })
+
 class NativeProvider extends SyncProvider<Event> {
   posts: Post[] = []
   attempts = 0
   private readonly failDelivery: boolean
 
-  constructor(run: SyncHandler<Event>, options: Options) {
-    super({ platform: 'opaque', canStartThreads: options.starts ?? true })
+  constructor(run: Inbound, options: Options) {
+    super({ platform: 'opaque', canStartThreads: options.starts ?? true }, routed(run))
     this.failDelivery = options.failDelivery ?? false
-    this.map('inbox', { channel: 'tickets', run })
   }
 
   override async receive(key: string, request: Request, emit: Receive) {
@@ -49,36 +53,35 @@ class NativeProvider extends SyncProvider<Event> {
     this.posts.push({ target, kind, body })
     return { thread: kind === 'channel' ? `${target}:conversation:${this.posts.length}` : target, message: `sent:${this.posts.length}` }
   }
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>) {
+  override event(context: SyncContext) {
     return Schema.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }
 
 class OpaqueChatProvider extends ChatSyncProvider<Event> {
-  constructor(adapter: ReturnType<typeof fakePlatform>['adapter'], run: SyncHandler<Event>, options: Options) {
+  constructor(adapter: ReturnType<typeof fakePlatform>['adapter'], run: Inbound, options: Options) {
     super({
       platform: 'opaque', adapter, canStartThreads: options.starts ?? true,
       author: () => author, resolveChannel: async () => channel,
       resolveTarget: async (target) => resolve(target), channelOf: () => channel,
-    })
-    this.map('inbox', { channel: 'tickets', run })
+    }, routed(run))
   }
 
   override eventId(key: string, input: ChatInput) {
     const raw = input.kind === 'reaction' ? input.reaction.raw : input.kind === 'deleted' ? input.raw : input.message.raw
     return z.object({ delivery_id: z.string() }).parse(raw).delivery_id
   }
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>) {
+  override event(context: SyncContext) {
     return Schema.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }
 
-function nativeFixture(run: SyncHandler<Event>, options: Options) {
+function nativeFixture(run: Inbound, options: Options) {
   const provider = new NativeProvider(run, options)
   return { provider, posts: provider.posts, payload: (input: Input) => input, attempts: () => provider.attempts }
 }
 
-function chatFixture(run: SyncHandler<Event>, options: Options) {
+function chatFixture(run: Inbound, options: Options) {
   const fake = fakePlatform('opaque')
   const posts: Post[] = []
   let attempts = 0
@@ -107,12 +110,12 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
     async function setup(options: Options = {}) {
       const events: Event[] = []
       const results: SyncResult[] = []
-      const run: SyncHandler<Event> = async ({ event, board }) => {
-        events.push(event)
-        const result = await board.sync('tickets', event)
+      const run: Inbound = async (sync) => {
+        events.push(sync.event)
+        const result = await sync.import('tickets')
         results.push(result)
         if (options.failCallback) {
-          await board.reply(result.root!, 'ack')
+          await sync.board.reply(result.root!, 'ack')
           if (events.length === 1) throw new Error('interrupted after import')
         }
       }
@@ -151,9 +154,9 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
 
     it('isolates concurrent webhook contexts when a provider is used by two entries', async () => {
       const events: Event[] = []
-      const configured = fixture(async ({ event, board }) => {
-        events.push(event)
-        await board.sync('tickets', event)
+      const configured = fixture(async (sync) => {
+        events.push(sync.event)
+        await sync.import('tickets')
       }, { starts: false })
       const board = testBoard({ sync: { left: configured.provider, right: configured.provider } })
       await Promise.all(['left', 'right'].map((key) => board.fetch(new Request(`${BOARD_URL}/webhooks/${key}`, {
@@ -256,7 +259,7 @@ providerContract('Chat SDK bridge', chatFixture)
 
 describe('who a post is from', () => {
   it("gives a platform an agent's name and avatar to post under, and nothing for a person", async () => {
-    const provider = new NativeProvider(async ({ event, board }) => { await board.sync('tickets', event) }, {})
+    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     const board = testBoard({ sync: { tickets: provider } })
     const token = await personToken()
     const person = caller(board.fetch, token)
@@ -272,7 +275,7 @@ describe('who a post is from', () => {
   })
 
   it("gives an agent with the board's built-in avatar its person's Vercel avatar", async () => {
-    const provider = new NativeProvider(async ({ event, board }) => { await board.sync('tickets', event) }, {})
+    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     const board = testBoard({ sync: { tickets: provider } })
     const claude = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'claude' })
     // No username to go by: the handle the board made up isn't one.
@@ -286,7 +289,7 @@ describe('who a post is from', () => {
   })
 
   it("prefers the person's own picture to one guessed from a handle they chose", async () => {
-    const provider = new NativeProvider(async ({ event, board }) => { await board.sync('tickets', event) }, {})
+    const provider = new NativeProvider(async (sync) => { await sync.import('tickets') }, {})
     const board = testBoard({ sync: { tickets: provider } })
     const token = await personToken()
     const julian = caller(board.fetch, token, { 'x-board-handle': 'jb', 'x-board-avatar': 'https://vercel.com/api/www/avatar/c275ff?s=128' })

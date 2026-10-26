@@ -7,6 +7,7 @@ import { board as mount, type Middleware } from '../src/server/index.ts'
 import { githubActions, vercelProject, oidcTokens } from '../src/access/index.ts'
 import { a2 } from '../src/backend-a2/index.ts'
 import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { fakeQueue } from './queue.ts'
@@ -251,7 +252,7 @@ describe('links', () => {
   it('show nothing of it on any route', async () => {
     const s = fakePlatform('slack')
     const board = testBoard({
-      sync: { slack: slack({ adapter: s.adapter, channels: { C2: 'security' } }) },
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C2: 'security' })) },
       access: [vercelProject({ project: 'prj_sync', can: { open: 'all', security: ['read'] } })],
     })
     const webhook = (body: unknown) =>
@@ -288,7 +289,7 @@ describe('sync', () => {
   async function mirrored() {
     const s = fakePlatform('slack')
     const board = testBoard({
-      sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'security' } }) },
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'security' })) },
       access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post', 'sync'] } })],
     })
     const webhook = (body: unknown) =>

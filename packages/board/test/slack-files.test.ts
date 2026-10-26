@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { slack, slackFileName } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 
 /**
  * The real Slack adapter, single-workspace like the software factory (an async
@@ -21,7 +22,7 @@ function slackWith(served: Uint8Array, extra: Record<string, unknown> = {}) {
       })
     },
   } as Parameters<typeof createSlackAdapter>[0])
-  const provider = slack({ adapter, client: async () => ({ conversations: { list: async () => ({}), info: async () => ({}), join: async () => ({}) } }), channels: {} })
+  const provider = slack({ adapter, client: async () => ({ conversations: { list: async () => ({}), info: async () => ({}), join: async () => ({}) } }) }, channels({}))
   return { provider, requests }
 }
 

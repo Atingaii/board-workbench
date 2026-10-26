@@ -1,7 +1,8 @@
 import { board } from "@vercel/board";
 import { a2, fsBlob } from "@vercel/board/backend-a2";
-import { slack } from "@vercel/board/sync-slack";
-import { github } from "@vercel/board/sync-github";
+import { render } from "@vercel/board/sync";
+import { channels, slack } from "@vercel/board/sync-slack";
+import { github, repos } from "@vercel/board/sync-github";
 import { vercelBlob } from "@vercel/board/backend-a2/blob-vercel";
 import { queues, store } from "./a2";
 import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
@@ -14,7 +15,7 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
-import { boardOnly, unseenPr } from "./quiet";
+import { boardOnly, fromBoard, unseenPr } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 import { vercelTrustedSources } from "./trusted-sources";
@@ -44,32 +45,34 @@ const factory = board({
   sync: {
     // Connect connectors: board builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.
-    slack: slack({
-      adapter: "slack/vboard-factory",
-      render: renderForSlack,
-      channels: {
-        // #development-messageboard
-        C0C8XN8SQRG: "dev",
-      },
-    }),
-    github: github({
-      adapter: CONNECTOR,
-      repos: {
+    slack: slack(
+      "slack/vboard-factory",
+      render(
+        renderForSlack,
+        channels({
+          // #development-messageboard
+          C0C8XN8SQRG: "dev",
+        }),
+      ),
+    ),
+    // What's written on the board reaches GitHub (Pi answering an issue's thread, crosspost's note on a
+    // PR); what's said in Slack stays in Slack and on the board.
+    github: github(
+      CONNECTOR,
+      repos({
         [REPO]: {
           // Inline review threads and "closed by …" replies stay on GitHub and the board,
           // out of Slack: top-level comments, review verdicts and merges still go through.
           // Comments on a PR the board has no thread for stay on GitHub.
-          pulls: {
-            channel: "dev",
-            run: async ({ event, board }) => {
-              if (await unseenPr(event, board, "dev")) return;
-              await board.sync("dev", event, { noSync: boardOnly(event) });
-            },
+          pulls: async (sync) => {
+            if (sync.direction === "out") return fromBoard(sync);
+            if (await unseenPr(sync.event, sync.board, "dev")) return;
+            await sync.import("dev", { noSync: boardOnly(sync.event) });
           },
-          issues: "dev",
+          issues: async (sync) => (sync.direction === "in" ? sync.import("dev") : fromBoard(sync)),
         },
-      },
-    }),
+      }),
+    ),
   },
   watch: {
     shipit: shipit({ tellPi }),

@@ -3,7 +3,8 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import type { ResolvedTarget, SyncContext, SyncHandler, EventMapping, RenderInput } from './provider.ts'
+import type { ResolvedTarget, SyncContext } from './provider.ts'
+import { channels, type SyncFn, type SyncUnit } from './fn.ts'
 
 type Raw = { kapso?: { transcript?: { text?: unknown } } } | null
 type Sent = { responses?: { messages?: { id?: string }[] }[] } | null
@@ -17,32 +18,33 @@ export const WhatsAppEvent = eventSchema('whatsapp', 'message')
 export type WhatsAppEvent = z.infer<typeof WhatsAppEvent>
 
 type MarkRead = (input: { phoneNumberId: string; messageId: string; typingIndicator: { type: 'text' } }) => Promise<unknown>
-export type KapsoHandler = SyncHandler<WhatsAppEvent>
 export type KapsoOptions = {
   adapter: Adapter
-  render?: (input: RenderInput) => string
   markRead: MarkRead
-  numbers: Record<string, EventMapping<WhatsAppEvent>>
 }
 
 /**
- * Syncs WhatsApp numbers on Kapso with board channels. Keys are phone number
- * IDs (`'16315558151'`); values are a board channel (a two-way mirror) or a
- * callback that handles every incoming event. Each Kapso conversation is a
- * thread. WhatsApp has no threads in a number, so a board thread never starts
- * one: a board root in a mirrored channel stays on the board.
+ * Syncs WhatsApp numbers on Kapso with the board: `sync` is what each event
+ * does, both ways, like `numbers({ '16315558151': 'support' })`. Each Kapso
+ * conversation is a thread. WhatsApp has no threads in a number, so a board
+ * thread never starts one: a board root in a mirrored channel stays on the board.
  */
-export function kapso(options: KapsoOptions): KapsoProvider {
-  return new KapsoProvider(options)
+export function kapso(options: KapsoOptions, sync: SyncFn<WhatsAppEvent>): KapsoProvider {
+  return new KapsoProvider(options, sync)
 }
 
+/**
+ * Routes each event by its WhatsApp number. Keys are phone number IDs (`'16315558151'`), not
+ * the numbers; values are a board channel to `mirror`, or a sync function.
+ */
+export const numbers = (map: Record<string, SyncUnit<WhatsAppEvent>>): SyncFn<WhatsAppEvent> => channels(map)
+
 export class KapsoProvider extends ChatSyncProvider<WhatsAppEvent> {
-  constructor(options: KapsoOptions) {
+  constructor(options: KapsoOptions, sync: SyncFn<WhatsAppEvent>) {
     if (typeof options.markRead !== 'function') throw new Error('kapso requires a public markRead operation for cross-instance read and typing')
     const fileIds = (raw: unknown) => ((raw as Sent)?.responses ?? []).flatMap((response) => response.messages?.[0]?.id ?? [])
     super({
       fileIds,
-      render: options.render,
       platform: 'whatsapp',
       adapter: options.adapter,
       canStartThreads: false,
@@ -80,8 +82,7 @@ export class KapsoProvider extends ChatSyncProvider<WhatsAppEvent> {
         if (!/^\d+$/.test(parts[0]!) || (parts.length !== 1 && parts.length !== 3)) throw new Error(`invalid Kapso target: ${target}`)
         return { target, channel: parts[0]!, kind: parts.length === 1 ? 'channel' : 'thread' }
       },
-    })
-    for (const [key, value] of Object.entries(options.numbers)) this.map(key, value)
+    }, sync)
   }
 
   override eventId(key: string, input: ChatInput): string {
@@ -91,7 +92,7 @@ export class KapsoProvider extends ChatSyncProvider<WhatsAppEvent> {
     return `reaction:${key}:${this.toNative(reaction.threadId)}|${reaction.messageId}|${reaction.rawEmoji}|${reaction.user.userId}|${reaction.added}|${stamp}`
   }
 
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>): WhatsAppEvent {
+  override event(context: SyncContext): WhatsAppEvent {
     return WhatsAppEvent.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }

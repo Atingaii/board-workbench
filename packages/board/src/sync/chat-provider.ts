@@ -4,6 +4,7 @@ import type { Actor } from '../contract/reducers.ts'
 import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/contract.ts'
 import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
+import type { SyncFn } from './fn.ts'
 import type { SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
 import { externalAuthor } from './types.ts'
@@ -69,8 +70,8 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   private readonly receiving = new AsyncLocalStorage<{ key: string; emit: Receive }>()
   private initialized: Promise<void> | undefined
 
-  constructor(transport: ChatTransport) {
-    super({ ...transport, users: transport.users ?? userTokensOf(transport.adapter), uploadsFiles: !!transport.uploadFiles })
+  constructor(transport: ChatTransport, sync: SyncFn<E>) {
+    super({ ...transport, users: transport.users ?? userTokensOf(transport.adapter), uploadsFiles: !!transport.uploadFiles }, sync)
     this.transport = transport
     this.chat = createChat(transport.adapter)
     const onMessage = async (_thread: unknown, message: ChatMessage) => this.emit({ kind: 'message', message })

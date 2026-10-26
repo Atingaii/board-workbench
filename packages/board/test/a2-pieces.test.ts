@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
@@ -18,7 +19,7 @@ function bare(env: string) {
   const seen: string[] = []
   const board = testBoard({
     blob: undefined,
-    sync: { slack: slack({ adapter: s.adapter, channels: { C1: 'firehose' } }) },
+    sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) },
     watch: {
       ack: {
         tail: 'firehose',

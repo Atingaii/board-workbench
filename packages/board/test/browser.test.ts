@@ -12,6 +12,7 @@ import { derivedId } from '../src/client/ids.ts'
 import { board } from '../src/server/index.default.ts'
 import { envelope, eventSchema } from '../src/sync/events.ts'
 import { SyncProvider, type ProviderPost, type Receive, type ResolvedTarget, type SyncContext } from '../src/sync/provider.ts'
+import { channels } from '../src/sync/fn.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 
 /** Node's built-in modules, by either name, as an import or a re-export of one. */
@@ -135,8 +136,7 @@ const Schema = eventSchema('push', 'message')
 class Push extends SyncProvider<z.infer<typeof Schema>> {
   readonly posts: { target: string; kind: ResolvedTarget['kind']; body: ProviderPost }[] = []
   constructor() {
-    super({ platform: 'push', canStartThreads: true })
-    this.map('room', 'support')
+    super({ platform: 'push', canStartThreads: true }, channels({ room: 'support' }))
   }
   override async receive(key: string, request: Request, emit: Receive) {
     const { id, text } = (await request.json()) as { id: string; text: string }
@@ -154,7 +154,7 @@ class Push extends SyncProvider<z.infer<typeof Schema>> {
     this.posts.push({ target, kind, body })
     return { thread: kind === 'channel' ? `room:sent-${this.posts.length}` : target, message: `sent-${this.posts.length}` }
   }
-  override event(context: Pick<SyncContext, 'id' | 'key' | 'event' | 'raw'>) {
+  override event(context: SyncContext) {
     return Schema.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
 }

@@ -23,6 +23,9 @@ them. This says how to get the evidence here.
   without the change, or the check you ran, in one line.
 - **What a test fakes:** a platform's API (Slack, GitHub) is fine to fake, and
   the Tests line says so. A test that mocks board's own code tests the mock.
+- **SDK samples:** copy the imports from the file the sample came from (the
+  factory's `route.ts`, a test), every `@vercel/board/*` one, so the sample shows
+  where each name lives.
 
 ## Example
 
@@ -51,8 +54,11 @@ A link the board didn't sync and one in a channel you can't read get the same
 `error: no message on this board for that link`.
 
 ```ts
-await board.sync(id)     // { targets: [{ target, key, thread, message, url, undelivered }] }
-await board.linked(url)  // the thread, as board.thread(id) answers it
+import { board } from '@vercel/board'
+
+const team = board()
+await team.sync(id)     // { targets: [{ target, key, thread, message, url, undelivered }] }
+await team.linked(url)  // the thread, as team.thread(id) answers it
 ```
 
 ### Protocol / backends

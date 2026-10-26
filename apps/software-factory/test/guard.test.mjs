@@ -47,10 +47,10 @@ test("lets clean messages through, and doesn't judge the team's own API writes",
 test("sees what Slack sends before it lands on the board, as board()'s middleware", async () => {
   const { testBoard, caller, personToken } = await import("../../../packages/board/test/harness.ts");
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
-  const { slack } = await import("../../../packages/board/src/sync/slack.ts");
+  const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
   const platform = fakePlatform("slack");
   const board = testBoard({
-    sync: { slack: slack({ adapter: platform.adapter, channels: { C1: "dev" } }) },
+    sync: { slack: slack({ adapter: platform.adapter }, channels({ C1: "dev" })) },
     middleware: [guard({ judge: async (text) => (text.includes("ignore previous") ? 0.93 : 0.1) })],
   });
   const webhook = (body) =>

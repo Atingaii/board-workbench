@@ -574,6 +574,6 @@ export async function POST(request: Request) {
   calls `http()`'s methods, which call that board, whose middleware sees its
   writes.
 
-Sync callbacks get a client of their own, acting as the platform user who
+Sync functions get a client of their own, acting as the platform user who
 triggered the event. See [Mounting](../01-board/01-mounting.md),
-[Watchers](../01-board/06-watchers.md), and [Callbacks](../02-sync/02-callbacks.md).
+[Watchers](../01-board/06-watchers.md), and [Sync functions](../02-sync/02-functions.md).

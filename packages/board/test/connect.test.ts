@@ -15,11 +15,12 @@ const connect = vi.hoisted(() => {
 vi.mock('@vercel/connect', () => connect)
 
 const { slack } = await import('../src/sync/slack.ts')
-const { github } = await import('../src/sync/github.ts')
+const { github, repos } = await import('../src/sync/github.ts')
+const { channels } = await import('../src/sync/fn.ts')
 
 describe('a Vercel Connect connector as the adapter', () => {
   it("builds Slack's adapter and client, and signs people in through Connect as their board principal", async () => {
-    const provider = slack({ adapter: 'slack/acme', channels: { C1: 'firehose' } })
+    const provider = slack({ adapter: 'slack/acme' }, channels({ C1: 'firehose' }))
     const adapter = (provider as unknown as { transport: { adapter: { name: string; withBotToken?: unknown } } }).transport.adapter
     expect(adapter.name).toBe('slack')
     expect(typeof adapter.withBotToken).toBe('function')
@@ -38,7 +39,7 @@ describe('a Vercel Connect connector as the adapter', () => {
   })
 
   it("builds GitHub's adapter with the bot's user ID, and the same sign-in", async () => {
-    const provider = github({ adapter: 'github/acme', botUserId: 338721338, repos: { 'vercel-labs/board': 'prs' } })
+    const provider = github({ adapter: 'github/acme', botUserId: 338721338 }, repos({ 'vercel-labs/board': 'prs' }))
     const adapter = (provider as unknown as { transport: { adapter: { name: string; botUserId?: string | number } } }).transport.adapter
     expect(adapter.name).toBe('github')
     expect(String(adapter.botUserId)).toBe('338721338')
@@ -47,7 +48,7 @@ describe('a Vercel Connect connector as the adapter', () => {
 
   it("finds the app's bot user ID itself, from GraphQL's viewer, when botUserId isn't set", async () => {
     type Detecting = { botUserId?: string; logger: unknown; initialize(chat: unknown): Promise<void>; defaultOctokit: unknown }
-    const provider = github({ adapter: 'github/acme', repos: { 'vercel-labs/board': 'prs' } })
+    const provider = github('github/acme', repos({ 'vercel-labs/board': 'prs' }))
     const adapter = (provider as unknown as { transport: { adapter: Detecting } }).transport.adapter
     expect(adapter.botUserId).toBeUndefined()
     // An installation token can't call REST's /user, but GraphQL's viewer answers with the bot.
@@ -63,7 +64,7 @@ describe('a Vercel Connect connector as the adapter', () => {
 
   it('keeps a given botUserId without asking GitHub', async () => {
     type Detecting = { botUserId?: string; initialize(chat: unknown): Promise<void>; defaultOctokit: unknown }
-    const provider = github({ adapter: 'github/acme', botUserId: 42, repos: {} })
+    const provider = github({ adapter: 'github/acme', botUserId: 42 }, repos({}))
     const adapter = (provider as unknown as { transport: { adapter: Detecting } }).transport.adapter
     const graphql = vi.fn()
     adapter.defaultOctokit = { graphql }
@@ -74,6 +75,6 @@ describe('a Vercel Connect connector as the adapter', () => {
 
   it('keeps a plain adapter posting as the app', async () => {
     const { fakePlatform } = await import('./sync-fixtures.ts')
-    expect(slack({ adapter: fakePlatform('slack').adapter, channels: {} }).users).toBeNull()
+    expect(slack({ adapter: fakePlatform('slack').adapter }, channels({})).users).toBeNull()
   })
 })
