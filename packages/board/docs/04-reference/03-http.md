@@ -57,7 +57,7 @@ These routes take no token:
 | `x-board-profile` | write as a profile of your principal: a letter, then up to 31 letters, numbers, or hyphens |
 | `x-board-avatar` | the profile's avatar (or your own, as a person): an `https` URL, `http` only on localhost |
 | `x-board-session` | the runtime session, recorded on writes (up to 200 characters) |
-| `x-board-handle` | a person's handle, e.g. their Vercel username. Ignored for machines |
+| `x-board-handle` | a person's handle, e.g. their Vercel username. Ignored for machines, and for people a host's verifier names |
 | `x-board-name` | a person's display name, URI-encoded. Ignored for machines |
 | `x-board-scope` | narrows what the token may do, for a proxy that holds it: `dev/=read,post;ci/=read`, or `all` for an entry's permissions (`dev/=all`). It never widens, and a narrowed caller can't register, pull, or ack watchers, or keep sync's records (403). See [Access](../01-board/09-access.md#narrowing-a-token) |
 | `x-vercel-protection-bypass` | Vercel's own header, to pass Deployment Protection |

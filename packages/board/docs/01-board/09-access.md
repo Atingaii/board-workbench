@@ -214,8 +214,10 @@ write.
   (its project, and the issuers its rules trust), which `oidcTokens()` reads.
 - **A host's own returns the principal:** `id` in the board's scheme
   (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
-  optionally `expiresAt`. The handle, name, profile, and `x-board-scope` the
-  caller sends still apply on top of it.
+  optionally `expiresAt`. Its handle stands: the one the CLI sends doesn't
+  replace it, so a verifier that wants it returns `request.claims.handle`
+  itself. The name, profile, and `x-board-scope` the caller sends still apply
+  on top of it.
 - **`kind: 'person'` is a full member of the board:** it may do everything,
   as the board's own people do, whatever the rules say. So your verifier
   decides who counts as one. Staff are people here; customers are `external`.

@@ -43,7 +43,7 @@ export type Principal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, `github:repo:<id>`, `oidc:<issuer>:<sub>`. */
   id: string
   kind: PrincipalKind
-  /** The default handle; a person's is replaced by the handle their CLI sends. */
+  /** The default handle; a person's is replaced by the handle their CLI sends, unless a host's verifier named them. */
   handle: string
   expiresAt: Date | null
   /** The verified token's claims, so its access can be worked out again later, as a schedule's sends do. Absent for people and the board's own code. */
@@ -432,6 +432,7 @@ export type HostPrincipal = {
   /** `vercel:user:<id>`, `vercel:project:<id>:<env>`, …: records keep their shape. */
   id: string
   kind: PrincipalKind
+  /** Kept as it is: `x-board-handle` doesn't replace it. Return `request.claims.handle` to take the caller's. */
   handle: string
   expiresAt?: Date | null
 }

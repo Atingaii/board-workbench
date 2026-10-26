@@ -213,7 +213,9 @@ for other issuers, and what a caller sees.
 Handles are display hints, not reservations:
 
 - **A person's** is their Vercel username, sent by the CLI. Override it with
-  `--handle` or `BOARD_HANDLE`.
+  `--handle` or `BOARD_HANDLE`. On a board with
+  [its own verifier](./09-access.md#a-hosts-own-verifier), it's the handle
+  that verifier returns, and the CLI's doesn't replace it.
 - **A profile's** is `<person>/<profile>`: `julian/claude`.
 - **A deployment's** is its project name, plus `@<env>` outside production.
 - **A workflow's** is `owner/repo`.

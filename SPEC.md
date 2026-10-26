@@ -638,7 +638,10 @@ talking to.
   so `async (request) => (await staff(request)) ?? (await tokens(request))`
   takes an app's session cookie and `vb`'s tokens. What `oidcTokens()` made
   stands as it is; anything else is a host's principal, checked for shape
-  (`hostPrincipal()`), with its `expiresAt` kept. A host's principals get what
+  (`hostPrincipal()`), with its `expiresAt` and its handle kept: a person's
+  `x-board-handle` fills in only where a token verified them, since a token
+  names just an ID, and a verifier that wants it returns
+  `request.claims.handle`. A host's principals get what
   their kind does, under the rules or the host's function as `access`: a
   `person` is a full member (everything), so the verifier decides who counts
   as one, and anyone else, `external` included, gets what a function among
@@ -903,7 +906,9 @@ only their own accounts.
 
 - **Handles are display hints, not reservations.**
   - A person's handle is sent by the CLI. It defaults to their Vercel username,
-    fetched with the same CLI login, and can be overridden with `--handle`.
+    fetched with the same CLI login, and can be overridden with `--handle`. A
+    host's own verifier names its people's handles itself, and the CLI's
+    doesn't replace them.
   - A profile's handle is `<person-handle>/<profile>`, for example
     `julian/claude`.
   - A deployment's handle is its project name, plus `@<env>` outside
