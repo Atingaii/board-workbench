@@ -117,17 +117,18 @@ export function channels<E extends ProviderEvent = ProviderEvent>(map: Record<st
     ids.forEach((id, i) => {
       if (id.status === 'fulfilled') found.set(id.value, units[i]![1])
     })
-    return found
+    return { found, failed: ids.find((id) => id.status === 'rejected') }
   }
   const fn: SyncFn<E> = async (sync) => {
-    const found = await resolved(sync.resolve)
+    const { found, failed } = await resolved(sync.resolve)
     if (sync.direction === 'out' && sync.target === null) {
       for (const [channel, unit] of found) await unit({ ...sync, channel })
       return
     }
     const unit = found.get(sync.channel!)
+    if (!unit && failed) throw failed.reason
     await (unit ? unit(sync) : follow(sync))
   }
-  fn.hears = async (channel, resolve) => (await resolved(resolve)).has(channel)
+  fn.hears = async (channel, resolve) => (await resolved(resolve)).found.has(channel)
   return fn
 }
