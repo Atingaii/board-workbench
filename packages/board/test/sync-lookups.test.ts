@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { githubActions } from '../src/access/index.ts'
 import { formatSynced } from '../src/cli/format.ts'
 import { github, repos } from '../src/sync/github.ts'
-import { channels } from '../src/sync/fn.ts'
+import { channels, mirror } from '../src/sync/fn.ts'
 import { envelope, type ProviderEvent } from '../src/sync/events.ts'
 import { SyncProvider, type ProviderPost, type Receive, type ResolvedTarget, type SyncContext } from '../src/sync/provider.ts'
 import { slack, type SlackClient } from '../src/sync/slack.ts'
@@ -166,6 +166,48 @@ describe('a GitHub review comment, by its own link', () => {
       expect(body.message.id).toBe(root)
     }
     expect((await ada('GET', linked('https://github.com/acme/www/pull/12#discussion_r999'))).status).toBe(404)
+  })
+
+  it("finds the board's own reply in a review thread by the link vb sync gives it", async () => {
+    const g = fakePlatform('github')
+    // GitHub names a comment by its number.
+    const post = g.adapter.postMessage.bind(g.adapter)
+    g.adapter.postMessage = async (thread, message) => ({ ...(await post(thread, message)), id: '400' })
+    const board = testBoard({ sync: { github: github({ adapter: g.adapter as never }, repos({ 'acme/www': mirror('dev') })) } })
+    const ada = caller(board.fetch, await personToken())
+    const webhook = (body: unknown, headers: Record<string, string> = {}) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/github`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }))
+    await webhook(
+      { action: 'opened', repository: { full_name: 'acme/www' }, sender: { id: 42, login: 'ada' }, pull_request: { number: 12, title: 'Links', html_url: 'https://github.com/acme/www/pull/12', draft: false, merged: false } },
+      { 'x-github-event': 'pull_request', 'x-github-delivery': 'own-reply-opened' },
+    )
+    await webhook({ type: 'message', threadId: 'github:acme/www:12:rc:345', id: '345', text: 'nit: rename this', user: '43', raw: { path: 'src/a.ts', line: 3 } })
+    let comment = ''
+    await vi.waitFor(async () => {
+      comment = (await ada('GET', '/messages?channel=dev')).body.messages.find((message: { text: string }) => message.text === 'nit: rename this')?.id
+      expect(comment).toBeTruthy()
+    })
+    // Answering the inline comment posts into its review thread.
+    const reply = (await ada('POST', '/messages', { re: comment, text: 'renamed' })).body.message.id
+    await vi.waitFor(() => expect(g.posts.map((sent) => sent.threadId)).toEqual(['github:acme/www:12:rc:345']))
+    let link = ''
+    await vi.waitFor(async () => {
+      link = (await ada('GET', `/messages/${reply}/sync`)).body.targets[0]?.url
+      expect(link).toBe('https://github.com/acme/www/pull/12#discussion_r400')
+    })
+    const { status, body } = await ada('GET', linked(link))
+    expect(status).toBe(200)
+    expect(body.replies.map((message: { id: string }) => message.id)).toContain(reply)
+  })
+
+  it('refuses a review thread as a target, and names the PR to sync instead', async () => {
+    const board = testBoard({ sync: { github: github({ adapter: fakePlatform('github').adapter as never }, repos({ 'acme/www': 'dev' })) } })
+    const ada = caller(board.fetch, await personToken())
+    const root = (await ada('POST', '/messages', { channel: 'dev', text: 'rename the helper' })).body.message.id
+    const refused = await ada('POST', `/messages/${root}/sync`, { target: 'github:acme/www:12:rc:345' })
+    expect(refused.status).toBe(400)
+    expect(refused.body.error.message).toBe("can't sync to github:acme/www:12:rc:345: a review thread can't be a target; sync its PR, acme/www:12")
+    expect((await ada('POST', `/messages/${root}/sync`, { target: 'github:acme/www:12' })).status).toBe(200)
   })
 })
 

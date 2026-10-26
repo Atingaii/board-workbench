@@ -354,24 +354,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
       const first = async (): Promise<string | null> => {
         for (const { platform, thread, message } of bound().locate(input.url))
           for (const entry of bound().sync.filter((candidate) => candidate.platform === platform)) {
-            const external = `${entry.key}:${thread}`
-            const at = await own.syncFind({ thread: external, ...(message !== null ? { message } : {}) }, { signal }).catch(rethrow)
-            const root = async () => (at.thread === null ? null : (await own.syncThread(at.thread).catch(rethrow)).root)
-            if (message === null) {
-              const found = await root()
-              if (found !== null) return found
-              continue
-            }
-            if (at.message !== null) return at.message
-            // A message recorded under a sub-thread its link doesn't name (a GitHub review reply's): one of the thread's replies.
-            const top = await root()
-            if (top === null) continue
-            const { replies } = await methods.message(caller, { id: top }, signal).catch((error: unknown) => {
-              if (error instanceof HttpError && error.status === 404) return { replies: [] as Protocol['message']['output']['replies'] }
-              throw error
-            })
-            const reply = replies.find((candidate) => candidate.origin?.thread === external && candidate.origin.message === message)
-            if (reply) return reply.id
+            const at = await own.syncFind({ thread: `${entry.key}:${thread}`, ...(message !== null ? { message } : {}) }, { signal }).catch(rethrow)
+            const found = message !== null ? at.message : at.thread === null ? null : (await own.syncThread(at.thread).catch(rethrow)).root
+            if (found !== null) return found
           }
         return null
       }

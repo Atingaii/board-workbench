@@ -784,27 +784,11 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       // Any sync of that platform may have synced it, each under its own key: this board's, and those registered here.
       const registered = Object.values((await registry.state()).byOwner).flatMap((registration) => registration.sync)
       const keysOf = (platform: string) => new Set([...binding.sync, ...registered].filter((entry) => entry.platform === platform).map((entry) => entry.key))
-      // A platform that groups messages into sub-threads records each under its sub-thread, which its
-      // link may not name (a GitHub review reply's names only the reply): it's one of the thread's
-      // replies, from that platform thread with that ID, which the caller reads as themselves.
-      const inThread = async (external: string, message: string): Promise<number | null> => {
-        const at = await tables.threadOf(external)
-        const root = at === null ? null : ((await tables.syncOf(at))?.root ?? null)
-        if (root === null) return null
-        try {
-          const { replies } = await methods.message(caller, { id: ref(root) }, signal)
-          const reply = replies.find((candidate) => candidate.origin?.thread === external && candidate.origin.message === message)
-          return reply ? messageAt(reply.id) : null
-        } catch (error) {
-          if (error instanceof HttpError && error.status === 404) return null
-          throw error
-        }
-      }
       const first = async (): Promise<number | null> => {
         for (const { platform, thread, message } of read)
           for (const key of keysOf(platform)) {
             let found: number | null
-            if (message !== null) found = (await tables.messageOf(`${key}:${thread}`, message)) ?? (await inThread(`${key}:${thread}`, message))
+            if (message !== null) found = await tables.messageOf(`${key}:${thread}`, message)
             else {
               const at = await tables.threadOf(`${key}:${thread}`)
               found = at === null ? null : ((await tables.syncOf(at))?.root ?? null)

@@ -345,7 +345,7 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
       isRoot: () => false,
       // A PR's or issue's page is its thread; `#issuecomment-…` is a comment in it, and `#discussion_r…`
       // a review comment, which names its review thread only when it's the thread's first: so it's read
-      // as a comment in the PR's thread, and the board finds it among that thread's replies.
+      // as a comment in the PR's thread, which knows every comment in its review threads.
       locate(url) {
         const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(pull|issues)\/(\d+)[^#\s]*(?:#(issuecomment-|discussion_r)(\d+))?$/.exec(url.trim())
         if (!match) return null
@@ -455,7 +455,11 @@ export class GitHubProvider extends ChatSyncProvider<GitHubEvent> {
         ]
       },
       async resolveTarget(target): Promise<ResolvedTarget> {
-        if (!/^[^/]+\/[^:]+(?::(?:issue:)?\d+(?::rc:[^:]+)?)?$/.test(target)) throw new Error(`invalid GitHub target: ${target}`)
+        // A review thread's comments come in under its PR, so a board thread joins the PR: its replies
+        // to review comments still go into their review threads.
+        const review = /^([^/]+\/[^:]+:\d+):rc:[^:]+$/.exec(target)
+        if (review) throw new Error(`a review thread can't be a target; sync its PR, ${review[1]}`)
+        if (!/^[^/]+\/[^:]+(?::(?:issue:)?\d+)?$/.test(target)) throw new Error(`invalid GitHub target: ${target}`)
         const at = target.indexOf(':')
         return { target, channel: at === -1 ? target : channelOf(target), kind: at === -1 ? 'channel' : 'thread' }
       },

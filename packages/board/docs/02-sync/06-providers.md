@@ -127,7 +127,8 @@ sync: {
 as a prefix: `desk:support:t_812`. A `subthread` extends its `thread`'s ID
 (`desk:support:t_812:r_3` in `desk:support:t_812`), so `groupThread` returns a
 prefix of the ID it's given: the board refuses an import whose subthread isn't
-in its thread. Targets handed to `post`, `resolveTarget`, and the
+in its thread. A subthread's messages are found by their thread too, so a
+platform message ID is unique within its thread, as GitHub's comment IDs are. Targets handed to `post`, `resolveTarget`, and the
 optional methods are native, without it: `support:t_812`. The board records each
 target's `kind` from `resolveTarget`, so it never parses your ID syntax, and a
 channel target on a provider whose `canStartThreads` is false is refused.
