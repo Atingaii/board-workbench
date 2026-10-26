@@ -3,7 +3,7 @@ import type { Actor } from '../contract/reducers.ts'
 import type { MessageView, SourceRead } from '../api/routes.ts'
 import { ExternalEvent, type ExternalAuthor, type ExternalFile, type ExternalLink, type Link } from '../contract/contract.ts'
 import type { ProviderEvent, SyncRoot } from './events.ts'
-import type { Sync, SyncFn } from './fn.ts'
+import { routesOf, type Routes, type Sync, type SyncFn } from './fn.ts'
 import type { UserTokens } from './users.ts'
 
 export const ResolvedTarget = z.object({ target: z.string().min(1), channel: z.string().min(1), kind: z.enum(['channel', 'thread']) }).strict()
@@ -66,20 +66,26 @@ export const ReceivedEvent = z.object({ event: ExternalEvent, raw: z.unknown(), 
 export type ReceivedEvent = z.infer<typeof ReceivedEvent>
 export type Receive = (received: ReceivedEvent) => Promise<void>
 
+const routed = new WeakMap<object, Routes>()
+/** The channels a provider's sync function routes, when a helper made it: the webhook keeps only theirs. */
+export const routesFor = (provider: object): Routes | undefined => routed.get(provider)
+
 export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   readonly platform: string
   readonly canStartThreads: boolean
   readonly singleReaction: boolean
   readonly uploadsFiles: boolean
   // A method's parameter is checked both ways, so a SlackProvider is still a SyncProvider.
-  private readonly fn: { run(sync: Sync<E>): unknown; hears: SyncFn['hears'] }
+  private readonly fn: { run(sync: Sync<E>): unknown }
   /** People's tokens, when the adapter has them: messages they write post as them. */
   readonly users: UserTokens | null
   protected readonly options: ProviderOptions
 
   constructor(options: ProviderOptions, sync: SyncFn<E>) {
     if (typeof sync !== 'function') throw new Error(`${options.platform} needs a sync function: what each event does, like channels({ '#dev': 'dev' })`)
-    this.fn = { run: sync, hears: sync.hears }
+    this.fn = { run: sync }
+    const routes = routesOf(sync)
+    if (routes) routed.set(this, routes)
     this.options = options
     this.users = options.users ?? null
     this.platform = options.platform
@@ -140,10 +146,6 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     return this.fn.run(sync)
   }
 
-  /** Whether the sync function hears a platform channel, or null when it hears them all: see `SyncFn`. */
-  hears(channel: string, resolve: (name: string) => Promise<string>): Promise<boolean> | null {
-    return this.fn.hears?.(channel, resolve) ?? null
-  }
 
   /** The default rendering: `**${label}**: ${text}`. A `Renderer` passed to `deliver` replaces it. */
   render(input: RenderInput): string {

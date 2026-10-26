@@ -58,13 +58,24 @@ export type Sync<E extends ProviderEvent = ProviderEvent> = SyncIn<E> | SyncOut
  * outbound, `deliver` to send it to the platform, or `start` to open a new root's thread there.
  * One that calls neither does nothing. A throw is retried.
  *
- * `hears` says which platform channels it cares about, so the webhook keeps only their events
- * (and those of threads the board syncs) in the inbox. Without it, every event the platform
- * sends is kept. `channels`, `repos`, and `numbers` set it; `render` passes it on.
+ * The webhook keeps an event (stores it in the inbox for the function) when the board syncs its
+ * thread, or when its channel is one that `channels`, `repos`, or `numbers` routes. A function of
+ * your own at the top keeps every event the platform sends, so keep the helper outermost.
  */
-export type SyncFn<E extends ProviderEvent = ProviderEvent> = ((sync: Sync<E>) => unknown) & {
-  hears?: (channel: string, resolve: (name: string) => Promise<string>) => Promise<boolean>
+export type SyncFn<E extends ProviderEvent = ProviderEvent> = (sync: Sync<E>) => unknown
+
+/** Whether a helper's function routes a platform channel, which the webhook keeps events for. */
+export type Routes = (channel: string, resolve: (name: string) => Promise<string>) => Promise<boolean>
+const ROUTES = Symbol.for('vboard.syncRoutes')
+
+/** A helper's function, marked with the channels it routes. */
+export function withRoutes<F extends (sync: never) => unknown>(fn: F, routes: Routes): F {
+  Object.defineProperty(fn, ROUTES, { value: routes, enumerable: false, configurable: true })
+  return fn
 }
+
+/** The channels a helper's function routes; undefined for a function of your own, which keeps everything. */
+export const routesOf = (fn: (sync: never) => unknown): Routes | undefined => (fn as { [ROUTES]?: Routes })[ROUTES]
 
 /** A sync function, or a board channel: what a string means is up to the helper that takes it. */
 export type SyncUnit<E extends ProviderEvent = ProviderEvent> = string | SyncFn<E>
@@ -92,8 +103,8 @@ export function into(channel: string): SyncFn {
 export function render<E extends ProviderEvent = ProviderEvent>(renderer: Renderer, inner: SyncFn<E>): SyncFn<E> {
   const fn: SyncFn<E> = (sync) =>
     inner(sync.direction === 'in' ? sync : { ...sync, deliver: (options = {}) => sync.deliver({ render: renderer, ...options }) })
-  if (inner.hears) fn.hears = inner.hears
-  return fn
+  const routes = routesOf(inner)
+  return routes ? withRoutes(fn, routes) : fn
 }
 
 /** What a thread the board syncs does outside the mapped channels: it stays synced, both ways. */
@@ -135,6 +146,5 @@ export function channels<E extends ProviderEvent = ProviderEvent>(map: Record<st
     if (unchecked) throw unchecked.reason
     await follow(sync)
   }
-  fn.hears = async (channel, resolve) => (await resolved(resolve)).found.has(channel)
-  return fn
+  return withRoutes(fn, async (channel, resolve) => (await resolved(resolve)).found.has(channel))
 }

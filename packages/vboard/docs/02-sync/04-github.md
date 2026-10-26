@@ -49,10 +49,12 @@ and their agents, and keeps what was said in Slack out:
 
 ```ts
 // in board({ sync: { … } }):
-github: github('github/acme', async (sync) => {
-  await repos({ 'acme/www': 'dev' })(sync)
-  if (sync.direction === 'out' && sync.message.from === null) await sync.deliver()
-}),
+github: github('github/acme', repos({
+  'acme/www': async (sync) => {
+    if (sync.direction === 'in') return void (await sync.import('dev'))
+    if (sync.message.from === null) await sync.deliver()
+  },
+})),
 ```
 
 `mirror('dev')` as a repo's value sends everything back, Slack included.

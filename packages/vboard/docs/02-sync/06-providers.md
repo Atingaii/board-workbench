@@ -138,8 +138,8 @@ identical action (a reaction added, removed, and added again) must produce a new
 one. Use the platform's delivery or event ID.
 
 **Intake.** The board validates each record and stores it before your `receive`
-returns. Events in channels the sync function doesn't hear, outside threads the
-board syncs, are dropped; see [What the webhook keeps](./02-functions.md#what-the-webhook-keeps).
+returns. Events outside the channels the sync function's helpers route, and
+outside threads the board syncs, are dropped; see [What the webhook keeps](./02-functions.md#what-the-webhook-keeps).
 If storing fails, the webhook answers 500 so the platform retries.
 
 **Options** passed to `super()`:

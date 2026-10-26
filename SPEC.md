@@ -2048,8 +2048,9 @@ both ways under `channels` and `numbers`, in only under `repos`.
 compose by calling each other, with no other mechanism.
 
 **What the webhook keeps.** An event goes to the inbox when the board syncs its
-thread, or when the function `hears` its channel. The helpers set `hears` to
-their keys and `render` passes it on; a function without it hears every event
+thread, or when its channel is one the function's helpers route: `channels`,
+`repos`, and `numbers` mark the function with their keys, privately, and `render`
+keeps the mark. A function of your own at the top has none and keeps every event
 the platform sends, and each is stored.
 
 **Entry keys** are names you choose, such as `slack` and `acme`, and the sync
@@ -2074,7 +2075,7 @@ default.
 
 ### Sync functions and default imports
 
-A function sees every incoming event it hears, connected threads included, and
+A function sees every incoming event the webhook keeps, connected threads included, and
 a board channel under a helper is shorthand for applying default imports to
 every event.
 
@@ -2203,7 +2204,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    thread in one: `mirror` does in its channel. `sync` targets land with the
    root on top, and `noSync` keeps it from the functions.
 3. **Inbound events.** A platform event goes to the sync function if its thread
-   is already synced with a board thread, or if the function hears its channel.
+   is already synced with a board thread, or if its channel is one the helpers route.
    The function decides what lands. Anything else is dropped at the webhook,
    even in channels the bot belongs to.
 4. **Threads start once.** `start` writes `thread.synced` as sync handles the
@@ -2695,7 +2696,7 @@ with Slack's code; a target that isn't a channel, thread, or permalink is 400
 `invalid_target`. A board that doesn't run the entry answers 404
 `not_synced_here`. Nothing is stored, and reading a channel doesn't make the
 board listen to it: inbound events still only come from channels the sync
-function hears and synced threads. Because the app's token reads more than the caller might,
+function's helpers route and synced threads. Because the app's token reads more than the caller might,
 it needs `manage` in every channel.
 
 **Rendering.** Messages use the common author-prefixed body by default.

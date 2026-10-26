@@ -16,7 +16,7 @@ import { waitUntil } from '../server/wait-until.ts'
 import type { SyncProvider } from './provider.ts'
 import { replaceMentions } from '../contract/mentions.ts'
 import { SyncOverrides, immutable, type SyncRoot, type ProviderEvent, type SyncResult } from './events.ts'
-import { channelMissing, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
+import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableError, type ProviderSender, type Renderer } from './provider.ts'
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
@@ -287,9 +287,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     const { event, raw, dedupe } = ReceivedEvent.parse(storableJson({ ...received, raw: jsonSafe(received.raw) }))
     for (const location of [event.channel, event.thread, 'subthread' in event ? event.subthread : null])
       if (location !== null && !location.startsWith(`${key}:`)) throw badRequest(`provider locations must belong to sync entry ${key}`)
-    // Only what the sync function hears, and threads the board syncs, are kept.
-    const hears = platformOf(key).hears(native(event.channel), (name) => resolve(key, name))
-    if (hears && !(await hears) && !(await syncsThread(event.thread))) return
+    // Only the channels a helper routes, and threads the board syncs, are kept.
+    const routes = routesFor(platformOf(key))
+    if (routes && !(await routes(native(event.channel), (name) => resolve(key, name))) && !(await syncsThread(event.thread))) return
     await call('inboxPush', { key, events: [{ id: dedupe, event, raw }] })
   }
 

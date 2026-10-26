@@ -8,7 +8,7 @@ import type { ReceivedEvent, ResolvedTarget, SyncContext, ProviderPost, Provider
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { connectGitHubAdapter } from '@vercel/connect/chat'
 import { connectUserTokens, withUserTokens } from './users.ts'
-import { into, type SyncFn, type SyncUnit } from './fn.ts'
+import { into, withRoutes, type SyncFn, type SyncUnit } from './fn.ts'
 
 /** `owner/repo:12` (and its review threads) → `owner/repo:pulls`; `owner/repo:issue:3` → `owner/repo:issues`. */
 function channelOf(thread: string): string {
@@ -284,8 +284,7 @@ export function repos(map: Record<string, GitHubRepo>): SyncFn<GitHubEvent> {
     if (route) await route(sync)
     else if (sync.direction === 'in') await sync.import()
   }
-  fn.hears = async (channel) => routes.has(channel)
-  return fn
+  return withRoutes(fn, async (channel) => routes.has(channel))
 }
 
 type Detecting = {

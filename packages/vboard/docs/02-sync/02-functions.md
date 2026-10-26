@@ -138,15 +138,18 @@ The units are plain sync functions, from `vboard/sync`:
 | `into(channel)` | Imports into the board channel, and sends nothing back. |
 | `render(renderer, fn)` | `fn`, delivering with `renderer`. |
 
-They compose by calling each other. A GitHub repo that comes in, and gets back
-only what's written on the board, never what was said in Slack:
+They compose by calling each other, with the helper outermost (see [What the
+webhook keeps](#what-the-webhook-keeps)). A GitHub repo that comes in, and gets
+back only what's written on the board, never what was said in Slack:
 
 ```ts
 // in board({ sync: { … } }):
-github: github('github/acme', async (sync) => {
-  await repos({ 'acme/www': 'prs' })(sync)
-  if (sync.direction === 'out' && sync.message.from === null) await sync.deliver()
-}),
+github: github('github/acme', repos({
+  'acme/www': async (sync) => {
+    if (sync.direction === 'in') return void (await sync.import('prs'))
+    if (sync.message.from === null) await sync.deliver()
+  },
+})),
 ```
 
 A PR's inline review threads stay on GitHub and the board, out of Slack:
@@ -172,18 +175,19 @@ never wait: a key like `'C0123ABC'` needs no listing.
 
 The webhook stores each event it keeps in the [inbox](./01-overview.md#debug-it),
 then the function runs on it. It keeps an event when the board syncs its thread,
-or when the function hears its channel. `channels`, `repos`, and `numbers` hear
-their keys, and `render` passes that on. A function of your own hears everything
-the platform sends the app, in every channel it's in, and each event is stored:
+or when its channel is one that `channels`, `repos`, or `numbers` routes;
+`render` keeps theirs. A function of your own at the top keeps every event the
+platform sends the app, in every channel it's in, and each one is stored, even
+if it only calls a helper inside:
 
 ```ts
-// in board({ sync: { … } }): hears only #support, and threads synced by hand
+// in board({ sync: { … } }): keeps #support's events, and threads synced by hand
 slack: slack('slack/acme', channels({ '#support': 'support' })),
-// hears every channel the app is in
-slack: slack('slack/acme', into('support')),
+// the same on the board, but keeps every channel the app is in
+slack: slack('slack/acme', (sync) => channels({ '#support': 'support' })(sync)),
 ```
 
-To hear only some channels with a function of your own, put it in `channels`.
+So keep the helper outermost, and put your own code in its values.
 
 ## The event
 

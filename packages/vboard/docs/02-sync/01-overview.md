@@ -119,8 +119,9 @@ Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
    channel, which may `start` one; `mirror` does in its channel. Slack can.
    GitHub and WhatsApp can't, so roots never open an issue or a conversation.
 3. **Inbound.** A platform event goes to the sync function when its thread is
-   already synced, or when the function hears its channel (the helpers hear
-   their keys). The function decides whether it lands. Everything else is
+   already synced, or when its channel is one the helpers route (their keys;
+   a function of your own at the top gets every channel). The function decides
+   whether it lands. Everything else is
    dropped at the webhook, even in channels the bot belongs to.
 4. **Threads start once,** when their root is posted, or when someone syncs
    them by hand. A deploy that changes a function changes what it does from

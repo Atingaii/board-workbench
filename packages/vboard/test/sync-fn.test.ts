@@ -73,7 +73,7 @@ describe('sync functions', () => {
     expect(g.posts.map((post) => post.text).join('\n')).not.toContain('stays on the board')
   })
 
-  it("keeps only what a function hears in the inbox, and threads the board syncs", async () => {
+  it("keeps only the channels a helper routes in the inbox, and threads the board syncs", async () => {
     const s = fakePlatform('slack')
     const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
     const julian = caller(board.fetch, await personToken())
@@ -93,12 +93,15 @@ describe('sync functions', () => {
     expect(await inbox('C9')).toHaveLength(1)
   })
 
-  it('keeps every event in the inbox for a function that names no channels', async () => {
+  it('keeps every event in the inbox for a function of your own, even one that calls a helper', async () => {
     const s = fakePlatform('slack')
-    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, into('firehose')) } })
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, (sync) => channels({ C1: 'firehose' })(sync)) } })
     const julian = caller(board.fetch, await personToken())
-    await webhookOf(board)('slack', { type: 'message', threadId: 'slack:C9:900', id: '900', text: 'anywhere', user: 'U_ADA' })
-    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    const webhook = webhookOf(board)
+    await webhook('slack', { type: 'message', threadId: 'slack:C9:900', id: '900', text: 'not ours', user: 'U_ADA' })
+    await webhook('slack', { type: 'message', threadId: 'slack:C1:100', id: '100', text: 'ours', user: 'U_ADA' })
+    await vi.waitFor(async () => expect((await read(julian, 'firehose')).map((m) => m.text)).toEqual(['ours']))
+    // The same board as with the helper outermost, but C9's event was stored.
     expect((await julian('GET', '/inbox/slack?channel=C9')).body.events).toHaveLength(1)
   })
 
