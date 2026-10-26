@@ -1291,7 +1291,7 @@ describe('sync', () => {
     // Julian may: his post goes to Slack to resolve, and mentions Ada.
     const posted = await julian('POST', '/messages', { channel: 'firehose', text, sync: ['slack:#general'] })
     expect(posted.body.message).toMatchObject({ text: 'cc @[slack:user:U_ADA]', mentions: ['slack:user:U_ADA'] })
-    expect(conversations.join).toHaveBeenCalledWith({ channel: 'C9' })
+    expect(conversations.join).not.toHaveBeenCalled()
   })
 
   it("answers a caller that can't read where it posts with what it sent, never who its emails are", async () => {
@@ -1331,13 +1331,41 @@ describe('sync', () => {
     warn.mockRestore()
   })
 
-  it('joins mapped Slack channels by name, and says which private ones need an invite', async () => {
+  it('takes a retried Slack event that reads differently the second time as the one it has', async () => {
+    // Another function instance takes the retry: its own Chat SDK state, the same log.
+    const store = boardMemory()
+    const first = setup({ store })
+    const second = setup({ store })
+    const julian = caller(first.board.fetch, await personToken())
+    const event = { type: 'message', threadId: 'slack:C1:500', id: '500', text: 'hello', user: 'U_ADA' }
+
+    expect((await first.webhook('slack', { ...event, name: 'Ada' })).status).toBe(200)
+    // Slack sends it again, and what it says about Ada changed in between.
+    expect((await second.webhook('slack', { ...event, name: 'Ada Lovelace' })).status).toBe(200)
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    expect((await read(julian, 'firehose'))[0]).toMatchObject({ text: 'hello', author: { name: 'Ada' } })
+  })
+
+  it('routes Slack events and posts by channel ID without asking Slack about the channels', async () => {
+    // A rate-limited conversations.info, which Slack's client waits out for about 30 minutes.
+    const conversations = { list: vi.fn(async () => ({ channels: [] })), info: vi.fn(() => new Promise<never>(() => {})), join: vi.fn() }
+    const { board, s, webhook } = setup({ slackClient: { conversations } })
+    const julian = caller(board.fetch, await personToken())
+
+    expect((await webhook('slack', { type: 'message', threadId: 'slack:C1:500', id: '500', text: 'still syncing', user: 'U_ADA' })).status).toBe(200)
+    await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
+    await julian('POST', '/messages', { channel: 'prs', text: 'and outbound too' })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect([conversations.list, conversations.info, conversations.join].map((fn) => fn.mock.calls.length)).toEqual([0, 0, 0])
+  })
+
+  it('finds mapped Slack channels by name, never joins them, and says which ones need an invite', async () => {
     // The Vercel Connect shape: the bot token resolves asynchronously.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const conversations = {
       list: vi.fn(async () => ({
         channels: [
-          { id: 'C9', name: 'sf-prs', is_member: false, is_private: false },
+          { id: 'C9', name: 'sf-prs', is_member: true, is_private: false },
           { id: 'C8', name: 'sf-secret', is_member: false, is_private: true },
         ],
       })),
@@ -1354,10 +1382,10 @@ describe('sync', () => {
     await julian('POST', '/messages', { channel: 'deploys', text: 'shipped' })
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     expect(s.channelPosts[0]!.channelId).toBe('slack:C9')
-    expect(conversations.join).toHaveBeenCalledTimes(1)
-    expect(conversations.join).toHaveBeenCalledWith({ channel: 'C9' })
+    expect(conversations.join).not.toHaveBeenCalled()
     expect(conversations.list).toHaveBeenCalledTimes(1) // one listing resolves every name
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('invite the app to #sf-secret'))
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('#sf-prs'))
     warn.mockRestore()
   })
 

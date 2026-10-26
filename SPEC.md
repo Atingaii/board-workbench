@@ -2513,7 +2513,7 @@ the board. The adapter then uses plain configuration from env:
      `https://<host>/api/board/webhooks/slack`.
   3. Subscribe to the bot events `message.channels`, `message.groups`,
      `reaction_added`, and `reaction_removed`.
-  4. Grant the scopes `channels:history`, `channels:read`, `channels:join`,
+  4. Grant the scopes `channels:history`, `channels:read`,
      `groups:history`, `groups:read`, `chat:write`, `chat:write.customize`,
      `reactions:read`, `reactions:write`, `users:read`, `users:read.email`,
      `files:read`, and `files:write`.
@@ -2642,9 +2642,8 @@ vercel connect create slack --triggers
 vercel connect attach … --triggers --trigger-path /api/board/webhooks/slack
 ```
 
-Slack only sends a channel's events to apps in it. When a mapped channel
-resolves, the app joins it if it's public (`channels:join`). Private channels
-need someone to `/invite` the app; the log names each one. Name lookups need
+Slack only sends a channel's events to apps in it, and the app never joins one
+on its own: someone `/invite`s it to each mapped channel. Name lookups need
 `channels:read`. Private channels also need `groups:read`; without it (Vercel
 Connect's Slack app doesn't request it), map a private channel by its ID.
 

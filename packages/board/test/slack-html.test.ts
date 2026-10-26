@@ -29,7 +29,7 @@ function slackWith() {
   }
   const posted: Record<string, unknown>[] = []
   const client: SlackClient = {
-    conversations: { list: async () => ({}), info: async () => ({}), join: async () => ({}), replies: async () => ({ messages: [] }) },
+    conversations: { list: async () => ({}), info: async () => ({}), replies: async () => ({ messages: [] }) },
     chat: { postMessage: async (args) => (posted.push(args), { ts: '1700000000.000200' }) },
     auth: { test: async () => ({ response_metadata: { scopes: ['chat:write.customize'] } }) },
   }

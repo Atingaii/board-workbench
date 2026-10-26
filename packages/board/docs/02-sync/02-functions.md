@@ -168,9 +168,8 @@ ID). A name the platform couldn't check, because its listing failed, might be
 any channel, so until it resolves, an event outside the channels that did
 throws and is retried, rather than reaching the fallback past that key's
 function, and a new root starts only where its channel resolved. Each retry
-asks again. Slack names resolve through one cached channel listing, and the app
-joins public channels as it resolves them; private ones need an invite. IDs
-never wait: a key like `'C0123ABC'` needs no listing.
+asks again. Slack names resolve through one cached channel listing. IDs never
+wait: a key like `'C0123ABC'` asks Slack nothing.
 
 ## What the webhook keeps
 

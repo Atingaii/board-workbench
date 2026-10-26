@@ -1,3 +1,5 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 
 const connect = vi.hoisted(() => {
@@ -37,6 +39,28 @@ describe('a Vercel Connect connector as the adapter', () => {
     connect.getToken.mockRejectedValueOnce(new Error('connect is down'))
     await expect(provider.users!.token('vercel:user:u_julian')).rejects.toThrow('connect is down')
   })
+
+  it('gives up on a Slack call that stays rate-limited after a few tries, within a function', async () => {
+    let calls = 0
+    const api = createServer((_request, response) => {
+      calls++
+      response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '0' }).end('{"ok":false,"error":"ratelimited"}')
+    })
+    await new Promise<void>((resolve) => api.listen(0, '127.0.0.1', resolve))
+    vi.stubEnv('SLACK_API_URL', `http://127.0.0.1:${(api.address() as AddressInfo).port}/api/`)
+    try {
+      const provider = slack({ adapter: 'slack/acme' }, channels({}))
+      type Web = { conversations: { info(args: { channel: string }): Promise<unknown> } }
+      const adapter = (provider as unknown as { transport: { adapter: { withBotToken<T>(token: string, fn: () => T): T; webClient: Web } } }).transport.adapter
+      const started = Date.now()
+      await expect(adapter.withBotToken('xoxb-test', () => adapter.webClient).conversations.info({ channel: 'C1' })).rejects.toThrow(/rate limit/)
+      expect(calls).toBe(4)
+      expect(Date.now() - started).toBeLessThan(15_000)
+    } finally {
+      vi.unstubAllEnvs()
+      api.close()
+    }
+  }, 30_000)
 
   it("builds GitHub's adapter with the bot's user ID, and the same sign-in", async () => {
     const provider = github({ adapter: 'github/acme', botUserId: 338721338 }, repos({ 'vercel-labs/board': 'prs' }))
