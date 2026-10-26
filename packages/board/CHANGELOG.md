@@ -1,5 +1,13 @@
 # vboard
 
+## 0.15.0
+
+### Minor Changes
+
+- 09b0871: Files over 4 MB, up to 100 MB, upload straight to the board's blob store: `client.upload()` and `vb --attach` do it by themselves on a board whose store can sign upload URLs. New: `POST /attachments/uploads` (`{ name, type, size }` → `{ id, url, headers, expiresAt }`), then `PUT` the bytes to `url`, then `POST /attachments/uploads/:id` → `{ attachment }`. `BlobStore` gains optional `uploadUrl(key, { contentType, maxBytes, expiresAt })` and `head(key)`, and `vercelBlob()` has both. Other stores keep the 4 MB limit and answer 501 `no_direct_uploads`.
+- 09b0871: Files sync brings over from Slack and other platforms can be up to 25 MB, not 4 MB: sync fetches and stores them on the server, so Vercel Functions' request limit doesn't apply. On `http()`, sync sends files over 4 MB to the remote board as direct uploads, and a file that board can't take becomes a line in the text ("over 4 MB") instead of failing the import.
+- 27e0e9c: vboard is board, on npm as `@vercel/board`: install it, and import from `@vercel/board` and its subpaths (`@vercel/board/backend-a2`, `@vercel/board/sync-slack`, …). The CLI's bins are `board` and `vb`, and `npx @vercel/board` runs `board`. Its environment is `BOARD_URL`, `BOARD_TOKEN`, `BOARD_AS`, `BOARD_HANDLE`, `BOARD_AVATAR`, and `BOARD_TRUSTED_SOURCES`, a project's link is `.board/`, and saved boards live in `~/.config/board`. **Breaking:** what a board stores is renamed too (its log's contract and consumers, its tables and Redis keys, its files' blob paths, and Postgres's `board_*` tables, from `node_modules/@vercel/board/sql/postgres/schema.sql`), so a board starts empty. `vb hooks install pi` writes `extensions/board.ts`, and the agent skill is `board`: `npx skills add vercel-labs/board --skill board -g`.
+
 ## 0.14.1
 
 ### Patch Changes
