@@ -756,9 +756,9 @@ describe('sync', () => {
   ])("says a retitled $name's new title on its root, and the copies of the root say it too", async ({ key, event, kind }) => {
     const { board, s, g, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() }, issues: { get: vi.fn() } } } })
     const julian = caller(board.fetch, await personToken())
-    const item = { number: 42, title: 'Old title', html_url: `https://github.com/basehub-ai/vboard/pull/42`, draft: false, merged: false }
+    const item = { number: 42, title: 'Old title', html_url: `https://github.com/vercel-labs/board/pull/42`, draft: false, merged: false }
     const send = (action: string, extra: Record<string, unknown>, delivery: string) =>
-      webhook('github', { action, repository: { full_name: 'basehub-ai/vboard' }, sender: { id: 42, login: 'julianbenegas' }, ...extra }, { 'x-github-event': event, 'x-github-delivery': delivery })
+      webhook('github', { action, repository: { full_name: 'vercel-labs/board' }, sender: { id: 42, login: 'julianbenegas' }, ...extra }, { 'x-github-event': event, 'x-github-delivery': delivery })
     await send('opened', { [key]: item }, 'retitle-opened')
     await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
     const [root] = await read(julian, 'prs')
@@ -770,6 +770,45 @@ describe('sync', () => {
     await vi.waitFor(async () => expect((await julian('GET', `/messages/${root!.id}`)).body.message.text).toBe(`${kind} #42: New title\n${item.html_url}`))
     await vi.waitFor(() => expect(s.edits.map((edit) => edit.text)).toEqual([expect.stringContaining('New title')]))
     expect(g.edits).toEqual([]) // GitHub's own title never goes back to GitHub
+  })
+
+  it('keeps the title of a root another PR made when a PR it joined is retitled', async () => {
+    const { board, webhook } = setup({ githubClient: { rest: { pulls: { get: vi.fn() } } } })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'vercel-labs/board' }
+    const sender = { id: 42, login: 'julianbenegas' }
+    const pr = (number: number, title: string) => ({ number, title, html_url: `https://github.com/vercel-labs/board/pull/${number}`, draft: false, merged: false })
+    await webhook('github', { action: 'opened', repository, sender, pull_request: pr(1, 'First') }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'joined-opened' })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    const [root] = await read(julian, 'prs')
+    // The same thread is also PR #2's conversation.
+    await julian('POST', `/messages/${root!.id}/sync`, { target: 'github:vercel-labs/board:2' })
+    await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:2', id: 'c2', text: 'on #2', user: '43' })
+    await vi.waitFor(async () => expect((await julian('GET', `/messages/${root!.id}`)).body.replies.map((m: { text: string }) => m.text)).toEqual(['on #2']))
+    await webhook('github', { action: 'edited', repository, sender, pull_request: pr(2, 'Second, renamed'), changes: { title: { from: 'Second' } } }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'joined-retitle' })
+    await webhook('github', { type: 'message', threadId: 'github:vercel-labs/board:2', id: 'c3', text: 'after the rename', user: '43' })
+    await vi.waitFor(async () => expect((await julian('GET', `/messages/${root!.id}`)).body.replies).toHaveLength(2))
+    expect((await julian('GET', `/messages/${root!.id}`)).body.message.text).toBe('PR #1: First\nhttps://github.com/vercel-labs/board/pull/1')
+  })
+
+  it("gives a root override the root's labels when a retitle redraws it, as when it was made", async () => {
+    const { board, webhook } = setup({
+      githubClient: { rest: { pulls: { get: vi.fn() } } },
+      github: repos({
+        'vercel-labs/board': async (sync) => {
+          if (sync.direction === 'out') return sync.deliver()
+          await sync.import('prs', { root: (draft) => ({ text: draft.labels.pr ? `[pr] ${draft.text}` : draft.text }) })
+        },
+      }),
+    })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'vercel-labs/board' }
+    const sender = { id: 42, login: 'julianbenegas' }
+    const pr = (title: string) => ({ number: 44, title, html_url: 'https://github.com/vercel-labs/board/pull/44', draft: false, merged: false })
+    await webhook('github', { action: 'opened', repository, sender, pull_request: pr('Old') }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'override-opened' })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.text).toBe('[pr] PR #44: Old\nhttps://github.com/vercel-labs/board/pull/44'))
+    await webhook('github', { action: 'edited', repository, sender, pull_request: pr('New'), changes: { title: { from: 'Old' } } }, { 'x-github-event': 'pull_request', 'x-github-delivery': 'override-retitle' })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]?.text).toBe('[pr] PR #44: New\nhttps://github.com/vercel-labs/board/pull/44'))
   })
 
   it.each([
