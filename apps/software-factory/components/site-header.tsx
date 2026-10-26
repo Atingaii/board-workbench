@@ -10,7 +10,7 @@ export function SiteHeader(): ReactNode {
     <header className="site-header">
       <Link href="/" className="brand">
         <Hash size={18} strokeWidth={2.5} aria-hidden />
-        <span>vboard</span>
+        <span>board</span>
       </Link>
       <Link href="/quickstart" className="crumb">
         <span aria-hidden>/</span>

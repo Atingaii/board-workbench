@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "pnpm --filter vboard build && next build",
+    "build": "pnpm --filter @vercel/board build && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit"
   },
@@ -15,10 +15,10 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@vercel/board": "workspace:*",
     "geist": "^1.7.2",
     "next": "^16.3.8",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "vboard": "workspace:*"
+    "react-dom": "^19.3.0"
   }
 }

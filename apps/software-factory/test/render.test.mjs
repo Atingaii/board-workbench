@@ -50,6 +50,6 @@ test("everything else keeps the default", () => {
 
 test("crosspost links go without a label", () => {
   const text = ":crosspost: [#105 Link threads](https://vercel.slack.com/archives/C0C6MNT9LLC/p1791405000000100)";
-  const message = { re: "2326", text, labels: {}, by: { actor: "vboard:watch:crosspost" } };
+  const message = { re: "2326", text, labels: {}, by: { actor: "board:watch:crosspost" } };
   assert.equal(renderForSlack({ ...input(message), label: "crosspost" }), text);
 });

@@ -1,4 +1,4 @@
-import type { Watcher } from "vboard";
+import type { Watcher } from "@vercel/board";
 import { byPi } from "./agent.ts";
 import { bot, github, prNumber, type GitHubOptions } from "./github.ts";
 
@@ -9,9 +9,9 @@ import { bot, github, prNumber, type GitHubOptions } from "./github.ts";
 
 /** The CI job a PR's head must pass (`.github/workflows/check.yml`). */
 const CHECK = "check";
-/** vboard core: what the published package ships, its source and the files that shape it. */
+/** board core: what the published package ships, its source and the files that shape it. */
 const isCore = (path: string) =>
-  path.startsWith("packages/vboard/src/") || path === "packages/vboard/package.json" || path === "packages/vboard/tsdown.config.ts";
+  path.startsWith("packages/board/src/") || path === "packages/board/package.json" || path === "packages/board/tsdown.config.ts";
 /** The reaction a PR root wears while it would auto-land, so Slack shows the verdict at a glance. */
 export const STAMP = "stamp-hammer";
 /** A user-facing change gets a changeset; the folder's README isn't one. */
@@ -19,8 +19,8 @@ const isChangeset = (path: string) => /^\.changeset\/[^/]+\.md$/.test(path) && p
 
 export type PullRequest = { state: string; merged: boolean; user: { login: string }; head: { sha: string; ref?: string } };
 
-/** The pi-pr workflow opens the PR for each push to a `factory/` branch, as github-actions[bot]. */
-const byWorkflow = (pr: PullRequest) => pr.user.login === "github-actions[bot]" && pr.head.ref?.startsWith("factory/") === true;
+/** The pi-pr workflow opens the PR for each push to a `board/` branch, as github-actions[bot]. */
+const byWorkflow = (pr: PullRequest) => pr.user.login === "github-actions[bot]" && pr.head.ref?.startsWith("board/") === true;
 export type ChangedFile = { filename: string; status: string };
 export type CheckRun = { name: string; status: string; conclusion: string | null };
 export type Review = { land?: string | undefined; why?: string | undefined; sha?: string | undefined };
@@ -39,8 +39,8 @@ export function decide(review: Review, pr: PullRequest, files: ChangedFile[], ch
   const live = files.filter((file) => file.status !== "removed");
   const core = files.some((file) => isCore(file.filename));
   const userFacing = live.some((file) => isChangeset(file.filename));
-  if (core && userFacing) return no("user-facing change to vboard core");
-  return { would: true, why: core ? "internal change to vboard core" : "outside vboard core" };
+  if (core && userFacing) return no("user-facing change to board core");
+  return { would: true, why: core ? "internal change to board core" : "outside board core" };
 }
 
 /** Labels hold up to 256 characters. */

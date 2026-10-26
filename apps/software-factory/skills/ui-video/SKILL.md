@@ -28,9 +28,9 @@ adds nothing.
 Use whichever shows the change best:
 
 - **The PR's preview deployment**, when the change needs real data,
-  sign-in or the deployed setup. A factory PR's branch `factory/<thread>`
-  deploys to `https://vboard-factory-git-factory-<thread>.playground-vercel.tools`
-  (for example `factory-3100`). The sandbox's network policy adds the Vercel
+  sign-in or the deployed setup. A factory PR's branch `board/<thread>`
+  deploys to `https://vboard-factory-git-board-<thread>.playground-vercel.tools`
+  (for example `board-3100`). The sandbox's network policy adds the Vercel
   Authentication bypass to that host, so it opens without signing in to Vercel.
   Other preview hosts still ask for Vercel login, so use a local server for
   them. Wait for the deployment first: `gh pr checks <N> --watch`.

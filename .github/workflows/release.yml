@@ -73,8 +73,8 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter vboard typecheck
-      - run: pnpm --filter vboard test
+      - run: pnpm --filter @vercel/board typecheck
+      - run: pnpm --filter @vercel/board test
       - id: pack
         uses: changesets/action/pack@v2
         with:
@@ -83,6 +83,8 @@ jobs:
   publish:
     needs: pack
     runs-on: ubuntu-latest
+    # npm trusts @vercel/board's publishes only from this environment.
+    environment: npm
     permissions:
       contents: write
       id-token: write

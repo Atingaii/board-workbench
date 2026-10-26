@@ -15,38 +15,38 @@ const green = [{ name: "check", status: "completed", conclusion: "success" }];
 test("a reviewed factory PR outside core, with CI green, would land", () => {
   assert.deepEqual(decide(review(), pr(), [file("apps/software-factory/app/x.ts")], green), {
     would: true,
-    why: "outside vboard core",
+    why: "outside board core",
   });
 });
 
 test("an internal core change, with no changeset, would land", () => {
-  assert.deepEqual(decide(review(), pr(), [file("packages/vboard/src/a.ts")], green), {
+  assert.deepEqual(decide(review(), pr(), [file("packages/board/src/a.ts")], green), {
     would: true,
-    why: "internal change to vboard core",
+    why: "internal change to board core",
   });
 });
 
 test("a user-facing core change, with a changeset, doesn't land", () => {
-  const files = [file("packages/vboard/src/a.ts"), file(".changeset/brave-cats.md", "added")];
-  assert.deepEqual(decide(review(), pr(), files, green), { would: false, why: "user-facing change to vboard core" });
+  const files = [file("packages/board/src/a.ts"), file(".changeset/brave-cats.md", "added")];
+  assert.deepEqual(decide(review(), pr(), files, green), { would: false, why: "user-facing change to board core" });
 });
 
 test("a changeset outside core lands, and the changeset README or a removed changeset isn't one", () => {
   assert.equal(decide(review(), pr(), [file("apps/a.ts"), file(".changeset/x.md", "added")], green).would, true);
-  const core = file("packages/vboard/src/a.ts");
+  const core = file("packages/board/src/a.ts");
   assert.equal(decide(review(), pr(), [core, file(".changeset/README.md")], green).would, true);
   assert.equal(decide(review(), pr(), [core, file(".changeset/old.md", "removed")], green).would, true);
 });
 
 test("the package's manifest and build config count as core", () => {
-  for (const path of ["packages/vboard/package.json", "packages/vboard/tsdown.config.ts"]) {
+  for (const path of ["packages/board/package.json", "packages/board/tsdown.config.ts"]) {
     const files = [file(path), file(".changeset/x.md", "added")];
-    assert.deepEqual(decide(review(), pr(), files, green), { would: false, why: "user-facing change to vboard core" });
+    assert.deepEqual(decide(review(), pr(), files, green), { would: false, why: "user-facing change to board core" });
   }
 });
 
 test("core tests and docs aren't core source", () => {
-  const files = [file("packages/vboard/test/a.test.ts"), file("packages/vboard/README.md"), file(".changeset/x.md", "added")];
+  const files = [file("packages/board/test/a.test.ts"), file("packages/board/README.md"), file(".changeset/x.md", "added")];
   assert.equal(decide(review(), pr(), files, green).would, true);
 });
 
@@ -61,7 +61,7 @@ test("a PR people opened, a closed or merged one, and new commits since the revi
   const files = [file("apps/a.ts")];
   assert.equal(decide(review(), pr({ user: { login: "jb" } }), files, green).why, "opened by jb, not the factory");
   const actions = { login: "github-actions[bot]" };
-  assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "factory/42" } }), files, green).would, true, "pi-pr's PR is the factory's");
+  assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "board/42" } }), files, green).would, true, "pi-pr's PR is the factory's");
   assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "pi/42" } }), files, green).why, "opened by github-actions[bot], not the factory");
   assert.equal(decide(review(), pr({ user: actions, head: { sha: "abc123", ref: "other" } }), files, green).why, "opened by github-actions[bot], not the factory");
   assert.equal(decide(review(), pr({ state: "closed" }), files, green).why, "the PR is closed");
@@ -129,7 +129,7 @@ const routes = (files = [file("apps/a.ts")]) => ({
 test("the watcher labels the PR thread with its decision and merges nothing", async () => {
   const h = harness(routes());
   await h.run();
-  assert.deepEqual(h.labels, [{ id: "59", set: { autoland: "would", "autoland.why": "outside vboard core" } }]);
+  assert.deepEqual(h.labels, [{ id: "59", set: { autoland: "would", "autoland.why": "outside board core" } }]);
   assert.equal(h.requests.length, 4);
   assert.ok(h.requests.every((url) => !url.includes("/merge")));
 });
@@ -138,10 +138,10 @@ test("the watcher pages through a PR's files", async () => {
   const many = Array.from({ length: 100 }, (_, i) => file(`apps/${i}.ts`));
   const h = harness({
     ...routes(many),
-    "/pulls/53/files?per_page=100&page=2": [file("packages/vboard/src/a.ts"), file(".changeset/x.md", "added")],
+    "/pulls/53/files?per_page=100&page=2": [file("packages/board/src/a.ts"), file(".changeset/x.md", "added")],
   });
   await h.run();
-  assert.deepEqual(h.labels[0].set, { autoland: "no", "autoland.why": "user-facing change to vboard core" });
+  assert.deepEqual(h.labels[0].set, { autoland: "no", "autoland.why": "user-facing change to board core" });
 });
 
 test("only the PR thread's own Pi can set the verdict", async () => {
@@ -171,7 +171,7 @@ test("the watcher ignores other labels, replies, and other repos", async () => {
   assert.deepEqual(h.labels, []);
   assert.deepEqual(h.requests, []);
   await h.run();
-  assert.equal(h.labels[0].set.autoland, "would", "the same harness labels a land verdict on a vboard PR root");
+  assert.equal(h.labels[0].set.autoland, "would", "the same harness labels a land verdict on a board PR root");
 });
 
 test("when GitHub fails, it says no and why", async () => {
@@ -189,7 +189,7 @@ test("a PR that would land gets :stamp-hammer: on its root", async () => {
 });
 
 test("the stamp comes off when the verdict flips to no", async () => {
-  const h = harness(routes([file("packages/vboard/src/a.ts"), file(".changeset/x.md", "added")]));
+  const h = harness(routes([file("packages/board/src/a.ts"), file(".changeset/x.md", "added")]));
   await h.run(withVerdict("would"));
   assert.deepEqual(h.labels[0].set.autoland, "no");
   assert.deepEqual(h.reactions, [{ id: "59", emoji: "stamp-hammer", remove: true }]);

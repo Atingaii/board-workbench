@@ -14,6 +14,9 @@ importers:
 
   apps/pong:
     dependencies:
+      '@vercel/board':
+        specifier: workspace:*
+        version: link:../../packages/board
       geist:
         specifier: ^1.7.2
         version: 1.7.2(next@16.3.8(@types/node@26.6.3)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
@@ -26,9 +29,6 @@ importers:
       react-dom:
         specifier: ^19.3.0
         version: 19.3.0(react@19.3.0)
-      vboard:
-        specifier: workspace:*
-        version: link:../../packages/vboard
     devDependencies:
       '@types/node':
         specifier: ^26.6.3
@@ -45,15 +45,18 @@ importers:
 
   apps/preview-publisher:
     dependencies:
-      vboard:
+      '@vercel/board':
         specifier: workspace:*
-        version: link:../../packages/vboard
+        version: link:../../packages/board
 
   apps/software-factory:
     dependencies:
       '@vercel/blob':
         specifier: ^2.8.0
         version: 2.8.0
+      '@vercel/board':
+        specifier: workspace:*
+        version: link:../../packages/board
       '@vercel/connect':
         specifier: ^2.3.4
         version: 2.3.4(@chat-adapter/slack@4.41.1(ai@7.0.130(zod@4.6.5))(debug@4.4.3)(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(zod@4.6.5))(ai@7.0.130(zod@4.6.5))
@@ -111,9 +114,6 @@ importers:
       unist-util-visit:
         specifier: ^5.1.0
         version: 5.1.0
-      vboard:
-        specifier: workspace:*
-        version: link:../../packages/vboard
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -140,7 +140,7 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
-  packages/vboard:
+  packages/board:
     dependencies:
       '@chat-adapter/github':
         specifier: ^4.41.1
