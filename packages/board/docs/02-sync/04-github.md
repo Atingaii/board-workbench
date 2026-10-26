@@ -73,8 +73,10 @@ by hand outside the map syncs both ways.
 A review thread isn't a sync target: `vb sync 812 github:acme/www:123:rc:345`
 says to sync its PR, `github:acme/www:123`. A board thread synced with the PR
 gets its review comments, and its replies to them go back into their review
-threads. A link to any review comment (`…/pull/123#discussion_r346`) finds it on
-the board, whether it came from GitHub or the board posted it.
+threads. A link to a review comment (`…/pull/123#discussion_r346`) finds it on
+the board, whether it came from GitHub or the board posted it, for comments
+synced on this release or later: earlier ones were recorded without the PR's
+thread, so their links answer 404.
 
 ## A PR's whole life in one thread
 
