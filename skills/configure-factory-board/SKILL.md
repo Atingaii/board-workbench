@@ -1,6 +1,6 @@
 ---
 name: configure-factory-board
-description: Connect a software factory to a hosted vboard using Vercel Trusted Sources, scoped workflow channels and collaboration tools. Use when setting up or validating Factory board access.
+description: Connect a software factory to a hosted board using Vercel Trusted Sources, scoped workflow channels and collaboration tools. Use when setting up or validating Factory board access.
 ---
 
 # Configure a software factory with a board
@@ -17,7 +17,7 @@ Factory environment, and workflows to enable. Use immutable `prj_…` and `team_
 IDs. Confirm the selected project before applying any Vercel CLI mutation.
 Keep unrelated uncommitted work intact.
 
-For `vercel-labs/board`, read `packages/vboard/docs/03-guides/05-agent-factory.md`
+For `vercel-labs/board`, read `packages/board/docs/03-guides/05-agent-factory.md`
 and `apps/software-factory/app/api/board/[[...path]]/route.ts`. For
 `vercel-labs/agent-factory`, read `docs/repository-workflows.md` and
 `factory/lib/workflow-board.ts`. These paths are relative to their own checkout;
@@ -25,7 +25,7 @@ use the repository's current files rather than assuming both are available.
 
 ## Configure both trust layers
 
-On the vboard project, set `VBOARD_TRUSTED_SOURCES` to JSON with the exact caller
+On the board project, set `BOARD_TRUSTED_SOURCES` to JSON with the exact caller
 bindings. Extend an existing allowlist rather than replacing other grants:
 
 ```json
@@ -42,7 +42,7 @@ Replace the example IDs. Missing configuration grants no external project
 access. Omitted environments default to production; enable preview or development
 only when needed. A grant reads and posts in every channel and labels only in
 `factory/` channels, since a Factory post carries labels; it never reacts or
-syncs, and never labels `dev` threads, which drive Pi. Raw vboard clients can also edit/delete messages owned by their verified
+syncs, and never labels `dev` threads, which drive Pi. Raw board clients can also edit/delete messages owned by their verified
 principal. The Factory tool exposes only scoped reads, posts and replies;
 session labels do not create separate ownership principals.
 
@@ -58,7 +58,7 @@ for available rules. A board application grant does not create an edge rule.
 
 Factory mints a server-side audience-bound JWT and sends the same token in
 `Authorization: Bearer <JWT>` and `x-vercel-trusted-oidc-idp-token: <JWT>`.
-The edge consumes the native header; vboard verifies Authorization. Agents
+The edge consumes the native header; board verifies Authorization. Agents
 receive tools, not credentials. Hosted Factory callers need no bypass secret.
 Prepare configuration for review when project changes or deployment are outside
 the user's request; do not change live settings merely to test the skill.
@@ -66,7 +66,7 @@ the user's request; do not change live settings merely to test the skill.
 ## Enable the workflow and collaboration surface
 
 Set the Factory's `EXPERIMENTAL_BOARD_URL` to the exact `/api/board` URL in its
-deployment environment. This selects one vboard service for that Factory
+deployment environment. This selects one board service for that Factory
 deployment; the service can host multiple factories and repositories.
 Repository `config.yml` has no board connection field in this experiment.
 Opt each intended repository workflow into a logical discussion space:

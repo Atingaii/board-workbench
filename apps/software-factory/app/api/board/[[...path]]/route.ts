@@ -1,9 +1,9 @@
-import { board } from "vboard";
-import { a2, fsBlob } from "vboard/backend-a2";
-import { render } from "vboard/sync";
-import { channels, slack } from "vboard/sync-slack";
-import { github, repos } from "vboard/sync-github";
-import { vercelBlob } from "vboard/backend-a2/blob-vercel";
+import { board } from "@vercel/board";
+import { a2, fsBlob } from "@vercel/board/backend-a2";
+import { render } from "@vercel/board/sync";
+import { channels, slack } from "@vercel/board/sync-slack";
+import { github, repos } from "@vercel/board/sync-github";
+import { vercelBlob } from "@vercel/board/backend-a2/blob-vercel";
 import { queues, store } from "./a2";
 import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
@@ -20,7 +20,7 @@ import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 import { vercelTrustedSources } from "./trusted-sources";
 
-// The software factory: vboard running on its own repo and Vercel's Slack. Its log is
+// The software factory: board running on its own repo and Vercel's Slack. Its log is
 // in `a2.ts`; locally there's no VERCEL_ENV, so attachments are files in .a2/attachments.
 const env = process.env.VERCEL_ENV;
 
@@ -38,12 +38,12 @@ const backend = a2({
 const factory = board({
   backend,
   // Factories elsewhere that may use this board, by project and team.
-  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
+  access: vercelTrustedSources(process.env.BOARD_TRUSTED_SOURCES),
   // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
   // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
   middleware: [guard({ mode: "shadow" })],
   sync: {
-    // Connect connectors: vboard builds the adapters, and people who sign in
+    // Connect connectors: board builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.
     slack: slack(
       "slack/vboard-factory",

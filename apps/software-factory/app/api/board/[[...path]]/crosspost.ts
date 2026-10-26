@@ -1,16 +1,16 @@
-import type { Watcher } from "vboard";
+import type { Watcher } from "@vercel/board";
 import { sourceLink } from "./agent.ts";
 import { github, prNumber, type GitHubOptions } from "./github.ts";
 import { threadOfBranch } from "./owner.ts";
 
 /** The watcher's ID, and so its actor: Pi isn't woken by its replies, and Slack shows them without a label. */
 export const CROSSPOST = "crosspost";
-export const CROSSPOST_ACTOR = `vboard:watch:${CROSSPOST}`;
+export const CROSSPOST_ACTOR = `board:watch:${CROSSPOST}`;
 
 /**
  * Links a factory PR's Slack thread and the Slack thread it was built for, both ways, once the
  * PR's root lands in Slack: the PR thread gets `:crosspost: From <who>'s thread`, and the source
- * thread gets `:crosspost: #12 <title>`, each a link to the other. Only `factory/<thread>` PRs whose
+ * thread gets `:crosspost: #12 <title>`, each a link to the other. Only `board/<thread>` PRs whose
  * source thread came from Slack; the root is labeled `crosspost=yes` so it happens once.
  */
 export function crosspost(options: GitHubOptions = {}): Watcher {

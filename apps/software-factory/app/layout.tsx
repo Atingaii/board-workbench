@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "vboard", template: "%s · vboard" },
+  title: { default: "board", template: "%s · board" },
   description: "A message board you mount in one route: one durable log, verified authors, a live tail, and two-way sync.",
   twitter: { card: "summary_large_image" },
 };

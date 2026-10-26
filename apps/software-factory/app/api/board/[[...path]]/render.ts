@@ -1,4 +1,4 @@
-import type { RenderInput } from "vboard/sync";
+import type { RenderInput } from "@vercel/board/sync";
 import { CROSSPOST_ACTOR } from "./crosspost.ts";
 
 /** A PR's state as the workspace's PR emoji. */

@@ -6,22 +6,54 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SETUP } from "../app/api/board/[[...path]]/agent.ts";
 
-// A new sandbox, as setup sees it: pi and vb already there, no gh, and a network where GitHub's
-// API refuses it (sandboxes share its unauthenticated rate limit) but release downloads work.
-function sandbox() {
+const { version } = JSON.parse(readFileSync(new URL("../../../packages/board/package.json", import.meta.url), "utf8"));
+
+// A sandbox, as setup sees it: pi there, no gh, and a network where GitHub's API refuses it
+// (sandboxes share its unauthenticated rate limit) but release downloads work. npm, as far as
+// vb goes, is a registry of `name@version`s (`registry`) and one global vb that names the package
+// it's from (`vb`, like `@vercel/board@0.13.0`, or none). Like npm, it installs a vb over another
+// package's only with --force.
+function sandbox({ vb = "@vercel/board@0.13.0", registry = [] } = {}) {
   const home = mkdtempSync(join(tmpdir(), "setup-"));
   const bin = join(home, "bin");
+  const vbBin = join(home, "vb-bin");
   mkdirSync(bin);
-  for (const tool of ["tar", "gzip", "mkdir", "mktemp", "basename", "cp", "sed", "cat"]) {
+  mkdirSync(vbBin);
+  for (const tool of ["tar", "gzip", "mkdir", "mktemp", "basename", "cp", "sed", "cat", "chmod", "grep", "tail"]) {
     symlinkSync(execFileSync("bash", ["-c", `command -v ${tool}`], { encoding: "utf8" }).trim(), join(bin, tool));
   }
   const fake = (name, script) => {
     writeFileSync(join(bin, name), `#!/bin/bash\n${script}\n`);
     chmodSync(join(bin, name), 0o755);
   };
+  const at = (spec) => spec.lastIndexOf("@");
+  writeFileSync(join(home, "registry"), registry.map((spec) => `${spec}\n`).join(""));
+  if (vb) {
+    writeFileSync(join(vbBin, "owner"), `${vb.slice(0, at(vb))}\n`);
+    writeFileSync(join(vbBin, "vb"), `#!/bin/bash\necho ${vb.slice(at(vb) + 1)}\n`);
+    chmodSync(join(vbBin, "vb"), 0o755);
+  }
   fake("pi", "exit 0");
-  fake("vb", "exit 0");
-  fake("npm", 'echo "$*" >> "$HOME/npm.log"');
+  fake(
+    "npm",
+    `echo "$*" >> "$HOME/npm.log"
+[ "$1" = install ] || exit 0
+force=; spec=
+for arg in "\${@:2}"; do case "$arg" in --force) force=1 ;; -*) ;; *) spec="$arg" ;; esac; done
+case "$spec" in
+  @vercel/board) spec=$(grep "^@vercel/board@" "$HOME/registry" | tail -1) ;;
+  @vercel/board@*) ;;
+  *) exit 0 ;;
+esac
+[ -n "$spec" ] && grep -qxF "$spec" "$HOME/registry" || { echo "npm error 404" >&2; exit 1; }
+owner="$HOME/vb-bin/owner"
+if [ -z "$force" ] && [ -f "$owner" ] && [ "$(cat "$owner")" != "\${spec%@*}" ]; then
+  echo "npm error EEXIST: file already exists" >&2; exit 1
+fi
+echo "\${spec%@*}" > "$owner"
+printf '#!/bin/bash\\necho %s\\n' "\${spec##*@}" > "$HOME/vb-bin/vb"
+chmod +x "$HOME/vb-bin/vb"`,
+  );
   fake("install", 'cp "$1" "$HOME/gh"');
   fake(
     "curl",
@@ -35,8 +67,13 @@ case "$url" in
 esac`,
   );
   const bash = execFileSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).trim();
-  const run = () => spawnSync(bash, ["-c", SETUP], { env: { HOME: home, PATH: bin }, encoding: "utf8" });
-  return { run, gh: join(home, "gh"), npm: join(home, "npm.log") };
+  const run = () => spawnSync(bash, ["-c", SETUP], { env: { HOME: home, PATH: `${vbBin}:${bin}` }, encoding: "utf8" });
+  // The global vb after setup: the package it's from and the version it answers.
+  const installed = () =>
+    existsSync(join(vbBin, "vb"))
+      ? { from: readFileSync(join(vbBin, "owner"), "utf8").trim(), version: execFileSync(join(vbBin, "vb"), { encoding: "utf8" }).trim() }
+      : null;
+  return { run, installed, gh: join(home, "gh") };
 }
 
 test("a new sandbox gets gh while GitHub's API refuses it", () => {
@@ -46,10 +83,30 @@ test("a new sandbox gets gh while GitHub's API refuses it", () => {
   assert.ok(existsSync(gh), "gh is installed");
 });
 
-test("an old sandbox upgrades vb to the vboard this deployment was built with", () => {
-  const { run, npm } = sandbox();
+test("an old sandbox upgrades vb to the release this deployment was built with", () => {
+  const { run, installed } = sandbox({ registry: [`@vercel/board@${version}`] });
   const done = run();
   assert.equal(done.status, 0, done.stderr);
-  const { version } = JSON.parse(readFileSync(new URL("../../../packages/vboard/package.json", import.meta.url), "utf8"));
-  assert.match(readFileSync(npm, "utf8"), new RegExp(`install -g vboard@${version.replaceAll(".", "\\.")}\\b`));
+  assert.deepEqual(installed(), { from: "@vercel/board", version });
+});
+
+test("the release takes over a vb that another package installed", () => {
+  const { run, installed } = sandbox({ vb: "another-cli@2.0.0", registry: [`@vercel/board@${version}`] });
+  const done = run();
+  assert.equal(done.status, 0, done.stderr);
+  assert.deepEqual(installed(), { from: "@vercel/board", version });
+});
+
+test("until the release is on npm, the vb already here stays", () => {
+  const { run, installed } = sandbox({ registry: ["@vercel/board@0.0.0"] });
+  const done = run();
+  assert.equal(done.status, 0, done.stderr);
+  assert.deepEqual(installed(), { from: "@vercel/board", version: "0.13.0" });
+});
+
+test("a new sandbox gets the release", () => {
+  const { run, installed } = sandbox({ vb: null, registry: [`@vercel/board@${version}`] });
+  const done = run();
+  assert.equal(done.status, 0, done.stderr);
+  assert.deepEqual(installed(), { from: "@vercel/board", version });
 });

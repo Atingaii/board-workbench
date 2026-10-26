@@ -1,6 +1,6 @@
 "use server";
 
-import type { MessageView, ThreadSummaryView } from "vboard";
+import type { MessageView, ThreadSummaryView } from "@vercel/board";
 import { PINGS, team } from "@/lib/board";
 
 /** A message as the page shows it. */

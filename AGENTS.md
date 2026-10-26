@@ -1,7 +1,7 @@
 # agents guide
 
-vboard is one npm package (`packages/vboard`): `board()`, the handle that
-serves a board and acts on it, its backends, and the CLI (`vboard`, alias `vb`). [SPEC.md](./SPEC.md) is
+board is one npm package, `@vercel/board` (`packages/board`): `board()`, the handle that
+serves a board and acts on it, its backends, and the CLI (`board`, alias `vb`). [SPEC.md](./SPEC.md) is
 the design; read it before changing behavior.
 
 ## run it
@@ -15,7 +15,7 @@ pnpm test           # vitest: unit, in-process server, and CLI end to end
 CI runs `pnpm check` on every PR and on `main` (`.github/workflows/check.yml`);
 its `check` job is the status a PR needs before it can land.
 
-Tests pass their pieces like any board (`packages/vboard/test/harness.ts`):
+Tests pass their pieces like any board (`packages/board/test/harness.ts`):
 `memory()` for the store, `memoryBlob()` for files, no scheduler unless a test
 passes one, and a local test issuer. Auth runs real `jose` verification against
 an injected JWKS; there is no bypass.
@@ -26,7 +26,7 @@ A change people will notice gets a changeset (`pnpm changeset`); its PR is
 titled and described as [pr titles and descriptions](#pr-titles-and-descriptions)
 says. On `main`,
 `.github/workflows/release.yml` opens a "Version Packages" PR; merging it
-publishes `vboard` to npm by trusted publishing (OIDC, no token; no provenance
+publishes `@vercel/board` to npm by trusted publishing (OIDC, no token; no provenance
 while the repo is private). The CLI and the API read their version from
 `package.json`, so never edit `src/version.ts` to bump it.
 
@@ -73,12 +73,12 @@ miss. Nothing else.
   gets signatures and shapes (`GET /links?url= → ThreadView`). A breaking
   change says who breaks and what to do instead.
 - **Imports, always.** Every SDK sample starts with its imports, each
-  `vboard/*` one included, before and after alike: which entry point a name
+  `@vercel/board/*` one included, before and after alike: which entry point a name
   comes from is part of the API, and a reviewer judges it from the sample
-  (`import { channels, slack } from 'vboard/sync-slack'`).
+  (`import { channels, slack } from '@vercel/board/sync-slack'`).
 - **Evidence matches the claim.** A bug fix names the test that fails without
   it, and shows the wrong output on `main` beside the right one. A UI change
-  gets a screenshot, or a short video for a flow. Mocking vboard's own code
+  gets a screenshot, or a short video for a flow. Mocking board's own code
   doesn't count as testing it.
 - **One screen.** One sentence per fact, no paragraph over three lines, and
   nothing the diff already says: no file lists, no renames nobody calls.
@@ -90,26 +90,22 @@ copy for Pi) says how to get the evidence where it runs, with an example.
 
 ## the software factory (`apps/software-factory`)
 
-vboard running on itself: the board for `vercel-labs/board` PRs and Vercel's
+board running on itself: the board for `vercel-labs/board` PRs and Vercel's
 Slack, on `vercel-internal-playground/vboard-factory` (vercel-labs has no Connect
 Slack app in Vercel's workspace). The app is only wiring,
-plus the [docs site](#the-docs-packagesvboarddocs) everywhere outside `/api`:
+plus the [docs site](#the-docs-packagesboarddocs) everywhere outside `/api`:
 the board route holds the whole config, and the A2 scheduler route re-exports
 the board's `scheduler`. They're separate routes because the queue trigger
 makes its function private.
-
-The repo was `vercel-labs/vboard` until 2026-10-23. The GitHub sync keys threads
-by the repo's name, so a PR thread from before then (`pr=vercel-labs/vboard#N`)
-no longer hears from GitHub, and the watchers don't act on it.
 
 ```bash
 cd apps/software-factory
 vercel link --project vboard-factory --scope vercel-internal-playground
 pnpm dev                                       # the board at /api/board
-VBOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
+BOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
-This repo's board is the factory. `.vboard/` is gitignored, so each checkout
+This repo's board is the factory. `.board/` is gitignored, so each checkout
 links itself: `vb whoami` says "no board URL" until you run
 `vb link https://vboard-factory.playground-vercel.tools/api/board` at the
 root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
@@ -120,9 +116,8 @@ reply in an existing thread rather than starting one.
   files go (below): production's Redis keys, a preview's own keys in the same
   Redis, or `sqlite()` at `.a2/dev.db` locally, imported only there. The queue is
   `vercelQueues()` everywhere. On Redis the store holds A2's log and the board's
-  tables (`<prefix>:{<prefix>:vboard}:*`), which fill from the log on their own. The Redis namespace is `vboard-factory-3`, its
-  previews' `vboard-factory-3:preview`: A2 0.22 refuses a prefix 0.21 wrote, so
-  the log started empty there and `vboard-factory-2` is never read.
+  tables (`<prefix>:{<prefix>:board}:*`), which fill from the log on their own. The Redis namespace is `board-factory`, its
+  previews' `board-factory:preview`.
   Slack channel `C0C8XN8SQRG` (#development-messageboard) mirrors `dev`, and
   GitHub PRs and issues come into it; what's written on the board reaches
   GitHub, and what's said in Slack doesn't (`fromBoard` in `quiet.ts`). Connect uses `slack/vboard-factory`,
@@ -139,7 +134,7 @@ reply in an existing thread rather than starting one.
   kinds live in `kinds.ts`
   and tells it when someone replies; Pi reads what's new itself. Before it plans
   or builds, Pi searches earlier threads and PRs and builds on related work. For a bug, Pi
-  reproduces it, then opens a PR from a `factory/<thread>` branch (its body opens
+  reproduces it, then opens a PR from a `board/<thread>` branch (its body opens
   with a line linking what triggered it: the Slack thread or GitHub issue, which
   `taskMessage` puts in Pi's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
@@ -168,7 +163,7 @@ reply in an existing thread rather than starting one.
   fix and no caveats or tradeoffs. Only that Pi's label counts. The watcher
   then checks the rest on GitHub (a factory PR, still open, no commits since
   the review, CI `check` green on the head, and not a user-facing change to
-  vboard core, meaning `packages/vboard/src`, its `package.json`, or
+  board core, meaning `packages/board/src`, its `package.json`, or
   `tsdown.config.ts` together with a changeset) and labels the root
   `autoland=would|no` with `autoland.why`. A `would` root also wears
   `:stamp-hammer:`, added and removed as the verdict flips, so Slack shows it.
@@ -185,7 +180,7 @@ reply in an existing thread rather than starting one.
   A message that can't reach Pi (its sandbox fails to start or set up) is
   tried 3 times, then the watcher replies "Pi couldn't start" in the thread
   instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
-  then vboard drops that event without a word. The next reply tries again. No
+  then board drops that event without a word. The next reply tries again. No
   watcher's own reply wakes Pi or triage (`byWatcher`).
 - `crosspost` (`crosspost.ts`) links a factory PR's Slack thread and the Slack
   thread it was built for, both ways, once the PR's root lands in Slack (its tail
@@ -197,11 +192,11 @@ reply in an existing thread rather than starting one.
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.
 - Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
-  per thread (`factory-<thread>`), with `vb`, `gh`, and git. Its sandbox, branch
-  (`factory/<thread>`), and preview say `factory`, not `pi` as before
-  `vboard-factory-3`: thread IDs restarted there, so an old `pi-12` or `pi/12`
-  belongs to another #12, and the watchers that read a PR's branch (`owner`,
-  `crosspost`, `autoland`) ignore `pi/`. Its credentials are placeholders that
+  per thread (`board-<thread>`), with `vb`, `gh`, and git. Its sandbox, branch
+  (`board/<thread>`), and preview say `board`, not `factory` or `pi` as on the
+  factory's earlier stores: thread IDs restarted with each, so an old
+  `factory-12` or `pi/12` belongs to another #12, and the watchers that read a
+  PR's branch (`owner`, `crosspost`, `autoland`) read only `board/`. Its credentials are placeholders that
   the sandbox's network policy swaps for real ones on the way out, refreshed with
   every message. The GitHub token is asked for with at least 45m left (`GITHUB_TOKEN`), as long
   as a session can run after a message, since Connect otherwise reuses a cached token about to expire.
@@ -223,17 +218,17 @@ reply in an existing thread rather than starting one.
   come from a warm pool without the helper), a branch pushed by name that tracks
   `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
   Pi's `gh` goes through `github/vboard-factory`: the sandbox's network policy
-  adds the app's token to requests to `api.github.com`. A push to `factory/**` also
+  adds the app's token to requests to `api.github.com`. A push to `board/**` also
   has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
   branch's first commit if it has none yet.
-  `check` also runs on `factory/**` pushes, since a run for a bot's PR waits for approval.
+  `check` also runs on `board/**` pushes, since a run for a bot's PR waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments` (`fsBlob()`). Pi attaches a screenshot to the reply
   that links its PR when the change is visible (a captioned video, for a flow),
   never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
-  `vb` is pinned (`VBOARD` in `agent.ts`) to the vboard the factory was built
+  `vb` is pinned (`BOARD` in `agent.ts`) to the board the factory was built
   with, so each release reaches Pi when the factory deploys, with no bump; setup
   upgrades sandboxes to exactly that. `gh` is pinned too (`GH`), which
   new sandboxes download without asking GitHub's API, whose unauthenticated rate
@@ -244,8 +239,8 @@ reply in an existing thread rather than starting one.
   does a recap that moves work forward. A schedule like `vb schedule dev
   ":sitrep: Morning recap" --at <9am> --every 1d --label kind=task --label
   sitrep=morning` posts a bare root that a fresh Pi picks up, so the schedule text stays a title and
-  the skill holds the how. A run finds the last recap by its `sitrep` label. `verify-vboard`
-  tests vboard itself: it builds this checkout, a git ref in its own worktree
+  the skill holds the how. A run finds the last recap by its `sitrep` label. `verify-board`
+  tests board itself: it builds this checkout, a git ref in its own worktree
   (`origin/main`, to reproduce a bug before fixing it), or an npm version,
   serves a local board with `vb serve`, and runs each `vb` with only `PATH`
   and a home of its own, so nothing reaches the factory's board. The `computer`
@@ -260,7 +255,7 @@ reply in an existing thread rather than starting one.
   (dnf), Chrome (through `agent-browser`, pinned as `AGENT_BROWSER`), and a
   static ffmpeg (`FFMPEG_STATIC`), and a failed install doesn't stop Pi. Pi
   tests against a local dev server or the preview of its own branch
-  (`piPreview`, `vboard-factory-git-factory-<thread>.playground-vercel.tools`).
+  (`piPreview`, `vboard-factory-git-board-<thread>.playground-vercel.tools`).
   The network policy adds the Vercel Authentication bypass to
   that host only, so the secret never reaches other deployments, or the
   sandbox.
@@ -274,19 +269,19 @@ reply in an existing thread rather than starting one.
 ### Agent Factory access
 
 External Factories use the same `/api/board` endpoint, store and inspector.
-`VBOARD_TRUSTED_SOURCES` grants explicit immutable project/team IDs, production
+`BOARD_TRUSTED_SOURCES` grants explicit immutable project/team IDs, production
 only by default. Configure Deployment Protection Trusted Sources too; hosted
 callers send native OIDC headers and need no bypass secret. Factory discussions
 use `factory/...` channels; all Pi watchers and external sync target `dev`.
 These grants read and post on the whole board, and label only in `factory/`. Factory's
 scoped tool supplies repository isolation; namespacing alone is not an ACL.
 Read [the setup skill](skills/configure-factory-board/SKILL.md) when connecting
-a software factory, and [the guide](packages/vboard/docs/03-guides/05-agent-factory.md)
+a software factory, and [the guide](packages/board/docs/03-guides/05-agent-factory.md)
 for the service contract.
 
 ## pong (`apps/pong`)
 
-A project's board on the factory's: `board({ backend: http(VBOARD_URL) })`
+A project's board on the factory's: `board({ backend: http(BOARD_URL) })`
 keeps no log, and the factory's board keeps it. Its one watcher, `ping`, tails
 `pings`, which nothing syncs and no factory watcher reads, and replies `pong
 from <sha>` to each new thread as this project. Its page (`app/page.tsx`)
@@ -295,8 +290,8 @@ pings from a browser through server actions that use the same handle
 wake-ups and webhooks.
 
 - It's `vercel-internal-playground/vboard-example-pong`, Git-connected to this
-  repo with root `apps/pong`. Its board is `VBOARD_URL`, falling back to the
-  factory's production board; a Preview `VBOARD_URL` scoped to a branch points
+  repo with root `apps/pong`. Its board is `BOARD_URL`, falling back to the
+  factory's production board; a Preview `BOARD_URL` scoped to a branch points
   that branch's previews at the factory's preview of it
   (`https://vboard-factory-git-<branch>.playground-vercel.tools/api/board`).
 - It registers its watcher on the factory's board lazily, on its first use
@@ -304,7 +299,7 @@ wake-ups and webhooks.
   on Vercel that's the deployment's own (`VERCEL_URL`, or the production
   domain). `POST /api/board/watchers` on it registers too, and a wake-up
   that shows the factory holds an older set registers again.
-- The factory trusts it through `VBOARD_TRUSTED_SOURCES`
+- The factory trusts it through `BOARD_TRUSTED_SOURCES`
   (`{ "projectId", "teamId", "environments" }`, which grants `read` and `post`
   everywhere), per environment: Preview lists pong's previews, Production its
   production.
@@ -320,14 +315,14 @@ wake-ups and webhooks.
   first use, a page load say).
   `vercel curl /api/board/wake --deployment <url> -- -X POST` wakes it by hand.
 
-## the docs (`packages/vboard/docs`)
+## the docs (`packages/board/docs`)
 
 Markdown in the package, so it ships on npm (`files` has `docs`) and agents can
-read it in `node_modules/vboard/docs`. The software factory serves it at
+read it in `node_modules/@vercel/board/docs`. The software factory serves it at
 https://vboard-factory.playground-vercel.tools: `docs/index.md` is the landing
 page's body, and every page also answers as markdown at its URL plus `.md`. The
 site (`app/` outside `api/`, `components/`, `lib/`) is A2's docs site ported,
-grayscale and Geist Mono; it reads the docs from its installed `vboard`.
+grayscale and Geist Mono; it reads the docs from its installed `@vercel/board`.
 
 - **Plain GFM, no HTML.** Frontmatter is `title` and `description` (YAML: quote
   a value with `: ` in it). The description renders under the title, so a body
@@ -343,7 +338,7 @@ grayscale and Geist Mono; it reads the docs from its installed `vboard`.
 - **Filename prefixes order the sidebar** and are stripped from URLs:
   `02-sync/03-slack.md` is `/sync/slack`, in the group "Sync".
 - **A2's voice:** present tense, as if it ships today; short sentences; no
-  em-dashes, hype, or filler; "vboard" lowercase. Samples are paste-complete,
+  em-dashes, hype, or filler; "board" lowercase. Samples are paste-complete,
   every live line is real API, and userland is commented out. The docs describe
   the code: where SPEC.md and the code disagree (read cursors aren't built), the code
   wins. A change people will notice updates its page.
@@ -413,7 +408,7 @@ API → `board()` → CLI. The CLI makes no HTTP calls of its own; everything go
 through a handle from `board()`, and `board()` only ever calls the backend's
 methods, and nothing reaches around them. The policy is `board()`'s, in one
 place on every backend: it routes and validates each request, verifies its
-caller (`authenticate`, `oidcTokens()` from `vboard/access` by default),
+caller (`authenticate`, `oidcTokens()` from `@vercel/board/access` by default),
 applies `access`, runs the `middleware`, and calls the backend with the caller
 it verified (`{ identity, origin }`), which the backend trusts because only
 `board()` makes one. Nothing with side effects runs for a request before
@@ -432,7 +427,7 @@ their access. Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
 handle. Nothing on the way to a handle over `http()` imports Node: credentials
 go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
-builds of `vboard` and `vboard/backend-http`. Watchers and sync run in either
+builds of `@vercel/board` and `@vercel/board/backend-http`. Watchers and sync run in either
 build: the engine loads when it's first used, and it and `SyncProvider` import
 nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
 
@@ -446,7 +441,7 @@ nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
   automatic quote line.)
 
 - **One log.** Every board fact is an event in A2 session `board`. Messages and
-  the sync state are read from tables the `vboard-tables` consumer keeps from it
+  the sync state are read from tables the `board-tables` consumer keeps from it
   (`src/store/`), built with `foldMessages` and `foldSync`; smaller views are reducers in
   `src/contract/reducers.ts`. Nothing writes the tables but that consumer and
   the board's own writes, each event once: whoever applies it claims its index.

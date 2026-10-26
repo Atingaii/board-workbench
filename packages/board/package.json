@@ -1,0 +1,169 @@
+{
+  "name": "@vercel/board",
+  "version": "0.16.0",
+  "description": "A message board you mount in one route: one durable log, verified authors, live tail, and two-way sync.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "sql",
+    "README.md"
+  ],
+  "bin": {
+    "board": "./dist/cli.mjs",
+    "vb": "./dist/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "node": "./dist/index.node.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./access": {
+      "types": "./dist/access.d.mts",
+      "default": "./dist/access.mjs"
+    },
+    "./conformance": {
+      "types": "./dist/conformance.d.mts",
+      "default": "./dist/conformance.mjs"
+    },
+    "./backend-a2": {
+      "types": "./dist/backend-a2.d.mts",
+      "default": "./dist/backend-a2.mjs"
+    },
+    "./backend-a2/contract": {
+      "types": "./dist/backend-a2/contract.d.mts",
+      "default": "./dist/backend-a2/contract.mjs"
+    },
+    "./backend-a2/blob-vercel": {
+      "types": "./dist/backend-a2/blob-vercel.d.mts",
+      "default": "./dist/backend-a2/blob-vercel.mjs"
+    },
+    "./backend-a2/store-postgres": {
+      "types": "./dist/backend-a2/store-postgres.d.mts",
+      "default": "./dist/backend-a2/store-postgres.mjs"
+    },
+    "./backend-a2/store-redis": {
+      "types": "./dist/backend-a2/store-redis.d.mts",
+      "default": "./dist/backend-a2/store-redis.mjs"
+    },
+    "./backend-a2/store-redis-http": {
+      "types": "./dist/backend-a2/store-redis-http.d.mts",
+      "default": "./dist/backend-a2/store-redis-http.mjs"
+    },
+    "./backend-a2/store-sqlite": {
+      "types": "./dist/backend-a2/store-sqlite.d.mts",
+      "default": "./dist/backend-a2/store-sqlite.mjs"
+    },
+    "./backend-a2/store-memory": {
+      "types": "./dist/backend-a2/store-memory.d.mts",
+      "default": "./dist/backend-a2/store-memory.mjs"
+    },
+    "./backend-a2/scheduler-vercel": {
+      "types": "./dist/backend-a2/scheduler-vercel.d.mts",
+      "default": "./dist/backend-a2/scheduler-vercel.mjs"
+    },
+    "./backend-a2/scheduler-qstash": {
+      "types": "./dist/backend-a2/scheduler-qstash.d.mts",
+      "default": "./dist/backend-a2/scheduler-qstash.mjs"
+    },
+    "./backend-a2/scheduler-local": {
+      "types": "./dist/backend-a2/scheduler-local.d.mts",
+      "default": "./dist/backend-a2/scheduler-local.mjs"
+    },
+    "./backend-http": {
+      "types": "./dist/backend-http.d.mts",
+      "node": "./dist/backend-http.node.mjs",
+      "default": "./dist/backend-http.mjs"
+    },
+    "./sync": {
+      "types": "./dist/sync.d.mts",
+      "default": "./dist/sync.mjs"
+    },
+    "./sync/chat": {
+      "types": "./dist/sync.chat.d.mts",
+      "default": "./dist/sync.chat.mjs"
+    },
+    "./sync-slack": {
+      "types": "./dist/sync-slack.d.mts",
+      "default": "./dist/sync-slack.mjs"
+    },
+    "./sync-github": {
+      "types": "./dist/sync-github.d.mts",
+      "default": "./dist/sync-github.mjs"
+    },
+    "./sync-kapso": {
+      "types": "./dist/sync-kapso.d.mts",
+      "default": "./dist/sync-kapso.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown && node scripts/schema.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "tsdown && node scripts/schema.ts",
+    "pretest": "tsdown --log-level warn"
+  },
+  "dependencies": {
+    "@chat-adapter/github": "^4.41.1",
+    "@chat-adapter/slack": "^4.41.1",
+    "@vercel/connect": "^2.3.4",
+    "@vercel/oidc": "^3.8.9",
+    "chat": "^4.41.1",
+    "experimental-a2": "0.22.0",
+    "jose": "^6.2.12",
+    "zod": "^4.6.5"
+  },
+  "peerDependencies": {
+    "@upstash/qstash": "^2.11.0",
+    "@vercel/blob": "^2.8.0",
+    "@vercel/queue": "*",
+    "ioredis": "^5.4.0",
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "@base-ui/react": "^1.8.0",
+    "@chat-adapter/tests": "^4.41.1",
+    "@electric-sql/pglite": "0.3.15",
+    "@kapso/chat-adapter": "^0.1.1",
+    "@types/node": "^26.6.3",
+    "@types/pg": "8.15.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vercel/blob": "^2.8.0",
+    "ai": "^7.0.130",
+    "ioredis": "5.11.1",
+    "lucide-react": "^1.49.0",
+    "pg": "^8.16.3",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "tsdown": "^0.23.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "peerDependenciesMeta": {
+    "@upstash/qstash": {
+      "optional": true
+    },
+    "@vercel/blob": {
+      "optional": true
+    },
+    "@vercel/queue": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  }
+}
