@@ -19,7 +19,7 @@ const slackSource = {
   author: { handle: "JB", name: "Julian Benegas" },
 };
 
-function harness({ ref = "factory/2326", source = slackSource } = {}) {
+function harness({ ref = "board/2326", source = slackSource } = {}) {
   const requests = [];
   const labels = [];
   const replies = [];

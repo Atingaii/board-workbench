@@ -1,8 +1,9 @@
-import { board } from "vboard";
-import { a2, fsBlob } from "vboard/backend-a2";
-import { slack } from "vboard/sync-slack";
-import { github } from "vboard/sync-github";
-import { vercelBlob } from "vboard/backend-a2/blob-vercel";
+import { board } from "@vercel/board";
+import { a2, fsBlob } from "@vercel/board/backend-a2";
+import { render } from "@vercel/board/sync";
+import { channels, slack } from "@vercel/board/sync-slack";
+import { github, repos } from "@vercel/board/sync-github";
+import { vercelBlob } from "@vercel/board/backend-a2/blob-vercel";
 import { queues, store } from "./a2";
 import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
@@ -14,12 +15,12 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
-import { boardOnly, unseenPr } from "./quiet";
+import { boardOnly, fromBoard, unseenPr } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 import { vercelTrustedSources } from "./trusted-sources";
 
-// The software factory: vboard running on its own repo and Vercel's Slack. Its log is
+// The software factory: board running on its own repo and Vercel's Slack. Its log is
 // in `a2.ts`; locally there's no VERCEL_ENV, so attachments are files in .a2/attachments.
 const env = process.env.VERCEL_ENV;
 
@@ -37,39 +38,41 @@ const backend = a2({
 const factory = board({
   backend,
   // Factories elsewhere that may use this board, by project and team.
-  access: vercelTrustedSources(process.env.VBOARD_TRUSTED_SOURCES),
+  access: vercelTrustedSources(process.env.BOARD_TRUSTED_SOURCES),
   // Every message from Slack, GitHub, or CI is checked for prompt injection before it lands.
   // Shadow mode: a flagged one is labeled guard=injection, and nothing is dropped yet.
   middleware: [guard({ mode: "shadow" })],
   sync: {
-    // Connect connectors: vboard builds the adapters, and people who sign in
+    // Connect connectors: board builds the adapters, and people who sign in
     // (`vb identity link slack`) post as themselves.
-    slack: slack({
-      adapter: "slack/vboard-factory",
-      render: renderForSlack,
-      channels: {
-        // #development-messageboard
-        C0C8XN8SQRG: "dev",
-      },
-    }),
-    github: github({
-      adapter: CONNECTOR,
-      repos: {
+    slack: slack(
+      "slack/vboard-factory",
+      render(
+        renderForSlack,
+        channels({
+          // #development-messageboard
+          C0C8XN8SQRG: "dev",
+        }),
+      ),
+    ),
+    // What's written on the board reaches GitHub (Pi answering an issue's thread, crosspost's note on a
+    // PR); what's said in Slack stays in Slack and on the board.
+    github: github(
+      CONNECTOR,
+      repos({
         [REPO]: {
           // Inline review threads and "closed by …" replies stay on GitHub and the board,
           // out of Slack: top-level comments, review verdicts and merges still go through.
           // Comments on a PR the board has no thread for stay on GitHub.
-          pulls: {
-            channel: "dev",
-            run: async ({ event, board }) => {
-              if (await unseenPr(event, board, "dev")) return;
-              await board.sync("dev", event, { noSync: boardOnly(event) });
-            },
+          pulls: async (sync) => {
+            if (sync.direction === "out") return fromBoard(sync);
+            if (await unseenPr(sync.event, sync.board, "dev")) return;
+            await sync.import("dev", { noSync: boardOnly(sync.event) });
           },
-          issues: "dev",
+          issues: async (sync) => (sync.direction === "in" ? sync.import("dev") : fromBoard(sync)),
         },
-      },
-    }),
+      }),
+    ),
   },
   watch: {
     shipit: shipit({ tellPi }),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { vercelProject } from "vboard/access";
+import { vercelProject } from "@vercel/board/access";
 
 const sourcesSchema = z.array(z.strictObject({
   projectId: z.string().regex(/^prj_[A-Za-z0-9]+$/),
@@ -19,10 +19,10 @@ export function vercelTrustedSources(value: string | undefined) {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected valid JSON");
+    throw new Error("Invalid BOARD_TRUSTED_SOURCES: expected valid JSON");
   }
   const result = sourcesSchema.safeParse(parsed);
-  if (!result.success) throw new Error("Invalid VBOARD_TRUSTED_SOURCES: expected projectId, teamId and optional environments");
+  if (!result.success) throw new Error("Invalid BOARD_TRUSTED_SOURCES: expected projectId, teamId and optional environments");
   return result.data.map(({ projectId, teamId, environments }) => {
     const rule = vercelProject({
       project: projectId,

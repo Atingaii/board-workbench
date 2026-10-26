@@ -5,7 +5,7 @@ dist
 .env*.local
 *.tgz
 .vercel
-.vboard/
+.board/
 .next
 next-env.d.ts
 .env*

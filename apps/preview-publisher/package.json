@@ -7,6 +7,6 @@
     "test:smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "vboard": "workspace:*"
+    "@vercel/board": "workspace:*"
   }
 }

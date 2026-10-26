@@ -3,8 +3,8 @@ import { join, posix } from "node:path";
 import { cache } from "react";
 import { parse } from "yaml";
 
-/** The docs ship in the vboard package (`docs/`), so the site reads them from its install. */
-const ROOT = join(process.cwd(), "node_modules/vboard/docs");
+/** The docs ship in the board package (`docs/`), so the site reads them from its install. */
+const ROOT = join(process.cwd(), "node_modules/@vercel/board/docs");
 
 export type Doc = {
   /** URL segments, without the numeric ordering prefixes. */
@@ -24,7 +24,7 @@ export type Group = {
 };
 
 export const REPO = "https://github.com/vercel-labs/board";
-export const NPM = "https://www.npmjs.com/package/vboard";
+export const NPM = "https://www.npmjs.com/package/@vercel/board";
 export const TAGLINE = "The programmable message board.";
 
 const unprefixed = (name: string): string => name.replace(/^\d+-/, "");
@@ -93,7 +93,7 @@ export function getSource(doc: Doc): Promise<string> {
   return readFile(join(ROOT, doc.file), "utf8");
 }
 
-export const editUrl = (doc: Doc): string => `${REPO}/edit/main/packages/vboard/docs/${doc.file}`;
+export const editUrl = (doc: Doc): string => `${REPO}/edit/main/packages/board/docs/${doc.file}`;
 
 /** A link in a page's markdown is relative when it isn't a URL, an absolute path, or an anchor. */
 export const isRelative = (url: string): boolean => !/^([a-z][a-z0-9+.-]*:|\/|#)/i.test(url);

@@ -6,13 +6,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { piAvatar, piFiles, piName, piPreview, piSandbox, policy } from "../app/api/board/[[...path]]/agent.ts";
-import { routes } from "../../../packages/vboard/src/api/routes.ts";
+import { routes } from "../../../packages/board/src/api/routes.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "skills/ui-video/scripts/ui-video");
 const tokens = { gateway: "g", board: "b", github: "h" };
 
-test("piFiles: the ui-video, verify-vboard, sitrep and pr-description skills and the computer tool go in Pi's home, scripts executable", async () => {
+test("piFiles: the ui-video, verify-board, sitrep and pr-description skills and the computer tool go in Pi's home, scripts executable", async () => {
   const files = await piFiles(root);
   const home = "/home/vercel-sandbox/.pi/agent";
   assert.deepEqual(
@@ -20,8 +20,8 @@ test("piFiles: the ui-video, verify-vboard, sitrep and pr-description skills and
     [
       [`${home}/skills/ui-video/SKILL.md`, 0o644],
       [`${home}/skills/ui-video/scripts/ui-video`, 0o755],
-      [`${home}/skills/verify-vboard/SKILL.md`, 0o644],
-      [`${home}/skills/verify-vboard/scripts/verify-vboard`, 0o755],
+      [`${home}/skills/verify-board/SKILL.md`, 0o644],
+      [`${home}/skills/verify-board/scripts/verify-board`, 0o755],
       [`${home}/skills/sitrep/SKILL.md`, 0o644],
       [`${home}/skills/pr-description/SKILL.md`, 0o644],
       [`${home}/extensions/computer/index.ts`, 0o644],
@@ -29,7 +29,7 @@ test("piFiles: the ui-video, verify-vboard, sitrep and pr-description skills and
     ],
   );
   assert.match(String(files[0].content), /^---\nname: ui-video\ndescription: .+\n---\n/);
-  assert.match(String(files[2].content), /^---\nname: verify-vboard\ndescription: .+\n---\n/);
+  assert.match(String(files[2].content), /^---\nname: verify-board\ndescription: .+\n---\n/);
   assert.match(String(files[4].content), /^---\nname: sitrep\ndescription: .+\n---\n/);
   assert.match(String(files[5].content), /^---\nname: pr-description\ndescription: .+\n---\n/);
   assert.match(String(files[6].content), /registerTool\(computer\)/);
@@ -37,8 +37,8 @@ test("piFiles: the ui-video, verify-vboard, sitrep and pr-description skills and
 
 test("policy: Pi's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {
   const allow = policy("3100", tokens, "s3cret").allow;
-  // Vercel's branch URL for factory/3100: the branch's `/` becomes `-`.
-  assert.equal(piPreview("3100"), "vboard-factory-git-factory-3100.playground-vercel.tools");
+  // Vercel's branch URL for board/3100: the branch's `/` becomes `-`.
+  assert.equal(piPreview("3100"), "vboard-factory-git-board-3100.playground-vercel.tools");
   assert.deepEqual(allow[piPreview("3100")], [{ transform: [{ headers: { "x-vercel-protection-bypass": "s3cret" } }] }]);
   const withSecret = Object.entries(allow).filter(([, rules]) => JSON.stringify(rules).includes("s3cret"));
   assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview("3100")].sort());
@@ -46,8 +46,8 @@ test("policy: Pi's own branch preview gets past Vercel Authentication, and no ot
   assert.equal(policy("3100", tokens, undefined).allow[piPreview("3100")], undefined);
 });
 
-test("a thread's sandbox is factory-<thread>, not an old board's pi-<thread>", () => {
-  assert.equal(piSandbox("3100"), "factory-3100");
+test("a thread's sandbox is board-<thread>, not an old board's factory-<thread>", () => {
+  assert.equal(piSandbox("3100"), "board-3100");
 });
 
 // The headers the sandbox's proxy adds to a request for `path` on `host`, as it reads a rule's path match.

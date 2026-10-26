@@ -105,11 +105,11 @@ test("GITHUB_TOKEN: Pi never gets a cached GitHub token that dies before its ses
 });
 
 test("byWatcher: the board's watchers' own notes, which wake neither Pi nor triage", () => {
-  assert.ok(byWatcher({ actor: "vboard:watch:crosspost" }));
-  assert.ok(byWatcher({ actor: "vboard:watch:security" }));
-  assert.ok(byWatcher({ actor: "vboard:watch:pi" }));
+  assert.ok(byWatcher({ actor: "board:watch:crosspost" }));
+  assert.ok(byWatcher({ actor: "board:watch:security" }));
+  assert.ok(byWatcher({ actor: "board:watch:pi" }));
   assert.ok(!byWatcher({ actor: "slack:user:U123" }));
-  assert.ok(!byWatcher({ actor: "vboard:schedule" }));
+  assert.ok(!byWatcher({ actor: "board:schedule" }));
 });
 
 test("byAgent: a coding agent's or Pi's message, which triage doesn't judge, and not a person's", () => {
@@ -162,9 +162,9 @@ test("the reviewer tells the PR's source thread, and that thread's Pi acts on it
   assert.match(INSTRUCTIONS.thread, /gets the reviewer to look again/);
 });
 
-test("Pi's branch for a thread is factory/<thread id>", async () => {
+test("Pi's branch for a thread is board/<thread id>", async () => {
   const { INSTRUCTIONS } = await import("../app/api/board/[[...path]]/agent.ts");
-  assert.match(INSTRUCTIONS.thread, /a branch named factory\/<thread id>/);
-  assert.match(INSTRUCTIONS.review, /its branch is factory\/<id>/);
-  for (const text of Object.values(INSTRUCTIONS)) assert.doesNotMatch(text, /\bpi\/</);
+  assert.match(INSTRUCTIONS.thread, /a branch named board\/<thread id>/);
+  assert.match(INSTRUCTIONS.review, /its branch is board\/<id>/);
+  for (const text of Object.values(INSTRUCTIONS)) assert.doesNotMatch(text, /\b(?:pi|factory)\/</);
 });
