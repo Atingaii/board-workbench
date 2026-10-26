@@ -3,9 +3,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { z } from 'zod'
 import { A2Error, idempotentId, reducer } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type ConsumerContext } from 'experimental-a2/server'
-import { boardContract, BOARD_SESSION, IDENTITY_SESSION, identityContract, inboxContract, INBOXES_SESSION, inboxSession, SCHEDULES_SESSION, type BoardEvent, type BoardEvents, type InboxEvent } from '../contract/contract.ts'
+import { boardContract, IDENTITY_SESSION, identityContract, inboxContract, INBOXES_SESSION, inboxSession, SCHEDULES_SESSION, type InboxEvent } from '../contract/contract.ts'
+import { BOARD_SESSION, type BoardEvent, type BoardEvents } from '../contract/events.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
-import { actorsReducer, channelsReducer, identityCodesReducer, linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/reducers.ts'
+import { actorsReducer, channelsReducer, identityCodesReducer } from '../contract/reducers.ts'
+import { linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/folds.ts'
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, LinkedAccount, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
@@ -25,25 +27,8 @@ import { ack, pull, pullInbox, queueReducer, type QueueSession } from './registe
 import { createRegistry, storedPrincipal, type Registration, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
 import { publicPost, type Post } from './transport.ts'
-import {
-  authorizeMessage,
-  authorizeOwn,
-  authorizePost,
-  blindText,
-  trusted,
-  writeAttach,
-  writeDelete,
-  writeEdit,
-  writeLabels,
-  writeLinks,
-  writePost,
-  writeReaction,
-  deploymentIdentity,
-  landedFor,
-  type Identity,
-  type WriteContext,
-  type WriteOrigin,
-} from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import type { WriteOrigin } from './origin.ts'
 import { isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
 import { VERSION } from '../version.ts'

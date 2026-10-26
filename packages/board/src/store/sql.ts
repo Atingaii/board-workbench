@@ -1,6 +1,6 @@
-import type { BoardEvent } from '../contract/contract.ts'
+import type { BoardEvent } from '../contract/events.ts'
 import { setOwn } from '../contract/own.ts'
-import type { ExternalCopy, Message, SyncedThread } from '../contract/reducers.ts'
+import type { ExternalCopy, Message, SyncedThread } from '../contract/folds.ts'
 import { externalMessageKey } from '../contract/external.ts'
 import { concernedMessageId, project, projectSync, syncReads, type Before, type Change, type SyncChange } from './project.ts'
 import type { MessageFilter, MessageTables, Page, ThreadSummary } from './types.ts'

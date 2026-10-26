@@ -1,6 +1,6 @@
 import type { A2Store } from 'experimental-a2/server'
-import type { BoardEvent } from '../contract/contract.ts'
-import type { ExternalCopy, Message, SyncedThread } from '../contract/reducers.ts'
+import type { BoardEvent } from '../contract/events.ts'
+import type { ExternalCopy, Message, SyncedThread } from '../contract/folds.ts'
 
 /**
  * What a query matches, resolved by the board: handles are already actor and

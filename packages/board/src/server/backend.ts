@@ -2,13 +2,13 @@ import type { Protocol } from '../api/protocol.ts'
 import type { MessageView, SourceRead } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
 import type { ExternalEvent } from '../contract/external.ts'
-import type { Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/folds.ts'
 import type { Author } from '../contract/schemas.ts'
 import type { Access } from './access.ts'
 import type { Granted, Known } from './auth.ts'
 import type { Board } from './board.ts'
-import type { WatcherContext } from './watch.ts'
-import type { WriteOrigin } from './writes.ts'
+import type { WatcherContext } from './watcher.ts'
+import type { WriteOrigin } from './origin.ts'
 
 /**
  * Who a verified caller is: its principal, with what board()'s `access` lets it do now (its scope

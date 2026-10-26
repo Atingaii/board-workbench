@@ -1,9 +1,12 @@
 import { A2Error, idempotentId } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type A2Store, type ConsumerContext } from 'experimental-a2/server'
 import type { BoardEventView } from '../api/routes.ts'
+import type { Watcher, WatcherContext } from './watcher.ts'
 import type { Board } from './board.ts'
-import { boardContract, watchContract, watchSession, type BoardEvent, type BoardEvents } from '../contract/contract.ts'
-import { actorsReducer, type Message, type MessagesState } from '../contract/reducers.ts'
+import { boardContract, watchContract, watchSession } from '../contract/contract.ts'
+import type { BoardEvent, BoardEvents } from '../contract/events.ts'
+import { actorsReducer } from '../contract/reducers.ts'
+import type { Message, MessagesState } from '../contract/folds.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import { compileFilter, eventView, foldEvent, loadBefore, OWN_CODE, view as messageView } from './feed.ts'
 import { compileWatcher, type Compiled } from './watch-spec.ts'
@@ -12,28 +15,6 @@ import { arm, due, hasWork, queueReducer, wakeBackoff, type QueueSession } from 
 import type { Registration, RegistryState, StoredPrincipal } from './registry.ts'
 import { A2_TRIES, afterRetry } from './attempts.ts'
 
-/** What a watcher's `run` gets. */
-export type WatcherContext = {
-  /** Exactly what `vb tail --json` prints. */
-  event: BoardEventView
-  /** The board, acting as this watcher. */
-  board: Board
-}
-
-/** A `vb tail` the board runs for you: every event the tail would print, handed to `run`. */
-export type Watcher = {
-  /**
-   * A `vb tail` expression without `vb tail`: `firehose --label status=needs-agent`. `--all` adds
-   * delivery receipts, as in `vb tail`: `message.synced` says where a message landed on a platform.
-   */
-  tail: string
-  /**
-   * `matches` (the default) runs on every event the tail prints. `enters` runs only when a
-   * message enters the view: it didn't match before the event and does after it.
-   */
-  when?: 'matches' | 'enters'
-  run: (context: WatcherContext) => unknown
-}
 
 export const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 

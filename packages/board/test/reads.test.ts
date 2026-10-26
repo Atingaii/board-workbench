@@ -1,7 +1,8 @@
 import { createServer } from 'experimental-a2/server'
 import { memory as a2Memory } from 'experimental-a2/store-memory'
 import { describe, expect, it, vi } from 'vitest'
-import { BOARD_SESSION, boardContract } from '../src/contract/contract.ts'
+import { boardContract } from '../src/contract/contract.ts'
+import { BOARD_SESSION } from '../src/contract/events.ts'
 // The engine itself, as a2() starts it.
 import { mount as board } from './harness.ts'
 import { tablesConsumer } from '../src/server/reads.ts'

@@ -6,7 +6,7 @@ import { SYNC, type Backend, type BoardBinding, type Caller, type SelfCaller, ty
 import type { Middleware } from './middleware.ts'
 import { createPolicy, type Policy, type PolicyOptions, type Serving } from './policy.ts'
 import { createServe, type PlatformCaller, type Serve } from './serve.ts'
-import type { Watcher } from './watch.ts'
+import type { Watcher } from './watcher.ts'
 
 /**
  * `board()`'s options: where the board lives, who may use it and what its writes go through, and

@@ -1,5 +1,5 @@
 import type { z } from 'zod'
-import type { Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/folds.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import type {
   AckBody,

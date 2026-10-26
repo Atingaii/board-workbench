@@ -1,5 +1,5 @@
 import { parseWatchTail } from '../api/tail.ts'
-import type { ParsedFilters } from './feed.ts'
+import type { ParsedFilters } from '../api/routes.ts'
 
 /** Whether filters narrow anything: a view a message can enter. */
 export const hasCriteria = (filters: ParsedFilters) =>

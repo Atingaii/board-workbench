@@ -1,5 +1,5 @@
 import type { Board } from './board.ts'
-import type { Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/folds.ts'
 import { z } from 'zod'
 import { Labels, MESSAGE_TEXT_MAX, type Attachment } from '../contract/schemas.ts'
 import { HttpError } from './errors.ts'

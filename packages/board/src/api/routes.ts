@@ -14,9 +14,9 @@ import {
   storable,
 } from '../contract/schemas.ts'
 import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINKS_PER_MESSAGE_MAX, Origin } from '../contract/external.ts'
-import type { BoardEvent } from '../contract/contract.ts'
+import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
-import type { Actor, Channel, ExternalCopy, Message } from '../contract/reducers.ts'
+import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
 import type { AccessSummary } from '../server/access.ts'
 
 /**
@@ -56,6 +56,8 @@ export const Filters = z.object({
   /** Case-insensitive words the text contains. */
   text: z.string().min(1).max(200).optional(),
 })
+/** The filters a query asks for, as the board parsed them. */
+export type ParsedFilters = z.output<typeof Filters>
 
 export const MessagesQuery = Filters.extend({
   after: Ref.optional(),

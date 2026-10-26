@@ -34,7 +34,7 @@ import {
 } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import type { ExternalAuthor } from '../contract/external.ts'
-import type { Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/folds.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
 import type { SyncEvent } from '../sync/engine.ts'
 import { SYNC, type Caller, type InboxDelivery, type ProtocolMethods, type SelfCaller, type VerifiedCaller } from './backend.ts'
@@ -48,8 +48,8 @@ import { DroppedError, runMiddleware, type Write, type WriteSource } from './mid
 import { createRouter, METHODS, openapi, queryObject, readCapped, readJson, type BoardRoute } from './routing.ts'
 import type { Access } from './access.ts'
 import { mentionsEmails, syncTarget, withEmailMentions, type SyncTarget } from './targets.ts'
-import type { WriteOrigin } from './writes.ts'
-import type { WatcherContext } from './watch.ts'
+import type { WriteOrigin } from './origin.ts'
+import type { WatcherContext } from './watcher.ts'
 import { VERSION } from '../version.ts'
 
 /** The methods whose answer is something new. */

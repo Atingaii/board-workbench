@@ -1,7 +1,8 @@
 import { derivedId } from '../client/ids.ts'
-import type { BoardEvent } from '../contract/contract.ts'
+import type { BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
-import { actorsReducer, foldMessages, type Actor, type ActorsState, type Message } from '../contract/reducers.ts'
+import { actorsReducer } from '../contract/reducers.ts'
+import { foldMessages, type Actor, type ActorsState, type Message } from '../contract/folds.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Granted } from './auth.ts'
@@ -15,6 +16,7 @@ import { badRequest, duplicateId, forbidden, HttpError, notFound } from './error
 import { view, type Reader } from './feed.ts'
 import type { MessageView } from '../api/routes.ts'
 import type { WriteSource } from './middleware.ts'
+import type { Via, WriteOrigin } from './origin.ts'
 
 export { syncTarget, withEmailMentions, type SyncTarget }
 
@@ -36,21 +38,6 @@ export type WriteContext = {
   reads: BoardReads
 }
 
-/**
- * Where a write came from: `middleware` is the middleware's own client, which skips it, and
- * `engine` is sync's own lookups and receipts.
- */
-export type Via = WriteSource | { kind: 'middleware' } | { kind: 'engine' }
-
-/**
- * How a write reaches the middleware: where it's from, and how to answer there. `schedule` marks a
- * schedule's send, which a backend's own schedules set in-process: no request carries it.
- */
-export type WriteOrigin = {
-  via?: Via
-  respond?: (text: string) => Promise<void>
-  schedule?: { id: number; n: number }
-}
 
 /**
  * The `actor.seen` a write carries, or null: who its author is, as the board's record of them

@@ -1,20 +1,12 @@
 import type { z } from 'zod'
 import type { ActorView, Filters, LinkView, MessageView, BoardEventView, PersonView } from '../api/routes.ts'
-import type { BoardEvent } from '../contract/contract.ts'
+import type { ParsedFilters } from '../api/routes.ts'
+import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import { FULL_ACCESS, type Access } from './access.ts'
 import { hasCriteria } from './watch-spec.ts'
-import {
-  channelsReducer,
-  foldActors,
-  foldMessages,
-  iso,
-  linkedTo,
-  personOf,
-  type ActorsState,
-  type Message,
-  type MessagesState,
-} from '../contract/reducers.ts'
+import { channelsReducer } from '../contract/reducers.ts'
+import { foldActors, foldMessages, iso, linkedTo, personOf, type ActorsState, type Message, type MessagesState } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { concernedMessageId } from '../store/project.ts'
 import type { MessageFilter } from '../store/types.ts'
@@ -22,8 +14,6 @@ import type { BoardSession } from './a2.ts'
 import type { BoardReads } from './reads.ts'
 
 export { concernedMessageId }
-
-export type ParsedFilters = z.output<typeof Filters>
 
 /** Bookkeeping events, shown only with `all`: who's who, and delivery receipts. */
 const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])

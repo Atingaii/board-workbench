@@ -15,6 +15,7 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { startInspector } from '../inspect/server.ts'
 import { A2_VERSION, VERSION } from '../version.ts'
+import { installA2 } from './peers.ts'
 import { conformance } from '../conformance/index.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import {
@@ -974,10 +975,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (args.length > 0) throw new UsageError('usage: board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]')
       const port = portFlag()
       const root = projectDir()
-      // A local board runs on A2, a peer: without it, say what to install instead of a stack trace.
+      // A local board runs on A2, a peer: without it, say what to install, the way this CLI was installed.
       const { localHandle, serveLocal } = await import('./serve.ts').catch((error: unknown) => {
         if ((error as { code?: string }).code === 'ERR_MODULE_NOT_FOUND' && String((error as Error).message).includes("'experimental-a2'"))
-          throw new Error(`board serve needs experimental-a2 beside it: npm i -g experimental-a2@${A2_VERSION}`)
+          throw new Error(`board serve needs experimental-a2@${A2_VERSION}: ${installA2(realpathSync(process.argv[1]!), A2_VERSION)}`)
         throw error
       })
       const handle = flags.handle ?? process.env.BOARD_HANDLE

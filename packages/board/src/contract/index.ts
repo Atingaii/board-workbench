@@ -21,16 +21,8 @@ export {
   MessageId,
   MessageText,
 } from './schemas.ts'
-export { BOARD_SESSION, boardContract, type BoardEvent, type BoardEvents } from './contract.ts'
+export { boardContract } from './contract.ts'
+export { BOARD_SESSION, type BoardEvent, type BoardEvents } from './events.ts'
 export { Origin, type ExternalAuthor } from './external.ts'
-export {
-  actorsReducer,
-  channelsReducer,
-  messagesReducer,
-  type Actor,
-  type ActorsState,
-  type Channel,
-  type ChannelsState,
-  type Message,
-  type MessagesState,
-} from './reducers.ts'
+export { actorsReducer, channelsReducer, messagesReducer } from './reducers.ts'
+export { type Actor, type ActorsState, type Channel, type ChannelsState, type Message, type MessagesState } from './folds.ts'
