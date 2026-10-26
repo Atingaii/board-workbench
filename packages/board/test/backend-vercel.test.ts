@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
+import { compileAccess, type Can } from '../src/server/access.ts'
+import type { Caller } from '../src/server/backend.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 const API = 'http://localhost'
@@ -10,8 +12,19 @@ const API = 'http://localhost'
 const handleOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
   board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
 
+/** A caller board() verified, with `can`: what a board with an `access` passes its backend. */
+const verified = (can: Can) =>
+  ({
+    identity: {
+      principal: { id: 'vercel:user:u_ada', access: compileAccess(can), expiresAt: null },
+      author: { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada', profile: null, session: null },
+      actor: { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', name: 'Ada', avatar: null },
+    },
+    origin: { via: null },
+  }) as unknown as Caller
+
 describe('vercel()', () => {
-  it("passes the conformance kit's core but actors, and keeps no schedules, files, watchers, or sync", async () => {
+  it("passes the conformance kit's core, and keeps no schedules, files, watchers, or sync", async () => {
     const report = await conformance(handleOn(fakeMessageboard()))
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
@@ -26,8 +39,7 @@ describe('vercel()', () => {
       'core: reads events after a cursor, each with a cursor of its own': 'passed',
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
-      // The API lists no actors yet.
-      'core: lists the channel and you in it': 'failed',
+      'core: lists the channel and you in it': 'passed',
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'skipped',
@@ -83,6 +95,50 @@ describe('vercel()', () => {
     api.requests.length = 0
     expect((await team.threads({ channel: 'busy', after: cursor })).threads.map((t) => t.message.id)).toEqual([later.id])
     expect(api.requests.filter((r) => /\/threads$/.test(r))).toHaveLength(1)
+  })
+
+  it("keeps a verified caller to its grants, which the API can't check for it", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api, 'project:prj_pong:production')
+    const dev = await team.post('dev', { text: 'dev' })
+    const ops = await team.post('ops', { text: 'ops' })
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+    const ada = verified({ 'dev/': ['read', 'post'] })
+    const signal = new AbortController().signal
+    const read = async (query: object) => (await backend.messages(ada, query as never, signal)).messages.map((m) => m.text)
+    expect(await read({})).toEqual(['dev'])
+    expect(await read({ channel: 'ops' })).toEqual([])
+    expect((await backend.channels(ada, {}, signal)).channels.map((c) => c.path)).toEqual(['dev'])
+    await expect(backend.message(ada, { id: ops.id }, signal)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
+    await expect(backend.post(ada, { channel: 'ops', text: 'hi' } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.post(ada, { re: ops.id, text: 'hi' } as never, signal)).rejects.toMatchObject({ status: 404 })
+    await expect(backend.post(ada, { channel: 'dev', text: 'hi', labels: { state: 'open' } } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.react(ada, { id: dev.id, emoji: 'eyes' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.label(ada, { id: dev.id, set: { state: 'open' } }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.events(ada, { channel: 'ops' } as never, signal)).resolves.toMatchObject({ events: [] })
+    await backend.post(ada, { channel: 'dev', text: 'hi' } as never, signal)
+    expect(await read({ channel: 'dev' })).toEqual(['dev', 'hi'])
+  })
+
+  it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const first = await team.post('busy', { text: 'one' })
+    await team.reply(first.id, { text: 'two' })
+    await team.post('busy', { text: 'three' })
+    api.requests.length = 0
+    const latest = await team.messages({ channel: 'busy', limit: 2 })
+    expect(latest.messages.map((m) => m.text)).toEqual(['two', 'three'])
+    expect(latest.cursor).toMatch(/^c1\./)
+    // One page of the channel's messages: no thread is read message by message.
+    expect(api.requests.filter((r) => r.endsWith('/messages'))).toEqual(['GET /boards/brd_test/messages'])
+    // A cursor is the API's, so a handle in another process, which keeps no positions, goes on from it.
+    const other = handleOn(api)
+    await other.post('busy', { text: 'four' })
+    expect((await other.messages({ channel: 'busy', after: latest.cursor })).messages.map((m) => m.text)).toEqual(['four'])
+    const events = await other.poll({ channel: 'busy', after: latest.cursor })
+    expect(events.events.map((e) => [e.type, e.message?.text])).toEqual([['message.posted', 'four']])
+    expect((await other.poll({ channel: 'busy', after: events.cursor })).events).toEqual([])
   })
 
   it("makes the team's board the first time a person uses it, and tells a project it needs a grant", async () => {

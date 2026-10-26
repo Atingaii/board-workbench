@@ -4,6 +4,7 @@ import type { ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import type { Author, Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
+import type { Access, Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { forbidden, HttpError, notFound } from './errors.ts'
@@ -39,18 +40,26 @@ type ApiMessage = {
   editedAt?: number
   deletedAt?: number
   reactions?: Record<string, number>
+  /** Up to 20 actor IDs an emoji, earliest first. */
+  reactors?: Record<string, string[]>
   labels?: Labels
 }
+type ApiActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app'; handle: string; name?: string; avatar?: string }
 type ApiChange = {
   type: string
   channelId: string
   actor: ApiActor
   createdAt: number
+  threadId?: string
   messageId?: string
   emoji?: string
   labels?: Record<string, { from?: string; to?: string }>
+  /** Where the channel's feed goes on from, right after this change. */
+  cursor?: string
+  /** With `include=message`, the message as it is now. */
+  currentMessage?: ApiMessage
 }
-type ApiMe = { teamId: string; actor: ApiActor; project?: { id: string; environment: string } }
+type ApiMe = { teamId: string; actor: ApiActor; view?: ApiActorView; project?: { id: string; environment: string } }
 
 export type VercelOptions = {
   /** The team whose board it is (`team_…`). In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
@@ -85,6 +94,13 @@ const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
 /** A cursor this backend made: a time, then the position it names, in base 36. */
 const CURSOR = /^([0-9a-z]+)(?:\.([0-9a-z]+))?$/
+/** The API's own cursor for one channel, which its message list and feed share, and any process resumes. */
+const API_CURSOR = /^c1\./
+/** The API's longest page of a channel's messages, and longest long-poll, in seconds. */
+const PAGE_MAX = 100
+const WAIT_MAX_S = 25
+/** Pages a filtered read of one channel scans for matches before it answers with what it found. */
+const SCAN_PAGES = 10
 
 /** What the API keeps none of: a check that gets one of these is told it isn't kept here. */
 const UNKEPT: Partial<Record<Method, [code: string, message: string]>> = {
@@ -96,6 +112,16 @@ const UNKEPT: Partial<Record<Method, [code: string, message: string]>> = {
 }
 
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
+
+/** What a caller board() verified may do. Null for this deployment's own code, which may do what its credentials may. */
+const accessOf = (caller: Caller): Access | null => ('identity' in caller ? caller.identity.principal.access : null)
+
+/** A verified caller's grant, which the API can't check: it sees this deployment's credentials. */
+function need(access: Access | null, permission: Permission, channel: string): void {
+  if (access && !access.can(permission, channel)) throw forbidden(`this token can't ${permission} in ${channel}`)
+}
+
+const apiKind = (kind: ApiActorView['kind']): ActorView['kind'] => (kind === 'app' ? 'workflow' : kind)
 
 /** A UUIDv7, which the API takes as an operation ID. */
 function operationId(): string {
@@ -274,13 +300,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw error
     }
   }
-  /** The channels a filter names: one, a channel and those under it (`dev/`), or every one. */
-  async function channelsFor(who: Who, filter: string | undefined): Promise<ApiChannel[]> {
+  /** The channels a filter names that `access` reads: one, a channel and those under it (`dev/`), or every one. */
+  async function channelsFor(who: Who, filter: string | undefined, access: Access | null): Promise<ApiChannel[]> {
+    const readable = (channel: ApiChannel) => access === null || access.readable(channel.name)
     if (filter !== undefined && !filter.endsWith('/')) {
       const found = await channelNamed(who, filter)
-      return found ? [found] : []
+      return found && readable(found) ? [found] : []
     }
-    const listed = await loadChannels(who, true)
+    const listed = (await loadChannels(who, true)).filter(readable)
     if (filter === undefined) return listed
     const path = filter.slice(0, -1)
     return listed.filter((channel) => channel.name === path || channel.name.startsWith(filter))
@@ -295,12 +322,34 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw error
     }
   }
+  /** A message `access` may read, and its channel: one it can't is as missing as one that isn't there. */
+  async function readableMessage(who: Who, access: Access | null, id: string, signal?: AbortSignal) {
+    const found = await messageById(who, id, signal)
+    const channel = await channelById(who, found.thread.channelId)
+    if (access && !access.readable(channel.name)) throw notFound(`message not found: ${id}`, 'message_not_found')
+    return { ...found, channel }
+  }
+
+  /** Each thread a read needs, read once: a label matches on its root's, which the API keeps on the thread. */
+  function threadReader(who: Who, signal?: AbortSignal) {
+    const read = new Map<string, Promise<ApiThread>>()
+    return (id: string) => {
+      let thread = read.get(id)
+      if (!thread) read.set(id, (thread = onBoard(who, `/threads/${encodeURIComponent(id)}`).then((path) => api<{ thread: ApiThread }>(who, 'GET', path, signal ? { signal } : {})).then((found) => found.thread)))
+      return thread
+    }
+  }
+
   const threadMessages = async (who: Who, threadId: string, signal?: AbortSignal) =>
     all<ApiMessage>(who, await onBoard(who, `/threads/${encodeURIComponent(threadId)}/messages`), 'messages', {}, signal)
 
   /** Who reacted with each emoji. The API counts them on the message and lists them apart. */
   async function reactors(who: Who, message: ApiMessage): Promise<Record<string, string[]>> {
     if (!message.reactions || Object.keys(message.reactions).length === 0) return {}
+    // The message names up to 20 reactors an emoji: only past that are they listed apart.
+    const named = message.reactors ?? {}
+    if (Object.entries(message.reactions).every(([emoji, count]) => (named[emoji]?.length ?? 0) >= count))
+      return Object.fromEntries(Object.entries(named).map(([emoji, actors]) => [emoji, [...actors]]))
     const path = await onBoard(who, `/threads/${encodeURIComponent(message.threadId)}/messages/${message.sequence}/reactions`)
     const out: Record<string, string[]> = {}
     for (const reaction of await all<{ emoji: string; actor: ApiActor }>(who, path, 'reactions')) (out[reaction.emoji] ??= []).push(reaction.actor.id)
@@ -466,21 +515,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const postId = async (caller: Caller, id: string) => clientIdOf('identity' in caller ? await derivedId('board-gateway', caller.identity.principal.id, id) : id)
 
   /** Messages a read covers, newest last: every thread's in the channels it names, or one thread's. */
-  async function collect(who: Who, filters: Filters, signal: AbortSignal) {
+  async function collect(who: Who, access: Access | null, filters: Filters, signal: AbortSignal) {
     let listed: ApiChannel[]
     let threads: { thread: ApiThread; channel: ApiChannel }[]
     if (filters.re !== undefined) {
-      const found = await messageById(who, filters.re, signal).catch((error: unknown) => {
+      const found = await readableMessage(who, access, filters.re, signal).catch((error: unknown) => {
         if (error instanceof HttpError && error.status === 404) return null
         throw error
       })
       if (!found) return { messages: [], feeds: {}, newest: 0 }
-      const channel = await channelById(who, found.thread.channelId)
-      if (filters.channel !== undefined && !(await channelsFor(who, filters.channel)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
+      const { channel } = found
+      if (filters.channel !== undefined && !(await channelsFor(who, filters.channel, access)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
       listed = [channel]
       threads = [{ thread: found.thread, channel }]
     } else {
-      listed = await channelsFor(who, filters.channel)
+      listed = await channelsFor(who, filters.channel, access)
       threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
     }
     const feeds = await heads(who, listed)
@@ -499,12 +548,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** A change in the API's feed as a board event, with the message as it is now. Null for what isn't a message's. */
-  async function eventOf(who: Who, change: ApiChange, channel: string, cursor: string, filters: Filters, me: string): Promise<BoardEventView | null> {
+  async function eventOf(who: Who, change: ApiChange, channel: string, cursor: string, filters: Filters, me: string, given?: { thread: ApiThread; message: ApiMessage }): Promise<BoardEventView | null> {
     if (!change.messageId || !change.type.startsWith('message.')) return null
-    const found = await messageById(who, change.messageId).catch((error: unknown) => {
-      if (error instanceof HttpError && error.status === 404) return null
-      throw error
-    })
+    const found =
+      given ??
+      (await messageById(who, change.messageId).catch((error: unknown) => {
+        if (error instanceof HttpError && error.status === 404) return null
+        throw error
+      }))
     if (!found || !matches(filters, found.message, found.thread, me)) return null
     const message = await view(who, found.message, channel)
     const by = authorOf(change.actor)
@@ -576,6 +627,74 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after } }
   }
 
+  /** Whether a read filters on what messages say, who wrote them, or their labels: what the API can't narrow by. */
+  const filtered = (filters: Filters) =>
+    filters.by !== undefined || filters.mentions !== undefined || filters.text !== undefined || filters.from !== undefined || (filters.label?.length ?? 0) > 0
+
+  /**
+   * One channel's messages, from the API's message list: the latest `limit`, or those after one of
+   * its cursors. A filtered read checks each page here, and asks only for as many as it still needs,
+   * so the cursor it answers with never passes a match it left out.
+   */
+  async function channelMessages(who: Who, channel: ApiChannel, query: Filters & { after?: string; limit?: number }, signal: AbortSignal) {
+    const path = await onBoard(who, '/messages')
+    const limit = Math.min(query.limit ?? 50, PAGE_MAX)
+    const thread = threadReader(who, signal)
+    const narrowed = filtered(query)
+    const me = narrowed ? await actorOf(who) : null
+    const keep = async (message: ApiMessage) =>
+      !narrowed || matches(query, message, query.label?.length ? await thread(message.threadId) : ({ id: message.threadId } as ApiThread), me)
+    const kept: ApiMessage[] = []
+    if (query.after === undefined) {
+      // Without a cursor, the newest: a filtered read looks among the channel's latest page.
+      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(narrowed ? PAGE_MAX : limit) }, signal })
+      for (const message of page.messages) if (await keep(message)) kept.push(message)
+      return { messages: kept.slice(-limit), cursor: page.cursor }
+    }
+    let cursor = query.after
+    for (let pages = 0; pages < SCAN_PAGES && kept.length < limit; pages++) {
+      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, after: cursor, limit: String(limit - kept.length) }, signal })
+      cursor = page.cursor
+      for (const message of page.messages) if (await keep(message)) kept.push(message)
+      if (page.messages.length === 0) break
+    }
+    return { messages: kept, cursor }
+  }
+
+  /** One channel's events, from the API's feed after one of its cursors, or from now: a long-poll holds there, not here. */
+  async function channelEvents(who: Who, channel: ApiChannel, query: Protocol['events']['input'], signal: AbortSignal) {
+    const path = await onBoard(who, '/changes')
+    const thread = threadReader(who, signal)
+    const me = await actorOf(who)
+    const until = Date.now() + (query.wait ?? 0) * 1000
+    let cursor = query.after
+    for (;;) {
+      const wait = Math.min(WAIT_MAX_S, Math.max(0, Math.ceil((until - Date.now()) / 1000)))
+      const page = await api<{ events: ApiChange[]; cursor: string }>(who, 'GET', path, {
+        query: { channelId: channel.id, include: 'message', ...(cursor === undefined ? { from: 'latest' } : { cursor }), ...(wait > 0 ? { wait: String(wait) } : {}) },
+        signal,
+      })
+      cursor = page.cursor
+      const events: BoardEventView[] = []
+      for (const change of page.events) {
+        const message = change.currentMessage
+        const found = message && change.threadId ? { message, thread: query.label?.length ? await thread(change.threadId) : ({ id: change.threadId } as ApiThread) } : null
+        if (!found) continue
+        const event = await eventOf(who, change, channel.name, change.cursor ?? page.cursor, query, me, found)
+        if (event) events.push(event)
+      }
+      if (events.length > 0 || Date.now() >= until || signal.aborted) return { events, cursor }
+    }
+  }
+
+  /** The one channel a read names, when the API can read it directly: not a subtree, and from one of its cursors or now. */
+  async function oneChannel(who: Who, access: Access | null, query: { channel?: string; re?: string; after?: string }): Promise<ApiChannel | null> {
+    if (query.channel === undefined || query.channel.endsWith('/') || query.re !== undefined) return null
+    if (query.after !== undefined && !API_CURSOR.test(query.after)) return null
+    const [channel] = await channelsFor(who, query.channel, access)
+    return channel ?? null
+  }
+
   /** What a gateway caller does here, as this deployment: never what's the project's own. */
   function checkCaller(method: Method, caller: Caller): void {
     if ('identity' in caller && PROJECTS_OWN.has(method)) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: ${method} is the project's own to do there`)
@@ -625,7 +744,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if ('identity' in caller) return meOf(caller.identity)
       const who = whoOf(caller)
       const found = await api<ApiMe>(who, 'GET', '/me')
-      const shown = actorView(found.actor)
+      const { view: named } = found
+      // The API names you by your account: your username, and an agent's profile under it.
+      const shown = named ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null } : actorView(found.actor)
       // The API lists no permissions: a board that lets you in lets you read, post, react, and label everywhere.
       return {
         actor: found.actor.id,
@@ -643,12 +764,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async channels(caller) {
       const who = whoOf(caller)
       // The API counts neither messages nor threads in a channel.
-      const listed: ChannelView[] = (await loadChannels(who, true)).map((channel) => ({ path: channel.name, lastIndex: 0, messages: 0, threads: 0 }))
+      const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller))).map((channel) => ({ path: channel.name, lastIndex: 0, messages: 0, threads: 0 }))
       return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
+    },
+    async actors(caller) {
+      const who = whoOf(caller)
+      const listed = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')
+      return {
+        actors: listed.map((actor) => ({ id: actor.id, kind: apiKind(actor.kind), handle: actor.handle, name: actor.name ?? actor.handle, avatar: actor.avatar ?? null })),
+        cursor: cursorOf({ t: Date.now(), feeds: {} }),
+      }
     },
     async messages(caller, query, signal) {
       const who = whoOf(caller)
-      const { messages, feeds, newest } = await collect(who, query, signal)
+      const access = accessOf(caller)
+      const channel = query.before === undefined ? await oneChannel(who, access, query) : null
+      if (channel) {
+        const page = await channelMessages(who, channel, query, signal)
+        return { messages: await Promise.all(page.messages.map((message) => view(who, message, channel.name))), cursor: page.cursor }
+      }
+      if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
+      const { messages, feeds, newest } = await collect(who, access, query, signal)
       const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
       const before = query.before !== undefined ? await timeOf(who, query.before) : undefined
       const limit = query.limit ?? 50
@@ -670,7 +806,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // A filter on what a message says, or who wrote it, reads every message in the channel.
       const byMessage = query.re !== undefined || query.by !== undefined || query.mentions !== undefined || query.text !== undefined || (query.from !== undefined && query.from !== 'board')
       if (byMessage) {
-        const { messages, feeds, newest } = await collect(who, query, signal)
+        const { messages, feeds, newest } = await collect(who, accessOf(caller), query, signal)
         // Each thread with a matching message, by its latest.
         const latest = new Map<string, { thread: ApiThread; channel: ApiChannel; at: number }>()
         for (const { message, thread, channel } of messages) latest.set(thread.id, { thread, channel, at: Math.max(latest.get(thread.id)?.at ?? 0, message.createdAt) })
@@ -679,7 +815,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
       // Otherwise the threads say enough: a label is matched on the root, whose labels the API
       // keeps on its thread. A reply's own labels aren't indexed, so they don't find its thread here.
-      const listed = await channelsFor(who, query.channel)
+      const listed = await channelsFor(who, query.channel, accessOf(caller))
       const feeds = await heads(who, listed)
       const label = indexed(query)
       const found = (
@@ -692,8 +828,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async message(caller, { id }, signal) {
       const who = whoOf(caller)
-      const { thread } = await messageById(who, id, signal)
-      const channel = await channelById(who, thread.channelId)
+      const { thread, channel } = await readableMessage(who, accessOf(caller), id, signal)
       const [root, ...replies] = await threadMessages(who, thread.id, signal)
       if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
       return {
@@ -707,16 +842,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (input.attachments?.length) throw new HttpError(501, 'no_files', "Vercel's boards keep no files yet")
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
+      const access = accessOf(caller)
+      const labeled = Object.keys(input.labels ?? {}).length > 0
       const clientId = input.id !== undefined ? await postId(caller, input.id) : undefined
       let made: { thread: ApiThread; message: ApiMessage }
       if (input.channel !== undefined) {
+        need(access, 'post', input.channel)
+        if (labeled) need(access, 'label', input.channel)
         const channel = await channelToPost(who, input.channel)
         made = await api(who, 'POST', await onBoard(who, '/threads'), {
           body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}) },
           signal,
         })
       } else {
-        const { thread, message: to } = await messageById(who, input.re!, signal)
+        const { thread, message: to, channel } = await readableMessage(who, access, input.re!, signal)
+        need(access, 'post', channel.name)
+        if (labeled) need(access, 'label', channel.name)
         made = await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
           body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}) },
           signal,
@@ -738,6 +879,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       const found = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'GET', await onBoard(who, `/posts/${encodeURIComponent(await postId(caller, id))}`), { signal })
       const channel = await channelById(who, found.thread.channelId)
+      const access = accessOf(caller)
+      if (access && !access.readable(channel.name)) throw notFound(`no post of yours has id ${id}`, 'post_not_found')
       return { message: await view(who, found.message, channel.name) }
     },
     async edit(caller, { id, text }, signal) {
@@ -761,6 +904,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      const access = accessOf(caller)
+      if (access) need(access, 'react', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/reactions`), {
         body: { operationId: operationId(), emoji, ...(remove ? { remove: true } : {}) },
         signal,
@@ -772,6 +917,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      const access = accessOf(caller)
+      if (access) need(access, 'label', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/labels`), {
         body: { operationId: operationId(), ...(set ? { set } : {}), ...(unset ? { unset } : {}) },
         signal,
@@ -781,7 +928,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async events(caller, query, signal) {
       checkCaller('events', caller)
       const who = whoOf(caller)
-      const listed = await channelsFor(who, query.channel)
+      const access = accessOf(caller)
+      const channel = await oneChannel(who, access, query)
+      if (channel) return channelEvents(who, channel, query, signal)
+      if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
+      const listed = await channelsFor(who, query.channel, access)
       // With no cursor, it starts now, as on any board.
       let position: Position =
         query.after === undefined

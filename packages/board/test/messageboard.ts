@@ -1,4 +1,4 @@
-// An in-memory `/v1/messageboard`, as its README (vercel/api#101009) says it behaves: what
+// An in-memory `/v1/messageboard`, as its README (vercel/api#101646) says it behaves: what
 // `vercel()` from `@vercel/board/backend-vercel` is tested against. A bearer token names its principal:
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
 import { randomUUID } from 'node:crypto'
@@ -22,6 +22,8 @@ type Message = {
   changes: number
   reactions: Map<string, Map<string, { actor: Actor; createdAt: number }>>
   labels: Record<string, string>
+  /** Its post's place in its channel's feed, which a channel cursor counts. */
+  feedSequence: number
 }
 type Thread = {
   id: string
@@ -33,7 +35,8 @@ type Thread = {
   createdBy: Actor
   messages: Message[]
 }
-type Change = Record<string, unknown> & { createdAt: number }
+type Change = Record<string, unknown> & { createdAt: number; messageId?: string }
+type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app'; handle: string; lastSeenAt: number }
 
 const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
@@ -56,6 +59,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
   const threads = new Map<string, Thread>()
   const posts = new Map<string, string>()
   const feeds = new Map<string, Change[]>()
+  const actors = new Map<string, ActorView>()
   const requests: string[] = []
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
@@ -81,6 +85,26 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     }
   }
 
+  /** How the API shows an actor: its handle is the principal's name, and an agent's adds its profile. */
+  function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
+    const p = actor.principal
+    const base = p.type === 'user' ? p.userId : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
+    if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}` }
+    return { id: actor.id, kind: p.type === 'user' ? 'person' : p.type === 'app' ? 'app' : 'deployment', handle: base }
+  }
+  const seen = (actor: Actor) => actors.set(actor.id, { ...viewOf(actor), lastSeenAt: now() })
+
+  /** A channel's feed position, as the API's `c1.` cursor carries it: shared by its messages and its events. */
+  const cursorAt = (channelId: string, position: number) => `c1.${position}.${channelId}`
+  function positionOf(channelId: string, cursor: string): number {
+    const found = /^c1\.(\d+)\.(.+)$/.exec(cursor)
+    if (!found) throw new Refused(400, 'invalid_cursor')
+    if (found[2] !== channelId) throw new Refused(400, 'invalid_cursor', 'Cursor belongs to another channel.')
+    const position = Number(found[1])
+    if (position > (feeds.get(channelId)?.length ?? 0)) throw new Refused(400, 'invalid_cursor', 'Cursor is ahead of this channel.')
+    return position
+  }
+
   const show = (m: Message) => ({
     id: m.id,
     threadId: m.threadId,
@@ -94,6 +118,8 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     ...(m.editedAt !== undefined ? { editedAt: m.editedAt } : {}),
     ...(m.deletedAt !== undefined ? { deletedAt: m.deletedAt } : {}),
     ...(m.reactions.size ? { reactions: Object.fromEntries([...m.reactions].map(([emoji, by]) => [emoji, by.size])) } : {}),
+    // Up to 20 reactors an emoji, earliest first: the count is exact.
+    ...(m.reactions.size ? { reactors: Object.fromEntries([...m.reactions].map(([emoji, by]) => [emoji, [...by.keys()].slice(0, 20)])) } : {}),
     ...(Object.keys(m.labels).length ? { labels: { ...m.labels } } : {}),
   })
   const showThread = (t: Thread) => {
@@ -102,14 +128,21 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     return { ...rest, teamId, boardId, ...(Object.keys(labels).length ? { labels: { ...labels } } : {}) }
   }
   const meta = (m: Message) => {
-    const { id, threadId, sequence, version, reactions, labels } = show(m)
-    return { id, threadId, sequence, version, ...(reactions ? { reactions } : {}), ...(labels ? { labels } : {}) }
+    const { id, threadId, sequence, version, reactions, reactors, labels } = show(m)
+    return { id, threadId, sequence, version, ...(reactions ? { reactions, reactors } : {}), ...(labels ? { labels } : {}) }
   }
 
   function emit(channelId: string, change: Record<string, unknown>, actor: Actor) {
     const feed = feeds.get(channelId) ?? []
     feeds.set(channelId, feed)
     feed.push({ id: `evt_${randomUUID()}`, channelId, actor, createdAt: now(), shard: 0, sequence: feed.length + 1, ...change })
+    seen(actor)
+    return feed.length
+  }
+
+  const messageNamed = (id: string) => {
+    const found = MESSAGE_ID.exec(id)
+    return found ? threads.get(`thr_${found[1]}`)?.messages[Number(found[2]) - 1] : undefined
   }
 
   const threadAt = (id: string) => {
@@ -145,13 +178,14 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
       changes: 0,
       reactions: new Map(),
       labels: {},
+      feedSequence: 0,
     }
     thread.messages.push(message)
     thread.messageCount = sequence
     thread.lastActivityAt = createdAt
     thread.lastMessage = { id: message.id, sequence, createdAt, createdBy: actor }
     if (body.clientId) posts.set(`${principalId(actor.principal)}|${body.clientId}`, message.id)
-    emit(thread.channelId, { type: 'message.posted', threadId: thread.id, message: sequence, messageId: message.id, revision: 1 }, actor)
+    message.feedSequence = emit(thread.channelId, { type: 'message.posted', threadId: thread.id, message: sequence, messageId: message.id, revision: 1 }, actor)
     return message
   }
 
@@ -181,7 +215,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     requests.push(`${method} ${path}`)
     const body = method === 'GET' ? {} : ((await request.json()) as Record<string, any>)
     if (method !== 'GET' && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
-    if (method === 'GET' && path === '/me') return { teamId, actor }
+    if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(actor) }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
     if (method === 'POST' && path === '/boards/default') {
       // Board creates record a person's event, so project tokens can't.
@@ -242,14 +276,39 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
       if (!again) throw new Refused(404, 'post_not_found')
       return again
     }
+    if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
+    if (method === 'GET' && rest === '/messages') {
+      const channelId = url.searchParams.get('channelId') ?? ''
+      channelAt(channelId)
+      const limit = Number(url.searchParams.get('limit') ?? 50)
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Refused(400, 'invalid_request')
+      const head = feeds.get(channelId)?.length ?? 0
+      const listed = [...threads.values()].filter((t) => t.channelId === channelId).flatMap((t) => t.messages).sort((a, b) => a.feedSequence - b.feedSequence)
+      const after = url.searchParams.get('after')
+      if (after === null) return { messages: listed.slice(-limit).map(show), cursor: cursorAt(channelId, head) }
+      const from = positionOf(channelId, after)
+      const taken = listed.filter((m) => m.feedSequence > from).slice(0, limit)
+      const more = listed.filter((m) => m.feedSequence > from).length > limit
+      return { messages: taken.map(show), cursor: cursorAt(channelId, more ? taken.at(-1)!.feedSequence : head) }
+    }
     if (method === 'GET' && rest === '/changes') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
-      const feed = feeds.get(channelId) ?? []
-      if (url.searchParams.get('from') === 'latest') return { events: [], cursor: String(feed.length), caughtUp: true }
-      const from = Number(url.searchParams.get('cursor') ?? 0)
-      const events = feed.slice(from, from + 50)
-      return { events, cursor: String(from + events.length), caughtUp: from + events.length >= feed.length }
+      const feed = () => feeds.get(channelId) ?? []
+      const cursor = url.searchParams.get('cursor')
+      if (cursor !== null && url.searchParams.get('from') !== null) throw new Refused(400, 'invalid_cursor')
+      const from = url.searchParams.get('from') === 'latest' ? feed().length : cursor === null ? 0 : positionOf(channelId, cursor)
+      // A long-poll holds until the next change, as the API's does.
+      const until = Date.now() + Math.min(Number(url.searchParams.get('wait') ?? 0), 25) * 1000
+      while (feed().length === from && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10))
+      const include = url.searchParams.get('include') === 'message'
+      const events = feed()
+        .slice(from, from + 48)
+        .map((change, i) => {
+          const message = include && change.messageId ? messageNamed(change.messageId) : undefined
+          return { ...change, cursor: cursorAt(channelId, from + i + 1), ...(message ? { currentMessage: show(message) } : {}) }
+        })
+      return { events, cursor: cursorAt(channelId, from + events.length), caughtUp: from + events.length >= feed().length }
     }
     if ((found = /^\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') return { thread: showThread(threadAt(found[1]!)) }
     if ((found = /^\/threads\/([^/]+)\/messages$/.exec(rest))) {
