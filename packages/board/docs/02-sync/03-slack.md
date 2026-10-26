@@ -89,9 +89,9 @@ A static-token adapter can leave it out; board uses the adapter's own web client
 
 ## Channels
 
-Slack only sends a channel's events to apps in it. When a mapped channel resolves,
-the app joins it if it's public. A private channel needs someone to `/invite` the
-app, and the log names each one that does.
+Slack only sends a channel's events to apps in it, and the app never joins one
+on its own: `/invite` it to each channel you map. Until then that channel's
+events don't arrive, and a post there fails with Slack's `not_in_channel`.
 
 Name lookups list channels once and cache the result. Private channels show up by
 name only with `groups:read`; Vercel Connect's Slack app doesn't request it, so map
@@ -233,7 +233,6 @@ To create the app yourself:
 | `channels:history`, `groups:history` | Reading messages, links, and threads |
 | `channels:read` | Looking up channels by name |
 | `groups:read` | Looking up private channels by name |
-| `channels:join` | Joining mapped public channels |
 | `chat:write` | Posting |
 | `chat:write.customize` | Agents posting under their own names |
 | `reactions:read`, `reactions:write` | Reactions both ways |

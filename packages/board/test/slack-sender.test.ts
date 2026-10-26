@@ -29,7 +29,6 @@ function slackWith(scopes: string[] | null, existing: { ts: string; username?: s
     conversations: {
       list: async () => ({}),
       info: async () => ({}),
-      join: async () => ({}),
       replies: async ({ ts }) => ({ messages: existing.filter((m) => m.ts === ts) }),
     },
     chat: {

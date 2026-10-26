@@ -21,7 +21,6 @@ export type SlackClient = {
       response_metadata?: { next_cursor?: string }
     }>
     info(args: { channel: string }): Promise<{ channel?: SlackChannel }>
-    join(args: { channel: string }): Promise<unknown>
     /** Reads a linked message or a thread; needs `channels:history` (`groups:history` for private channels). */
     replies?(args: { channel: string; ts: string; oldest?: string; latest?: string; inclusive?: boolean; limit: number }): Promise<{ messages?: SlackMessage[]; has_more?: boolean }>
     /** Reads a channel, newest first, for `vb sources <key> read`; needs `channels:history`. */
@@ -280,8 +279,8 @@ export type SlackOptions = {
 /**
  * Syncs a Slack workspace with the board: `app` is a Vercel Connect connector
  * (`'slack/acme'`) or the options, and `sync` is what each event does, both ways,
- * like `channels({ '#prs': 'prs' })`. The app joins public channels as it
- * resolves them; private ones need an invite.
+ * like `channels({ '#prs': 'prs' })`. Invite the app to each channel it syncs:
+ * it never joins one on its own.
  */
 export function slack(app: string | SlackOptions, sync: SyncFn<SlackEvent>): SlackProvider {
   return new SlackProvider(typeof app === 'string' ? { adapter: app } : app, sync)
@@ -289,10 +288,16 @@ export function slack(app: string | SlackOptions, sync: SyncFn<SlackEvent>): Sla
 
 type SlackWithTokens = Adapter & { webClient?: SlackClient; withBotToken?<T>(token: string, fn: () => T): T }
 
+/**
+ * Slack's client retries for about 30 minutes by default, waiting out each rate limit, which
+ * outlives any function: here a call gets 3 more tries, and a request 30 seconds.
+ */
+const SLACK_CLIENT = { retryConfig: { retries: 3, factor: 2, minTimeout: 500, randomize: true }, timeout: 30_000 }
+
 /** A Slack adapter, client, and people's tokens, all from one Vercel Connect connector. */
 function fromConnector(connector: string) {
   const credentials = connectSlackAdapter(connector)
-  const adapter = withUserTokens(createSlackAdapter(credentials) as unknown as SlackWithTokens, connectUserTokens(connector))
+  const adapter = withUserTokens(createSlackAdapter({ ...credentials, webClientOptions: SLACK_CLIENT }) as unknown as SlackWithTokens, connectUserTokens(connector))
   const botToken = credentials.botToken
   const client = async () => adapter.withBotToken!(typeof botToken === 'function' ? await botToken() : botToken, () => adapter.webClient!)
   return { adapter: adapter as Adapter, client }
@@ -378,30 +383,6 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
             : `no Slack channel named #${name} (a private channel shows up once the app is invited)`,
         )
       return found
-    }
-
-    // Slack only sends a channel's events to apps in it. Never throws: a channel the
-    // app can't join still resolves, and the log says who to invite.
-    const joined = new Map<string, Promise<void>>()
-    function join(client: SlackClient, id: string, known?: SlackChannel) {
-      let promise = joined.get(id)
-      if (!promise) {
-        promise = (async () => {
-          const channel = known ?? (await client.conversations.info({ channel: id }).then((r) => r.channel, () => undefined))
-          if (!channel || channel.is_member) return
-          const label = channel.name ? `#${channel.name}` : id
-          if (channel.is_private)
-            return console.warn(`[board] slack: invite the app to ${label}; it can't join private channels itself`)
-          try {
-            await client.conversations.join({ channel: id })
-          } catch (error) {
-            joined.delete(id)
-            console.warn(`[board] slack: couldn't join ${label} (${slackError(error)}); invite the app to it`)
-          }
-        })()
-        joined.set(id, promise)
-      }
-      return promise
     }
 
     // Slack's events carry user IDs only; their pictures come from users.info, once each.
@@ -490,16 +471,10 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       mention: (actor) => actor.id.startsWith('slack:user:') ? `<@${actor.id.slice('slack:user:'.length)}>` : null,
       // `#name` is looked up by name; anything else is a channel ID.
       async resolveChannel(key) {
-        if (!key.startsWith('#')) {
-          const web = await client().catch(() => undefined)
-          if (web) await join(web, key)
-          return key
-        }
+        if (!key.startsWith('#')) return key
         const web = await client()
         if (!web) throw new Error(`can't look up Slack channel ${key}: use its ID instead`)
-        const channel = await find(web, key.slice(1))
-        await join(web, channel.id, channel)
-        return channel.id
+        return (await find(web, key.slice(1))).id
       },
       // A forward has no text of its own: it says what it shares.
       markdown(message) {

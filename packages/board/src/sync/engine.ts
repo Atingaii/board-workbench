@@ -227,7 +227,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   const resolutions = new Map<string, { id: Promise<string>; failed: boolean; at: number }>()
   /**
    * A platform channel's ID from its name, on entry `key`: what sync functions route by. Each
-   * resolves once (on Slack, that joins it). One the platform says doesn't exist is logged and
+   * resolves once. One the platform says doesn't exist is logged and
    * tried again a minute later; one it couldn't check is asked again on the next call, so a
    * retried event asks again.
    */

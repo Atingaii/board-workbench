@@ -198,8 +198,7 @@ describe('slack message links', () => {
       COUT: { id: 'COUT', is_member: false },
     }
     const replies = vi.fn(async () => ({ messages: [{ ts: TS, user: 'U_ADA', text: 'layoffs friday' }] }))
-    const join = vi.fn(async () => ({}))
-    const { board, webhook } = setup({ replies, join, info: async ({ channel }) => ({ channel: channels[channel] }) })
+    const { board, webhook } = setup({ replies, info: async ({ channel }) => ({ channel: channels[channel] }) })
     const julian = caller(board.fetch, await personToken())
     await webhook(linking('1791322999.000005', permalink('CPRIV')))
     await webhook(linking('1791322999.000006', permalink('D0DM')))
@@ -211,7 +210,6 @@ describe('slack message links', () => {
       { url: permalink('COUT'), message: null, snapshot: null, unavailable: 'not_in_channel' },
     ])
     expect(replies).not.toHaveBeenCalled()
-    expect(join).not.toHaveBeenCalled() // joining a channel someone linked would announce the app there
   })
 
   it('keeps the links Slack did not unfurl when it unfurls the others', async () => {

@@ -216,6 +216,14 @@ type PlatformEvent = Received['payload']['event']
 /** An append that holds an event ID already in the log. */
 const duplicate = (error: unknown) => error instanceof A2Error && error.code === 'PARTIAL_DUPLICATE_BATCH'
 
+/**
+ * A platform event whose ID is already in an inbox: the platform's retry, which can read differently
+ * (another instance, a name changed since), so the copy already there stands.
+ */
+const alreadyReceived = (error: unknown) => {
+  if (!duplicate(error)) throw error
+}
+
 /** Where a board given no store keeps it, in the working directory, in every environment. */
 const DEFAULT_STORE_PATH = '.a2/dev.db'
 
@@ -952,7 +960,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
             type: 'external.received',
             id: await idempotentId('board-inbox', key, id),
             payload: { sync: key, event, raw },
-          })
+          }).catch(alreadyReceived)
         }
         return { ok: true }
       }
@@ -967,7 +975,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       )
       await queue.append(...matched).catch(async (error: unknown) => {
         if (!duplicate(error)) throw error
-        for (const one of matched) await queue.append(one)
+        for (const one of matched) await queue.append(one).catch(alreadyReceived)
       })
       return { ok: true }
     },
