@@ -73,6 +73,9 @@ describe('board() in a browser', () => {
         const all = Object.values(files).join('\n')
         expect(all).not.toContain('BOARD_TOKEN')
         expect(all).not.toContain('jwtVerify')
+        // Nor A2: a handle over http() never loads the engine a2() runs on.
+        expect(all).not.toContain('contract name must be a non-empty string')
+        expect(all).not.toContain('reducer name must be a non-empty string')
         expect(all).not.toContain('createRemoteJWKSet')
         // The sync engine is a chunk of its own, which a board with no sync entries never loads.
         expect(files['app.js']).not.toContain('function createSyncEngine')
@@ -102,6 +105,8 @@ describe('board() in a browser', () => {
         const all = Object.values(files).join('\n')
         expect(all).toContain('function createSyncEngine')
         expect(all).not.toContain('jwtVerify')
+        expect(all).not.toContain('contract name must be a non-empty string')
+        expect(all).not.toContain('reducer name must be a non-empty string')
         expect(all).not.toContain('createRemoteJWKSet')
       },
     )

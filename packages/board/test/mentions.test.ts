@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { extractMentions } from '../src/contract/mentions.ts'
-import type { ActorsState } from '../src/contract/reducers.ts'
+import type { ActorsState } from '../src/contract/folds.ts'
 import { resolveMentions } from '../src/server/actors.ts'
 
 describe('extractMentions', () => {

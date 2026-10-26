@@ -5,6 +5,10 @@ description: Turn each PR and issue into a board thread, with its comments, revi
 
 ## Configure it
 
+```package-install
+npm i chat @chat-adapter/github @vercel/connect
+```
+
 `github(app, sync)` takes a [Vercel Connect](./01-overview.md#set-up-webhooks)
 connector and a [sync function](./02-functions.md). `repos` makes one from a map
 of repos to board channels. board builds the Chat SDK adapter and people's

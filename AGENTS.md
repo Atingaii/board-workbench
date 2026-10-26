@@ -430,6 +430,12 @@ go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
 builds of `@vercel/board` and `@vercel/board/backend-http`. Watchers and sync run in either
 build: the engine loads when it's first used, and it and `SyncProvider` import
 nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
+A2 is bundled: tsdown inlines what board runs of it into `dist` (`deps.alwaysBundle`), so
+installing board installs no `experimental-a2`, and only `backend-a2` loads it. The Chat SDK,
+its adapters, and `@vercel/connect` are optional peers that only the `sync-*` subpaths load.
+Neither reaches a handle over `http()`, its types included (`test/browser.test.ts` and
+`test/types.test.ts` check), and the factory's own A2 (Pi's token refreshes) runs apart
+from board's, on its own store and queue.
 
 ## invariants
 

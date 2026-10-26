@@ -1,5 +1,5 @@
 import { own } from '../contract/own.ts'
-import type { ActorsState, Actor } from '../contract/reducers.ts'
+import type { ActorsState, Actor } from '../contract/folds.ts'
 import { toStorable, type Author } from '../contract/schemas.ts'
 import { extractMentions } from '../contract/mentions.ts'
 import { parseScope } from './access.ts'

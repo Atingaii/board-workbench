@@ -34,7 +34,7 @@ import type {
   ThreadView,
   TypingResult,
 } from '../api/routes.ts'
-import type { Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/folds.ts'
 import { ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, typeOf } from '../contract/files.ts'
 import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'

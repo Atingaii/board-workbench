@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ExternalEvent, ExternalLocation } from '../contract/contract.ts'
+import { ExternalEvent, ExternalLocation } from '../contract/external.ts'
 import { Labels, LabelKey } from '../contract/schemas.ts'
 
 export const EventBase = z.object({
@@ -41,7 +41,7 @@ export function eventSchema<P extends string, M extends string>(platform: P, mes
   ])
 }
 
-export type SyncRoot = { text: string; labels: Record<string, string>; author: import('../contract/contract.ts').ExternalAuthor; raw: unknown }
+export type SyncRoot = { text: string; labels: Record<string, string>; author: import('../contract/external.ts').ExternalAuthor; raw: unknown }
 export type RootOverride = (root: Readonly<SyncRoot>) => { text?: string; labels?: Record<string, string> }
 
 export const SyncOverrides = z.object({

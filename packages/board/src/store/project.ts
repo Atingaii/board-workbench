@@ -1,6 +1,6 @@
-import type { BoardEvent } from '../contract/contract.ts'
+import type { BoardEvent } from '../contract/events.ts'
 import { own, setOwn } from '../contract/own.ts'
-import { foldMessages, foldSync, type ExternalCopy, type Message, type SyncedThread, type SyncState } from '../contract/reducers.ts'
+import { foldMessages, foldSync, type ExternalCopy, type Message, type SyncedThread, type SyncState } from '../contract/folds.ts'
 
 /** The message an event concerns, if any. */
 export function concernedMessageId(event: BoardEvent): number | null {

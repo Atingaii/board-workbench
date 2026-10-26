@@ -1,6 +1,6 @@
 import { ChatSyncProvider } from './chat-provider.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
-import type { ExternalAuthor, ExternalEvent } from '../contract/contract.ts'
+import type { ExternalAuthor, ExternalEvent } from '../contract/external.ts'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'

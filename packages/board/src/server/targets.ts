@@ -1,5 +1,6 @@
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
-import { isThreadTarget, type Actor } from '../contract/reducers.ts'
+import type { Actor } from '../contract/folds.ts'
+import { isThreadTarget } from '../contract/external.ts'
 
 /** A sync target, resolved: a platform channel to start a thread in, or a thread to join. */
 export type SyncTarget = { target: string; kind: 'channel' | 'thread' }

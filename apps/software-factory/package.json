@@ -18,6 +18,8 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@chat-adapter/github": "^4.41.1",
+    "@chat-adapter/slack": "^4.41.1",
     "@vercel/blob": "^2.8.0",
     "@vercel/board": "workspace:*",
     "@vercel/connect": "^2.3.4",
@@ -25,6 +27,7 @@
     "@vercel/queue": "^0.7.0",
     "@vercel/sandbox": "^3.5.1",
     "ai": "^7.0.130",
+    "chat": "^4.41.1",
     "experimental-a2": "0.22.0",
     "geist": "^1.7.2",
     "github-slugger": "^2.0.0",

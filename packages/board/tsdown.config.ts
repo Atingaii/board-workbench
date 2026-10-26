@@ -36,6 +36,13 @@ export default defineConfig([
     // into the entry, it would load that entry (the CLI, say) wherever the chunk loads.
     inputOptions: { experimental: { chunkOptimization: false } },
     dts: true,
+    // A2 is inlined: what board runs of it ships in dist, its types too, so installing board installs no
+    // experimental-a2, and nothing else from node_modules is.
+    deps: {
+      alwaysBundle: [/^experimental-a2(\/|$)/],
+      onlyBundle: [/^experimental-a2(\/|$)/],
+      dts: { alwaysBundle: [/^experimental-a2(\/|$)/] },
+    },
     clean: ['dist/*', '!dist/inspect'],
   },
   // `vb inspect`'s page: one prebuilt file, React included, so installing the

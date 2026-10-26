@@ -470,7 +470,7 @@ The board that keeps the log matches the tails; the board on `http()` runs
 
 ```bash
 pnpm i @vercel/board pg                               # a board: log, tables, API, handle, CLI (or ioredis)
-pnpm i @chat-adapter/slack @chat-adapter/github       # + your own Slack or GitHub adapter, instead of Connect
+pnpm i chat @chat-adapter/slack @vercel/connect       # + sync with Slack through Connect (@chat-adapter/github for GitHub)
 pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api  # + sync with WhatsApp, through Kapso
 ```
 
@@ -479,16 +479,19 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
 
 **Dependencies:**
 
-- **Regular dependency: `experimental-a2`.** board owns it: you import your
-  store and scheduler from board (`@vercel/board/backend-a2/store-postgres`,
-  `@vercel/board/backend-a2/scheduler-vercel`), so they're always the copy board uses.
+- **Bundled: `experimental-a2`.** board inlines the parts of A2 it runs into its own
+  build, so installing board installs no `experimental-a2`. You import your store and
+  scheduler from board (`@vercel/board/backend-a2/store-postgres`,
+  `@vercel/board/backend-a2/scheduler-vercel`), and nothing on the way to a handle over
+  `http()` loads A2. A project that uses A2 itself has its own copy, apart from board's,
+  and doesn't hand it board's stores or schedulers.
 - **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`,
   `@vercel/blob`.** Loaded only by `@vercel/board/backend-a2/store-postgres`,
   `@vercel/board/backend-a2/store-redis`, `@vercel/board/backend-a2/scheduler-vercel`,
   `@vercel/board/backend-a2/scheduler-qstash`, and `@vercel/board/backend-a2/blob-vercel`.
   `@vercel/board/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
   `@vercel/board/backend-a2/store-sqlite` uses Node's own `node:sqlite`.
-- **Regular dependencies for sync: `chat`, `@chat-adapter/slack`,
+- **Peers, optional, for sync: `chat`, `@chat-adapter/slack`,
   `@chat-adapter/github`, `@vercel/connect`.** `@vercel/board/sync-slack` and
   `@vercel/board/sync-github` build their adapters with them, from Connect or from
   secrets. `@vercel/board/sync-kapso` takes an adapter you install
