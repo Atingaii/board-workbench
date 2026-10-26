@@ -116,7 +116,7 @@ call, like `import`.
 
 ## Helpers
 
-`channels`, `repos`, and `numbers` take a map from platform channels to what
+`channels`, `repos`, `numbers`, and `teams` take a map from platform channels to what
 each one does: a sync function, or a board channel as a string.
 
 | Helper | From | Keys | A string means |
@@ -124,11 +124,12 @@ each one does: a sync function, or a board channel as a string.
 | `channels` | `@vercel/board/sync-slack`, `@vercel/board/sync` | Slack channels, by name (`'#prs'`) or ID | `mirror` |
 | `repos` | `@vercel/board/sync-github` | Repos (`'owner/repo'`), or `{ pulls, issues }` to route each | `into` |
 | `numbers` | `@vercel/board/sync-kapso` | WhatsApp phone number IDs | `mirror` |
+| `teams` | `@vercel/board/sync-linear` | Linear team keys (`'ENG'`) | `mirror` |
 
 Each routes an event by its `channel`. A new root goes to every channel's
 function, with `channel` set to that one. A thread the board syncs in a channel
 that isn't in the map (someone ran `vb sync` on it) keeps syncing: both ways
-under `channels` and `numbers`, and in only under `repos`.
+under `channels`, `numbers`, and `teams`, and in only under `repos`.
 
 The units are plain sync functions, from `@vercel/board/sync`:
 
@@ -212,13 +213,15 @@ Then, by kind:
 - **`edited`:** `message`, `text`, `author`, `links`.
 - **`deleted`:** `message`.
 - **`reaction`:** `message`, `emoji`, `added`, `author`.
-- **`lifecycle`:** `type`, `title`, `url`, `labels`, `reply`, and `author`. Only
-  GitHub sends these: see the [events table](./04-github.md#events).
+- **`lifecycle`:** `type`, `title`, `url`, `labels`, `reply`, and `author`. GitHub
+  and Linear send these: see GitHub's [events table](./04-github.md#events) and
+  Linear's [events table](./07-linear.md#events).
 
 GitHub events also carry `subject: { type: 'pull_request' | 'issue', repo, number }`,
 comments and reactions included. The types are exported: `SlackEvent` from
 `@vercel/board/sync-slack`, `GitHubEvent` and `GitHubPayload` from
-`@vercel/board/sync-github`, and `WhatsAppEvent` from `@vercel/board/sync-kapso`.
+`@vercel/board/sync-github`, `WhatsAppEvent` from `@vercel/board/sync-kapso`, and `LinearEvent` from
+`@vercel/board/sync-linear`.
 
 ## Permalinks
 

@@ -116,8 +116,9 @@ Slack, `'owner/repo'` for GitHub, a phone number ID for WhatsApp.
    something (WhatsApp edits, GitHub typing), that delivery is skipped.
 2. **Starting threads.** A root posted on the board, by anyone or any watcher,
    goes to the sync function of each platform that can start threads in a
-   channel, which may `start` one; `mirror` does in its channel. Slack can.
-   GitHub and WhatsApp can't, so roots never open an issue or a conversation.
+   channel, which may `start` one; `mirror` does in its channel. Slack and
+   Linear can; on Linear a root opens an issue. GitHub and WhatsApp can't, so
+   roots never open an issue or a conversation there.
 3. **Inbound.** A platform event goes to the sync function when its thread is
    already synced, or when its channel is one the helpers route (their keys;
    a function of your own at the top gets every channel). The function decides
@@ -255,7 +256,8 @@ branch, a custom environment).
 **Without Connect,** create the app on the platform yourself, point its webhook
 at the same route, and pass the platform's own secrets to the Chat SDK adapter.
 Each platform page has the steps: [Slack](./03-slack.md#setup),
-[GitHub](./04-github.md#setup), [WhatsApp](./05-whatsapp.md#setup).
+[GitHub](./04-github.md#setup), [WhatsApp](./05-whatsapp.md#setup),
+[Linear](./07-linear.md#setup).
 
 ## When delivery fails
 
