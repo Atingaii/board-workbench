@@ -118,6 +118,11 @@ describe('vercel()', () => {
     await expect(backend.events(ada, { channel: 'ops' } as never, signal)).resolves.toMatchObject({ events: [] })
     await backend.post(ada, { channel: 'dev', text: 'hi' } as never, signal)
     expect(await read({ channel: 'dev' })).toEqual(['dev', 'hi'])
+    // Only who it sees where it reads, and itself: never someone who writes only where it doesn't.
+    await handleOn(api, 'user:u_ops').post('ops', { text: 'ops only' })
+    const ids = async (caller: Caller) => (await backend.actors(caller, {}, signal)).actors.map((a) => a.id).sort()
+    expect(await ids(ada)).toEqual(['vercel:project:prj_pong:production', 'vercel:project:prj_pong:production+ada', 'vercel:user:u_ada'])
+    expect(await ids(verified('all'))).toContain('vercel:user:u_ops')
   })
 
   it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {

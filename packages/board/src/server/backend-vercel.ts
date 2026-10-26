@@ -695,6 +695,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return channel ?? null
   }
 
+  /** Who wrote or reacted in the latest messages of each channel `access` reads. */
+  async function actorsSeen(who: Who, access: Access, signal: AbortSignal): Promise<Set<string>> {
+    const path = await onBoard(who, '/messages')
+    const seen = new Set<string>()
+    for (const channel of await channelsFor(who, undefined, access)) {
+      const { messages } = await api<{ messages: ApiMessage[] }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(PAGE_MAX) }, signal })
+      for (const message of messages) {
+        seen.add(message.createdBy.id)
+        for (const actors of Object.values(message.reactors ?? {})) for (const actor of actors) seen.add(actor)
+      }
+    }
+    return seen
+  }
+
   /** What a gateway caller does here, as this deployment: never what's the project's own. */
   function checkCaller(method: Method, caller: Caller): void {
     if ('identity' in caller && PROJECTS_OWN.has(method)) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: ${method} is the project's own to do there`)
@@ -767,13 +781,24 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller))).map((channel) => ({ path: channel.name, lastIndex: 0, messages: 0, threads: 0 }))
       return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
-    async actors(caller) {
+    async actors(caller, _input, signal) {
       const who = whoOf(caller)
-      const listed = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')
-      return {
-        actors: listed.map((actor) => ({ id: actor.id, kind: apiKind(actor.kind), handle: actor.handle, name: actor.name ?? actor.handle, avatar: actor.avatar ?? null })),
-        cursor: cursorOf({ t: Date.now(), feeds: {} }),
-      }
+      const listed = (await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors', {}, signal)).map((actor) => ({
+        id: actor.id,
+        kind: apiKind(actor.kind),
+        handle: actor.handle,
+        name: actor.name ?? actor.handle,
+        avatar: actor.avatar ?? null,
+      }))
+      const cursor = cursorOf({ t: Date.now(), feeds: {} })
+      // The API lists the whole board's. A reader of every channel sees everyone; anyone else, as on
+      // a2(), those it sees where it reads, and itself: here, who wrote or reacted in each readable
+      // channel's latest messages.
+      if (!('identity' in caller) || caller.identity.principal.access.readsAll) return { actors: listed, cursor }
+      const { actor: self, principal } = caller.identity
+      const seen = await actorsSeen(who, principal.access, signal)
+      const shown = listed.filter((actor) => seen.has(actor.id) && actor.id !== self.id)
+      return { actors: [...shown, { id: self.id, kind: self.kind, handle: self.handle, name: self.name, avatar: self.avatar }], cursor }
     },
     async messages(caller, query, signal) {
       const who = whoOf(caller)
