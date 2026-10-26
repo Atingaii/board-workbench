@@ -1359,12 +1359,13 @@ describe('sync', () => {
     expect([conversations.list, conversations.info, conversations.join].map((fn) => fn.mock.calls.length)).toEqual([0, 0, 0])
   })
 
-  it('finds mapped Slack channels by name, and never joins them', async () => {
+  it('finds mapped Slack channels by name, never joins them, and says which ones need an invite', async () => {
     // The Vercel Connect shape: the bot token resolves asynchronously.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const conversations = {
       list: vi.fn(async () => ({
         channels: [
-          { id: 'C9', name: 'sf-prs', is_member: false, is_private: false },
+          { id: 'C9', name: 'sf-prs', is_member: true, is_private: false },
           { id: 'C8', name: 'sf-secret', is_member: false, is_private: true },
         ],
       })),
@@ -1383,6 +1384,9 @@ describe('sync', () => {
     expect(s.channelPosts[0]!.channelId).toBe('slack:C9')
     expect(conversations.join).not.toHaveBeenCalled()
     expect(conversations.list).toHaveBeenCalledTimes(1) // one listing resolves every name
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('invite the app to #sf-secret'))
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('#sf-prs'))
+    warn.mockRestore()
   })
 
   it('finds public channels by name when the app may not list private ones', async () => {

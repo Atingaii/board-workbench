@@ -91,7 +91,9 @@ A static-token adapter can leave it out; board uses the adapter's own web client
 
 Slack only sends a channel's events to apps in it, and the app never joins one
 on its own: `/invite` it to each channel you map. Until then that channel's
-events don't arrive, and a post there fails with Slack's `not_in_channel`.
+events don't arrive, and a post there fails with Slack's `not_in_channel`. The
+log names each channel mapped by name that the app isn't in; one mapped by ID
+isn't checked, since that would ask Slack about it.
 
 Name lookups list channels once and cache the result. Private channels show up by
 name only with `groups:read`; Vercel Connect's Slack app doesn't request it, so map

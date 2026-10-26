@@ -289,8 +289,9 @@ export function slack(app: string | SlackOptions, sync: SyncFn<SlackEvent>): Sla
 type SlackWithTokens = Adapter & { webClient?: SlackClient; withBotToken?<T>(token: string, fn: () => T): T }
 
 /**
- * Slack's client retries for about 30 minutes by default, waiting out each rate limit, which
- * outlives any function: here a call gets 3 more tries, and a request 30 seconds.
+ * Slack's client retries 10 times over about 30 minutes by default, which outlives any function:
+ * here a call gets 3 more tries. Each still waits out Slack's `Retry-After` (about a minute at
+ * most), and `timeout` caps only the request itself, at 30 seconds.
  */
 const SLACK_CLIENT = { retryConfig: { retries: 3, factor: 2, minTimeout: 500, randomize: true }, timeout: 30_000 }
 
@@ -474,7 +475,9 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
         if (!key.startsWith('#')) return key
         const web = await client()
         if (!web) throw new Error(`can't look up Slack channel ${key}: use its ID instead`)
-        return (await find(web, key.slice(1))).id
+        const channel = await find(web, key.slice(1))
+        if (!channel.is_member) console.warn(`[board] slack: invite the app to ${key}; its events don't arrive until it's in`)
+        return channel.id
       },
       // A forward has no text of its own: it says what it shares.
       markdown(message) {
