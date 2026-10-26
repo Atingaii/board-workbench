@@ -56,11 +56,14 @@ export function claimsOf(headers: Headers): Claims {
 
 /**
  * The actor a caller writes as: its principal, plus the profile it claims (`vercel:user:u_123+claude`).
- * A person's handle and name are what they claim; anyone else's are their principal's. `audience`
- * is the board's URL, which serves the known agents' avatars.
+ * A person's name is what they claim, and so is their handle unless a host's verifier named them;
+ * anyone else's are their principal's. `audience` is the board's URL, which serves the known
+ * agents' avatars.
  */
 export function resolveActor(principal: Principal, claims: Claims, audience: string): ResolvedActor {
-  const baseHandle = principal.kind === 'person' && claims.handle ? claims.handle : principal.handle
+  // A token says only who a person is, so their CLI sends the handle; a host's verifier already said it.
+  const claimsHandle = principal.kind === 'person' && principal.facts?.issuer !== 'host'
+  const baseHandle = claimsHandle && claims.handle ? claims.handle : principal.handle
   const personName = principal.kind === 'person' ? claims.name : null
   const profile = claims.profile?.toLowerCase() ?? null
   const id = profile === null ? principal.id : `${principal.id}+${profile}`
