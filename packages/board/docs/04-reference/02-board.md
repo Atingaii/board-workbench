@@ -433,7 +433,7 @@ Each needs [`sync`](./03-http.md#what-sync-grants) where it lands, but
 ### Registered watchers
 
 ```ts
-register(input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: { key: string; platform: string; signIn?: boolean }[] }): Promise<RegistrationView>
+register(input: RegisterInput): Promise<RegistrationView>
 watchers(): Promise<RegistrationView[]>
 matches(opts?: { limit?: number; wait?: number; signal?: AbortSignal }): Promise<MatchView[]>
 ack(id: string, body: { lease: string; error?: string; skip?: boolean }): Promise<{ ok: true }>
@@ -441,7 +441,9 @@ ack(id: string, body: { lease: string; error?: string; skip?: boolean }): Promis
 
 What a board on `http()` does on the board it uses, one method each:
 `register` replaces the caller's registration (its watchers, at most 32, its
-sync entries, and where to wake it); `matches` pulls what they matched, each leased to the caller
+sync entries, and where to wake it: a `url`, or on a board whose discovery says
+`wake_by_path`, a `path` on its own project and a preview's `branch`, never
+both); `matches` pulls what they matched, each leased to the caller
 for 5 minutes; `ack` says how one went (done, an `error` to try again, or
 `skip`). `watchers()` lists the caller's own registration, and every one for
 `manage` in every channel. `board()` does all of it for its watchers, so you

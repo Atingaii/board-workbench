@@ -166,10 +166,26 @@ export const InboxQuery = z.object({
 /** How many watchers one registration holds: the board matches every event against every tail. */
 export const REGISTERED_WATCHERS_MAX = 32
 
-/** What a board on `http()` registers with the board it uses: its watchers' tails, and where to wake it. */
-export const RegisterBody = z
-  .object({
-    /** Without one, or a `path`, the board pulls on its own instead of being woken. */
+/** What every registration carries: its watchers' tails, and its sync entries. */
+const Registering = z.object({
+  // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
+  watch: z
+    .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
+    .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
+  /**
+   * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
+   * where it may sync, and the board lists the entries and links accounts on them.
+   */
+  sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().default(false) })).max(32).optional(),
+})
+
+/**
+ * What a board on `http()` registers with the board it uses: its watchers, and where to wake it,
+ * at a URL or at a path on its own project, never both.
+ */
+export const RegisterBody = z.union([
+  Registering.extend({
+    /** Without one, the board pulls on its own instead of being woken. */
     url: z
       .string()
       .url()
@@ -178,6 +194,11 @@ export const RegisterBody = z
       .transform((url) => url.replace(/\/+$/, ''))
       .nullable()
       .optional(),
+    path: z.null({ error: 'register a url or a path, not both' }).optional(),
+    branch: z.null({ error: 'a branch goes with a path' }).optional(),
+  }),
+  Registering.extend({
+    url: z.null({ error: 'register a url or a path, not both' }).optional(),
     /**
      * Where to wake the caller on its own Vercel project, on a board whose discovery says
      * `wake_by_path`. The board takes the project and environment from the caller's token and
@@ -188,26 +209,16 @@ export const RegisterBody = z
       .string()
       .max(300)
       .regex(/^\/[^?#]*$/, 'a path starts with / and has no query or fragment')
-      .transform((path) => path.replace(/(.)\/+$/, '$1'))
-      .nullable()
-      .optional(),
+      .transform((path) => path.replace(/(.)\/+$/, '$1')),
     /**
-     * With a `path`, from a preview: the branch whose latest ready preview is woken, since a
-     * token says which project and environment called but not which deployment. Production names none.
+     * From a preview: the branch whose latest ready preview is woken, since a token says which
+     * project and environment called but not which deployment. Production names none.
      */
     branch: z.string().min(1).max(255).nullable().optional(),
-    // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
-    watch: z
-      .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
-      .refine((watch) => Object.keys(watch).length <= REGISTERED_WATCHERS_MAX, `a board registers at most ${REGISTERED_WATCHERS_MAX} watchers`),
-    /**
-     * Its sync entries: its sync subscribes too, to every post, change, and thread sync in the channels
-     * where it may sync, and the board lists the entries and links accounts on them.
-     */
-    sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().default(false) })).max(32).optional(),
-  })
-  .refine((body) => !(body.url && body.path), { message: 'register a url or a path, not both', path: ['path'] })
-  .refine((body) => !body.branch || body.path, { message: 'a branch goes with a path', path: ['branch'] })
+  }),
+])
+/** A registration as a board on `http()` sends it: `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`. */
+export type RegisterInput = z.input<typeof RegisterBody>
 
 /** A pull of the caller's matches: at most `limit`, waiting up to `wait` seconds for one. */
 export const MatchesQuery = z.object({
@@ -497,22 +508,33 @@ export type Discovery = {
   wake_by_path?: boolean
 }
 
-/** Watchers a board on `http()` registered here: one registration per principal. */
+/**
+ * Watchers a board on `http()` registered here: one registration per principal, woken at a URL
+ * or at a path on its own project, never both.
+ */
 export type RegistrationView = {
   /** The principal that registered. Its watchers write as it, with their IDs as profiles. */
   owner: string
-  /** Where it's woken: `<url>/wake`. `null` when it pulls on its own, or is woken by `path`. */
-  url: string | null
-  /** Where it's woken on its own Vercel project, on a board with `wake_by_path`. */
-  path?: string | null
-  /** The branch whose latest ready preview a preview's `path` wakes. */
-  branch?: string | null
   watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
   /** Its sync entries. With any, its sync gets every event it delivers to platforms, as matches of watcher `@sync`. */
   sync: { key: string; platform: string; signIn: boolean }[]
   /** Every wake-up carries it, so the board can tell its registration is stale. */
   hash: string
-}
+} & (
+  | {
+      /** Where it's woken: `<url>/wake`. `null` when it pulls on its own. */
+      url: string | null
+      path?: undefined
+      branch?: undefined
+    }
+  | {
+      url: null
+      /** Where it's woken on its own Vercel project, on a board with `wake_by_path`. */
+      path: string
+      /** The branch whose latest ready preview a preview's `path` wakes. */
+      branch?: string
+    }
+)
 
 /** One match, leased to the registrant that pulled it. */
 export type MatchView = {
