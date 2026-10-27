@@ -637,17 +637,23 @@ describe('registering by path', () => {
     })
   })
 
-  it('takes a url or a path, not both', async () => {
+  it('takes a url or a path, not both, and a branch only with a path', async () => {
     const v0 = caller(testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch, await v0Token())
     expect((await v0('POST', '/watchers', { url: V0_URL, path: '/api/board', watch: {} })).status).toBe(400)
+    expect((await v0('POST', '/watchers', { url: V0_URL, branch: 'jb/watchers', watch: {} })).status).toBe(400)
   })
 
+  const production = { VERCEL: '1', VERCEL_ENV: 'production' }
   it.each([
-    ['on Vercel, on a board that wakes by path', '1', true, { path: '/api/board' }],
-    ['off Vercel', '', true, { url: V0_URL }],
-    ["on a board that doesn't wake by path", '1', false, { url: V0_URL }],
-  ])('registers %s with %j', async (_case, vercel, byPath, where) => {
-    vi.stubEnv('VERCEL', vercel)
+    ['production, on a board that wakes by path', production, true, { path: '/api/board' }],
+    ['a preview of a branch, which it names', { VERCEL: '1', VERCEL_ENV: 'preview', VERCEL_GIT_COMMIT_REF: 'jb/watchers' }, true, { path: '/api/board', branch: 'jb/watchers' }],
+    ['a preview of no branch, as `vercel deploy` makes', { VERCEL: '1', VERCEL_ENV: 'preview' }, true, { url: V0_URL }],
+    ['a custom environment', { VERCEL: '1', VERCEL_ENV: 'preview', VERCEL_TARGET_ENV: 'staging', VERCEL_GIT_COMMIT_REF: 'staging' }, true, { url: V0_URL }],
+    ['development', { VERCEL: '1', VERCEL_ENV: 'development' }, true, { url: V0_URL }],
+    ['off Vercel', {}, true, { url: V0_URL }],
+    ["on a board that doesn't wake by path", production, false, { url: V0_URL }],
+  ])('registers %s with %j', async (_case, env: Record<string, string>, byPath, where) => {
+    for (const name of ['VERCEL', 'VERCEL_ENV', 'VERCEL_TARGET_ENV', 'VERCEL_GIT_COMMIT_REF']) vi.stubEnv(name, env[name] ?? '')
     /** The team's board, as v0's board sees it: its discovery, and the registration it was sent. */
     const sent: unknown[] = []
     const remote = async (input: RequestInfo | URL, init?: RequestInit) => {

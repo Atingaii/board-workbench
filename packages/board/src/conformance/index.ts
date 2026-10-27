@@ -54,9 +54,10 @@ async function rejects(attempt: Promise<unknown>, status: number, code: string, 
   throw new Mismatch(`${what}: expected ${status} ${code}, and it succeeded`)
 }
 
-/** Where a registration is woken, to put back after a check replaces it: its path on a board that wakes by path, or its url. */
-function wokenAt(registered: RegistrationView | undefined): { url: string | null } | { path: string } {
-  return registered?.path ? { path: registered.path } : { url: registered?.url ?? null }
+/** Where a registration is woken, to put back after a check replaces it: its path (and branch) on a board that wakes by path, or its url. */
+function wokenAt(registered: RegistrationView | undefined): { url: string | null } | { path: string; branch?: string } {
+  if (!registered?.path) return { url: registered?.url ?? null }
+  return { path: registered.path, ...(registered.branch ? { branch: registered.branch } : {}) }
 }
 
 /** An ID or cursor as the protocol shapes them: a string of 1 to 128 characters. */
@@ -317,15 +318,22 @@ const CHECKS: Check[] = [
       const registered = (await ctx.board.watchers()).find((r) => r.owner === ctx.me.principal)
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, and checking would replace them'
+      const byPath = (await ctx.board.discovery()).wake_by_path
+      // A path wakes a project's production, or a preview's branch, which it names.
+      const environment = /^vercel:project:[^:]+:(.+)$/.exec(ctx.me.principal)?.[1] ?? null
+      if (byPath && environment !== null && environment !== 'production' && environment !== 'preview')
+        return `a path wakes production or a preview, and this token is ${environment}'s`
       const where = wokenAt(registered)
-      const attempt = () => ctx.board.register({ path: '/conformance', watch: {} })
+      const branch = environment === 'preview' ? { branch: 'conformance' } : {}
+      const attempt = () => ctx.board.register({ path: '/conformance', ...branch, watch: {} })
       try {
-        if (!(await ctx.board.discovery()).wake_by_path) await rejects(attempt(), 501, 'no_wake_by_path', 'a path, on a board that wakes only urls')
-        else if (!ctx.me.principal.startsWith('vercel:project:')) await rejects(attempt(), 403, 'not_a_project', "a path, from a token that isn't a Vercel project's")
+        if (!byPath) await rejects(attempt(), 501, 'no_wake_by_path', 'a path, on a board that wakes only urls')
+        else if (environment === null) await rejects(attempt(), 403, 'not_a_project', "a path, from a token that isn't a Vercel project's")
         else {
           const view = await attempt()
           same(view.path, '/conformance', "the registration's path")
           same(view.url, null, "the registration's url")
+          same(view.branch ?? null, environment === 'preview' ? 'conformance' : null, "the registration's branch")
         }
       } finally {
         await ctx.board.register({ ...where, watch: {} })

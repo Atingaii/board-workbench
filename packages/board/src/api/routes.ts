@@ -191,6 +191,11 @@ export const RegisterBody = z
       .transform((path) => path.replace(/(.)\/+$/, '$1'))
       .nullable()
       .optional(),
+    /**
+     * With a `path`, from a preview: the branch whose latest ready preview is woken, since a
+     * token says which project and environment called but not which deployment. Production names none.
+     */
+    branch: z.string().min(1).max(255).nullable().optional(),
     // The IDs are checked one by one, so a bad one fails with what a misconfigured boot would.
     watch: z
       .record(z.string().max(100), z.object({ tail: z.string().max(1000), when: z.enum(['matches', 'enters']).default('matches') }))
@@ -202,6 +207,7 @@ export const RegisterBody = z
     sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().default(false) })).max(32).optional(),
   })
   .refine((body) => !(body.url && body.path), { message: 'register a url or a path, not both', path: ['path'] })
+  .refine((body) => !body.branch || body.path, { message: 'a branch goes with a path', path: ['branch'] })
 
 /** A pull of the caller's matches: at most `limit`, waiting up to `wait` seconds for one. */
 export const MatchesQuery = z.object({
@@ -496,6 +502,8 @@ export type RegistrationView = {
   url: string | null
   /** Where it's woken on its own Vercel project, on a board with `wake_by_path`. */
   path?: string | null
+  /** The branch whose latest ready preview a preview's `path` wakes. */
+  branch?: string | null
   watch: Record<string, { tail: string; when: 'matches' | 'enters' }>
   /** Its sync entries. With any, its sync gets every event it delivers to platforms, as matches of watcher `@sync`. */
   sync: { key: string; platform: string; signIn: boolean }[]

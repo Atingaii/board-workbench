@@ -37,7 +37,8 @@ function withoutPath(fetch: Fetch): Fetch {
 
 /**
  * A board in front of `fetch` that wakes by path, as the team board does: it refuses a path from a
- * person, and keeps one as a URL on a host that never resolves, which it shows as the path.
+ * person, and keeps one (and a preview's branch) as a URL on a host that never resolves, which it
+ * shows as the path.
  */
 function wakingByPath(fetch: Fetch): Fetch {
   const host = 'https://path.invalid'
@@ -45,14 +46,18 @@ function wakingByPath(fetch: Fetch): Fetch {
     const url = new URL(request.url)
     let forwarded = request
     if (request.method === 'POST' && url.pathname.endsWith('/watchers')) {
-      const { path, ...body } = await request.json()
+      const { path, branch, ...body } = await request.json()
       const claims = JSON.parse(Buffer.from(request.headers.get('authorization')!.split('.')[1]!, 'base64url').toString())
       if (path && claims.user_id) return Response.json({ error: { code: 'not_a_project', message: "a path is on the caller's own project" } }, { status: 403 })
-      forwarded = new Request(request, { body: JSON.stringify(path ? { ...body, url: host + path } : body) })
+      const at = `${host}${path}${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`
+      forwarded = new Request(request, { body: JSON.stringify(path ? { ...body, url: at } : body) })
     }
     const response = await fetch(forwarded)
     if (!response.headers.get('content-type')?.includes('application/json')) return response
-    let text = (await response.text()).replaceAll(`"url":"${host}`, '"url":null,"path":"')
+    let text = (await response.text()).replace(
+      /"url":"https:\/\/path\.invalid([^"?]*)(?:\?branch=([^"]*))?"/g,
+      (_, path: string, branch?: string) => `"url":null,"path":${JSON.stringify(path)}${branch ? `,"branch":${JSON.stringify(decodeURIComponent(branch))}` : ''}`,
+    )
     if (request.method === 'GET' && url.pathname.replace(/\/$/, '') === new URL(BOARD_URL).pathname) text = text.replace(/^\{/, '{"wake_by_path":true,')
     return new Response(text, { status: response.status, headers: response.headers })
   }
@@ -132,6 +137,15 @@ describe('the conformance kit', () => {
     // A person's token names no project to wake.
     const person = await conformance(await clientOf(wakingByPath(testBoard({ scheduler: fakeQueue().scheduler }).fetch)))
     expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed'])
+  })
+
+  it("checks a preview's path with its branch, and gives the branch back", async () => {
+    const byPath = wakingByPath(testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch)
+    const preview = caller(byPath, await deploymentToken('v0', 'prj_v0', 'preview'))
+    expect((await preview('POST', '/watchers', { path: '/api/board', branch: 'jb/watchers', watch: {} })).status).toBe(200)
+    const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')))
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed'])
+    expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
   })
 
   it('reports schedules and files as not kept here on a board without a scheduler or a blob store', async () => {

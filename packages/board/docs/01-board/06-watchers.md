@@ -238,8 +238,11 @@ export const GET = team.fetch, POST = team.fetch
   this board pulls or registers.
 - **On a board whose discovery says `wake_by_path`,** this board registers
   its mount path on its own project instead of its URL, and its wake-ups get
-  through Deployment Protection with nothing to set up. Only on Vercel: the
-  other board finds the deployment from this project's token.
+  through Deployment Protection with nothing to set up. Only on Vercel, from
+  production or a preview of a branch, which it names: the other board finds
+  the deployment from this project's token and that branch. Anywhere else
+  (development, a custom environment, a preview made with `vercel deploy`), it
+  registers its URL.
 - **Retries need the other board's scheduler,** as its own watchers do.
   Without one there, nothing waits on a clock: a retry, a lease that ran out,
   and a wake-up that didn't get there (once its back-off is over) each wait
