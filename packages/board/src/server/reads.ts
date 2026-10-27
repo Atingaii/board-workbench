@@ -50,8 +50,37 @@ export function createReads(tables: MessageTables, session: BoardSession, projec
     waitUntil(catching)
   }
 
+  /**
+   * The tables caught up with the whole log once on this instance. Until then, a read by index waits
+   * for all of it: tables rebuilt from the log can be far behind, and a message's later events (an
+   * edit, a reaction, a reply) come after its own index. Once caught up, each write applies as it lands.
+   */
+  let whole: Promise<void> | null = null
+  function caughtUp(): Promise<void> {
+    whole ??= session.consume(projection).then(
+      () => undefined,
+      (error: unknown) => {
+        whole = null
+        throw error
+      },
+    )
+    return whole
+  }
+
+  /** `promise`, unless `signal` aborts first: the caller stops waiting, and what it waits for keeps going. */
+  function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return promise
+    if (signal.aborted) return Promise.reject(signal.reason)
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+    })
+  }
+
   /** Waits until the tables have applied `index`, or the whole log when it's omitted. */
   async function ensure(index?: number, signal?: AbortSignal): Promise<void> {
+    if (index !== undefined) await untilAborted(caughtUp(), signal)
     if (index !== undefined && (await tables.position()) >= index) return
     await session.consume(projection, { ...(index !== undefined ? { through: index } : {}), ...(signal ? { signal } : {}) })
   }
