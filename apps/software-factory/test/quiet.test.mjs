@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { boardOnly, fromBoard, unseenPr } from "../app/api/board/[[...path]]/quiet.ts";
+import { boardOnly, fromBoard, issues, pulls, unseenPr } from "../app/api/board/[[...path]]/quiet.ts";
 
 const lifecycle = (type, labels = {}) => ({ subthread: null, type, labels });
 
@@ -58,4 +58,17 @@ test("GitHub gets what was written on the board, and reactions made there, not S
   await fromBoard(out("reaction.added", null, "slack"));
   await fromBoard(out("reaction.added", "slack", null));
   assert.deepEqual(delivered, ["message.posted:null:null", "reaction.added:slack:null"]);
+});
+
+test("a PR thread's board replies stay off GitHub; an issue thread's go", async () => {
+  const delivered = [];
+  const out = (where) => ({
+    direction: "out",
+    event: { type: "message.posted", payload: { from: null } },
+    message: { from: null },
+    deliver: async () => void delivered.push(where),
+  });
+  await pulls(out("pulls"));
+  await issues(out("issues"));
+  assert.deepEqual(delivered, ["issues"]);
 });

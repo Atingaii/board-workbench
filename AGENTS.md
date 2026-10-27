@@ -119,8 +119,9 @@ reply in an existing thread rather than starting one.
   tables (`<prefix>:{<prefix>:board}:*`), which fill from the log on their own. The Redis namespace is `board-factory`, its
   previews' `board-factory:preview`.
   Slack channel `C0C8XN8SQRG` (#development-messageboard) mirrors `dev`, and
-  GitHub PRs and issues come into it; what's written on the board reaches
-  GitHub, and what's said in Slack doesn't (`fromBoard` in `quiet.ts`). Connect uses `slack/vboard-factory`,
+  GitHub PRs and issues come into it. PR threads are inbound only (`pulls` in
+  `quiet.ts`); in an issue's thread what's written on the board reaches GitHub,
+  and what's said in Slack doesn't (`issues` and `fromBoard`). Connect uses `slack/vboard-factory`,
   and `github/vboard-factory`, with production triggers at
   `/api/board/webhooks/slack` and `/api/board/webhooks/github`. The GitHub
   app's bot (its login and commit
@@ -186,8 +187,8 @@ reply in an existing thread rather than starting one.
   thread it was built for, both ways, once the PR's root lands in Slack (its tail
   has `--all`, for the delivery receipt that says where): the PR thread gets `:crosspost: From
   <who>'s Slack thread`, the source thread gets `:crosspost: #N <title>`. Slack
-  shows them without a label, and they don't wake Pi or triage. The PR-thread
-  one reaches GitHub too, as a comment.
+  shows them without a label, and they don't wake Pi or triage. Neither reaches
+  GitHub, since PR threads are inbound only.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.

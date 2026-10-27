@@ -15,7 +15,7 @@ import { owner } from "./owner";
 import { crosspost } from "./crosspost";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
-import { boardOnly, fromBoard, unseenPr } from "./quiet";
+import { issues, pulls } from "./quiet";
 import { asksPi, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 import { vercelTrustedSources } from "./trusted-sources";
@@ -55,24 +55,9 @@ const factory = board({
         }),
       ),
     ),
-    // What's written on the board reaches GitHub (Pi answering an issue's thread, crosspost's note on a
-    // PR); what's said in Slack stays in Slack and on the board.
-    github: github(
-      CONNECTOR,
-      repos({
-        [REPO]: {
-          // Inline review threads and "closed by …" replies stay on GitHub and the board,
-          // out of Slack: top-level comments, review verdicts and merges still go through.
-          // Comments on a PR the board has no thread for stay on GitHub.
-          pulls: async (sync) => {
-            if (sync.direction === "out") return fromBoard(sync);
-            if (await unseenPr(sync.event, sync.board, "dev")) return;
-            await sync.import("dev", { noSync: boardOnly(sync.event) });
-          },
-          issues: async (sync) => (sync.direction === "in" ? sync.import("dev") : fromBoard(sync)),
-        },
-      }),
-    ),
+    // GitHub comes in; what's written on the board goes back only in issue threads (Pi answering a
+    // reporter). PR threads are inbound only: their replies stay in Slack and on the board.
+    github: github(CONNECTOR, repos({ [REPO]: { pulls, issues } })),
   },
   watch: {
     shipit: shipit({ tellPi }),

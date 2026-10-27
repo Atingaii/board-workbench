@@ -41,3 +41,26 @@ export async function unseenPr(event: GitHubEvent, board: Board, channel: string
   const { messages } = await board.messages({ channel, label: { pr: `${REPO}#${number}` }, limit: 1 });
   return messages.length === 0;
 }
+
+type PullsSync =
+  | { direction: "in"; event: GitHubEvent; board: Board; import(channel: string, overrides: { noSync: boolean }): Promise<unknown> }
+  | ({ direction: "out" } & Outbound);
+type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> } | ({ direction: "out" } & Outbound);
+
+/**
+ * PR threads come in from GitHub and go nowhere back: a reply on the board, a Pi's included, stays
+ * in Slack and on the board, so a conversation about a PR doesn't end up as comments on it.
+ * Inline review threads and "closed by …" replies stay out of Slack; comments on a PR the board
+ * has no thread for stay on GitHub.
+ */
+export async function pulls(sync: PullsSync): Promise<void> {
+  if (sync.direction === "out") return;
+  if (await unseenPr(sync.event, sync.board, "dev")) return;
+  await sync.import("dev", { noSync: boardOnly(sync.event) });
+}
+
+/** Issue threads come in, and what's written on the board goes back, so Pi answers the reporter on GitHub. */
+export async function issues(sync: IssuesSync): Promise<void> {
+  if (sync.direction === "in") await sync.import("dev");
+  else await fromBoard(sync);
+}
