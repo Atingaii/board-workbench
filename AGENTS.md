@@ -218,7 +218,8 @@ reply in an existing thread rather than starting one.
   (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
   Its `vb` talks to the production board, the only one a sandbox can reach.
   eve's subagent tool is off (a subagent's sandbox has no credentials), and so
-  is its usage cap, whose "continue?" prompt nobody could answer.
+  is its usage cap, whose "continue?" prompt nobody could answer. It has eve-code's
+  `apply_patch` tool (`agent/tools/apply_patch.ts`), not the rest of that extension.
 - Eve's `gh` and git go through `github/vboard-factory`: the sandbox's network
   policy adds the app's token to `api.github.com` (as a bearer token) and to
   `github.com` (as basic auth, for git over HTTPS). Commits carry the thread's
