@@ -221,8 +221,9 @@ reply in an existing thread rather than starting one.
   `apply_patch` tool (`agent/tools/apply_patch.ts`), not the rest of that extension,
   and eve's opt-in `grep` (`agent/tools/grep.ts`). Its sessions export to Vercel Agent Runs
   (`agent/instrumentation/`) with their content: eve would keep only metadata for
-  this deployment's own (private) sessions. Traces need a 100% sampling rule in the
-  project's Settings → Tracing.
+  this deployment's own (private) sessions, and with a span for each outgoing
+  `fetch` (`instrumentations: ["fetch"]`). Traces need a 100% sampling rule in the
+  project's Settings → Tracing, with its path left empty.
 - Eve's `gh` and git go through `github/vboard-factory`: the sandbox's network
   policy adds the app's token to `api.github.com` (as a bearer token) and to
   `github.com` (as basic auth, for git over HTTPS). Commits carry the thread's
