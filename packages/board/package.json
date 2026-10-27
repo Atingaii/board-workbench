@@ -104,9 +104,9 @@
       "types": "./dist/sync-linear.d.mts",
       "default": "./dist/sync-linear.mjs"
     },
-    "./format": {
-      "types": "./dist/format.d.mts",
-      "default": "./dist/format.mjs"
+    "./cli": {
+      "types": "./dist/vb.d.mts",
+      "default": "./dist/vb.mjs"
     },
     "./package.json": "./package.json"
   },

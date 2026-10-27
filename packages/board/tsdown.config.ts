@@ -28,7 +28,8 @@ export default defineConfig([
       'sync-github': 'src/sync/github.ts',
       'sync-kapso': 'src/sync/kapso.ts',
       'sync-linear': 'src/sync/linear.ts',
-      format: 'src/format/index.ts',
+      // `@vercel/board/cli`: `vb()`, the CLI's board commands in-process. `cli` is the CLI itself.
+      vb: 'src/cli/vb.ts',
       cli: 'src/cli/main.ts',
     },
     format: 'esm',

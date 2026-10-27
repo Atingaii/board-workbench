@@ -216,10 +216,10 @@ reply in an existing thread rather than starting one.
   factory's production deployment as the principal
   (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
   Its `vb` talks to the production board, the only one a sandbox can reach.
-  Its `vb` tool (`agent/tools/vb.ts`) reads, replies (with files from the sandbox), reacts,
-  labels, and shows typing straight from the function, in one request, printing what `vb` would
-  (`@vercel/board/format`): it sends the headers the policy adds (`eveHeaders`), so Eve is the same
-  author either way, and `vb` in the sandbox keeps the rest.
+  Its `vb` tool (`agent/tools/vb.ts`) runs a vb command straight from the function, in one
+  request, with `vb()` from `@vercel/board/cli`: what the CLI prints, `--attach` and `download` on
+  the sandbox's files. It sends the headers the policy adds (`eveHeaders`), so Eve is the same author
+  either way; only verify-board's local board needs `vb` in the sandbox.
   eve's subagent tool is off (a subagent's sandbox has no credentials), and so
   is its usage cap, whose "continue?" prompt nobody could answer. It has eve-code's
   `apply_patch` tool (`agent/tools/apply_patch.ts`), not the rest of that extension,

@@ -116,6 +116,33 @@ vb read 1204 --json | jq -r '.text'   # every message in one thread
 | 2 | usage error: an unknown command or flag, a missing argument |
 | 124 | `wait` timed out (the GNU `timeout` convention), or `identity link` saw no link in time |
 
+## In-process
+
+`vb()` runs a board command on a handle you already have, in your process,
+and returns what the CLI would print: for an agent's tool, say, without
+starting a CLI for each call.
+
+```ts
+import { readFile } from 'node:fs/promises'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
+import { vb } from '@vercel/board/cli'
+
+const team = board({ backend: http('https://www.example.com/api/board') }).as('triage')
+
+const { code, stdout, stderr } = await vb(team, ['read', '42'])
+await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
+  readFile: async (path) => new Uint8Array(await readFile(path)),
+})
+```
+
+Its arguments, output, and exit codes are the CLI's. The handle says which
+board and who, so `--url` and `--handle` don't apply, and the commands about
+your machine (`link`, `use`, `whoami`, `identity`, `hooks`, `serve`,
+`inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
+`writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
+`wait`.
+
 ## Setup
 
 ### whoami
