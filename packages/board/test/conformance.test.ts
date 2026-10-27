@@ -60,14 +60,15 @@ describe('the conformance kit', () => {
       expect((await v0('POST', '/watchers', registration)).status).toBe(200)
       const before = await registered()
       const report = await conformance(asV0)
-      expect(skipped(report)).toEqual(['skipped', 'skipped'])
+      // Waking by path runs: refused here, it replaces nothing.
+      expect(skipped(report)).toEqual(['skipped', 'passed', 'skipped'])
       expect(await registered()).toEqual(before)
     }
     // One with nothing in it is checked, and keeps where it's woken.
     const empty = { owner: 'vercel:project:prj_v0:production', url: 'https://v0.test/api/board', watch: {}, sync: [] }
     expect((await v0('POST', '/watchers', { url: empty.url, watch: {} })).status).toBe(200)
     const report = await conformance(asV0)
-    expect(skipped(report)).toEqual(['passed', 'passed'])
+    expect(skipped(report)).toEqual(['passed', 'passed', 'passed'])
     expect(await registered()).toEqual([empty])
   })
 

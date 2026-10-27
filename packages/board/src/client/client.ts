@@ -384,7 +384,7 @@ export function createBoardClient(options: ClientOptions) {
     inbox: async (key: string, opts: { channel?: string; limit?: number } = {}) =>
       (await call<{ events: InboxEntry[] }>('GET', `/inbox/${key}${queryString(opts)}`)).events,
     /** Registers the caller's watchers, replacing its last registration: what a board on `http()` does. */
-    register: (input: { url?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: { key: string; platform: string; signIn?: boolean }[] }) =>
+    register: (input: { url?: string | null; path?: string | null; watch: Record<string, { tail: string; when?: 'matches' | 'enters' }>; sync?: { key: string; platform: string; signIn?: boolean }[] }) =>
       call<RegistrationView>('POST', '/watchers', { body: input }),
     /** Registered watchers: every one to `manage` everywhere, the caller's own to anyone else. */
     watchers: async () => (await call<{ watchers: RegistrationView[] }>('GET', '/watchers')).watchers,

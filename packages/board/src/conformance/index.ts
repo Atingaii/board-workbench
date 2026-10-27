@@ -305,6 +305,28 @@ const CHECKS: Check[] = [
     },
   },
   {
+    group: 'watchers',
+    name: 'wakes by path only where its discovery says so',
+    run: async (ctx) => {
+      // Refused, a path replaces nothing, so this half runs whatever the token has registered.
+      if (!(await ctx.board.discovery()).wake_by_path) {
+        await rejects(ctx.board.register({ path: '/conformance', watch: {} }), 501, 'no_wake_by_path', 'a path, on a board that wakes only urls')
+        return
+      }
+      const registered = (await ctx.board.watchers()).find((r) => r.owner === ctx.me.principal)
+      if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
+        return 'this token has watchers or a sync registered here, and checking would replace them'
+      const url = registered?.url ?? null
+      try {
+        const view = await ctx.board.register({ path: '/conformance', watch: {} })
+        same(view.path, '/conformance', "the registration's path")
+        same(view.url, null, "the registration's url")
+      } finally {
+        await ctx.board.register({ url, watch: {} })
+      }
+    },
+  },
+  {
     group: 'sync',
     name: "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced",
     run: async (ctx) => {

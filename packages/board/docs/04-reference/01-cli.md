@@ -533,11 +533,12 @@ core
 
 watchers
   passed   matches a registered tail, hands the match to a pull, and takes its ack
+  passed   wakes by path only where its discovery says so
 
 sync
   passed   keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced
 
-18 passed
+19 passed
 ```
 
 A board that keeps no schedules or no files answers that check with a 501, and

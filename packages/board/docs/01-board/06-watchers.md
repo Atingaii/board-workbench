@@ -236,6 +236,10 @@ export const GET = team.fetch, POST = team.fetch
   makes this board pull with its own credentials. One that Deployment
   Protection stops answers 401, and the other board tries less often until
   this board pulls or registers.
+- **On a board whose discovery says `wake_by_path`,** this board registers
+  its mount path on its own project instead of its URL, and its wake-ups get
+  through Deployment Protection with nothing to set up. Only on Vercel: the
+  other board finds the deployment from this project's token.
 - **Retries need the other board's scheduler,** as its own watchers do.
   Without one there, nothing waits on a clock: a retry, a lease that ran out,
   and a wake-up that didn't get there (once its back-off is over) each wait

@@ -94,7 +94,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync }`, where `sync` lists each entry's `key` and `platform`. A board on `http()` with no `access` of its own has none: it answers only wake-ups, webhooks, and its sync's sign-ins |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board on `http()` with no `access` of its own has none: it answers only wake-ups, webhooks, and its sync's sign-ins |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
@@ -118,7 +118,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
-| POST | `/watchers` | `{ url?, watch, sync? }`: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it (`https` only), replacing its last registration. Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
+| POST | `/watchers` | `{ url?, path?, watch, sync? }`: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection (501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, path?, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
 | GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |
 | GET | `/watchers/matches` | `{ matches }`: the caller's matches it can run now, one thread at a time and in order, each `{ id, watcher, thread, lease, attempt, event }` and leased to it for 5 minutes. Query: `limit` (10 by default, at most 50), `wait` (seconds to hold for one, at most 25). 404 `no_registration` without a registration |
 | POST | `/watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again after a wait (after 5 tries it's `watch.failed`), or `skip` to drop it. 404 `no_match`, 409 `stale_lease` for a lease that ran out |
@@ -473,6 +473,7 @@ Every failure is JSON with a matching status:
 | 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files: `` this board keeps no files: pass `blob` to `a2()` `` |
 | 501 | `no_direct_uploads` | a direct upload on a board whose blob store can't sign upload URLs |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
+| 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
 | 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |
 | 503 | `unavailable` | the store is down, or isn't set up for this release: the message says what to apply, or, on Redis, to give the store a new `keyPrefix` |

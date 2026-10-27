@@ -385,14 +385,24 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   /** Only an https URL can be woken; anything else pulls on its own. */
   const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
 
+  /**
+   * Where the remote wakes this board: on Vercel, on a board that wakes by path, the path on this
+   * project, which gets through its Deployment Protection; anywhere else, its URL.
+   */
+  async function wakeAt(here: string | null): Promise<{ url: string | null } | { path: string }> {
+    const onVercel = typeof process !== 'undefined' && process.env.VERCEL === '1'
+    if (here && onVercel && (await discovery()).wake_by_path) return { path: new URL(here).pathname }
+    return { url: here }
+  }
+
   let last: { url: string | null; at: number; result: RegistrationView } | null = null
   let registering: Promise<RegistrationView> | null = null
   /** Registers this board's watchers with the remote, as itself, replacing its last registration. */
   async function register(here: string | null): Promise<RegistrationView> {
     const current = await watchersHash()
     if (last && last.url === here && last.result.hash === current && Date.now() - last.at < REGISTER_EVERY_MS) return last.result
-    registering ??= own
-      .register({ url: here, watch: specs, ...(sync.length > 0 ? { sync } : {}) })
+    registering ??= wakeAt(here)
+      .then((where) => own.register({ ...where, watch: specs, ...(sync.length > 0 ? { sync } : {}) }))
       .then((result) => {
         last = { url: here, at: Date.now(), result }
         return result
