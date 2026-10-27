@@ -100,7 +100,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
   const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
   const { github, repos } = await import("../../../packages/board/src/sync/github.ts");
-  const { fromBoard } = await import("../app/api/board/[[...path]]/quiet.ts");
+  const { issues, pulls } = await import("../app/api/board/[[...path]]/quiet.ts");
   const slackPlatform = fakePlatform("slack");
   const githubPlatform = fakePlatform("github");
   const watched = [];
@@ -110,7 +110,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
     ...options,
     sync: {
       slack: slack({ adapter: slackPlatform.adapter }, channels({ C1: "dev" })),
-      github: github({ adapter: githubPlatform.adapter }, repos({ "vercel-labs/board": async (sync) => (sync.direction === "in" ? sync.import("dev") : fromBoard(sync)) })),
+      github: github({ adapter: githubPlatform.adapter }, repos({ "vercel-labs/board": { pulls, issues } })),
     },
     watch: Object.fromEntries(Object.entries(watchers).map(([name, watcher]) => [name, {
       ...watcher, run: ({ event }) => { watched.push([name, event.message?.channel]); },
@@ -146,8 +146,10 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
     if (!githubRoot) await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.ok(githubRoot);
+  // A board reply in a PR's thread (a Pi's, say) reaches Slack but not the PR on GitHub.
+  const slackBefore = slackPlatform.posts.length;
   await operator("POST", "/messages", { re: githubRoot.re ?? githubRoot.id, text: "Existing dev response" });
-  while (githubPlatform.posts.length === 0 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(githubPlatform.posts.length, 1);
-  assert.match(githubPlatform.posts[0].text, /Existing dev response/);
+  while (slackPlatform.posts.length === slackBefore && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(slackPlatform.posts.slice(slackBefore).some((post) => /Existing dev response/.test(post.text)));
+  assert.equal(githubPlatform.posts.length, 0);
 });
