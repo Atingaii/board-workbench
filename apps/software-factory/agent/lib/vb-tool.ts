@@ -2,7 +2,7 @@ import { board as boardAt, type Board } from "@vercel/board";
 import { http } from "@vercel/board/backend-http";
 import { vb } from "@vercel/board/cli";
 import { z } from "zod";
-import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER } from "../../app/api/board/[[...path]]/harness.ts";
+import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
 
 // The vb tool: vb's board commands, run in the function against the board, without starting `vb` in
 // the sandbox. It's who `vb` is there: the same token, profile, and session the sandbox's network
@@ -24,7 +24,13 @@ export function eveBoard(
   options: { token: () => Promise<string>; bypass?: string | undefined; fetch?: typeof fetch },
 ): Board {
   const send = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const routes = new RegExp(VB_ROUTES);
   const withEve: typeof fetch = async (input, init) => {
+    // Only the routes the sandbox's policy lets vb reach with Eve's token: never sources, inbox,
+    // identity, sync, or watchers, which board content could otherwise steer Eve into reading.
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin !== new URL(BOARD).origin || !routes.test(url.pathname))
+      throw new Error(`the vb tool can't reach ${url.pathname.replace(new URL(BOARD).pathname, "") || "/"}: it's not a route Eve uses`);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     for (const [name, value] of Object.entries(eveHeaders(thread, await options.token(), options.bypass))) headers.set(name, value);
     return send(input, { ...init, headers });

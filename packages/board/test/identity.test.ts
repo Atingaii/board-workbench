@@ -537,7 +537,7 @@ describe('signing in, and posting as yourself', () => {
 })
 
 describe('vb identity', () => {
-  const CLI = join(import.meta.dirname, '../src/cli/main.ts')
+  const CLI = join(import.meta.dirname, '../src/cli/bin.ts')
   const run = (url: string, token: string, args: string[], onLine?: (line: string) => void, env: Record<string, string> = {}) =>
     new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
       const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|CODEX|GROK|PI_|AI_AGENT|BOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key)))

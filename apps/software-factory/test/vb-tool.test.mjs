@@ -70,3 +70,15 @@ test("vb tool: --attach and download use the sandbox's files, ~ and $HOME in its
   assert.equal(await run("download", attachment.id, "~/copy.png"), "~/copy.png");
   assert.deepEqual(files.get(`${SANDBOX_HOME}/copy.png`), png);
 });
+
+test("vb tool: reaches only the routes the sandbox's policy lets vb reach", async () => {
+  const { root, run, sent } = await setup();
+  const before = sent.length;
+  for (const args of [["sources", "slack", "read", "#general"], ["inbox", "slack"], ["identity"]])
+    assert.match(await run(...args), /\(exit [12]\)$/, args.join(" "));
+  assert.match(await run("sources", "slack", "read", "#general"), /the vb tool can't reach \/sources\/slack\/read/);
+  assert.match(await run("inbox", "slack"), /the vb tool can't reach \/inbox\/slack/);
+  // None of them reached the board.
+  assert.equal(sent.length, before);
+  assert.match(await run("read", root.id), /add a vb tool to eve/);
+});

@@ -28,9 +28,9 @@ export default defineConfig([
       'sync-github': 'src/sync/github.ts',
       'sync-kapso': 'src/sync/kapso.ts',
       'sync-linear': 'src/sync/linear.ts',
-      // `@vercel/board/cli`: `vb()`, the CLI's board commands in-process. `cli` is the CLI itself.
-      vb: 'src/cli/vb.ts',
-      cli: 'src/cli/main.ts',
+      cli: 'src/cli/bin.ts',
+      // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `serve` or `inspect`.
+      'cli-embedded': 'src/cli/embedded.ts',
     },
     format: 'esm',
     platform: 'node',

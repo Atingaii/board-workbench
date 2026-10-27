@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { vb } from '../src/cli/vb.ts'
+import { vb } from '../src/cli/embedded.ts'
 import { personToken, testBoard, BOARD_URL } from './harness.ts'
 
 // vb() on a handle over HTTP to an in-process board: the CLI's commands, output, and exit codes,
@@ -29,8 +29,8 @@ describe('vb()', () => {
     const read = await vb(team, ['read', `#${id}`])
     expect(read.code).toBe(0)
     expect(read.stdout).toMatch(new RegExp(`^#${id} .*\\[kind=bug\\]\\n\\s+the build is red\\n\\s+↳ #\\d+ .*\\n\\s+on it\\n$`))
-    const json = (await vb(team, ['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
-    expect(json.map((m) => m.text)).toEqual(['the build is red', 'on it'])
+    const json = (await vb(team, ['read', id, '--json'])).stdout.trim().split('\n').map((line: string) => JSON.parse(line))
+    expect(json.map((m: { text: string }) => m.text)).toEqual(['the build is red', 'on it'])
     expect((await vb(team, ['read', 'dev', '--text', 'build'])).stdout).toMatch(/^dev · 1 thread · cursor/)
   })
 
@@ -41,6 +41,10 @@ describe('vb()', () => {
     expect(await vb(team, ['frobnicate'])).toMatchObject({ code: 2, stderr: 'error: unknown command: frobnicate (run `board help`)\n' })
     expect((await vb(team, ['read', '--bogus'])).stderr).toMatch(/^error: unknown option: --bogus/)
     expect((await vb(team, ['help'])).stdout).toMatch(/^board \S+: a message board/)
+    // --help is help, never the command it's on.
+    const id = (await vb(team, ['post', 'dev', 'keep me', '--no-sync'])).stdout.trim()
+    for (const flag of ['--help', '-h']) expect((await vb(team, ['delete', id, flag])).stdout).toMatch(/^board \S+: a message board/)
+    expect(JSON.parse((await vb(team, ['read', id, '--json'])).stdout).deleted).toBe(false)
   })
 
   it("refuses what's the CLI's: another board or handle, and the commands about its machine", async () => {
@@ -58,10 +62,10 @@ describe('vb()', () => {
       readFile: async (path: string) => (path === '/work/shot.png' ? png : null),
       writeFile: async (path: string, data: Uint8Array) => void saved.set(path, data),
     }
-    expect((await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).code).toBe(2)
+    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 1, stderr: "error: --attach reads files: pass it in vb()'s options\n" })
     expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/missing.png'], files)).toMatchObject({ code: 2, stderr: 'error: no such file: /work/missing.png\n' })
     const id = (await vb(team, ['post', 'dev', 'proof', '--attach', '/work/shot.png', '--no-sync'], files)).stdout.trim()
-    const [root] = (await vb(team, ['read', id, '--json'])).stdout.trim().split('\n').map((line) => JSON.parse(line))
+    const [root] = (await vb(team, ['read', id, '--json'])).stdout.trim().split('\n').map((line: string) => JSON.parse(line))
     expect(root.attachments).toMatchObject([{ name: 'shot.png', size: png.byteLength }])
     expect(await vb(team, ['download', root.attachments[0].id, '/work/copy.png'], files)).toMatchObject({ code: 0, stdout: '/work/copy.png\n' })
     expect(saved.get('/work/copy.png')).toEqual(png)

@@ -122,8 +122,15 @@ const expiry = (token: string): number => {
 
 type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
 
-const cacheFile = (audience: string) =>
-  join(configDir(), 'tokens', `${createHash('sha256').update(audience).digest('hex').slice(0, 32)}.json`)
+/**
+ * Where `audience`'s token is cached: one per board, and with a login the Vercel CLI hands over
+ * (`VERCEL_AUTH_TOKEN`), one per login too, since it can be someone else's than `vercel login`'s.
+ */
+const cacheFile = (audience: string) => {
+  const login = process.env.VERCEL_AUTH_TOKEN
+  const key = login ? `${audience}\n${login}` : audience
+  return join(configDir(), 'tokens', `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
+}
 
 async function readCache(audience: string): Promise<Cached | null> {
   try {
@@ -140,6 +147,12 @@ async function writeCache(audience: string, cached: Cached) {
 }
 
 /**
+ * Your Vercel login: what the Vercel CLI hands a CLI it runs, as `vercel board` (`VERCEL_AUTH_TOKEN`,
+ * from its `--token` or its own login), or else what `vercel login` saved.
+ */
+const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken())
+
+/**
  * A person's token: their Vercel CLI login mints a development token for the
  * project the board's host is a deployment of, exchanged so its audience is the
  * board's URL. Cached on disk for its 12-hour life.
@@ -148,7 +161,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   const cached = await readCache(audience)
   // Tokens cached before names and avatars were kept get them once.
   if (cached && cached.name === undefined) {
-    const user = await getVercelToken()
+    const user = await vercelLogin()
       .then(vercelUser)
       .catch(() => null)
     const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
@@ -159,7 +172,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   if (!discovery.project_id)
     throw new BoardError('no_project', `the board at ${discovery.url} doesn't know its Vercel project`, 0)
 
-  const authToken = await getVercelToken().catch(() => null)
+  const authToken = await vercelLogin().catch(() => null)
   const project = await boardProject(audience, discovery, authToken)
   let development: string
   try {
@@ -549,7 +562,7 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
     new BoardError('protected', `${url} is behind Vercel Deployment Protection, and your Vercel login ${why}, or set VERCEL_AUTOMATION_BYPASS_SECRET (${WHERE})`, 0)
   let api: VercelApi
   try {
-    const token = await getVercelToken()
+    const token = await vercelLogin()
     api = async (method, path) => {
       const response = await doFetch(`https://api.vercel.com${path}`, {
         method,

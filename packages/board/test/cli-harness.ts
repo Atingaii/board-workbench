@@ -10,7 +10,7 @@ import { personToken, testBoard } from './harness.ts'
 // The CLI end to end, shared by the cli*.test.ts files. They're split so vitest runs
 // them in parallel: each file serves a board of its own, with `useBoard()`.
 
-export const CLI = join(import.meta.dirname, '../src/cli/main.ts')
+export const CLI = join(import.meta.dirname, '../src/cli/bin.ts')
 // Every directory a test makes lives under one root, which holds an empty `.git`
 // (as stray ones in `~` or `/tmp` do): it isn't a checkout, so nothing links there.
 export const TEMP = realpathSync(mkdtempSync(join(tmpdir(), 'board-cli-')))

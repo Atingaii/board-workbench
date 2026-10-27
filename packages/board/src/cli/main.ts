@@ -1,20 +1,20 @@
-#!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
-import { withMentions } from '../api/tail.ts'
-import { type ProfileOption } from '../client/client.ts'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
+import { parseArgs } from 'node:util'
+import type { BoardEventView, MessageView } from '../api/routes.ts'
+import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
+import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { boardUrl, configDir, connect, detectAgent, projectDir, projectUrl } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
-import { DIRECT_UPLOAD_BYTES_MAX } from '../contract/schemas.ts'
-import { startInspector } from '../inspect/server.ts'
+import { normalizeEmoji } from '../contract/emoji.ts'
+import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import { formatAccess, terminalText, who } from './format.ts'
-import { commandWord, HELP, parse, UsageError, type Flags } from './args.ts'
-import { run as runOnBoard, type Io } from './vb.ts'
+import { conformance } from '../conformance/index.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import {
   AGENTS,
   allow,
@@ -37,39 +37,322 @@ import {
   type HookAgent,
 } from './hooks.ts'
 
+const help = () => `${app.name} ${VERSION}: a message board you mount in one route
+
+usage: ${app.name} <command> [options]${app.name === 'board' ? '      (also installed as `vb`)' : ''}
+
+  whoami                                   who am I, on which board, with which token, and what I can do
+  link <url>                               link this project to a board (.board/config.json)
+  use <url>                                save the default board
+
+  channels                                 channels, grouped by path prefix
+  actors                                   actors and their handles
+  identity                                 your linked Slack and GitHub accounts
+  identity link <key> [--code] [--no-wait] link your account on sync entry <key> (e.g. slack): sign in, or post a code from it
+  identity unlink <account>                unlink one, by handle or actor ID
+
+  read [channel] [filters] [--limit N]     the latest threads, one each: root, replies, latest reply
+                                           (no channel: every channel)
+  read <id>                                one thread, every message (filters: the root and the replies that match)
+  read <link>                              the thread a Slack or GitHub link names, if the board synced it
+
+  post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+                                           a new thread in a channel, or with an id, a reply in its thread
+  reply <id> ["<text>"] [--attach <file>]... [--id <key>] [--no-sync]
+  schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N]
+           [--label k=v]... [--attach <file>]... [--no-sync]
+                                           post later, as you: once, or repeating until a stop or until canceled
+  schedules [id] [--by <handle>] [--channel <c>] [--all]
+                                           pending schedules (a thread's, with an id); --all adds done and canceled
+  schedule cancel <schedule>               stop one, e.g. schedule cancel s12 (yours, or with manage)
+  edit <id> "<text>"
+  delete <id>
+  react <id> <emoji> [--remove]
+  label <id> k=v... [--unset k]...
+  typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
+                                           Slack shows the status, if given, instead of "Typing…"
+  sync <id>                                where the thread is synced, with this message's link on each
+  sync <id> <target>                       attach the thread to e.g. slack:#incidents, backfilling it
+  inbox <key> [channel] [--limit N]        raw platform events, for debugging sync
+  sources                                  the board's sources (its sync entries: slack, github, …)
+  sources <key> read <channel|thread|link> [--limit N]
+                                           read a source's channel, thread, or message link without syncing it,
+                                           e.g. sources slack read '#general', or a Slack permalink (full access only)
+  sources <key> join <channel|link>        add the app to a public channel so it can be read, where the board
+                                           opted in (slack({ join: true })); full access only
+  download <attachment> [path]             save an attachment (its name, here, by default; - for stdout)
+  conformance [--channel <c>]              check that the board speaks the protocol: posts to conformance,
+                                           kept on the board, and deletes what it posted (1 if a check fails)
+
+  hooks [install|uninstall|status] [claude|codex|cursor|pi]...
+                                           after a turn that didn't update the board, remind the agent to (linked projects only)
+
+  tail [channel] [filters] [--all]         live, until Ctrl-C
+  wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)${Object.keys(app.commands).length > 0 ? `\n\n${Object.values(app.commands).map((command) => command.help).join('\n')}` : ''}
+
+filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
+          labels match a message or its thread's root; repeated flags all must match
+global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
+json:     one object per line (JSONL): { message, replies, last } for read <channel>, a message for read <id>
+text:     pass "-" to read it from stdin; it may be left out when you --attach
+env:      BOARD_URL  BOARD_TOKEN  BOARD_AS  BOARD_AVATAR  BOARD_HANDLE`
+
+class UsageError extends Error {}
+
+const OPTIONS = {
+  ...FILTER_FLAGS,
+  url: { type: 'string' },
+  as: { type: 'string' },
+  avatar: { type: 'string' },
+  human: { type: 'boolean' },
+  handle: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
+  unset: { type: 'string', multiple: true },
+  id: { type: 'string' },
+  'no-sync': { type: 'boolean' },
+  sync: { type: 'string', multiple: true },
+  attach: { type: 'string', multiple: true },
+  channel: { type: 'string' },
+  agent: { type: 'string' },
+  remove: { type: 'boolean' },
+  after: { type: 'string' },
+  limit: { type: 'string' },
+  all: { type: 'boolean' },
+  timeout: { type: 'string' },
+  port: { type: 'string' },
+  'no-open': { type: 'boolean' },
+  'no-inspect': { type: 'boolean' },
+  dir: { type: 'string' },
+  code: { type: 'boolean' },
+  'no-wait': { type: 'boolean' },
+  in: { type: 'string' },
+  at: { type: 'string' },
+  every: { type: 'string' },
+  until: { type: 'string' },
+  for: { type: 'string' },
+  times: { type: 'string' },
+} as const
+
+// No argument can hold a NUL, so a marked one can't be anything else.
+const MARK = '\0'
+
+/**
+ * Attachment IDs are base64url, so boards minted some that start with `-`,
+ * which `parseArgs` reads as a flag. Where `download` takes its ID, a token
+ * shaped like one is the ID: this marks it to parse as a positional.
+ */
+function markAttachmentId(args: string[]): string[] {
+  const positionals: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--') break
+    if (!arg.startsWith('-') || arg === '-') positionals.push(arg)
+    else if (positionals.length === 1 && positionals[0] === 'download' && AttachmentId.safeParse(arg).success)
+      return [...args.slice(0, i), `${MARK}${arg}`, ...args.slice(i + 1)]
+    else if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+  }
+  return args
+}
+/** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
+function removedCommand(word: string): string | undefined {
+  const cli = named()
+  const removed: Record<string, string> = {
+    update: `\`${cli} update\` is gone: reply in the thread you're working in (${cli} reply <id>), or post where it fits (${cli} post <channel>)`,
+    stuck: `\`${cli} stuck\` is gone: a board on a2() keeps its dead letters in A2, on the backend's \`servers\``,
+  }
+  return Object.hasOwn(removed, word) ? removed[word] : undefined
+}
+
+/** The command word: the first argument that isn't a flag or a string flag's value. */
+function commandWord(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === '--') return args[i + 1]
+    if (!arg.startsWith('-') || arg === '-') return arg
+    if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+  }
+  return undefined
+}
+
+const parseAll = (args: string[]) => parseArgs({ args, allowPositionals: true, options: OPTIONS })
+
+/** A command an app adds to board's: `serve` and `inspect`, in the standalone `board`. */
+export type Command = {
+  /** Its lines in `help`, indented as the others are. */
+  help: string
+  run(args: string[], context: CommandContext): Promise<number>
+}
+
+/** What a command an app adds gets from the CLI it runs in. */
+export type CommandContext = {
+  flags: Flags
+  out: (text: string) => void
+  usage: (message: string) => Error
+  portFlag: () => number | undefined
+  connection: typeof connection
+  client: () => Board
+  openBrowser: (url: string) => void
+  saveLink: typeof saveLink
+  linkedByServe: (root: string) => boolean
+}
+
+/**
+ * The CLI an app runs: its name, as help, usage, and errors say it (`board`, `vercel board`),
+ * the command an agent's hook runs it with later (found when it isn't given), and its own commands.
+ */
+export type App = { name: string; command?: string; commands: Record<string, Command> }
+
+type Flags = ReturnType<typeof parseAll>['values']
+
+// What one run parsed, which every command reads. A process runs one command at a time.
+let app: App = { name: 'board', commands: {} }
+let flags = {} as Flags
+let positionals: string[] = []
+
+/** How messages name this CLI: `vb` for the standalone one, as they always have, or the app's own name. */
+const named = () => (app.name === 'board' ? 'vb' : app.name)
+
+/** Parses `argv` for this run: false, once the error line is out, when it doesn't. */
+function parse(argv: string[]): boolean {
+  const args = withMentions(argv)
+  const removed = removedCommand(commandWord(args) ?? '')
+  try {
+    if (removed) throw new UsageError(removed)
+    const parsed = parseAll(markAttachmentId(args))
+    flags = parsed.values
+    positionals = parsed.positionals.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
+    return true
+  } catch (error) {
+    const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
+    io.error(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`${app.name} help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
+    return false
+  }
+}
+
+/**
+ * Where a run's output goes and its files come from: the terminal and this machine's, or for
+ * `vb()`, its caller's, with the board handle it runs on.
+ */
+export type Io = {
+  write(chunk: string | Uint8Array): void
+  error(chunk: string): void
+  /** A file's bytes, for `--attach`; null when there's no such file. */
+  readFile(path: string): Promise<Uint8Array | null>
+  /** Saves a file, for `download`. */
+  writeFile(path: string, data: Uint8Array): Promise<void>
+  /** What `-` reads. */
+  stdin(): Promise<string>
+  /** Stops `tail` and `wait`; without one, Ctrl-C does. */
+  signal?: AbortSignal
+  /** The handle to run on, in place of the one the environment and `--url` find. */
+  board?: Board
+}
+
+const TERMINAL: Io = {
+  write: (chunk) => void process.stdout.write(chunk),
+  error: (chunk) => void process.stderr.write(chunk),
+  async readFile(path) {
+    const info = await stat(path).catch(() => null)
+    if (!info?.isFile()) return null
+    if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+    return new Uint8Array(await readFile(path))
+  },
+  writeFile: (path, data) => writeFile(path, data),
+  stdin: readStdin,
+}
+let io: Io = TERMINAL
 
 // What a person reads can't drive their terminal; what a program reads is byte for byte what the board said.
-const out = (text: string) => process.stdout.write(`${terminalText(text)}\n`)
-const printJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`)
+const out = (text: string) => io.write(`${terminalText(text)}\n`)
+const printJson = (value: unknown) => io.write(`${JSON.stringify(value)}\n`)
 
-const argv = process.argv.slice(2)
-/** The commands about this machine: the rest act on the board, through `vb()`'s code (vb.ts). */
-const LOCAL = new Set(['link', 'use', 'whoami', 'identity', 'hooks', 'hook', 'serve', 'inspect'])
-const parsed = (() => {
-  try {
-    return parse(argv)
-  } catch (error) {
-    return error as Error
+/** A message's ID as you'd write it: `#812` or `812`. It's passed to the board as it is. */
+function messageId(value: string | undefined, what = 'message id'): string {
+  const id = value?.replace(/^#/, '') ?? ''
+  if (!/^[^\s/]+$/.test(id)) throw new UsageError(`expected a ${what}, got: ${value ?? '(nothing)'}`)
+  return id
+}
+
+/** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
+const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
+
+function labelPairs(values: string[] | undefined): Record<string, string> {
+  const pairs: Record<string, string> = {}
+  for (const value of values ?? []) {
+    const at = value.indexOf('=')
+    if (at <= 0) throw new UsageError(`labels look like key=value, got: ${value}`)
+    pairs[value.slice(0, at)] = value.slice(at + 1)
   }
-})()
-// A misused flag runs nothing: the end of this file says why and exits 2.
-const { flags, positionals } = parsed instanceof Error ? { flags: {} as Flags, positionals: [] as string[] } : parsed
+  return pairs
+}
+
+async function text(value: string | undefined): Promise<string> {
+  if (value === undefined) throw new UsageError('missing message text')
+  if (value !== '-') return value
+  return (await io.stdin()).replace(/\n$/, '')
+}
 
 
+/** Uploads each `--attach` file, reading them all before sending any. */
+async function attachments(board: ReturnType<typeof client>): Promise<Attachment[]> {
+  const files: { path: string; data: Uint8Array }[] = []
+  for (const path of flags.attach ?? []) {
+    const data = await io.readFile(path)
+    if (!data) throw new UsageError(`no such file: ${path}`)
+    if (data.byteLength > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+    files.push({ path, data })
+  }
+  const uploaded: Attachment[] = []
+  for (const { path, data } of files) uploaded.push(await board.upload({ data: new Uint8Array(data), name: basename(path) }))
+  return uploaded
+}
 
+/** `s12` or `12`. */
+function scheduleId(value: string | undefined): string {
+  const id = value?.replace(/^s(?=\d)/i, '') ?? ''
+  if (!/^[^\s/]+$/.test(id)) throw new UsageError(`expected a schedule id like s12, got: ${value ?? '(nothing)'}`)
+  return id
+}
 
+/** A time flag: anything `Date` reads, as ISO. */
+function instant(flag: string, value: string): string {
+  const time = new Date(value)
+  if (Number.isNaN(time.getTime())) throw new UsageError(`--${flag} takes a time like 2026-10-08T09:00:00Z, got: ${value}`)
+  return time.toISOString()
+}
 
-
-
-
-
+function filters(channel?: string): Filters & { after?: string } {
+  return {
+    ...(channel ? { channel } : {}),
+    ...(flags.re ? { re: messageId(flags.re) } : {}),
+    ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
+    ...(flags.mentions ? { mentions: flags.mentions.replace(/^@/, '') } : {}),
+    ...(flags.label?.length ? { label: flags.label } : {}),
+    ...(flags.from ? { from: flags.from } : {}),
+    ...(flags.text ? { text: flags.text } : {}),
+    ...(flags.after !== undefined ? { after: flags.after.replace(/^#/, '') } : {}),
+  }
+}
 
 /**
  * The board this command talks to, `--url`'s or the one the environment points at, as `--as`
  * says: a handle on it, and how it reaches it (the credentials `vb` finds, `--handle`'s handle).
  */
+/** The board the environment points at; with none, how to point at one, with the commands this app has. */
+function configuredUrl(): string {
+  try {
+    return boardUrl()
+  } catch (error) {
+    if (!(error instanceof BoardError) || error.code !== 'no_board') throw error
+    const ways = [`run \`${app.name} link <url>\``, 'set BOARD_URL', `run \`${app.name} use <url>\``, ...(app.commands.serve ? [`\`${app.name} serve\` for a local one`] : [])]
+    throw new BoardError('no_board', `no board URL: ${ways.slice(0, -1).join(', ')}, or ${ways.at(-1)}`, 0)
+  }
+}
+
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
-  const at = (url ?? boardUrl()).replace(/\/+$/, '')
+  const at = (url ?? configuredUrl()).replace(/\/+$/, '')
   const handle = options.handle ?? flags.handle
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
@@ -83,8 +366,13 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   return { url: at, transport, board: profile !== undefined ? board.as(profile) : board }
 }
 
-/** A handle on the board this command talks to. */
-const client = (): Board => connection().board
+/** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
+function client(): Board {
+  if (!io.board) return connection().board
+  if (flags.human) return io.board.as(null)
+  if (flags.as) return io.board.as(flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as)
+  return io.board
+}
 
 /**
  * What names an agent's turns, for the turn-end hook: its session, or for
@@ -138,6 +426,7 @@ function runsCli(bin: string, self: string): boolean {
  * this version through npx; otherwise this CLI's full path.
  */
 function cliCommand(): { command: string; note?: string } {
+  if (app.command) return { command: app.command }
   const self = realpathSync(process.argv[1]!)
   const installed = globalVb()
   if (!fromNpx(self)) {
@@ -193,8 +482,24 @@ function hookAgents(names: string[]): HookAgent[] {
   return names.length ? (names as HookAgent[]) : known
 }
 
+/** A write went through, but some handles in it matched no one: they stayed plain text. */
+function warnUnknownMentions(handles: string[] | undefined) {
+  if (!handles?.length) return
+  const names = handles.map((handle) => `@${handle}`)
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  const one = names.length === 1
+  io.error(terminalText(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one`) + '\n')
+}
 
+function printMessage(message: MessageView) {
+  if (flags.json) printJson(message)
+  else out(String(message.id))
+}
 
+function printEvent(event: BoardEventView) {
+  if (flags.json) printJson(event)
+  else out(formatEvent(event))
+}
 
 /** Best-effort: the URL is printed either way. */
 /** `url`, when it's an http or https URL as `new URL` reads it: the only kind the CLI opens, so a board can't hand the opener a flag or another scheme. */
@@ -261,17 +566,17 @@ async function identity(args: string[]): Promise<number> {
     if (flags.json) return printJson(view), 0
     if (view.links.length === 0) out('no linked accounts')
     for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
-    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (vb identity link <key>)`)
+    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (${named()} identity link <key>)`)
     return 0
   }
   if (sub === 'unlink') {
-    if (!target || args.length !== 2) throw new UsageError('usage: board identity unlink <account>   (a handle or actor ID from `vb identity`)')
+    if (!target || args.length !== 2) throw new UsageError(`usage: ${app.name} identity unlink <account>   (a handle or actor ID from \`${app.name} identity\`)`)
     const result = await board.unlinkAccount(target)
     if (flags.json) printJson(result)
     else out(`unlinked ${result.actor}`)
     return 0
   }
-  if (sub !== 'link' || !target || args.length !== 2) throw new UsageError('usage: board identity [link <key> [--code] [--no-wait] | unlink <account>]')
+  if (sub !== 'link' || !target || args.length !== 2) throw new UsageError(`usage: ${app.name} identity [link <key> [--code] [--no-wait] | unlink <account>]`)
   const before = new Set((await board.identity()).links.map((link) => `${link.actor}|${link.at}`))
   // The entry's platform, as the board lists it: what the code is posted from, or the sign-in is for.
   const platform = (await board.discovery().catch(() => null))?.sync.find((entry) => entry.key === target)?.platform ?? target
@@ -306,16 +611,21 @@ async function identity(args: string[]): Promise<number> {
       return 0
     }
   }
-  process.stderr.write('timed out\n')
+  io.error('timed out\n')
   return 124
 }
 
 async function run(command: string | undefined, args: string[]): Promise<number> {
   switch (command) {
+    case undefined:
+    case 'help':
+      out(help())
+      return 0
+
     case 'link':
     case 'use': {
       const url = args[0]
-      if (!url || args.length !== 1) throw new UsageError(`usage: board ${command} <url>`)
+      if (!url || args.length !== 1) throw new UsageError(`usage: ${app.name} ${command} <url>`)
       const discovery = await connection(url).board.discovery()
       const root = command === 'link' ? projectDir() : null
       await saveLink(root, discovery.url)
@@ -347,8 +657,175 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
+    case 'conformance': {
+      if (args.length > 0) throw new UsageError(`usage: ${app.name} conformance [--channel <c>]`)
+      const report = await conformance(client(), flags.channel ? { channel: flags.channel } : {})
+      if (flags.json) printJson(report)
+      else out(formatConformance(report))
+      return report.ok ? 0 : 1
+    }
+
+    case 'channels': {
+      const channels = await client().channels()
+      if (flags.json) return channels.forEach(printJson), 0
+      if (channels.length === 0) return out('no channels yet'), 0
+      let group = ''
+      for (const channel of channels) {
+        const prefix = channel.path.includes('/') ? channel.path.slice(0, channel.path.lastIndexOf('/') + 1) : ''
+        if (prefix !== group) {
+          if (prefix) out(prefix)
+          group = prefix
+        }
+        const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+        out(`${prefix ? '  ' : ''}${channel.path}  ${count(channel.threads, 'thread', 'threads')} · ${count(channel.messages, 'message', 'messages')} · last #${channel.lastIndex}`)
+      }
+      return 0
+    }
+
+    case 'actors': {
+      const actors = await client().actors()
+      if (flags.json) return actors.forEach(printJson), 0
+      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}${actor.person ? `  → @${actor.person.handle}` : ''}`)
+      return 0
+    }
+
     case 'identity':
       return identity(args)
+
+    case 'read': {
+      const target = args[0]
+      const board = client()
+      // A platform's link to a message (a Slack permalink, a GitHub comment) reads the board's thread it synced.
+      const link = target !== undefined && /^https?:\/\//i.test(target)
+      if (target && (link || isMessageRef(target))) {
+        const thread = link ? await board.linked(target) : await board.thread(messageId(target))
+        // A board older than this CLI answers /links with its discovery document. Its 404 stays: a
+        // current board's means the link isn't one it synced.
+        if (link && !Array.isArray((thread as { replies?: unknown }).replies))
+          throw new Error("this board can't read links: update board where the board is deployed")
+        // With filters, the root and only the replies that match them.
+        const narrowed = Object.keys(filters()).length > 0
+        const replies = narrowed
+          ? (await board.messages({ ...filters(), re: thread.message.id, limit: 500 })).messages.filter((m) => m.re !== null)
+          : thread.replies
+        if (flags.json) return [thread.message, ...replies].forEach(printJson), 0
+        // Reactions name people who may not have written here: look up the ones that show.
+        const authors = new Set([thread.message, ...replies].map((m) => m.by.actor))
+        const unnamed = reactionNames([thread.message, ...replies]).filter((id) => !authors.has(id))
+        const known = unnamed.length
+          ? new Map((await board.actors().catch(() => [])).filter((a) => unnamed.includes(a.id)).map((a) => [a.id, actorName(a)]))
+          : new Map<string, string>()
+        out(formatThreads([thread.message, ...replies], known))
+        if (!narrowed) for (const schedule of thread.schedules ?? []) out(formatSchedule(schedule, { pad: '  ' }))
+        return 0
+      }
+      const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
+      // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
+      const old = new Error("this board can't list threads: update board where the board is deployed")
+      const page = await board.threads(query).catch((error: unknown) => {
+        throw error instanceof BoardError && error.status === 404 ? old : error
+      })
+      if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
+      // Nothing in a channel that doesn't exist is a typo, not an empty channel.
+      if (!page.threads.length && target && !(await board.channels()).some((c) => c.path === target || c.path.startsWith(target.replace(/\/?$/, '/'))))
+        throw new Error(`no channel ${target}: board channels lists them`)
+      if (flags.json) return page.threads.forEach(printJson), 0
+      const count = `${page.threads.length} ${page.threads.length === 1 ? 'thread' : 'threads'}`
+      out(`${target ?? 'all channels'} · ${count} · cursor ${page.cursor}${page.threads.length ? '\n' : ''}`)
+      if (page.threads.length) out(formatThreadSummaries(page.threads, { channel: !target || target.endsWith('/') }))
+      return 0
+    }
+
+    case 'post': {
+      const [target, body] = args
+      if (!target) throw new UsageError(`usage: ${app.name} post <channel|id> "<text>"`)
+      const re = isMessageRef(target) ? messageId(target) : undefined
+      if (re !== undefined && flags.sync?.length) throw new UsageError(`--sync attaches whole threads: post to a channel, or use ${named()} sync <id> <target>`)
+      if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
+      const board = client()
+      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const files = await attachments(board)
+      const options = {
+        text: content,
+        ...(files.length ? { attachments: files } : {}),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
+        ...(flags.id ? { id: flags.id } : {}),
+        ...(flags['no-sync'] ? { noSync: true } : {}),
+      }
+      const message = re === undefined
+        ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
+        : await board.reply(re, options)
+      wrote()
+      warnUnknownMentions(message.unknownMentions)
+      printMessage(message)
+      return 0
+    }
+
+    case 'reply': {
+      const id = messageId(args[0])
+      const board = client()
+      const content = args[1] === undefined && flags.attach?.length ? '' : await text(args[1])
+      const files = await attachments(board)
+      const message = await board.reply(id, {
+        text: content,
+        ...(files.length ? { attachments: files } : {}),
+        ...(flags.id ? { id: flags.id } : {}),
+        ...(flags['no-sync'] ? { noSync: true } : {}),
+      })
+      wrote()
+      warnUnknownMentions(message.unknownMentions)
+      printMessage(message)
+      return 0
+    }
+
+    case 'schedule': {
+      if (args[0] === 'cancel' && args.length === 2) {
+        const { schedule, canceled } = await client().cancelSchedule(scheduleId(args[1]))
+        if (flags.json) printJson(schedule)
+        else out(canceled ? `canceled s${schedule.id}` : `s${schedule.id} is already ${schedule.state}`)
+        return 0
+      }
+      const [target, body] = args
+      if (!target) throw new UsageError(`usage: ${app.name} schedule <channel|id> "<text>" (--in 1d | --at <time> | --every 30m)`)
+      if (!flags.in && !flags.at && !flags.every) throw new UsageError('say when: --in 1d, --at <time>, or --every 30m')
+      if (flags.sync?.length) throw new UsageError('a schedule posts where you point it: --sync is for post')
+      const times = flags.times === undefined ? undefined : Number(flags.times)
+      if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw new UsageError(`--times takes a count, got: ${flags.times}`)
+      const board = client()
+      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const files = await attachments(board)
+      const where = isMessageRef(target) ? { re: messageId(target) } : target
+      const schedule = await board.schedule(where, {
+        text: content,
+        ...(files.length ? { attachments: files } : {}),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
+        ...(flags['no-sync'] ? { noSync: true } : {}),
+        ...(flags.in ? { in: flags.in } : {}),
+        ...(flags.at ? { at: instant('at', flags.at) } : {}),
+        ...(flags.every ? { every: flags.every } : {}),
+        ...(flags.until ? { until: instant('until', flags.until) } : {}),
+        ...(flags.for ? { for: flags.for } : {}),
+        ...(times !== undefined ? { times } : {}),
+      })
+      wrote()
+      warnUnknownMentions(schedule.unknownMentions)
+      if (flags.json) printJson(schedule)
+      else out(formatSchedule(schedule))
+      return 0
+    }
+
+    case 'schedules': {
+      const list = await client().schedules({
+        ...(args[0] ? { re: messageId(args[0]) } : {}),
+        ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
+        ...(flags.channel ? { channel: flags.channel } : {}),
+        ...(flags.all ? { all: true } : {}),
+      })
+      if (flags.json) return list.forEach(printJson), 0
+      if (list.length === 0) return out(flags.all ? 'no schedules' : 'no pending schedules'), 0
+      out(list.map((schedule) => formatSchedule(schedule)).join('\n'))
+      return 0
+    }
 
     case 'hooks': {
       const [action = 'status', ...names] = args
@@ -366,7 +843,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           // What installing again would change, and whether the board the hook runs is older than this one.
           const cli = cliOf(installed)
           const problems = outdated(agent, installed)
-          if (!versions.has(cli)) versions.set(cli, hookVersion(cli))
+          // A host answers `--version` with its own version, not board's, so its hook isn't checked by it.
+          if (!versions.has(cli)) versions.set(cli, app.command ? null : hookVersion(cli))
           const version = versions.get(cli)
           const behind = version != null && olderVersion(version, VERSION)
           if (behind) problems.push(`runs board ${version}, not ${VERSION}`)
@@ -374,7 +852,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           if (problems.length === 0) continue
           for (const problem of problems) out(`  ${problem}`)
           const global = behind && cli === 'vb'
-          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`${named()} hooks install ${agent}`] : [])]
           out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
@@ -389,7 +867,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         }
         return 0
       }
-      if (action !== 'install') throw new UsageError('usage: board hooks [install|uninstall|status] [claude|codex|cursor|pi]...')
+      if (action !== 'install') throw new UsageError(`usage: ${app.name} hooks [install|uninstall|status] [claude|codex|cursor|pi]...`)
       const { command: cli, note } = cliCommand()
       // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
@@ -402,8 +880,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // "already installed" only when nothing was written: a new hook command, rule, or dropped rule is an update.
         out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
         out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
-        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
-        if (agent === 'cursor' && !rules) out('  npm i -g @vercel/board lets Cursor run vb without asking')
+        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : `${named()} runs without asking`}`)
+        if (agent === 'cursor' && !rules && !app.command) out('  npm i -g @vercel/board lets Cursor run vb without asking')
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
           let host: string | null = null
@@ -413,7 +891,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           } catch {}
           const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
           const profile = codexNetwork(host)
-          out(`  to let vb reach the board from Codex's sandbox, add to ${tilde(config)}:`)
+          out(`  to let ${named()} reach the board from Codex's sandbox, add to ${tilde(config)}:`)
           out('')
           out(['# a permission profile (beta) that opens the network to just the board', '', '# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
         }
@@ -421,7 +899,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
       out('The hooks remind once per turn without a board update.')
-      out('They stay quiet outside projects linked with `vb link <url>`.')
+      out(`They stay quiet outside projects linked with \`${named()} link <url>\`.`)
       return 0
     }
 
@@ -458,117 +936,218 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'serve': {
-      if (args.length > 0) throw new UsageError('usage: board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]')
-      const port = portFlag()
-      const root = projectDir()
-      const { localHandle, serveLocal } = await import('./serve.ts')
-      const handle = flags.handle ?? process.env.BOARD_HANDLE
-      const local = await serveLocal({
-        dir: flags.dir ?? join(root, '.board'),
-        ...(port !== undefined ? { port } : {}),
-        ...(handle ? { handle: localHandle(handle) } : {}),
-      })
-      let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
+    case 'edit': {
+      const { unknownMentions } = await client().edit(messageId(args[0]), await text(args[1]))
+      warnUnknownMentions(unknownMentions)
+      return 0
+    }
+
+    case 'delete': {
+      await client().delete(messageId(args[0]))
+      return 0
+    }
+
+    case 'react': {
+      const id = messageId(args[0])
+      if (!args[1]) throw new UsageError(`usage: ${app.name} react <id> <emoji> [--remove]`)
+      let emoji: string
       try {
-        // Link this project, unless it's linked to another board (a remote one, or a \`board()\` dev
-        // server on localhost): then say how to reach this one. A link an earlier \`vb serve\` wrote moves.
-        const linked = projectUrl()
-        if (linked === undefined || linked === local.url || linkedByServe(root)) {
-          await saveLink(root, local.url, { serve: true })
-          if (linked !== local.url) out(`linked ${root} to ${local.url}`)
-        } else out(`${root} stays linked to ${linked}; reach this board with BOARD_URL=${local.url}`)
-        out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
-        if (!flags['no-inspect']) {
-          // With this board's token, whatever BOARD_TOKEN says.
-          const { board } = connection(local.url, { token: local.token, handle: local.handle })
-          inspector = await startInspector({ client: board.as(null) })
-          out(`inspector at ${inspector.url}`)
-          if (!flags['no-open']) openBrowser(inspector.url)
-        }
-        await new Promise<void>((resolve) => {
-          process.once('SIGINT', resolve)
-          process.once('SIGTERM', resolve)
-        })
-      } finally {
-        await inspector?.close()
-        await local.close()
+        emoji = normalizeEmoji(args[1])
+      } catch (error) {
+        throw new UsageError((error as Error).message)
+      }
+      await client().react(id, emoji, flags.remove ? { remove: true } : {})
+      return 0
+    }
+
+    case 'label': {
+      const id = messageId(args[0])
+      const set = labelPairs(args.slice(1))
+      const unset = flags.unset ?? []
+      if (Object.keys(set).length === 0 && unset.length === 0)
+        throw new UsageError(`usage: ${app.name} label <id> k=v... [--unset k]...`)
+      await client().label(id, { set, unset })
+      return 0
+    }
+
+    case 'typing': {
+      const id = messageId(args[0])
+      const status = args.slice(1).join(' ').trim()
+      const targets = await client().typing(id, status || undefined)
+      if (flags.json) printJson({ targets })
+      return 0
+    }
+
+    case 'sync': {
+      const id = messageId(args[0])
+      if (!args[1]) {
+        const { targets } = await client().sync(id)
+        if (flags.json) return targets.forEach(printJson), 0
+        out(targets.length ? formatSynced(targets) : 'not synced anywhere')
+        return 0
+      }
+      const result = await client().sync(id, args[1])
+      if (flags.json) printJson(result)
+      else out(result.attached ? `synced with ${result.target}` : `already synced with ${result.target}`)
+      return 0
+    }
+
+    case 'download': {
+      const id = args[0]
+      if (!id) throw new UsageError(`usage: ${app.name} download <attachment> [path]   (the id \`${app.name} read\` shows on a file line)`)
+      const response = await client().download(id)
+      const data = new Uint8Array(await response.arrayBuffer())
+      if (args[1] === '-') return io.write(data), 0
+      const disposition = response.headers.get('content-disposition') ?? ''
+      const named = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
+      const path = args[1] ?? basename(named ? decodeURIComponent(named) : id)
+      await io.writeFile(path, data)
+      out(path)
+      return 0
+    }
+
+    case 'inbox': {
+      const key = args[0]
+      if (!key) throw new UsageError(`usage: ${app.name} inbox <key> [channel] [--limit N]`)
+      const events = await client().inbox(key, {
+        ...(args[1] ? { channel: args[1] } : {}),
+        ...(flags.limit ? { limit: Number(flags.limit) } : {}),
+      })
+      if (flags.json) return events.forEach(printJson), 0
+      if (events.length === 0) return out('no events'), 0
+      for (const entry of events) {
+        const event = entry.event as { kind: string; thread: string; text?: string; type?: string; emoji?: string; author?: { handle: string } }
+        const detail = event.text ?? event.type ?? event.emoji ?? ''
+        out(`${entry.createdAt}  ${entry.channel}  ${event.kind}  ${event.author?.handle ?? ''}  ${detail.split('\n')[0]}`)
       }
       return 0
     }
 
-    case 'inspect': {
-      const port = portFlag()
-      const inspector = await startInspector({ client: client(), ...(port !== undefined ? { port } : {}) })
-      out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)
-      if (!flags['no-open']) openBrowser(inspector.url)
-      await new Promise<void>((resolve) => {
-        process.once('SIGINT', resolve)
-        process.once('SIGTERM', resolve)
-      })
-      await inspector.close()
+    case 'sources': {
+      const [key, sub, target] = args
+      if (!key) {
+        const { sync } = await client().discovery()
+        if (flags.json) return sync.forEach(printJson), 0
+        if (sync.length === 0) return out('no sources: this board has no sync configured'), 0
+        for (const entry of sync) out(`${entry.key}  ${entry.platform}`)
+        return 0
+      }
+      if (sub === 'join' && target) {
+        const joined = await client().joinSource(key, target)
+        if (flags.json) return printJson(joined), 0
+        const label = joined.name ? `#${joined.name}` : joined.channel
+        return out(joined.joined ? `joined ${label}` : `already in ${label}`), 0
+      }
+      if (sub !== 'read' || !target) throw new UsageError(`usage: ${app.name} sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel|link>`)
+      const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
+      if (flags.json) return printJson(read), 0
+      return out(formatSourceRead(key, read, Date.now(), named())), 0
+    }
+
+    case 'tail': {
+      const controller = new AbortController()
+      // Its handler goes when it's done: inside another CLI, the process goes on, and Ctrl-C should stop it.
+      const release = stopOn(controller)
+      try {
+        for await (const event of client().events(
+          { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+          { signal: controller.signal },
+        ))
+          printEvent(event)
+      } finally {
+        release()
+      }
       return 0
     }
 
-    default:
-      throw new UsageError(`unknown command: ${command} (run \`board help\`)`)
+    case 'wait': {
+      const controller = new AbortController()
+      const release = stopOn(controller)
+      const event = await client()
+        .wait(filters(args[0]), { timeout: flags.timeout ?? '30m', signal: controller.signal })
+        .finally(release)
+      if (!event) {
+        if (!controller.signal.aborted) io.error('timed out\n')
+        return 124
+      }
+      printEvent(event)
+      return 0
+    }
+
+    default: {
+      const own = app.commands[command]
+      if (own) return own.run(args, context())
+      throw new UsageError(`unknown command: ${command} (run \`${app.name} help\`)`)
+    }
   }
 }
 
-/** The terminal, this machine's files, stdin, and Ctrl-C: what the board's commands run with here. */
-const terminal: Io = {
-  write: (chunk) => process.stdout.write(chunk),
-  error: (chunk) => process.stderr.write(chunk),
-  async readFile(path) {
-    const info = await stat(path).catch(() => null)
-    if (!info?.isFile()) return null
-    if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
-    return new Uint8Array(await readFile(path))
-  },
-  writeFile: (path, data) => writeFile(path, data),
-  stdin: readStdin,
-  // Only a command that reads it (tail, wait) takes over Ctrl-C: the rest stop as any process does.
-  get signal() {
-    const controller = new AbortController()
-    process.once('SIGINT', () => controller.abort())
-    return controller.signal
-  },
-  wrote,
+
+/** Aborts `controller` on the run's signal, or Ctrl-C without one; the returned function stops listening. */
+function stopOn(controller: AbortController): () => void {
+  const stop = () => controller.abort()
+  if (io.signal) {
+    if (io.signal.aborted) stop()
+    io.signal.addEventListener('abort', stop, { once: true })
+    const signal = io.signal
+    return () => signal.removeEventListener('abort', stop)
+  }
+  process.once('SIGINT', stop)
+  return () => process.off('SIGINT', stop)
 }
 
-const command = commandWord(withMentions(argv))
-if (command === undefined || !LOCAL.has(command)) {
-  // `help` and `--version` too: they need no board.
-  if (!(parsed instanceof Error) && flags.version) out(VERSION), exit(0)
-  else if (!(parsed instanceof Error) && flags.help) out(HELP), exit(0)
-  else runOnBoard(client, argv, terminal).then(exit)
-} else if (parsed instanceof Error) {
-  process.stderr.write(terminalText(`error: ${parsed.message}`) + '\n')
-  exit(2)
-} else if (flags.version) {
-  out(VERSION)
-} else if (flags.help) {
-  out(HELP)
-} else {
-  const [, ...args] = positionals
-  run(positionals[0], args).then(
-    (code) => exit(code),
-    (error: unknown) => {
-      // A board's error says what the board said: it can't drive the terminal either.
-      process.stderr.write(`${terminalText(`error: ${(error as Error).message}`)}\n`)
-      exit(error instanceof UsageError ? 2 : 1)
-    },
-  )
-}
+/** What a command an app adds gets: this run's flags, and the helpers board's own commands use. */
+const context = (): CommandContext => ({
+  flags,
+  out,
+  usage: (message) => new UsageError(message),
+  portFlag,
+  connection,
+  client,
+  openBrowser,
+  saveLink,
+  linkedByServe,
+})
 
 /**
- * Exits once stdout and stderr have flushed. On a pipe, writes can still be
- * queued when a command returns, and `process.exit` would drop them: a long
- * `read <id> --json` would reach a slow reader cut off.
+ * Runs board's CLI on `argv` (what follows the command name) as `app`, and answers its exit
+ * code: 0 success, 1 error, 2 misuse, 124 when `wait` times out. Errors are one `error: …` line
+ * on stderr. A long-running command (`tail`, `serve`) answers once it's stopped.
  */
-function exit(code: number) {
-  let pending = 2
-  const done = () => --pending === 0 && process.exit(code)
-  process.stdout.write('', done)
-  process.stderr.write('', done)
+export async function main(argv: string[], options: App): Promise<number> {
+  app = options
+  if (!parse(argv)) return 2
+  if (flags.version) {
+    out(VERSION)
+    return 0
+  }
+  if (flags.help) {
+    out(help())
+    return 0
+  }
+  const [command, ...args] = positionals
+  try {
+    if (io.board) {
+      if (flags.url || flags.handle) throw new UsageError(`--${flags.url ? 'url' : 'handle'} doesn't apply: the board handle you pass says which board and who`)
+      if (command !== undefined && MACHINE.has(command)) throw new UsageError(`${command} isn't available in-process: it's about the machine vb runs on`)
+    }
+    return await run(command, args)
+  } catch (error) {
+    // A board's error says what the board said: it can't drive the terminal either.
+    io.error(`${terminalText(`error: ${(error as Error).message}`)}\n`)
+    return error instanceof UsageError ? 2 : 1
+  }
+}
+
+/** The commands about the machine the CLI runs on, not the board: none of them run in-process. */
+const MACHINE = new Set(['link', 'use', 'whoami', 'identity', 'hooks', 'hook', 'serve', 'inspect'])
+
+/** `main()` with `io` in place of the terminal, for `vb()`. One run at a time, as `main()`'s. */
+export async function mainWith(argv: string[], options: App, with_: Io): Promise<number> {
+  io = with_
+  try {
+    return await main(argv, options)
+  } finally {
+    io = TERMINAL
+  }
 }

@@ -31,6 +31,10 @@
       "types": "./dist/conformance.d.mts",
       "default": "./dist/conformance.mjs"
     },
+    "./cli": {
+      "types": "./dist/cli-embedded.d.mts",
+      "default": "./dist/cli-embedded.mjs"
+    },
     "./backend-a2": {
       "types": "./dist/backend-a2.d.mts",
       "default": "./dist/backend-a2.mjs"
@@ -103,10 +107,6 @@
     "./sync-linear": {
       "types": "./dist/sync-linear.d.mts",
       "default": "./dist/sync-linear.mjs"
-    },
-    "./cli": {
-      "types": "./dist/vb.d.mts",
-      "default": "./dist/vb.mjs"
     },
     "./package.json": "./package.json"
   },
