@@ -108,7 +108,7 @@ describe('cli hooks', () => {
       await mkdir(join(home, 'pnpm', 'global', 'node_modules', '@vercel'), { recursive: true })
       await mkdir(bin)
       await symlink(dirname(dirname(CLI)), join(home, 'pnpm', 'global', 'node_modules', '@vercel', 'board'))
-      await writeFile(join(bin, 'vb'), `${shim('../global/node_modules/@vercel/board/cli/main.ts').join('\n')}\n`, { mode: 0o755 })
+      await writeFile(join(bin, 'vb'), `${shim('../global/node_modules/@vercel/board/cli/bin.ts').join('\n')}\n`, { mode: 0o755 })
       const at = { HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}` }
 
       expect(await vb(['hooks', 'install', 'claude'], at)).toMatchObject({ code: 0, stderr: '' })
