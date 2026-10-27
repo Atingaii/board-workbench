@@ -51,8 +51,8 @@ in the map stays off the board, except threads someone syncs by hand.
 2. **Comments** arrive as replies. A reply to a comment stays in that comment's
    thread on Linear, and a board reply to one goes back into it. Edits and
    deletes sync too.
-3. **Moving the issue** to another state updates `state`, and to another team
-   keeps the same thread. A new title edits a root that Linear opened to say it.
+3. **Moving the issue** to another state updates `state`. A new title edits a
+   root that Linear opened to say it.
 4. **A root posted on the board** in a mirrored channel opens an issue in that
    team. Its first line is the title, and the whole message is the description.
    Editing the root edits the description. Deleting it on the board leaves the
@@ -61,13 +61,17 @@ in the map stays off the board, except threads someone syncs by hand.
 | Thing | ID |
 | --- | --- |
 | A team, the channel | `linear:ENG` |
-| An issue | `linear:issue:<issueId>` |
-| A comment thread, grouped under its issue | `linear:issue:<issueId>:c:<commentId>` |
+| An issue | `linear:ENG:<issueId>` |
+| A comment thread, grouped under its issue | `linear:ENG:<issueId>:c:<commentId>` |
 
-`<issueId>` is the issue's UUID, which stays the same when the issue moves teams
-or is renamed. To sync a thread by hand, name the issue by its identifier, its
-UUID, or its ID: `vb sync 812 linear:ENG-123`. A comment thread isn't a sync
-target: sync its issue.
+`<issueId>` is the issue's UUID, which stays the same when the issue is renamed.
+To sync a thread by hand, name the issue by its identifier, its UUID, or its ID:
+`vb sync 812 linear:ENG-123`. A comment thread isn't a sync target: sync its
+issue.
+
+An issue that moves to another team starts a new thread in that team's channel,
+with a root fetched from Linear: the team is part of the ID, so what's said on
+the board follows the team it's in now. The old thread stays as it was.
 
 ## Events
 

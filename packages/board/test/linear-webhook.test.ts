@@ -12,7 +12,7 @@ const OPENED = '7a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d'
 const ada = { id: 'user-ada', name: 'Ada Lovelace', url: 'https://linear.app/acme/profiles/ada', avatarUrl: 'https://avatars.test/ada.png', type: 'user' }
 const board = { id: BOT, name: 'board', url: 'https://linear.app/acme/profiles/board', type: 'OauthClient' }
 const issue = { id: ISSUE, identifier: 'ENG-12', title: 'Sync Linear to the board', url: 'https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board' }
-const thread = `linear:issue:${ISSUE}`
+const thread = `linear:ENG:${ISSUE}`
 
 // Linear's GraphQL API, answering by operation: who the app is, its teams, its issues, and what it creates.
 const calls: { query: string; variables: Record<string, unknown> }[] = []
@@ -75,10 +75,17 @@ it('keeps a reply in the comment thread it answers', async () => {
   expect(received[0]!.event).toMatchObject({ thread, subthread: `${thread}:c:comment-1`, message: 'comment-2' })
 })
 
-it('keeps the thread when an issue moves teams: only its channel follows', async () => {
+it("puts a comment in its issue's current team, from the comment's URL", async () => {
   const { send } = setup()
   const { received } = await send({ type: 'Comment', action: 'create', url: 'https://linear.app/acme/issue/OPS-3/sync-linear-to-the-board#comment-3', data: comment('comment-3', 'moved') })
-  expect(received[0]!.event).toMatchObject({ channel: 'linear:OPS', thread })
+  expect(received[0]!.event).toMatchObject({ channel: 'linear:OPS', thread: `linear:OPS:${ISSUE}` })
+})
+
+it('types a comment event as a comment, for sync functions', async () => {
+  const { provider, send } = setup()
+  const { received } = await send({ type: 'Comment', action: 'create', url: `${issue.url}#comment-1`, data: comment('comment-1', 'hi') })
+  const event = provider.event({ id: '812', key: 'linear', event: received[0]!.event, raw: received[0]!.raw })
+  expect(event).toMatchObject({ type: 'comment', platform: 'linear', channel: 'linear:ENG', thread, text: 'hi' })
 })
 
 it('syncs edited and deleted comments, which the adapter does not emit', async () => {
@@ -114,7 +121,7 @@ it('never opens a second root for an issue the board opened', async () => {
   const { send } = setup()
   const data = { ...issue, id: OPENED, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' } }
   const { received } = await send({ type: 'Issue', action: 'create', url: issue.url, data, actor: board })
-  expect(received.map((r) => r.event)).toMatchObject([{ type: 'issue.created', thread: `linear:issue:${OPENED}`, labels: { issue: 'ENG-12' }, createRoot: false, author: { isBot: true } }])
+  expect(received.map((r) => r.event)).toMatchObject([{ type: 'issue.created', thread: `linear:ENG:${OPENED}`, labels: { issue: 'ENG-12' }, createRoot: false, author: { isBot: true } }])
 })
 
 it('refuses a webhook that Linear did not sign', async () => {
@@ -131,33 +138,35 @@ it('resolves teams by key and issues by UUID or identifier', async () => {
   const { provider } = setup()
   await expect(provider.resolveChannel('eng')).resolves.toBe('ENG')
   await expect(provider.resolveTarget('eng')).resolves.toEqual({ target: 'ENG', channel: 'ENG', kind: 'channel' })
-  const target = { target: `issue:${ISSUE}`, channel: 'ENG', kind: 'thread' }
-  await expect(provider.resolveTarget(`issue:${ISSUE}`)).resolves.toEqual(target)
+  const target = { target: `ENG:${ISSUE}`, channel: 'ENG', kind: 'thread' }
+  await expect(provider.resolveTarget(`eng:${ISSUE}`)).resolves.toEqual(target)
   await expect(provider.resolveTarget(ISSUE)).resolves.toEqual(target)
   await expect(provider.resolveTarget('ENG-12')).resolves.toEqual(target)
-  await expect(provider.resolveTarget(`issue:${ISSUE}:c:comment-1`)).rejects.toThrow(`sync its issue, issue:${ISSUE}`)
+  await expect(provider.resolveTarget(`ENG:${ISSUE}:c:comment-1`)).rejects.toThrow(`sync its issue, ENG:${ISSUE}`)
   await expect(provider.resolveTarget('not a target')).rejects.toThrow('invalid Linear target')
+  // The team in a thread's ID is the channel its outbound events route by, so `into` sends nothing back.
+  expect(provider.inboxChannel('linear', `linear:ENG:${ISSUE}:c:comment-1`)).toBe('linear:ENG')
 })
 
-it('opens an issue for a board root, titled with its first line', async () => {
+it("opens an issue for a board root, titled with its first line without the author's label", async () => {
   const { provider } = setup()
   const sent = await provider.post('ENG', 'channel', { markdown: '**ada**: Flaky snake_case_name test\n\nIt fails one run in ten.' })
-  expect(sent).toEqual({ thread: `issue:${OPENED}`, message: 'issue' })
+  expect(sent).toEqual({ thread: `ENG:${OPENED}`, message: 'issue' })
   const created = calls.find((call) => /issueCreate\(/.test(call.query))!
-  expect(created.variables.input).toEqual({ teamId: 'team-eng', title: 'ada: Flaky snake_case_name test', description: '**ada**: Flaky snake_case_name test\n\nIt fails one run in ten.' })
+  expect(created.variables.input).toEqual({ teamId: 'team-eng', title: 'Flaky snake_case_name test', description: '**ada**: Flaky snake_case_name test\n\nIt fails one run in ten.' })
 })
 
 it("edits only the description of an issue the board opened, and leaves the issue alone for its root's reactions and deletes", async () => {
   const { provider } = setup()
-  await provider.edit(`issue:${OPENED}`, 'issue', { markdown: 'Flaky checkout test, now with logs' })
+  await provider.edit(`ENG:${OPENED}`, 'issue', { markdown: 'Flaky checkout test, now with logs' })
   const updated = apiCalls().filter((call) => /issueUpdate\(/.test(call.query))
   expect(updated.map((call) => call.variables)).toEqual([{ id: OPENED, input: { description: 'Flaky checkout test, now with logs' } }])
   calls.length = 0
   for (const root of ['issue', 'lifecycle:812', 'root:812']) {
-    await provider.react(`issue:${ISSUE}`, root, 'eyes', true)
-    await provider.delete(`issue:${ISSUE}`, root)
+    await provider.react(`ENG:${ISSUE}`, root, 'eyes', true)
+    await provider.delete(`ENG:${ISSUE}`, root)
   }
-  for (const root of ['lifecycle:812', 'root:812']) await provider.edit(`issue:${ISSUE}`, root, { markdown: 'ENG-12: Sync Linear to the board' })
+  for (const root of ['lifecycle:812', 'root:812']) await provider.edit(`ENG:${ISSUE}`, root, { markdown: 'ENG-12: Sync Linear to the board' })
   expect(apiCalls()).toEqual([])
 })
 
@@ -165,7 +174,7 @@ it('reaches Linear outside a webhook with a Connect token', async () => {
   const connect = createLinearAdapter({ accessToken: async () => 'connect-token', webhookVerifier: async () => true, userName: 'board', mode: 'comments' }) as unknown as Adapter
   const { provider } = setup(connect)
   await expect(provider.resolveChannel('ENG')).resolves.toBe('ENG')
-  await expect(provider.resolveTarget('ENG-12')).resolves.toEqual({ target: `issue:${ISSUE}`, channel: 'ENG', kind: 'thread' })
-  await expect(provider.post('ENG', 'channel', { markdown: 'From Connect' })).resolves.toEqual({ thread: `issue:${OPENED}`, message: 'issue' })
-  await expect(provider.fetchRoot(`issue:${ISSUE}`)).resolves.toMatchObject({ text: `ENG-12: Sync Linear to the board\n${issue.url}`, labels: { issue: 'ENG-12', state: 'unstarted' } })
+  await expect(provider.resolveTarget('ENG-12')).resolves.toEqual({ target: `ENG:${ISSUE}`, channel: 'ENG', kind: 'thread' })
+  await expect(provider.post('ENG', 'channel', { markdown: 'From Connect' })).resolves.toEqual({ thread: `ENG:${OPENED}`, message: 'issue' })
+  await expect(provider.fetchRoot(`ENG:${ISSUE}`)).resolves.toMatchObject({ text: `ENG-12: Sync Linear to the board\n${issue.url}`, labels: { issue: 'ENG-12', state: 'unstarted' } })
 })

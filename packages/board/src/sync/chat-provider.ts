@@ -103,7 +103,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     return { channel: `${key}:${channel}`, thread, subthread: precise === thread ? null : precise }
   }
 
-  override inboxChannel(key: string, thread: string): string | null {
+  override inboxChannel(key: string, thread: string): string {
     const native = thread.slice(key.length + 1)
     return `${key}:${this.transport.channelOf?.(native) ?? this.toNative(this.transport.adapter.channelIdFromThreadId(this.toChat(native)))}`
   }

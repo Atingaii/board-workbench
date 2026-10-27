@@ -2606,8 +2606,8 @@ board configures every Chat instance itself:
   arrives while the thread's handler is still running is dropped, which would
   lose replies sent in quick succession. Ordering comes from the inbound lane
   instead.
-- **One Chat instance per provider.** `slack()`, `github()`, and `kapso()`
-  each make one, with one adapter, so two Slack entries never share one and
+- **One Chat instance per provider.** `slack()`, `github()`, `kapso()`, and
+  `linear()` each make one, with one adapter, so two Slack entries never share one and
   collide on `slack:`. board translates between Chat SDK IDs and its
   key-prefixed external IDs; a provider used under two keys takes each
   webhook's key from the request it's handling.

@@ -94,17 +94,18 @@ const isIssue = (message: string) => message === OPENED || message.includes(':')
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** `issue:<issueId>`, or `issue:<issueId>:c:<commentId>` (a comment thread). */
+/** `ENG:<issueId>`, or `ENG:<issueId>:c:<commentId>` (a comment thread): the team, and the issue's UUID. */
 function parseThread(thread: string) {
-  const match = /^issue:([^:]+)(?::c:([^:]+))?$/.exec(thread)
+  const match = /^([A-Z0-9_]+):([^:]+)(?::c:([^:]+))?$/i.exec(thread)
   if (!match) throw new Error(`invalid Linear thread: ${thread}`)
-  return { issue: match[1]!, comment: match[2] ?? null }
+  return { team: match[1]!.toUpperCase(), issue: match[2]!, comment: match[3] ?? null }
 }
 
 /** A board message's first line, as an issue title: Linear titles are plain text. */
 function titleOf(markdown: string) {
   const line = markdown.split('\n').map((text) => text.trim()).find(Boolean) ?? ''
-  return line.replace(/\*\*|__|`/g, '').replace(/^[#>\s]+/, '').replace(/\s+/g, ' ').trim().slice(0, 255) || 'Untitled'
+  // Without the label `render` opens a message with (`**ada**: `): the description keeps it.
+  return line.replace(/^\*\*[^*\n]+\*\*:\s*/, '').replace(/\*\*|__|`/g, '').replace(/^[#>\s]+/, '').replace(/\s+/g, ' ').trim().slice(0, 255) || 'Untitled'
 }
 
 function stateOf(state: { name?: string; type?: string } | undefined) {
@@ -126,10 +127,11 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
       // Checked against Linear by the class's own `resolveChannel` and `resolveTarget`, which reach its API.
       resolveChannel: (key) => Promise.resolve(key.toUpperCase()),
       resolveTarget: (target) => Promise.resolve({ target, channel: target, kind: 'channel' }),
-      // A comment thread (`issue:<issue>:c:<comment>`) belongs to its issue (`issue:<issue>`).
+      // A comment thread (`ENG:<issue>:c:<comment>`) belongs to its issue (`ENG:<issue>`).
       groupThread: (thread) => thread.replace(/:c:[^:]+$/, ''),
-      // The board's IDs say `issue:`, which Chat SDK's don't: `issue:<issue>` is `<issue>` there.
-      toChatId: (id) => id.replace(/^issue:/, ''),
+      channelOf: (thread) => thread.slice(0, thread.indexOf(':')),
+      // The board's IDs carry the team, which Chat SDK's don't: `ENG:<issue>` is `<issue>` there.
+      toChatId: (id) => id.slice(id.indexOf(':') + 1),
       isRoot: () => false,
       context: () => null,
       // Linear's own markdown; Chat SDK's text flattens it.
@@ -189,7 +191,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
           event: {
             kind: 'lifecycle',
             channel: `${key}:${team}`,
-            thread: `${key}:issue:${data.id}`,
+            thread: `${key}:${team}:${data.id}`,
             type: created ? 'issue.created' : 'issue.updated',
             title: `${data.identifier}: ${data.title}`,
             url: data.url ?? payload.url ?? null,
@@ -223,18 +225,19 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   }
 
   /**
-   * `ENG` is a team; `issue:<uuid>`, a bare UUID, or `ENG-12` is an issue, by its UUID: the
-   * identifier changes when the issue moves teams, and comments come in under the UUID.
+   * `ENG` is a team; `ENG:<uuid>`, a bare UUID, or `ENG-12` is an issue, by its team and UUID:
+   * comments come in under the UUID, which stays when the issue is renamed.
    */
   override async resolveTarget(target: string): Promise<ResolvedTarget> {
     if (/:c:[^:]+$/.test(target)) throw new Error(`a comment thread can't be a target; sync its issue, ${target.replace(/:c:[^:]+$/, '')}`)
     if (/^[A-Z0-9_]+$/i.test(target)) return { target: target.toUpperCase(), channel: target.toUpperCase(), kind: 'channel' }
-    const id = target.replace(/^issue:/, '')
-    if (!UUID.test(id) && !/^[A-Z0-9_]+-\d+$/i.test(id)) throw new Error(`invalid Linear target: ${target}`)
-    const issue = await this.api(() => this.client().issue(id))
+    const scoped = /^([A-Z0-9_]+):([^:]+)$/i.exec(target)
+    if (scoped && UUID.test(scoped[2]!)) return { target: `${scoped[1]!.toUpperCase()}:${scoped[2]}`, channel: scoped[1]!.toUpperCase(), kind: 'thread' }
+    if (!UUID.test(target) && !/^[A-Z0-9_]+-\d+$/i.test(target)) throw new Error(`invalid Linear target: ${target}`)
+    const issue = await this.api(() => this.client().issue(target))
     const team = teamOf(issue.identifier) ?? (await this.api(async () => (await issue.team)?.key))
     if (!team) throw new Error(`Linear didn't say which team ${target} is in`)
-    return { target: `issue:${issue.id}`, channel: team.toUpperCase(), kind: 'thread' }
+    return { target: `${team.toUpperCase()}:${issue.id}`, channel: team.toUpperCase(), kind: 'thread' }
   }
 
   override async fetchRoot(thread: string) {
@@ -277,7 +280,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
     const root = (comment as { parentId?: string } | undefined)?.parentId || comment?.id
     if (!issue || !root) return received
     const team = teamOf(raw?.comment?.url ?? raw?.url) ?? teamOf(raw?.data?.issue?.identifier) ?? await this.teamOfIssue(issue)
-    const thread = `${key}:issue:${issue}`
+    const thread = `${key}:${team}:${issue}`
     const event = { ...received.event, channel: `${key}:${team}`, thread, subthread: `${thread}:c:${root}` }
     return { ...received, event } as ReceivedEvent
   }
@@ -285,13 +288,14 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   private async teamOfIssue(id: string) {
     return this.api(async () => {
       const issue = await this.client().issue(id)
-      return teamOf(issue.identifier) ?? (await issue.team)?.key ?? 'UNKNOWN'
+      const team = teamOf(issue.identifier) ?? (await issue.team)?.key
+      if (!team) throw new Error(`Linear didn't say which team issue ${id} is in`)
+      return team.toUpperCase()
     })
   }
 
-  // A thread's ID doesn't name its team, so a key's inbox lists only the mapped teams'.
-  override inboxChannel(): null {
-    return null
+  override inboxChannel(key: string, thread: string): string {
+    return `${key}:${parseThread(thread.slice(key.length + 1)).team}`
   }
 
   /** A root in a mirrored team opens an issue, titled with its first line; a reply is a comment. */
@@ -303,7 +307,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
     const teamId = await this.team(target)
     const created = await this.api(() => this.client().createIssue({ teamId, title: titleOf(post.markdown), description: post.markdown }))
     if (!created.issueId) throw new Error(`Linear didn't return the issue it opened in ${target}`)
-    return { thread: `issue:${created.issueId}`, message: OPENED }
+    return { thread: `${target.toUpperCase()}:${created.issueId}`, message: OPENED }
   }
 
   // Only an issue the board opened takes the root's text: one opened on Linear keeps its own description.
@@ -326,6 +330,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   override async startTyping() {}
 
   override event(context: SyncContext): LinearEvent {
-    return LinearEvent.parse(envelope(this.platform, context.key, context.event, context.raw ?? {}, context.id))
+    const base = envelope(this.platform, context.key, context.event, context.raw ?? {}, context.id)
+    return LinearEvent.parse({ ...base, type: context.event.kind === 'message' ? 'comment' : base.type })
   }
 }
