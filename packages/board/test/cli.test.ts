@@ -506,6 +506,16 @@ describe('cli', () => {
     }
   })
 
+  it('says so when the board is older than reading links, instead of crashing on its discovery document', async () => {
+    const old = await serve(async () => Response.json({ version: '0.16.0', sync: [] }))
+    try {
+      const read = await vb(['read', 'https://acme.slack.com/archives/C1/p1727000000123456'], { BOARD_URL: `${old.origin}/api/board` })
+      expect(read).toMatchObject({ code: 1, stderr: "error: this board can't read links: update board where the board is deployed\n" })
+    } finally {
+      await old.close()
+    }
+  })
+
   it('says so when a board with a basePath is older than thread summaries, instead of its 404', async () => {
     // Under a basePath, an old board answers an unknown route with a 404 instead.
     const old = await serve(async (request) =>
