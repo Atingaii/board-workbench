@@ -276,14 +276,14 @@ export function formatSynced(targets: SyncedView['targets']): string {
  * A channel or thread read with `vb sources <key> read`: a header, then each message under its ID,
  * with the target that reads its thread when it has replies.
  */
-export function formatSourceRead(key: string, read: SourceRead, now = Date.now()): string {
+export function formatSourceRead(key: string, read: SourceRead, now = Date.now(), cli = 'vb'): string {
   const where = `${key}:${read.channel}${read.name ? ` (#${read.name})` : ''}${read.thread ? `, thread ${read.thread}` : ''}`
   if (read.messages.length === 0) return `${where}\nno messages`
   const blocks = read.messages.map((message) => {
     const reply = read.thread !== null && message.id !== read.thread
     const pad = reply ? '    ' : '      '
     const when = message.createdAt ? ` · ${ago(message.createdAt, now)}` : ''
-    const replies = message.replies > 0 && read.thread === null ? `  (${message.replies} ${message.replies === 1 ? 'reply' : 'replies'}: vb sources ${key} read ${message.thread})` : ''
+    const replies = message.replies > 0 && read.thread === null ? `  (${message.replies} ${message.replies === 1 ? 'reply' : 'replies'}: ${cli} sources ${key} read ${message.thread})` : ''
     return [
       `${reply ? '  ↳ ' : ''}${message.id}  ${message.author}${when}${replies}`,
       indent(message.text || '(no text)', pad),

@@ -156,9 +156,13 @@ function markAttachmentId(args: string[]): string[] {
   return args
 }
 /** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
-const REMOVED: Record<string, string> = {
-  update: "`vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)",
-  stuck: '`vb stuck` is gone: a board on a2() keeps its dead letters in A2, on the backend\'s `servers`',
+function removedCommand(word: string): string | undefined {
+  const cli = named()
+  const removed: Record<string, string> = {
+    update: `\`${cli} update\` is gone: reply in the thread you're working in (${cli} reply <id>), or post where it fits (${cli} post <channel>)`,
+    stuck: `\`${cli} stuck\` is gone: a board on a2() keeps its dead letters in A2, on the backend's \`servers\``,
+  }
+  return Object.hasOwn(removed, word) ? removed[word] : undefined
 }
 
 /** The command word: the first argument that isn't a flag or a string flag's value. */
@@ -207,10 +211,13 @@ let app: App = { name: 'board', commands: {} }
 let flags = {} as Flags
 let positionals: string[] = []
 
+/** How messages name this CLI: `vb` for the standalone one, as they always have, or the app's own name. */
+const named = () => (app.name === 'board' ? 'vb' : app.name)
+
 /** Parses `argv` for this run: false, once the error line is out, when it doesn't. */
 function parse(argv: string[]): boolean {
   const args = withMentions(argv)
-  const removed = REMOVED[commandWord(args) ?? '']
+  const removed = removedCommand(commandWord(args) ?? '')
   try {
     if (removed) throw new UsageError(removed)
     const parsed = parseAll(markAttachmentId(args))
@@ -528,7 +535,7 @@ async function identity(args: string[]): Promise<number> {
     if (flags.json) return printJson(view), 0
     if (view.links.length === 0) out('no linked accounts')
     for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
-    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (vb identity link <key>)`)
+    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (${named()} identity link <key>)`)
     return 0
   }
   if (sub === 'unlink') {
@@ -702,7 +709,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const [target, body] = args
       if (!target) throw new UsageError(`usage: ${app.name} post <channel|id> "<text>"`)
       const re = isMessageRef(target) ? messageId(target) : undefined
-      if (re !== undefined && flags.sync?.length) throw new UsageError('--sync attaches whole threads: post to a channel, or use vb sync <id> <target>')
+      if (re !== undefined && flags.sync?.length) throw new UsageError(`--sync attaches whole threads: post to a channel, or use ${named()} sync <id> <target>`)
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
@@ -805,7 +812,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           // What installing again would change, and whether the board the hook runs is older than this one.
           const cli = cliOf(installed)
           const problems = outdated(agent, installed)
-          if (!versions.has(cli)) versions.set(cli, hookVersion(cli))
+          // A host answers `--version` with its own version, not board's, so its hook isn't checked by it.
+          if (!versions.has(cli)) versions.set(cli, app.command ? null : hookVersion(cli))
           const version = versions.get(cli)
           const behind = version != null && olderVersion(version, VERSION)
           if (behind) problems.push(`runs board ${version}, not ${VERSION}`)
@@ -813,7 +821,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           if (problems.length === 0) continue
           for (const problem of problems) out(`  ${problem}`)
           const global = behind && cli === 'vb'
-          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`${named()} hooks install ${agent}`] : [])]
           out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
@@ -841,8 +849,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // "already installed" only when nothing was written: a new hook command, rule, or dropped rule is an update.
         out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
         out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
-        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
-        if (agent === 'cursor' && !rules) out('  npm i -g @vercel/board lets Cursor run vb without asking')
+        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : `${named()} runs without asking`}`)
+        if (agent === 'cursor' && !rules && !app.command) out('  npm i -g @vercel/board lets Cursor run vb without asking')
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
           let host: string | null = null
@@ -852,7 +860,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           } catch {}
           const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
           const profile = codexNetwork(host)
-          out(`  to let vb reach the board from Codex's sandbox, add to ${tilde(config)}:`)
+          out(`  to let ${named()} reach the board from Codex's sandbox, add to ${tilde(config)}:`)
           out('')
           out(['# a permission profile (beta) that opens the network to just the board', '', '# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
         }
@@ -860,7 +868,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
       out('The hooks remind once per turn without a board update.')
-      out(`They stay quiet outside projects linked with \`${app.name === 'board' ? 'vb' : app.name} link <url>\`.`)
+      out(`They stay quiet outside projects linked with \`${named()} link <url>\`.`)
       return 0
     }
 
@@ -1002,7 +1010,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (sub !== 'read' || !target) throw new UsageError(`usage: ${app.name} sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel|link>`)
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
       if (flags.json) return printJson(read), 0
-      return out(formatSourceRead(key, read)), 0
+      return out(formatSourceRead(key, read, Date.now(), named())), 0
     }
 
     case 'tail': {

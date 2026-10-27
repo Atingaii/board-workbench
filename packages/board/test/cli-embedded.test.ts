@@ -21,6 +21,18 @@ async function capture(run: () => Promise<number>) {
   }
 }
 
+/**
+ * This process's environment as a fresh machine's, for the CLI: no board, agent, Vercel, or Actions
+ * variables, as the subprocess tests clear them, and an empty home, so no cached token answers.
+ */
+async function isolated(): Promise<string> {
+  for (const key of Object.keys(process.env)) if (/^(CLAUDE|CODEX|GROK|PI_|AI_AGENT|BOARD|VERCEL|ACTIONS_ID_TOKEN)/.test(key)) vi.stubEnv(key, undefined)
+  const home = await mkdtemp(join(tmpdir(), 'board-home-'))
+  vi.stubEnv('HOME', home)
+  vi.stubEnv('XDG_CONFIG_HOME', home)
+  return home
+}
+
 /** Markers only the inspector, `serve`, and A2's stores have. */
 const MARKERS = { inspector: 'x-inspect-token', serve: 'serving a local board', a2: 'board-tables' }
 
@@ -57,9 +69,7 @@ describe('the embedded CLI', () => {
   })
 
   it('says how to point it at a board with the commands it has: no serve', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'board-home-'))
-    vi.stubEnv('XDG_CONFIG_HOME', home)
-    vi.stubEnv('BOARD_URL', '')
+    const home = await isolated()
     const cwd = process.cwd()
     process.chdir(home)
     try {
@@ -81,6 +91,7 @@ describe('the embedded CLI', () => {
   })
 
   it('takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN', async () => {
+    const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'vca_from_the_vercel_cli')
     vi.stubEnv('BOARD_URL', 'https://board.example/api/board')
     const asked: string[] = []
@@ -94,6 +105,7 @@ describe('the embedded CLI', () => {
       await capture(() => createApp({ appName: 'vercel board' }).run(['whoami']))
     } finally {
       fetching.mockRestore()
+      await rm(home, { recursive: true, force: true })
     }
     expect(asked.filter((line) => line.startsWith('https://api.vercel.com/')).every((line) => line.endsWith('Bearer vca_from_the_vercel_cli'))).toBe(true)
     expect(asked.some((line) => line.startsWith('https://api.vercel.com/'))).toBe(true)
