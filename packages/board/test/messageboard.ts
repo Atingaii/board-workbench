@@ -52,8 +52,9 @@ class Refused extends Error {
   }
 }
 
-export function fakeMessageboard(options: { teamId?: string; boardId?: string | null } = {}) {
+export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null } = {}) {
   const teamId = options.teamId ?? 'team_test'
+  const slug = options.slug ?? 'test'
   let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
   const threads = new Map<string, Thread>()
@@ -310,6 +311,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
   async function route(request: Request): Promise<unknown> {
     const url = new URL(request.url)
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
+    if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
     const actor = actorOf(request)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method

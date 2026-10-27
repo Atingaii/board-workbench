@@ -150,7 +150,7 @@ async function writeCache(audience: string, cached: Cached) {
  * Your Vercel login: what the Vercel CLI hands a CLI it runs, as `vercel board` (`VERCEL_AUTH_TOKEN`,
  * from its `--token` or its own login), or else what `vercel login` saved.
  */
-const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken())
+export const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken())
 
 /**
  * A person's token: their Vercel CLI login mints a development token for the
