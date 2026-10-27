@@ -1,5 +1,12 @@
 # vboard
 
+## 0.18.1
+
+### Patch Changes
+
+- abe07e0: The CLI and `board()` in Node get through Vercel Connect passport the way they get through Vercel Authentication, with the project's Protection Bypass for Automation. Passport answers a fetch with Vercel's own 401 instead of a redirect, so they reported `no board at <url> (401)`.
+- fad7778: `vb read <link>` on a board older than reading links says so: `error: this board can't read links: update board where the board is deployed`. It failed with `error: replies is not iterable`, since an older board answers `/links` with its discovery document.
+
 ## 0.18.0
 
 ### Minor Changes
