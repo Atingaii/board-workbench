@@ -1,6 +1,6 @@
 import type { Task } from "./harness.ts";
 
-// Pi, the eve agent (`agent/` in this app, mounted at /eve/v1 by `withEve`). Each thread's task gets one durable eve session; this file finds it, or starts it, and sends it the message.
+// Eve, the eve agent (`agent/` in this app, mounted at /eve/v1 by `withEve`). Each thread's task gets one durable eve session; this file finds it, or starts it, and sends it the message.
 // A message that lands mid-turn steers that turn (the eve channel's `turnPolicy: "steer"`), so there's no lock here.
 
 /** What the eve agent is told: who it works for travels with each message, so its hooks and instructions know. */
@@ -33,10 +33,10 @@ const gone = (error: unknown) =>
     (error as { code?: string }).code === "session_stranded");
 
 /**
- * Sends the eve agent a message about a thread, once: `key` names it, as with Pi. The thread's session is made on
+ * Sends the eve agent a message about a thread, once: `key` names it, as before. The thread's session is made on
  * first use; two first messages racing each make one, and the loser's is reset so only one session holds the thread.
  */
-export async function tellEve(
+export async function sendToEve(
   { task, thread, key, message }: EveMessage,
   deps: { sessions?: Sessions; eve?: EveSessions } = {},
 ) {
@@ -59,7 +59,7 @@ export async function tellEve(
       await eve.send(session, message, context);
     } catch (error) {
       if (!gone(error)) throw error;
-      // The thread starts over in a new session, as a Pi thread does when its sandbox's snapshot expires.
+      // The thread starts over in a new session, as an Eve thread does when its sandbox's snapshot expires.
       const fresh = await eve.create();
       await sessions.set(`session:${name}`, fresh);
       await eve.send(fresh, message, context);

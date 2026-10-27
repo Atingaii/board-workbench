@@ -4,7 +4,7 @@ import { BOARD, TOOLS } from "../app/api/board/[[...path]]/harness.ts";
 import xinput from "./lib/xinput.py?raw";
 import { XINPUT } from "./lib/computer";
 
-// The tools Pi's sandbox gets (vb, gh, the desktop and Chrome), installed once at build into the snapshot every
+// The tools Eve's sandbox gets (vb, gh, the desktop and Chrome), installed once at build into the snapshot every
 // thread's sandbox starts from. eve puts the skills in ~/.agents/skills.
 export const environment = VercelSandbox.environment({
   prepare: async (sandbox) => {

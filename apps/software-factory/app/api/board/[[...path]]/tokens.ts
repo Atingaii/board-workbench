@@ -1,8 +1,8 @@
-// Pi's OIDC tokens (AI Gateway's, and the board's, exchanged from it) die when the function's own does. Vercel
+// Eve's OIDC tokens (AI Gateway's, and the board's, exchanged from it) die when the function's own does. Vercel
 // reuses a function's token for up to 90 minutes of its 2 hours, so a turn can start with tokens that have 30
 // minutes left. The eve agent puts new ones in its sandbox's policy before they die (`agent/lib/credentials.ts`).
 
-/** How long before Pi's tokens die they're replaced: in their last 30 minutes, when functions get a new one. */
+/** How long before Eve's tokens die they're replaced: in their last 30 minutes, when functions get a new one. */
 export const REFRESH_LEAD_MS = 15 * 60_000;
 
 /** When a JWT expires, in epoch milliseconds. */

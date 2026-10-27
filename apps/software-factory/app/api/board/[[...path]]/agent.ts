@@ -1,35 +1,35 @@
 import type { WatcherContext } from "@vercel/board";
-import { piName, piSession, type Task } from "./harness.ts";
-import { tellEve } from "./eve.ts";
+import { eveName, eveSession, type Task } from "./harness.ts";
+import { sendToEve, type EveMessage } from "./eve.ts";
 
-export { INSTRUCTIONS, piAvatar, piName, piPreview, policy, type Task } from "./harness.ts";
+export { INSTRUCTIONS, eveAvatar, eveName, evePreview, policy, type Task } from "./harness.ts";
 
-// Pi, the agent working on a board thread: an eve agent (`agent/` in this app) with its own Vercel Sandbox, with
+// Eve, the agent working on a board thread: an eve agent (`agent/` in this app) with its own Vercel Sandbox, with
 // `vb`, `gh`, and git, like a developer at a terminal. Each thread's task gets one eve session, so a later message
 // continues the same work (`eve.ts`). Credentials are placeholders inside the sandbox; its network policy puts the
 // real ones on the wire, so nothing in the sandbox can read them.
 
 
 /**
- * Whether a message was written by the Pi working on `thread` (named `pi` before it had a name of its own). Every Pi
+ * Whether a message was written by the Eve working on `thread` (named `pi` before it had a name of its own). Every Eve
  * posts as the factory's production deployment, whose OIDC token its network policy adds; its profile and session
- * are headers anyone who can write may send, so they only say which thread's Pi it is.
+ * are headers anyone who can write may send, so they only say which thread's Eve it is.
  */
-export const byPi = (thread: string, by: { principal: string; profile: string | null; session: string | null }) =>
+export const byEve = (thread: string, by: { principal: string; profile: string | null; session: string | null }) =>
   !!process.env.VERCEL_PROJECT_ID &&
   by.principal === `vercel:project:${process.env.VERCEL_PROJECT_ID}:production` &&
-  (by.profile === piName(thread) || by.profile === "pi") &&
-  by.session === piSession(thread);
+  (by.profile === eveName(thread) || by.profile === "pi") &&
+  by.session === eveSession(thread);
 
 /**
- * Whether a message is one of the board's watchers' own notes (a crosspost, `:security:`'s answer, or saying Pi
- * couldn't start), not a person's: it doesn't wake Pi or triage.
+ * Whether a message is one of the board's watchers' own notes (a crosspost, `:security:`'s answer, or saying Eve
+ * couldn't start), not a person's: it doesn't wake Eve or triage.
  */
 export const byWatcher = (by: { actor: string }) => by.actor.startsWith("board:watch:");
 
 /**
- * Whether a message was written by an agent profile (someone's coding agent, like `julian/claude`, or a Pi), not
- * a person: a coding agent sharing its progress in `dev` shouldn't get a kind, and with it, Pi.
+ * Whether a message was written by an agent profile (someone's coding agent, like `julian/claude`, or an Eve), not
+ * a person: a coding agent sharing its progress in `dev` shouldn't get a kind, and with it, Eve.
  */
 export const byAgent = (by: { profile: string | null }) => by.profile !== null;
 
@@ -37,7 +37,7 @@ export const byAgent = (by: { profile: string | null }) => by.profile !== null;
 const SLACK = "https://vercel.slack.com";
 
 /**
- * Where a thread came from, as a link Pi can put in its PR: a Slack thread's permalink or a GitHub issue or PR.
+ * Where a thread came from, as a link Eve can put in its PR: a Slack thread's permalink or a GitHub issue or PR.
  * `origin.thread` is the sync target: `slack:C0123:1727000000.123456`, `github:owner/repo:issue:12`, `github:owner/repo:12`.
  */
 export function sourceLink(origin: { thread: string } | null | undefined) {
@@ -49,7 +49,7 @@ export function sourceLink(origin: { thread: string } | null | undefined) {
   return null;
 }
 
-/** The task message that starts Pi on a thread, with where it came from when it's synced. */
+/** The task message that starts Eve on a thread, with where it came from when it's synced. */
 export function taskMessage(
   task: string,
   thread: { id: string; origin: { thread: string } | null; author?: { name: string } | null },
@@ -60,7 +60,7 @@ export function taskMessage(
 }
 
 
-/** How many times a message to Pi is tried before the thread hears Pi couldn't start, and the wait after a first failure. */
+/** How many times a message to Eve is tried before the thread hears Eve couldn't start, and the wait after a first failure. */
 const TRIES = 3;
 const RETRY_MS = 5_000;
 
@@ -84,27 +84,20 @@ export async function startOrSay(
         await new Promise((resolve) => setTimeout(resolve, retryMs * attempt));
         continue;
       }
-      console.error(`[factory] Pi couldn't start on board thread #${thread}:`, error);
+      console.error(`[factory] Eve couldn't start on board thread #${thread}:`, error);
       const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 200);
-      await board.reply(thread, `Pi couldn't start: \`${reason}\`. Reply here to try again.`);
+      await board.reply(thread, `Eve couldn't start: \`${reason}\`. Reply here to try again.`);
       return;
     }
   }
 }
 
 /**
- * Sends Pi a message about a thread: the first one is its task (a thread to work or a PR to review), later ones say
- * there's news. Pi's eve session for the thread is created on first use. If Pi can't be reached, `board`
+ * Sends Eve a message about a thread: the first one is its task (a thread to work or a PR to review), later ones say
+ * there's news. Eve's session for the thread is created on first use. If Eve can't be reached, `board`
  * (the calling watcher's) says so in the thread; see `startOrSay`.
- * `key` names the message, so telling Pi the same thing twice is a no-op.
+ * `key` names the message, so telling Eve the same thing twice is a no-op.
  */
-export async function tellPi({ board, ...input }: PiMessage & { board: Pick<WatcherContext["board"], "reply"> }) {
-  await startOrSay(board, input.thread, () => tellEve(input));
+export async function tellEve({ board, ...input }: EveMessage & { board: Pick<WatcherContext["board"], "reply"> }) {
+  await startOrSay(board, input.thread, () => sendToEve(input));
 }
-
-type PiMessage = {
-  task: Task;
-  thread: string;
-  key: string;
-  message: string;
-};

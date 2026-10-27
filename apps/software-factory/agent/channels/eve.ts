@@ -8,7 +8,7 @@ import { boardFrom } from "../lib/board";
 // model sees.
 export default eveChannel({
   auth: [vercelOidc(), localDev()],
-  // A message that lands mid-turn steers it: Pi sees it at its next step instead of after the turn.
+  // A message that lands mid-turn steers it: Eve sees it at its next step instead of after the turn.
   turnPolicy: "steer",
   onMessage(ctx) {
     const auth = defaultEveAuth(ctx);

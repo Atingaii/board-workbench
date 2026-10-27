@@ -1,6 +1,6 @@
 import { defineState } from "eve/context";
 import type { ToolContext } from "eve/tools";
-import { BOARD, policy, piName } from "../../app/api/board/[[...path]]/harness.ts";
+import { BOARD, policy, eveName } from "../../app/api/board/[[...path]]/harness.ts";
 import { CONNECTOR } from "../../app/api/board/[[...path]]/github.ts";
 import { expiresAt, stale } from "../../app/api/board/[[...path]]/tokens.ts";
 import { environment } from "../sandbox";
@@ -35,9 +35,9 @@ export async function give(ctx: Ctx, board: Board, now = Date.now()) {
     policy(board.thread, { gateway, board: boardToken, github }, process.env.VERCEL_AUTOMATION_BYPASS_SECRET) as SandboxNetworkPolicy,
   );
   if (thread !== board.thread) {
-    // Commits name the thread's agent, as Pi's do; the app's token pushes them.
+    // Commits name the thread's agent, as Eve's do; the app's token pushes them.
     const git = await sandbox.run({
-      command: `git config --global user.name ${JSON.stringify(piName(board.thread))} && git config --global user.email ${GIT_EMAIL}`,
+      command: `git config --global user.name ${JSON.stringify(eveName(board.thread))} && git config --global user.email ${GIT_EMAIL}`,
     });
     if (git.exitCode !== 0) throw new Error(`git config failed: ${git.stderr.slice(-300)}`);
   }

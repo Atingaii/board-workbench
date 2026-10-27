@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { memory, tellEve } from "../app/api/board/[[...path]]/eve.ts";
+import { memory, sendToEve } from "../app/api/board/[[...path]]/eve.ts";
 import { boardFrom, boardOf } from "../agent/lib/board.ts";
 import { script } from "../agent/lib/computer.ts";
 
@@ -33,12 +33,12 @@ function fakeEve() {
   };
 }
 
-test("tellEve: a thread's first message makes its session, later ones go to the same one, with the thread they're about", async () => {
+test("sendToEve: a thread's first message makes its session, later ones go to the same one, with the thread they're about", async () => {
   const sessions = memory(new Map());
   const eve = fakeEve();
-  await tellEve({ task: "thread", thread: "900", key: "kind-bug", message: "There's a bug report in board thread #900." }, { sessions, eve });
-  await tellEve({ task: "thread", thread: "900", key: "news-901", message: "There's new activity in board thread #900." }, { sessions, eve });
-  await tellEve({ task: "review", thread: "900", key: "pr", message: "There's a pull request to review in board thread #900." }, { sessions, eve });
+  await sendToEve({ task: "thread", thread: "900", key: "kind-bug", message: "There's a bug report in board thread #900." }, { sessions, eve });
+  await sendToEve({ task: "thread", thread: "900", key: "news-901", message: "There's new activity in board thread #900." }, { sessions, eve });
+  await sendToEve({ task: "review", thread: "900", key: "pr", message: "There's a pull request to review in board thread #900." }, { sessions, eve });
   assert.deepEqual(eve.made, ["wrun_1", "wrun_2"]);
   assert.deepEqual(
     eve.sent.map((s) => [s.session, s.context]),
@@ -50,38 +50,38 @@ test("tellEve: a thread's first message makes its session, later ones go to the 
   );
 });
 
-test("tellEve: a message is delivered once, so a retried watcher is a no-op", async () => {
+test("sendToEve: a message is delivered once, so a retried watcher is a no-op", async () => {
   const sessions = memory(new Map());
   const eve = fakeEve();
   const message = { task: "thread", thread: "900", key: "news-901", message: "There's new activity in board thread #900." };
-  await tellEve(message, { sessions, eve });
-  await tellEve(message, { sessions, eve });
+  await sendToEve(message, { sessions, eve });
+  await sendToEve(message, { sessions, eve });
   assert.equal(eve.sent.length, 1);
 });
 
-test("tellEve: two first messages racing leave one session for the thread, and reset the other", async () => {
+test("sendToEve: two first messages racing leave one session for the thread, and reset the other", async () => {
   const sessions = memory(new Map());
   const eve = fakeEve();
   await Promise.all([
-    tellEve({ task: "thread", thread: "900", key: "kind-bug", message: "a" }, { sessions, eve }),
-    tellEve({ task: "thread", thread: "900", key: "news-901", message: "b" }, { sessions, eve }),
+    sendToEve({ task: "thread", thread: "900", key: "kind-bug", message: "a" }, { sessions, eve }),
+    sendToEve({ task: "thread", thread: "900", key: "news-901", message: "b" }, { sessions, eve }),
   ]);
   assert.equal(eve.made.length, 2);
   assert.equal(new Set(eve.sent.map((s) => s.session)).size, 1);
   assert.deepEqual(eve.resets, eve.made.filter((id) => id !== eve.sent[0].session));
 });
 
-test("tellEve: a session that's gone (idle too long, or reset) is replaced, and the message still arrives", async () => {
+test("sendToEve: a session that's gone (idle too long, or reset) is replaced, and the message still arrives", async () => {
   const sessions = memory(new Map());
   const eve = fakeEve();
-  await tellEve({ task: "thread", thread: "900", key: "kind-bug", message: "a" }, { sessions, eve });
+  await sendToEve({ task: "thread", thread: "900", key: "kind-bug", message: "a" }, { sessions, eve });
   eve.gone.add("wrun_1");
-  await tellEve({ task: "thread", thread: "900", key: "news-901", message: "b" }, { sessions, eve });
-  await tellEve({ task: "thread", thread: "900", key: "news-902", message: "c" }, { sessions, eve });
+  await sendToEve({ task: "thread", thread: "900", key: "news-901", message: "b" }, { sessions, eve });
+  await sendToEve({ task: "thread", thread: "900", key: "news-902", message: "c" }, { sessions, eve });
   assert.deepEqual(eve.sent.map((s) => [s.session, s.message]), [["wrun_1", "a"], ["wrun_2", "b"], ["wrun_2", "c"]]);
 });
 
-test("tellEve: a message that couldn't be sent is sent by the next try", async () => {
+test("sendToEve: a message that couldn't be sent is sent by the next try", async () => {
   const sessions = memory(new Map());
   const eve = fakeEve();
   const send = eve.send;
@@ -89,9 +89,9 @@ test("tellEve: a message that couldn't be sent is sent by the next try", async (
     throw new Error("eve is down");
   };
   const message = { task: "thread", thread: "900", key: "kind-bug", message: "a" };
-  await assert.rejects(tellEve(message, { sessions, eve }), /eve is down/);
+  await assert.rejects(sendToEve(message, { sessions, eve }), /eve is down/);
   eve.send = send;
-  await tellEve(message, { sessions, eve });
+  await sendToEve(message, { sessions, eve });
   assert.deepEqual(eve.sent.map((s) => s.message), ["a"]);
 });
 
@@ -124,7 +124,7 @@ test("computer: each call starts the desktop if it's down, then acts and screens
   assert.ok(script({ title: "Caption 'quoted'", action: "screenshot" }).includes(`step 'Caption '\\''quoted'\\'''`));
 });
 
-test("the eve agent compiles: Pi's model, skills and computer, eve's bash and files, its hook, and no subagents", async () => {
+test("the eve agent compiles: Eve's model, skills and computer, eve's bash and files, its hook, and no subagents", async () => {
   const { stdout } = await promisify(execFile)("pnpm", ["exec", "eve", "info", "--json"], { cwd: root, maxBuffer: 64 << 20 });
   const info = JSON.parse(stdout);
   assert.equal(info.status, "ready");

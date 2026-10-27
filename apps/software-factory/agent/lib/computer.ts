@@ -1,13 +1,13 @@
-import { PI_USER } from "../../app/api/board/[[...path]]/harness.ts";
+import { SANDBOX_USER } from "../../app/api/board/[[...path]]/harness.ts";
 
 // What one computer call (`tools/computer.ts`) runs in the sandbox.
 
 /** Where the computer tool's mouse and keyboard driver goes in the sandbox (`sandbox.ts` puts it there). */
-export const XINPUT = `/home/${PI_USER}/.computer/xinput.py`;
+export const XINPUT = `/home/${SANDBOX_USER}/.computer/xinput.py`;
 
 const DISPLAY = ":99";
 export const [WIDTH, HEIGHT] = [1280, 800];
-const HOME = `/home/${PI_USER}`;
+const HOME = `/home/${SANDBOX_USER}`;
 export const SHOT = "/tmp/computer.png";
 export const ACTIONS = ["screenshot", "open", "click", "double_click", "right_click", "move", "drag", "type", "key", "scroll", "wait"] as const;
 

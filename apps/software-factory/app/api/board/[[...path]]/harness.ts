@@ -2,14 +2,14 @@ import type { NetworkPolicy } from "@vercel/sandbox";
 import pkg from "@vercel/board/package.json" with { type: "json" };
 import { REPO } from "./github.ts";
 
-// What a thread's Pi is, shared by the board's watchers (`agent.ts`) and the eve agent itself (`agent/`): its name,
+// What a thread's Eve is, shared by the board's watchers (`agent.ts`) and the eve agent itself (`agent/`): its name,
 // its instructions, the tools its sandbox gets, and the network policy that puts real credentials on the wire.
 
 /** The production board the agent's `vb` talks to. */
 export const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 export const MODEL = "anthropic/claude-opus-5.5";
 /**
- * The `vb` Pi runs: the board this deployment was built with, so each release reaches Pi
+ * The `vb` Eve runs: the board this deployment was built with, so each release reaches Eve
  * with no hand-made bump. A thread's sandbox outlives releases, so setup upgrades it in place.
  */
 export const BOARD_VERSION: string = pkg.version;
@@ -19,15 +19,15 @@ export const BOARD_VERSION: string = pkg.version;
  * threads' setup failed on a 403.
  */
 export const GH = "2.102.0";
-/** What installs the Chrome Pi uses on its desktop (and drives headless, when it wants), pinned like gh. */
+/** What installs the Chrome Eve uses on its desktop (and drives headless, when it wants), pinned like gh. */
 export const AGENT_BROWSER = "0.38.2";
 /** ffmpeg 6.0, a static build with libass, so captions can be burned in. */
 export const FFMPEG_STATIC = "5.2.0";
-/** The user Pi runs as, whose home its skills and agent-browser's Chrome go in. */
-export const PI_USER = "vercel-sandbox";
+/** The user Eve runs as, whose home its skills and agent-browser's Chrome go in. */
+export const SANDBOX_USER = "vercel-sandbox";
 
-/** A thread's Pi session, on the board and in the sandbox. */
-export const piSession = (thread: string) => `thread-${thread}`;
+/** A thread's Eve session, on the board and in the sandbox. */
+export const eveSession = (thread: string) => `thread-${thread}`;
 
 const ADJECTIVES = [
   "amber", "brave", "brisk", "calm", "clever", "cosmic", "crisp", "dapper",
@@ -42,31 +42,31 @@ const ANIMALS = [
   "seal", "sloth", "stoat", "tapir", "toucan", "walrus", "wombat", "yak",
 ];
 
-/** The number a Pi's words come from: the thread's own on this board, whose IDs are numbers, so names stay put. */
+/** The number an Eve's words come from: the thread's own on this board, whose IDs are numbers, so names stay put. */
 const seed = (thread: string) =>
   /^\d{1,15}$/.test(thread) ? Number(thread) : [...thread].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 0);
 
 /**
- * Who a thread's Pi is on the board: a name of its own, like `clever-lemur-1956 via vboard-factory`,
- * so people can tell one thread's Pi from another's. The words make it easy to tell apart at a glance;
+ * Who a thread's Eve is on the board: a name of its own, like `clever-lemur-1956 via vboard-factory`,
+ * so people can tell one thread's Eve from another's. The words make it easy to tell apart at a glance;
  * the thread number makes it unique, since a profile is part of the actor's ID.
  */
-export function piName(thread: string) {
+export function eveName(thread: string) {
   const n = Math.imul(seed(thread), 0x9e3779b1) >>> 0;
   return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}-${thread}`;
 }
 
 /**
- * A thread's Pi's picture, generated from its name so each Pi has its own: a PNG, since Slack
+ * A thread's Eve's picture, generated from its name so each Eve has its own: a PNG, since Slack
  * won't use the board's SVG avatars as a message's icon.
  */
-export const piAvatar = (thread: string) =>
-  `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(piName(thread))}`;
+export const eveAvatar = (thread: string) =>
+  `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(eveName(thread))}`;
 
-/** What Pi does in a thread: work a firehose thread (bug, feature, question, task), or review a pull request. */
+/** What Eve does in a thread: work a firehose thread (bug, feature, question, task), or review a pull request. */
 export type Task = "thread" | "review";
 
-/** How Pi keeps people company in any thread: they see it's on it, and get pinged when it answers. */
+/** How Eve keeps people company in any thread: they see it's on it, and get pinged when it answers. */
 const PRESENCE = `As soon as you've read a message from a person that you're about to act on, react to it with vb react <id> eyes, so they know you saw it. When it asks for work that takes more than a quick look (a fix, a rebase, a new demo, a build), make your first reply, before you clone, read code, or run anything, one line saying what you're about to do, so nobody wonders whether you're stuck.
 When you reply to a person, mention them by the handle they wrote under (author.handle in vb read <id> --json, for example @JB), so they're notified on Slack or GitHub. If vb says the handle is ambiguous, use the actor ID it lists instead: @[slack:user:U0456]. Mention each person once, not in every line.
 You hear about every reply in your threads, but most aren't for you. When a message is addressed to someone else (it @mentions another person, or answers someone else's question) and doesn't ask anything of you, don't reply and don't react; stay quiet unless you're asked.
@@ -105,7 +105,7 @@ Before anything else, react to the PR thread's root with vb react <root id> look
 2. Run pnpm install and pnpm check. Try the change where you can: a test that should fail without it, or the CLI by hand.
 3. Put the detail on GitHub, attached to the code: submit one review with gh api repos/${REPO}/pulls/<N>/reviews --input review.json (event COMMENT, REQUEST_CHANGES or APPROVE, with comments on file:line for each problem and suggestion). You review as the factory GitHub App's bot, and GitHub rejects APPROVE and REQUEST_CHANGES on that account's own PRs, so on a PR it opened use COMMENT and put the verdict in the body. Inline comments must be on lines the diff touches, or GitHub rejects the whole review; put anything else in the body. Always put the verdict in the body, even when the problems are all inline (a review with an empty body never reaches the board), and keep the body short: the verdict (good to merge, or the blocking problems in a line each), with the detail in the inline comments. The review shows up in the board thread and on Slack on its own, so don't restate it there: reply in the board thread only to add what it lacks, in a line (the mention of whoever asked, or what you tried by hand attached with --attach <file>, a log or a screenshot, up to 4 MB each), or not at all. vb read lists files people attached as file lines; vb download <id> saves one.
 4. After each review, say whether the PR could land without a person, in one command on the PR thread's root: vb label <root id> land=yes|no land.why="<one line>" land.sha=<the head SHA you reviewed>. Say yes only when all of these hold: it fixes a bug or does what a person clearly asked for (not something you or its author had to interpret); your review found nothing to fix; and it has no caveats, open questions, or negative tradeoffs (in its body, in the thread, or that you see). Otherwise say no, and land.why says which one failed. When unsure, say no. The board checks the rest itself: who opened it, CI, and whether it changes board core for users.
-5. Tell the thread the work started in. When the PR was built for another board thread (its branch is board/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Pi, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
+5. Tell the thread the work started in. When the PR was built for another board thread (its branch is board/<id>, and the PR thread has a ":crosspost: From … · board #<id>" reply), reply there after each review, in one line: the verdict (good to merge, or what blocks it, briefly) and that the detail is in the review on PR #<N>. That thread's Eve, the PR's author, hears it and can fix what you found, and the person who asked sees it where they asked. Don't mention anyone there, and don't restate the review.
 When you're told there's new activity in a thread, read it, see what's new since you last replied, and act on it if it's for you: answer questions, and review again if new commits landed (gh pr view <N> --json commits), labeling land again.`;
 
 export const INSTRUCTIONS: Record<Task, string> = {
@@ -130,17 +130,17 @@ command -v Xvfb >/dev/null || dnf install -y -q xorg-x11-server-Xvfb libXtst >/d
 command -v ffmpeg >/dev/null || { npm install -g ffmpeg-static@${FFMPEG_STATIC} >/dev/null 2>&1 \
   && ln -sf "$(npm root -g)/ffmpeg-static/ffmpeg" /usr/local/bin/ffmpeg; } || true
 [ "$(agent-browser --version 2>/dev/null)" = "agent-browser ${AGENT_BROWSER}" ] || { npm install -g agent-browser@${AGENT_BROWSER} >/dev/null 2>&1 \
-  && HOME=/home/${PI_USER} agent-browser install --with-deps >/dev/null 2>&1 && chown -R ${PI_USER}: /home/${PI_USER}/.agent-browser; } || true`;
+  && HOME=/home/${SANDBOX_USER} agent-browser install --with-deps >/dev/null 2>&1 && chown -R ${SANDBOX_USER}: /home/${SANDBOX_USER}/.agent-browser; } || true`;
 
 /**
- * The preview of Pi's own branch, `board/<thread>`: its branch URL on the factory's preview domain, which spells
- * the branch's `/` as `-`. Pi's network policy gets it past Vercel Authentication. Only this host:
+ * The preview of Eve's own branch, `board/<thread>`: its branch URL on the factory's preview domain, which spells
+ * the branch's `/` as `-`. Eve's network policy gets it past Vercel Authentication. Only this host:
  * `*.playground-vercel.tools` would also hand the bypass secret to every other deployment on that domain.
  */
-export const piPreview = (thread: string) => `vboard-factory-git-board-${thread}.playground-vercel.tools`;
+export const evePreview = (thread: string) => `vboard-factory-git-board-${thread}.playground-vercel.tools`;
 
 /**
- * The board routes Pi's `vb` calls, as an RE2 regex: discovery, and reading and writing messages, schedules and
+ * The board routes Eve's `vb` calls, as an RE2 regex: discovery, and reading and writing messages, schedules and
  * attachments. Not `/webhooks/*`, which skip board auth and accept any OIDC token for this project, so the board's
  * token there would let the sandbox forge Slack and GitHub events. Not the full-access routes (stuck events, inboxes,
  * raw source reads), identity linking, or anything else on the host, like the docs site.
@@ -159,7 +159,7 @@ export const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
 
 /**
  * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
- * On the board's routes, the policy also sets who Pi is, so nothing in the sandbox can post as anyone else.
+ * On the board's routes, the policy also sets who Eve is, so nothing in the sandbox can post as anyone else.
  */
 export function policy(
   thread: string,
@@ -181,16 +181,16 @@ export function policy(
             {
               headers: {
                 authorization: `Bearer ${tokens.board}`,
-                "x-board-profile": piName(thread),
-                "x-board-avatar": piAvatar(thread),
-                "x-board-session": piSession(thread),
+                "x-board-profile": eveName(thread),
+                "x-board-avatar": eveAvatar(thread),
+                "x-board-session": eveSession(thread),
                 ...protection,
               },
             },
           ],
         },
       ],
-      ...(bypass ? { [piPreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
+      ...(bypass ? { [evePreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
       // gh and git, as the factory GitHub App.
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "github.com": [{ transform: [{ headers: { authorization: `Basic ${git}` } }] }],

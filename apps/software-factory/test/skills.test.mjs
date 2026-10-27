@@ -5,22 +5,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { piAvatar, piName, piPreview, policy } from "../app/api/board/[[...path]]/agent.ts";
+import { eveAvatar, eveName, evePreview, policy } from "../app/api/board/[[...path]]/agent.ts";
 import { routes } from "../../../packages/board/src/api/routes.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "skills/ui-video/scripts/ui-video");
 const tokens = { gateway: "g", board: "b", github: "h" };
 
-test("policy: Pi's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {
+test("policy: Eve's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {
   const allow = policy("3100", tokens, "s3cret").allow;
   // Vercel's branch URL for board/3100: the branch's `/` becomes `-`.
-  assert.equal(piPreview("3100"), "vboard-factory-git-board-3100.playground-vercel.tools");
-  assert.deepEqual(allow[piPreview("3100")], [{ transform: [{ headers: { "x-vercel-protection-bypass": "s3cret" } }] }]);
+  assert.equal(evePreview("3100"), "vboard-factory-git-board-3100.playground-vercel.tools");
+  assert.deepEqual(allow[evePreview("3100")], [{ transform: [{ headers: { "x-vercel-protection-bypass": "s3cret" } }] }]);
   const withSecret = Object.entries(allow).filter(([, rules]) => JSON.stringify(rules).includes("s3cret"));
-  assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview("3100")].sort());
+  assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", evePreview("3100")].sort());
   assert.deepEqual(allow["*"], []);
-  assert.equal(policy("3100", tokens, undefined).allow[piPreview("3100")], undefined);
+  assert.equal(policy("3100", tokens, undefined).allow[evePreview("3100")], undefined);
 });
 
 // The headers the sandbox's proxy adds to a request for `path` on `host`, as it reads a rule's path match.
@@ -29,13 +29,13 @@ function sent(allow, host, path) {
   return Object.assign({}, ...rules.flatMap((rule) => rule.transform.map((t) => t.headers)));
 }
 
-test("policy: Pi's credentials and identity reach every board route vb calls, and nothing else on the board's host", () => {
+test("policy: Eve's credentials and identity reach every board route vb calls, and nothing else on the board's host", () => {
   const allow = policy(3100, tokens, "s3cret").allow;
   const host = "vboard-factory.playground-vercel.tools";
   const pi = {
     authorization: "Bearer b",
-    "x-board-profile": piName(3100),
-    "x-board-avatar": piAvatar(3100),
+    "x-board-profile": eveName(3100),
+    "x-board-avatar": eveAvatar(3100),
     "x-board-session": "thread-3100",
     "x-vercel-protection-bypass": "s3cret",
   };
@@ -89,7 +89,7 @@ test("policy: Pi's credentials and identity reach every board route vb calls, an
   }
 });
 
-test("policy: Pi's gh and git always go as the factory GitHub App", () => {
+test("policy: Eve's gh and git always go as the factory GitHub App", () => {
   const allow = policy("3100", tokens, undefined).allow;
   assert.deepEqual(allow["api.github.com"], [{ transform: [{ headers: { authorization: "Bearer h" } }] }]);
   assert.deepEqual(allow["github.com"], [
@@ -99,8 +99,8 @@ test("policy: Pi's gh and git always go as the factory GitHub App", () => {
   assert.equal(Object.keys(allow).at(-1), "*");
 });
 
-// ui-video is for Pi's Linux sandbox: an X11 desktop, bash 4, and GNU date and stat. Elsewhere (macOS) it can't run.
-const onLinux = process.platform === "linux" ? {} : { skip: "ui-video runs only on Linux (Pi's sandbox)" };
+// ui-video is for Eve's Linux sandbox: an X11 desktop, bash 4, and GNU date and stat. Elsewhere (macOS) it can't run.
+const onLinux = process.platform === "linux" ? {} : { skip: "ui-video runs only on Linux (Eve's sandbox)" };
 
 // ui-video with fake Xvfb, ffmpeg and AI Gateway: what it records, which captions it burns in, and when.
 function recorder() {
@@ -244,7 +244,7 @@ test("ui-video: UI_VIDEO_VOICE=off mutes it, and the model and voice can be pick
   off.run(["stop", join(off.dir, "out.mp4")], { UI_VIDEO_LAST: "0" });
 });
 
-test("ui-video: the take cuts the time Pi spends thinking, keeping HOLD seconds after each step", onLinux, (t) => {
+test("ui-video: the take cuts the time Eve spends thinking, keeping HOLD seconds after each step", onLinux, (t) => {
   const { dir, run, cleanup } = recorder();
   t.after(cleanup);
   run(["start", "--mute"]);

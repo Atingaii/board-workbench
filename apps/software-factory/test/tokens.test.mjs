@@ -15,6 +15,6 @@ test("stale: a sandbox gets new tokens in their last minutes, or when it has non
   assert.equal(stale(now + 30 * MIN, "3100", "3100", now), false);
   assert.equal(stale(now + 30 * MIN, "3100", "3100", now + 30 * MIN - REFRESH_LEAD_MS), true);
   assert.equal(stale(0, "", "3100", now), true);
-  // Tokens for another thread name another thread's Pi.
+  // Tokens for another thread name another thread's Eve.
   assert.equal(stale(now + 60 * MIN, "3101", "3100", now), true);
 });
