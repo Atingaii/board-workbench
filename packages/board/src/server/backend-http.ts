@@ -385,14 +385,28 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   /** Only an https URL can be woken; anything else pulls on its own. */
   const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
 
+  /**
+   * Where the remote wakes this board: on a board that wakes by path, the path on this project,
+   * which gets through its Deployment Protection, from production or from a preview of a branch,
+   * which it names; anywhere else (off Vercel, development, a custom environment), its URL.
+   */
+  async function wakeAt(here: string | null): Promise<{ url: string | null } | { path: string; branch?: string }> {
+    const env = typeof process !== 'undefined' && process.env.VERCEL === '1' ? process.env : null
+    // A custom environment says `preview` in VERCEL_ENV and its own name in VERCEL_TARGET_ENV.
+    const environment = env?.VERCEL_TARGET_ENV || env?.VERCEL_ENV
+    const branch = environment === 'preview' ? env?.VERCEL_GIT_COMMIT_REF || null : null
+    if (!here || (environment !== 'production' && !branch) || !(await discovery()).wake_by_path) return { url: here }
+    return { path: new URL(here).pathname, ...(branch ? { branch } : {}) }
+  }
+
   let last: { url: string | null; at: number; result: RegistrationView } | null = null
   let registering: Promise<RegistrationView> | null = null
   /** Registers this board's watchers with the remote, as itself, replacing its last registration. */
   async function register(here: string | null): Promise<RegistrationView> {
     const current = await watchersHash()
     if (last && last.url === here && last.result.hash === current && Date.now() - last.at < REGISTER_EVERY_MS) return last.result
-    registering ??= own
-      .register({ url: here, watch: specs, ...(sync.length > 0 ? { sync } : {}) })
+    registering ??= wakeAt(here)
+      .then((where) => own.register({ ...where, watch: specs, ...(sync.length > 0 ? { sync } : {}) }))
       .then((result) => {
         last = { url: here, at: Date.now(), result }
         return result

@@ -649,6 +649,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       return { watchers: principal.access.everywhere('manage') ? all : all.filter((found) => found.owner === principal.id) }
     },
     async register(caller, body) {
+      // A path wakes the caller's own Vercel project, which only a board that finds its deployments can.
+      if (body.path) throw new HttpError(501, 'no_wake_by_path', 'this board wakes a url, not a path: register `url` instead')
       const { principal } = (await identityOf(caller))
       ownWatchers(principal)
       // A registered watcher sees only what its registrant may read.

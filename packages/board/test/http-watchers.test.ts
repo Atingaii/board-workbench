@@ -623,3 +623,53 @@ describe('registering', () => {
     expect(canonicalWatchers({ B: spec, a: spec }, [entry('B'), entry('a')])).toBe(canonical)
   })
 })
+
+describe('registering by path', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("is the board's to offer: one on a2() can't find a project's deployments, so it says so", async () => {
+    const v0 = caller(testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch, await v0Token())
+    expect(await v0('POST', '/watchers', { path: '/api/board', watch: { fix: { tail: 'feedback' } } })).toMatchObject({
+      status: 501,
+      body: { error: { code: 'no_wake_by_path' } },
+    })
+  })
+
+  it('takes a url or a path, not both, and a branch only with a path', async () => {
+    const v0 = caller(testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch, await v0Token())
+    expect((await v0('POST', '/watchers', { url: V0_URL, path: '/api/board', watch: {} })).status).toBe(400)
+    expect((await v0('POST', '/watchers', { url: V0_URL, branch: 'jb/watchers', watch: {} })).status).toBe(400)
+  })
+
+  const production = { VERCEL: '1', VERCEL_ENV: 'production' }
+  it.each([
+    ['production, on a board that wakes by path', production, true, { path: '/api/board' }],
+    ['a preview of a branch, which it names', { VERCEL: '1', VERCEL_ENV: 'preview', VERCEL_GIT_COMMIT_REF: 'jb/watchers' }, true, { path: '/api/board', branch: 'jb/watchers' }],
+    ['a preview of no branch, as `vercel deploy` makes', { VERCEL: '1', VERCEL_ENV: 'preview' }, true, { url: V0_URL }],
+    ['a custom environment', { VERCEL: '1', VERCEL_ENV: 'preview', VERCEL_TARGET_ENV: 'staging', VERCEL_GIT_COMMIT_REF: 'staging' }, true, { url: V0_URL }],
+    ['development', { VERCEL: '1', VERCEL_ENV: 'development' }, true, { url: V0_URL }],
+    ['off Vercel', {}, true, { url: V0_URL }],
+    ["on a board that doesn't wake by path", production, false, { url: V0_URL }],
+  ])('registers %s with %j', async (_case, env: Record<string, string>, byPath, where) => {
+    for (const name of ['VERCEL', 'VERCEL_ENV', 'VERCEL_TARGET_ENV', 'VERCEL_GIT_COMMIT_REF']) vi.stubEnv(name, env[name] ?? '')
+    /** The team's board, as v0's board sees it: its discovery, and the registration it was sent. */
+    const sent: unknown[] = []
+    const remote = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const path = new URL(request.url).pathname
+      if (request.method === 'GET' && (path === '/api/board' || path === '/api/board/'))
+        return Response.json({ version: '0', url: BOARD_URL, audience: BOARD_URL, team_id: null, project_id: null, sync: [], ...(byPath ? { wake_by_path: true } : {}) })
+      if (request.method === 'POST' && path === '/api/board/watchers') {
+        sent.push(await request.json())
+        return Response.json({ owner: V0, url: null, watch: {}, sync: [], hash: 'h' })
+      }
+      return new Response('no such route', { status: 404 })
+    }
+    const backend = http(BOARD_URL, { fetch: bearer(remote, v0Token) })
+    board({ backend, url: V0_URL, watch: { fix: { tail: 'feedback', run: async () => {} } } })
+    await backend.registerWatchers()
+    expect(sent).toEqual([{ ...where, watch: { fix: { tail: 'feedback', when: 'matches' } } }])
+  })
+})
