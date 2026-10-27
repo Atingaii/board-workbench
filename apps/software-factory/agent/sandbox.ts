@@ -7,10 +7,13 @@ import { XINPUT } from "./lib/computer";
 // Tools are installed once, at build, into the snapshot.
 export const environment = VercelSandbox.environment({
   prepare: async (sandbox) => {
-    const tools = await sandbox.run({ command: `sudo bash -c ${JSON.stringify(TOOLS)}` });
+    // A file, not `bash -c "…"`: inside double quotes the script's newlines stay `\n` and its `$(…)` run too early.
+    await sandbox.writeTextFile({ path: "/tmp/factory-tools.sh", content: TOOLS });
+    const tools = await sandbox.run({ command: "sudo bash /tmp/factory-tools.sh" });
     if (tools.exitCode !== 0) throw new Error(`sandbox setup failed: ${tools.stderr.slice(-500)}`);
+    await sandbox.run({ command: `mkdir -p "$(dirname ${XINPUT})"` });
     await sandbox.writeTextFile({ path: XINPUT, content: xinput });
-    const scripts = await sandbox.run({ command: `chmod +x ${XINPUT} "$HOME"/.agents/skills/*/scripts/*` });
+    const scripts = await sandbox.run({ command: `chmod +x ${XINPUT} && { chmod +x "$HOME"/.agents/skills/*/scripts/* 2>/dev/null || true; }` });
     if (scripts.exitCode !== 0) throw new Error(`sandbox setup failed: ${scripts.stderr.slice(-500)}`);
   },
 });
