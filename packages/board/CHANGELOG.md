@@ -1,5 +1,15 @@
 # vboard
 
+## 0.18.0
+
+### Minor Changes
+
+- 5fee847: Add `@vercel/board/sync-linear`: `linear(app, teams({ ENG: 'dev' }))` turns each Linear issue into a board thread, with comments as replies and `issue` and `state` labels, and a board root in a mirrored team opens an issue.
+
+### Patch Changes
+
+- 3663db3: Update the Factory setup skill for current automation paths and scoped board tools.
+
 ## 0.17.0
 
 ### Minor Changes
