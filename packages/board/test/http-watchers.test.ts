@@ -637,10 +637,29 @@ describe('registering by path', () => {
     })
   })
 
-  it('takes a url or a path, not both, and a branch only with a path', async () => {
+  it('takes a url or a path, not both, and a branch only with a path, and says which', async () => {
     const v0 = caller(testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch, await v0Token())
-    expect((await v0('POST', '/watchers', { url: V0_URL, path: '/api/board', watch: {} })).status).toBe(400)
-    expect((await v0('POST', '/watchers', { url: V0_URL, branch: 'jb/watchers', watch: {} })).status).toBe(400)
+    const refused = (message: string) => ({ status: 400, body: { error: { code: 'invalid_request', message } } })
+    expect(await v0('POST', '/watchers', { url: V0_URL, path: '/api/board', watch: {} })).toMatchObject(refused('path: register a url or a path, not both'))
+    expect(await v0('POST', '/watchers', { url: V0_URL, branch: 'jb/watchers', watch: {} })).toMatchObject(refused('branch: a branch goes with a path'))
+    // A url registration that's wrong elsewhere is told what's wrong there, not only that it matched neither.
+    const watch = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`w${i}`, { tail: 'feedback' }]))
+    expect(await v0('POST', '/watchers', { url: V0_URL, watch })).toMatchObject(refused('watch: a board registers at most 32 watchers'))
+  })
+
+  it('types a registration as a url or a path, never both', () => {
+    const handle = board({ backend: http(BOARD_URL) })
+    const watch = {}
+    // Never sent: the calls only have to typecheck, or not.
+    const typed = () => {
+      handle.register({ url: V0_URL, watch })
+      handle.register({ path: '/api/board', branch: 'jb/watchers', watch })
+      // @ts-expect-error a url and a path are two registrations
+      handle.register({ url: V0_URL, path: '/api/board', watch })
+      // @ts-expect-error a branch goes with a path
+      handle.register({ url: V0_URL, branch: 'jb/watchers', watch })
+    }
+    expect(typed).toBeTypeOf('function')
   })
 
   const production = { VERCEL: '1', VERCEL_ENV: 'production' }

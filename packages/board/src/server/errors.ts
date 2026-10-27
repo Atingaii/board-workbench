@@ -36,13 +36,24 @@ export const json = (body: unknown, status = 200, headers?: HeadersInit) =>
     headers: { 'content-type': 'application/json', ...headers },
   })
 
+/**
+ * The issue a request is told about. A union that matched no option says only "Invalid input", so
+ * it's the first issue of the option that came closest, the one with the fewest, at its own path.
+ */
+function reported(issue: ZodError['issues'][number]): ZodError['issues'][number] {
+  if (issue.code !== 'invalid_union' || issue.errors.length === 0) return issue
+  const closest = issue.errors.reduce((best, option) => (option.length < best.length ? option : best))
+  const first = closest[0]
+  return first ? reported({ ...first, path: [...issue.path, ...first.path] }) : issue
+}
+
 /** Every failure becomes `{ error: { code, message } }` with a matching status. */
 export function toErrorResponse(error: unknown): Response {
   if (error instanceof RejectedError) return error.response
   if (error instanceof HttpError)
     return json({ error: { code: error.code, message: error.message } }, error.status)
   if (error instanceof ZodError) {
-    const issue = error.issues[0]
+    const issue = error.issues[0] && reported(error.issues[0])
     const path = issue?.path.length ? `${issue.path.join('.')}: ` : ''
     return json(
       { error: { code: 'invalid_request', message: `${path}${issue?.message ?? 'invalid request'}` } },
