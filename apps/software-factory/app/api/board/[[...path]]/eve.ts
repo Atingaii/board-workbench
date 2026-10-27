@@ -1,41 +1,32 @@
 import type { Task } from "./harness.ts";
 
-// Eve, the eve agent (`agent/` in this app, mounted at /eve/v1 by `withEve`). Each thread's task gets one durable eve session; this file finds it, or starts it, and sends it the message.
-// A message that lands mid-turn steers that turn (the eve channel's `turnPolicy: "steer"`), so there's no lock here.
+// One eve session per thread task, kept in Redis.
 
-/** What the eve agent is told: who it works for travels with each message, so its hooks and instructions know. */
 export type EveMessage = { task: Task; thread: string; key: string; message: string };
 
-/** The context that says which thread's agent a session is: the eve channel turns it into the session's identity. */
 export const boardContext = (task: Task, thread: string) => ({ board: { task, thread } });
 
-/** Where the factory keeps each thread's eve session, and which messages it already sent: a key-value store with set-if-absent. */
 export type Sessions = {
   get(key: string): Promise<string | null>;
-  /** Sets `key` only when it's unset; says whether it did. */
   claim(key: string, value: string): Promise<boolean>;
   set(key: string, value: string): Promise<void>;
   delete(key: string): Promise<void>;
 };
 
-/** The eve sessions API, as much of it as the factory uses. */
 export type EveSessions = {
   create(): Promise<string>;
   send(session: string, message: string, clientContext: object): Promise<void>;
   reset(session: string): Promise<void>;
 };
 
-/** A session that's gone: ended after its idle timeout, or reset, or built by an eve the deployment no longer runs. */
+/** Ended (idle timeout, reset) or built by an older eve. */
 const gone = (error: unknown) =>
   error instanceof Error &&
   (error.name === "SessionNotActiveError" ||
     error.name === "ClientSessionStrandedError" ||
     (error as { code?: string }).code === "session_stranded");
 
-/**
- * Sends the eve agent a message about a thread, once: `key` names it, as before. The thread's session is made on
- * first use; two first messages racing each make one, and the loser's is reset so only one session holds the thread.
- */
+/** Sends a message once per `key`. Two racing first messages each make a session; the loser's is reset. */
 export async function sendToEve(
   { task, thread, key, message }: EveMessage,
   deps: { sessions?: Sessions; eve?: EveSessions } = {},
@@ -59,19 +50,16 @@ export async function sendToEve(
       await eve.send(session, message, context);
     } catch (error) {
       if (!gone(error)) throw error;
-      // The thread starts over in a new session, as an Eve thread does when its sandbox's snapshot expires.
       const fresh = await eve.create();
       await sessions.set(`session:${name}`, fresh);
       await eve.send(fresh, message, context);
     }
   } catch (error) {
-    // Not sent, so the next try (startOrSay's, or the next event's) sends it.
     await sessions.delete(`told:${name}:${key}`).catch(() => {});
     throw error;
   }
 }
 
-/** This deployment's eve agent, called as this deployment: its OIDC token, and past Vercel Authentication. */
 async function client(): Promise<EveSessions> {
   const [{ Client }, { getVercelOidcToken }] = await Promise.all([import("eve/client"), import("@vercel/oidc")]);
   const host = process.env.VERCEL_URL;
@@ -92,9 +80,6 @@ async function client(): Promise<EveSessions> {
   };
 }
 
-/**
- * The factory's Upstash, under its own prefix per environment like the board's tables (`a2.ts`), or memory locally.
- */
 async function kv(): Promise<Sessions> {
   const env = process.env.VERCEL_ENV;
   if (!env) return memory();
@@ -120,7 +105,7 @@ async function kv(): Promise<Sessions> {
 
 const local = new Map<string, string>();
 
-/** A `Sessions` in memory: locally, and in tests. */
+/** Locally, and in tests. */
 export function memory(map = local): Sessions {
   return {
     get: async (key) => map.get(key) ?? null,

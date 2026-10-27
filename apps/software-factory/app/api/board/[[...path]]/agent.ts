@@ -4,11 +4,6 @@ import { sendToEve, type EveMessage } from "./eve.ts";
 
 export { INSTRUCTIONS, eveAvatar, eveName, evePreview, policy, type Task } from "./harness.ts";
 
-// Eve, the agent working on a board thread: an eve agent (`agent/` in this app) with its own Vercel Sandbox, with
-// `vb`, `gh`, and git, like a developer at a terminal. Each thread's task gets one eve session, so a later message
-// continues the same work (`eve.ts`). Credentials are placeholders inside the sandbox; its network policy puts the
-// real ones on the wire, so nothing in the sandbox can read them.
-
 
 /**
  * Whether a message was written by the Eve working on `thread` (named `pi` before it had a name of its own). Every Eve
@@ -92,12 +87,6 @@ export async function startOrSay(
   }
 }
 
-/**
- * Sends Eve a message about a thread: the first one is its task (a thread to work or a PR to review), later ones say
- * there's news. Eve's session for the thread is created on first use. If Eve can't be reached, `board`
- * (the calling watcher's) says so in the thread; see `startOrSay`.
- * `key` names the message, so telling Eve the same thing twice is a no-op.
- */
 export async function tellEve({ board, ...input }: EveMessage & { board: Pick<WatcherContext["board"], "reply"> }) {
   await startOrSay(board, input.thread, () => sendToEve(input));
 }

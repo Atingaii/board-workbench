@@ -2,31 +2,17 @@ import type { NetworkPolicy } from "@vercel/sandbox";
 import pkg from "@vercel/board/package.json" with { type: "json" };
 import { REPO } from "./github.ts";
 
-// What a thread's Eve is, shared by the board's watchers (`agent.ts`) and the eve agent itself (`agent/`): its name,
-// its instructions, the tools its sandbox gets, and the network policy that puts real credentials on the wire.
-
-/** The production board the agent's `vb` talks to. */
 export const BOARD = "https://vboard-factory.playground-vercel.tools/api/board";
 export const MODEL = "anthropic/claude-opus-5.5";
-/**
- * The `vb` Eve runs: the board this deployment was built with, so each release reaches Eve
- * with no hand-made bump. A thread's sandbox outlives releases, so setup upgrades it in place.
- */
+/** The board this deployment was built with. */
 export const BOARD_VERSION: string = pkg.version;
-/**
- * The `gh` a new sandbox gets, pinned too: asking GitHub's API for the latest release goes out without
- * credentials (setup runs before the network policy), and sandboxes share that rate limit, so new
- * threads' setup failed on a 403.
- */
+/** Pinned: asking GitHub's API for the latest hits the shared unauthenticated rate limit. */
 export const GH = "2.102.0";
-/** What installs the Chrome Eve uses on its desktop (and drives headless, when it wants), pinned like gh. */
 export const AGENT_BROWSER = "0.38.2";
-/** ffmpeg 6.0, a static build with libass, so captions can be burned in. */
+/** ffmpeg 6.0 with libass, for burned-in captions. */
 export const FFMPEG_STATIC = "5.2.0";
-/** The user Eve runs as, whose home its skills and agent-browser's Chrome go in. */
 export const SANDBOX_USER = "vercel-sandbox";
 
-/** A thread's Eve session, on the board and in the sandbox. */
 export const eveSession = (thread: string) => `thread-${thread}`;
 
 const ADJECTIVES = [
@@ -42,38 +28,27 @@ const ANIMALS = [
   "seal", "sloth", "stoat", "tapir", "toucan", "walrus", "wombat", "yak",
 ];
 
-/** The number an Eve's words come from: the thread's own on this board, whose IDs are numbers, so names stay put. */
 const seed = (thread: string) =>
   /^\d{1,15}$/.test(thread) ? Number(thread) : [...thread].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 0);
 
-/**
- * Who a thread's Eve is on the board: a name of its own, like `clever-lemur-1956 via vboard-factory`,
- * so people can tell one thread's Eve from another's. The words make it easy to tell apart at a glance;
- * the thread number makes it unique, since a profile is part of the actor's ID.
- */
+/** A thread's Eve on the board, like `clever-lemur-1956`: unique per thread. */
 export function eveName(thread: string) {
   const n = Math.imul(seed(thread), 0x9e3779b1) >>> 0;
   return `${ADJECTIVES[n % ADJECTIVES.length]}-${ANIMALS[(n >>> 8) % ANIMALS.length]}-${thread}`;
 }
 
-/**
- * A thread's Eve's picture, generated from its name so each Eve has its own: a PNG, since Slack
- * won't use the board's SVG avatars as a message's icon.
- */
+/** A PNG: Slack won't use the board's SVG avatars as a message's icon. */
 export const eveAvatar = (thread: string) =>
   `https://vercel.com/api/www/avatar?s=64&format=png&u=${encodeURIComponent(eveName(thread))}`;
 
-/** What Eve does in a thread: work a firehose thread (bug, feature, question, task), or review a pull request. */
 export type Task = "thread" | "review";
 
-/** How Eve keeps people company in any thread: they see it's on it, and get pinged when it answers. */
 const PRESENCE = `As soon as you've read a message from a person that you're about to act on, react to it with vb react <id> eyes, so they know you saw it. When it asks for work that takes more than a quick look (a fix, a rebase, a new demo, a build), make your first reply, before you clone, read code, or run anything, one line saying what you're about to do, so nobody wonders whether you're stuck.
 When you reply to a person, mention them by the handle they wrote under (author.handle in vb read <id> --json, for example @JB), so they're notified on Slack or GitHub. If vb says the handle is ambiguous, use the actor ID it lists instead: @[slack:user:U0456]. Mention each person once, not in every line.
 You hear about every reply in your threads, but most aren't for you. When a message is addressed to someone else (it @mentions another person, or answers someone else's question) and doesn't ask anything of you, don't reply and don't react; stay quiet unless you're asked.
 Board replies are read on Slack by busy people: keep each to a few lines. Lead with the outcome (the PR link, the answer, the one question you need answered), skip background they already know, and use a short list only when there are real options to pick from. No "What I ran" lists, and no recaps of the thread, including messages synced from GitHub (PR descriptions, reviews and comments, yours too): point at them instead, and say each thing once; the attachments and the PR carry the detail.
 Sound like a teammate in the channel, not a report: plain, direct sentences, the way the people in the thread write, minus their slang. Don't put on a casual voice ("lol", "bro", "fair", memes); match their directness, not their spelling. Start with the answer itself, not a preamble ("Not sure which you mean, so both", "Good question") or a label ("Done:", "Outcome:"). Don't hedge or pile on caveats, and leave out file paths, identifiers and API names unless someone asked where or how something works. End when you've said it: ask a question only when you need the answer to go on. Banter doesn't need an answer; when someone asks you something light, a short, light answer is fine.`;
 
-/** Thread work only: a review's board reply adds what the review lacks, or nothing, so it posts no progress. */
 const PROGRESS = `Each vb reply reaches Slack right away, so you can post several replies in one turn instead of saving everything for the end. When the work will take more than a quick look (cloning, reproducing, running tests, building a fix), before you start, post a one-line reply saying what you're about to do, so people aren't left waiting in silence. On long jobs, post a line when you reach a milestone (reproduced it, found the cause, PR opened), then finish with the outcome as above. A quick answer is just the answer, in one reply.`;
 
 const DIRECTION = `Your initial task is a starting point. People can redirect you in the thread at any time; follow their latest instructions even when they change the task, including fixing code, pushing changes, approving, marking a draft ready, merging, or closing a PR.
@@ -114,37 +89,26 @@ export const INSTRUCTIONS: Record<Task, string> = {
 };
 
 
-/** The tools a thread's sandbox gets besides its harness: vb, gh, and the desktop the computer tool drives. Run as root. */
+/** Sandbox setup, as root. */
 export const TOOLS = `set -e
 command -v pnpm >/dev/null || npm install -g pnpm >/dev/null 2>&1
-# Pinned, and --force, so it takes over a vb that another package installed. If that release
-# isn't on npm yet, a vb already here stays, and a new sandbox gets the latest.
+# --force takes over a vb another package installed.
 [ "$(vb --version 2>/dev/null)" = "${BOARD_VERSION}" ] || npm install -g --force @vercel/board@${BOARD_VERSION} >/dev/null 2>&1 || command -v vb >/dev/null || npm install -g @vercel/board >/dev/null 2>&1
 command -v gh >/dev/null || {
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH}/gh_${GH}_linux_amd64.tar.gz" | tar xz -C /tmp
   install "/tmp/gh_${GH}_linux_amd64/bin/gh" /usr/local/bin/gh
 }
-# For the computer tool and the ui-video skill: a virtual desktop, its keyboard and mouse (XTEST), Chrome, and ffmpeg.
-# The agent can work without them, so a failed install doesn't stop setup; the next turn tries again.
+# The desktop, Chrome and ffmpeg (computer tool, ui-video) are optional.
 command -v Xvfb >/dev/null || dnf install -y -q xorg-x11-server-Xvfb libXtst >/dev/null 2>&1 || true
 command -v ffmpeg >/dev/null || { npm install -g ffmpeg-static@${FFMPEG_STATIC} >/dev/null 2>&1 \
   && ln -sf "$(npm root -g)/ffmpeg-static/ffmpeg" /usr/local/bin/ffmpeg; } || true
 [ "$(agent-browser --version 2>/dev/null)" = "agent-browser ${AGENT_BROWSER}" ] || { npm install -g agent-browser@${AGENT_BROWSER} >/dev/null 2>&1 \
   && HOME=/home/${SANDBOX_USER} agent-browser install --with-deps >/dev/null 2>&1 && chown -R ${SANDBOX_USER}: /home/${SANDBOX_USER}/.agent-browser; } || true`;
 
-/**
- * The preview of Eve's own branch, `board/<thread>`: its branch URL on the factory's preview domain, which spells
- * the branch's `/` as `-`. Eve's network policy gets it past Vercel Authentication. Only this host:
- * `*.playground-vercel.tools` would also hand the bypass secret to every other deployment on that domain.
- */
+/** Eve's branch preview. Only this host gets the bypass secret, not `*.playground-vercel.tools`. */
 export const evePreview = (thread: string) => `vboard-factory-git-board-${thread}.playground-vercel.tools`;
 
-/**
- * The board routes Eve's `vb` calls, as an RE2 regex: discovery, and reading and writing messages, schedules and
- * attachments. Not `/webhooks/*`, which skip board auth and accept any OIDC token for this project, so the board's
- * token there would let the sandbox forge Slack and GitHub events. Not the full-access routes (stuck events, inboxes,
- * raw source reads), identity linking, or anything else on the host, like the docs site.
- */
+/** The board routes `vb` calls. Never `/webhooks/*`, where the board's token could forge Slack and GitHub events. */
 export const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
   "me",
   "channels",
@@ -157,10 +121,7 @@ export const VB_ROUTES = `^${new URL(BOARD).pathname}(/(${[
   "attachments(/uploads)?(/[A-Za-z0-9_-]+)?",
 ].join("|")}))?/?$`;
 
-/**
- * Real credentials on the way out: the deployment's OIDC token, and the factory GitHub App's.
- * On the board's routes, the policy also sets who Eve is, so nothing in the sandbox can post as anyone else.
- */
+/** Real credentials on the way out, and who Eve is on the board. */
 export function policy(
   thread: string,
   tokens: { gateway: string; board: string; github: string },
@@ -170,7 +131,6 @@ export function policy(
   const git = Buffer.from(`x-access-token:${tokens.github}`).toString("base64");
   return {
     allow: {
-      // eve calls the model from its own function; the sandbox's AI Gateway calls are ui-video's voice.
       "ai-gateway.vercel.sh": [
         { transform: [{ headers: { "x-api-key": tokens.gateway, authorization: `Bearer ${tokens.gateway}` } }] },
       ],
@@ -191,7 +151,6 @@ export function policy(
         },
       ],
       ...(bypass ? { [evePreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
-      // gh and git, as the factory GitHub App.
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
       "github.com": [{ transform: [{ headers: { authorization: `Basic ${git}` } }] }],
       "*": [],

@@ -195,7 +195,8 @@ reply in an existing thread rather than starting one.
   over eve's HTTP API as this deployment (`eve.ts`): each thread's task gets one
   eve session, kept in the factory's Redis (`board-factory-eve:*`), and every
   message says which thread it's about. The eve channel (`agent/channels/eve.ts`)
-  takes only this project's OIDC tokens and puts the thread in the turn's auth,
+  takes only this deployment's own OIDC tokens (`runtime`, so a preview of the
+  factory can't drive production Eve) and puts the thread in the turn's auth,
   where Eve's instructions (`agent/instructions/board.ts`, from `harness.ts`) and
   its credentials read it. Each session has its own persistent Vercel Sandbox
   with `vb`, `gh`, and git, set up once at build into a snapshot
@@ -204,9 +205,9 @@ reply in an existing thread rather than starting one.
   with each, so an old `factory-12` or `pi/12` belongs to another #12, and the
   watchers that read a PR's branch (`owner`, `crosspost`, `autoland`) read only
   `board/`. Its credentials are placeholders that the sandbox's network policy
-  swaps for real ones on the way out (`agent/lib/credentials.ts`): handed over
-  when a turn starts, and again before a `bash` call once they're within 15m of
-  dying (`stale` in `tokens.ts`). The OIDC tokens die with the function's own,
+  swaps for real ones on the way out (`agent/lib/credentials.ts`): put in place
+  with git's identity at every turn's start, and again before a `bash` call when
+  they're within 15m of dying or eve swapped in a new sandbox (`stale` in `tokens.ts`). The OIDC tokens die with the function's own,
   which Vercel reuses for 90 of its 120 minutes, and GitHub's are asked for with
   30m left, so a long turn renews them as it goes. The policy also pins who Eve
   is on the board (a profile named for the thread, like `clever-lemur-1956`, and

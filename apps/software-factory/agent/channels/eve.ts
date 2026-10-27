@@ -1,15 +1,14 @@
-import { localDev, vercelOidc } from "eve/channels/auth";
+import { localDev, vercelOidc, type AuthFn } from "eve/channels/auth";
 import { defaultEveAuth, eveChannel } from "eve/channels/eve";
-import { boardFrom } from "../lib/board";
+import { boardFrom, sameDeployment } from "../lib/board";
 
-// Only this deployment's board watchers talk to the agent: `vercelOidc()` takes this project's own tokens and no
-// one else's. Each message says which thread it's about; that goes into the turn's auth, where the sandbox's
-// credentials (`hooks/credentials.ts`) and the instructions (`instructions/board.ts`) read it, and out of what the
-// model sees.
+const oidc = vercelOidc();
+const watchers: AuthFn = async (request) => sameDeployment((await oidc(request)) as never);
+
 export default eveChannel({
-  auth: [vercelOidc(), localDev()],
-  // A message that lands mid-turn steers it: Eve sees it at its next step instead of after the turn.
+  auth: [watchers, localDev()],
   turnPolicy: "steer",
+  // The thread goes into the turn's auth, where tools, hooks and instructions read it, and not to the model.
   onMessage(ctx) {
     const auth = defaultEveAuth(ctx);
     const board = boardFrom(ctx.eve.clientContext);

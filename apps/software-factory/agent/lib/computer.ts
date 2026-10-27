@@ -1,8 +1,5 @@
 import { SANDBOX_USER } from "../../app/api/board/[[...path]]/harness.ts";
 
-// What one computer call (`tools/computer.ts`) runs in the sandbox.
-
-/** Where the computer tool's mouse and keyboard driver goes in the sandbox (`sandbox.ts` puts it there). */
 export const XINPUT = `/home/${SANDBOX_USER}/.computer/xinput.py`;
 
 const DISPLAY = ":99";
@@ -33,7 +30,6 @@ function need<T>(value: T | undefined, what: string, action: string): T {
   return value;
 }
 
-/** The shell script one call runs in the sandbox: start the desktop if it's down, caption, act, settle, screenshot. */
 export function script(p: ComputerInput) {
   const xy = () => [Math.round(need(p.x, "x", p.action)), Math.round(need(p.y, "y", p.action))];
   const input = (...args: (string | number)[]) => `python3 ${XINPUT} ${args.map(q).join(" ")}`;
@@ -43,8 +39,7 @@ export function script(p: ComputerInput) {
       break;
     case "open":
       act = p.url
-        ? // One Chrome per desktop: opening again adds a tab to it.
-          `chrome=$(ls -d ${HOME}/.agent-browser/browsers/chrome-*/ 2>/dev/null | sort | tail -1)
+        ?           `chrome=$(ls -d ${HOME}/.agent-browser/browsers/chrome-*/ 2>/dev/null | sort | tail -1)
 [ -n "$chrome" ] || { echo "no Chrome: run agent-browser install" >&2; exit 1; }
 setsid "$chrome/chrome" --no-first-run --no-default-browser-check --disable-search-engine-choice-screen --disable-infobars \\
   --user-data-dir=${HOME}/.computer-chrome --window-position=0,0 --window-size=${WIDTH},${HEIGHT} ${q(p.url)} >/dev/null 2>&1 < /dev/null &

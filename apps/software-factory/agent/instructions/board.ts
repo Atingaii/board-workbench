@@ -3,7 +3,6 @@ import { defineInstructions } from "eve/instructions";
 import { INSTRUCTIONS, eveName } from "../../app/api/board/[[...path]]/harness.ts";
 import { boardOf } from "../lib/board";
 
-// Eve's instructions for the session's task, word for word, and which thread's agent it is.
 export default defineDynamic((ctx) => {
   const board = boardOf(ctx.session);
   if (!board) return null;

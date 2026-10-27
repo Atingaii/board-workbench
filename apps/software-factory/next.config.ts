@@ -7,5 +7,4 @@ const config: NextConfig = {
   rewrites: async () => [{ source: "/:path((?!api/).+)\\.md", destination: "/raw/:path" }],
 };
 
-// Pi, the eve agent in `agent/`, at /eve/v1: the board's watchers send it each thread's work (`eve.ts`).
 export default withEve(config);

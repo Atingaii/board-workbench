@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { memory, sendToEve } from "../app/api/board/[[...path]]/eve.ts";
-import { boardFrom, boardOf } from "../agent/lib/board.ts";
+import { boardFrom, boardOf, sameDeployment } from "../agent/lib/board.ts";
 import { script } from "../agent/lib/computer.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -111,6 +111,14 @@ test("boardFrom and boardOf: a session knows its thread from the turn's auth, or
     { task: "thread", thread: "900" },
   );
   assert.equal(boardOf({ auth: { current: auth({}), initiator: null } }), null);
+});
+
+test("sameDeployment: only this deployment's own watchers reach Eve, not a preview's token for the same project", () => {
+  const runtime = { principalType: "runtime", principalId: "vercel:project:prj:production" };
+  assert.equal(sameDeployment(runtime), runtime);
+  assert.equal(sameDeployment({ principalType: "service", principalId: "vercel:project:prj:preview" }), null);
+  assert.equal(sameDeployment({ principalType: "user" }), null);
+  assert.equal(sameDeployment(null), null);
 });
 
 test("computer: each call starts the desktop if it's down, then acts and screenshots, with text reaching the shell as data", () => {

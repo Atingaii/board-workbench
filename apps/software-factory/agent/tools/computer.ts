@@ -2,9 +2,6 @@ import { defineTool, toolOutput, toolOutputPart } from "eve/tools";
 import { z } from "zod";
 import { ACTIONS, HEIGHT, script, SHOT, WIDTH } from "../lib/computer";
 
-// Computer use, the way Codex does it: one tool that does one action on the sandbox's virtual desktop (Xvfb) per
-// call, driven from eve's function, and returns a screenshot. While ui-video records, each call's title is the caption.
-
 export default defineTool({
   description: `Use a virtual ${WIDTH}x${HEIGHT} desktop like a person: see it, click, type. Each call does one action and returns a screenshot of the screen afterwards, so look at it before the next action. Coordinates are pixels from the top-left of that screenshot.
 Actions: screenshot; open (url: opens it in Chrome, or command: starts a program on the desktop); click, double_click, right_click, move (x, y); drag (x, y to to_x, to_y); type (text, into whatever has focus: click the field first); key (keys, like "Return", "ctrl+l", "shift+Tab", several separated by spaces); scroll (x, y, amount: wheel clicks, positive down); wait (seconds).
