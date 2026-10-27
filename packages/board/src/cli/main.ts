@@ -1015,22 +1015,28 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'tail': {
       const controller = new AbortController()
-      process.once('SIGINT', () => controller.abort())
-      for await (const event of client().events(
-        { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
-        { signal: controller.signal },
-      ))
-        printEvent(event)
+      // Its handler goes when it's done: inside another CLI, the process goes on, and Ctrl-C should stop it.
+      const stop = () => controller.abort()
+      process.once('SIGINT', stop)
+      try {
+        for await (const event of client().events(
+          { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+          { signal: controller.signal },
+        ))
+          printEvent(event)
+      } finally {
+        process.off('SIGINT', stop)
+      }
       return 0
     }
 
     case 'wait': {
       const controller = new AbortController()
-      process.once('SIGINT', () => controller.abort())
-      const event = await client().wait(filters(args[0]), {
-        timeout: flags.timeout ?? '30m',
-        signal: controller.signal,
-      })
+      const stop = () => controller.abort()
+      process.once('SIGINT', stop)
+      const event = await client()
+        .wait(filters(args[0]), { timeout: flags.timeout ?? '30m', signal: controller.signal })
+        .finally(() => process.off('SIGINT', stop))
       if (!event) {
         if (!controller.signal.aborted) process.stderr.write('timed out\n')
         return 124

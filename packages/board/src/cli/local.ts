@@ -7,11 +7,16 @@ import { startInspector } from '../inspect/server.ts'
 import type { Command, CommandContext } from './main.ts'
 import { who } from './format.ts'
 
-/** Until Ctrl-C or a SIGTERM. */
+/** Until Ctrl-C or a SIGTERM, whichever comes first: then neither is listened for. */
 const stopped = () =>
   new Promise<void>((resolve) => {
-    process.once('SIGINT', resolve)
-    process.once('SIGTERM', resolve)
+    const done = () => {
+      process.off('SIGINT', done)
+      process.off('SIGTERM', done)
+      resolve()
+    }
+    process.once('SIGINT', done)
+    process.once('SIGTERM', done)
   })
 
 const inspect: Command = {

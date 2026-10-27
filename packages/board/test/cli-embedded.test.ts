@@ -1,4 +1,5 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { build } from 'tsdown'
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../src/cli/embedded.ts'
 import { main } from '../src/cli/main.ts'
 import { local } from '../src/cli/local.ts'
+import { env, url, useBoard } from './cli-harness.ts'
 
 /** What `run` printed, and the exit code it answered. */
 async function capture(run: () => Promise<number>) {
@@ -52,6 +54,8 @@ async function bundled(entry: string): Promise<string> {
 }
 
 describe('the embedded CLI', () => {
+  useBoard()
+
   afterEach(() => {
     vi.unstubAllEnvs()
   })
@@ -90,8 +94,13 @@ describe('the embedded CLI', () => {
     expect(help.stdout).toContain('(or --handle)\n\nfilters:')
   })
 
-  it('takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN', async () => {
+  it("takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN, never a token cached for someone else's", async () => {
     const home = await isolated()
+    // A token `vercel login`'s account minted for this board, cached as board caches them.
+    const tokens = join(home, 'board', 'tokens')
+    await mkdir(tokens, { recursive: true })
+    const audience = 'https://board.example/api/board'
+    await writeFile(join(tokens, `${createHash('sha256').update(audience).digest('hex').slice(0, 32)}.json`), JSON.stringify({ token: 'someone-elses', expiresAt: Date.now() + 3_600_000, name: null, avatar: null }))
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'vca_from_the_vercel_cli')
     vi.stubEnv('BOARD_URL', 'https://board.example/api/board')
     const asked: string[] = []
@@ -109,6 +118,19 @@ describe('the embedded CLI', () => {
     }
     expect(asked.filter((line) => line.startsWith('https://api.vercel.com/')).every((line) => line.endsWith('Bearer vca_from_the_vercel_cli'))).toBe(true)
     expect(asked.some((line) => line.startsWith('https://api.vercel.com/'))).toBe(true)
+  })
+
+  it('leaves no Ctrl-C handler behind once wait or tail is done, since the process it runs in goes on', async () => {
+    await isolated()
+    vi.stubEnv('BOARD_URL', url)
+    vi.stubEnv('BOARD_TOKEN', env.BOARD_TOKEN)
+    const before = process.listenerCount('SIGINT')
+    const app = createApp({ appName: 'vercel board' })
+    expect((await capture(() => app.run(['wait', 'quiet', '--timeout', '1s']))).code).toBe(124)
+    // No board answers there, so tail fails before it reads anything.
+    vi.stubEnv('BOARD_URL', url.replace(/\/api\/board$/, '/nowhere'))
+    expect((await capture(() => app.run(['tail', 'quiet']))).code).toBe(1)
+    expect(process.listenerCount('SIGINT')).toBe(before)
   })
 
   it('never brings the inspector, serve, or A2 into an app that bundles it', async () => {

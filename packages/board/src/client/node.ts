@@ -122,8 +122,15 @@ const expiry = (token: string): number => {
 
 type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
 
-const cacheFile = (audience: string) =>
-  join(configDir(), 'tokens', `${createHash('sha256').update(audience).digest('hex').slice(0, 32)}.json`)
+/**
+ * Where `audience`'s token is cached: one per board, and with a login the Vercel CLI hands over
+ * (`VERCEL_AUTH_TOKEN`), one per login too, since it can be someone else's than `vercel login`'s.
+ */
+const cacheFile = (audience: string) => {
+  const login = process.env.VERCEL_AUTH_TOKEN
+  const key = login ? `${audience}\n${login}` : audience
+  return join(configDir(), 'tokens', `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
+}
 
 async function readCache(audience: string): Promise<Cached | null> {
   try {
