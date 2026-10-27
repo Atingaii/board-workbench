@@ -54,7 +54,8 @@ token   expires in 11h 42m
 
 ### Boards behind Deployment Protection
 
-Many teams protect production with Vercel Authentication. The CLI and
+Many teams protect production with Vercel Authentication or Vercel Connect
+passport. The CLI and
 `board()` in Node get through the way `vercel curl` does: with your
 `vercel login`, they find the board's project from its host, read its
 Protection Bypass for Automation (creating one if the project has none, and

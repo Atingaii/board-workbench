@@ -30,11 +30,12 @@ const OWN_HOSTS = ['VERCEL_URL', 'VERCEL_BRANCH_URL', 'VERCEL_PROJECT_PRODUCTION
 
 /**
  * A board behind Vercel Authentication (a 302 to vercel.com/sso-api without the
- * secret), and the slice of the Vercel API `vercel curl` uses to get through:
- * the host is a deployment in one of your teams, not your own scope.
+ * secret), or Vercel Connect passport (a fetch gets Vercel's own 401), and the
+ * slice of the Vercel API `vercel curl` uses to get through: the host is a
+ * deployment in one of your teams, not your own scope.
  */
 function protectedBoard(
-  options: { bypass?: Record<string, { scope: string }>; canCreate?: boolean; canRead?: boolean; page?: boolean } = {},
+  options: { bypass?: Record<string, { scope: string }>; canCreate?: boolean; canRead?: boolean; page?: boolean; passport?: boolean } = {},
 ) {
   const board = testBoard()
   let bypass = options.bypass ?? {}
@@ -53,8 +54,9 @@ function protectedBoard(
         return Response.json({ projectId: 'prj_board', ownerId: 'team_board' })
       if (url.pathname === '/v9/projects/prj_board' && team === 'team_board') {
         if (options.canRead === false) return Response.json({ error: { code: 'forbidden' } }, { status: 403 })
-        const sso = options.page ? null : { deploymentType: 'all_except_custom_domains' }
-        return Response.json({ id: 'prj_board', name: 'board', protectionBypass: bypass, ssoProtection: sso, passwordProtection: null })
+        const sso = options.page || options.passport ? null : { deploymentType: 'all_except_custom_domains' }
+        const passport = options.passport ? { connectorId: 'scl_board', deploymentType: 'all' } : null
+        return Response.json({ id: 'prj_board', name: 'board', protectionBypass: bypass, ssoProtection: sso, passwordProtection: null, passport })
       }
       if (url.pathname === '/v1/projects/prj_board/protection-bypass' && request.method === 'PATCH' && team === 'team_board') {
         if (options.canCreate === false) return Response.json({ error: { code: 'forbidden' } }, { status: 403 })
@@ -66,6 +68,12 @@ function protectedBoard(
     sent.push(request.headers.get('x-vercel-protection-bypass'))
     // A plain website, not a board: an HTML page whatever you send.
     if (options.page) return new Response('<!DOCTYPE html><h1>Welcome</h1>', { headers: { 'content-type': 'text/html' } })
+    // Passport redirects only a page load (`sec-fetch-mode: navigate`); Node's fetch says `cors`.
+    if (options.passport && request.headers.get('x-vercel-protection-bypass') !== SECRET)
+      return new Response('You must sign in\n\nUNAUTHORIZED\n', {
+        status: 401,
+        headers: { 'content-type': 'text/plain; charset=utf-8', 'x-vercel-error': 'UNAUTHORIZED' },
+      })
     if (request.headers.get('x-vercel-protection-bypass') !== SECRET)
       return new Response('Protected by Vercel Authentication', {
         status: 302,
@@ -304,6 +312,16 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
     expect((await client.discovery()).url).toBe(BOARD_URL)
     expect(api).toContain('PATCH /v1/projects/prj_board/protection-bypass?teamId=team_board')
+    expect(stderr).toHaveBeenCalledWith('created a Protection Bypass for Automation on the Vercel project board\n')
+  })
+
+  it("gets through Vercel Connect passport's 401 with the project's bypass, creating it when there's none", async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const { fetch, api, sent } = protectedBoard({ passport: true })
+    const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
+    expect((await client.discovery()).url).toBe(BOARD_URL)
+    expect(api).toContain('PATCH /v1/projects/prj_board/protection-bypass?teamId=team_board')
+    expect(sent).toEqual([null, SECRET])
     expect(stderr).toHaveBeenCalledWith('created a Protection Bypass for Automation on the Vercel project board\n')
   })
 

@@ -476,13 +476,14 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
 }
 
 /**
- * One request that recognizes the wall: a redirect to `/sso-api`, or an HTML
+ * One request that recognizes the wall: a redirect to `/sso-api`, an HTML
  * page where the board answers JSON (on SAML teams, the redirects end at the
- * IdP's login page with a 200). Only a 2xx, 401, or 403 HTML page counts, so a
- * 404 page keeps its own error; attachments, which may be HTML, come with a
- * `content-disposition`. Other redirects of a GET or HEAD are followed as fetch
- * would, dropping the token and bypass secret on the way to another origin; a
- * redirected POST comes back as its 3xx.
+ * IdP's login page with a 200), or Vercel's own 401 (`x-vercel-error`, which
+ * Vercel Connect passport answers a fetch with). Only a 2xx, 401, or 403 HTML
+ * page counts, so a 404 page keeps its own error; attachments, which may be
+ * HTML, come with a `content-disposition`. Other redirects of a GET or HEAD
+ * are followed as fetch would, dropping the token and bypass secret on the way
+ * to another origin; a redirected POST comes back as its 3xx.
  */
 async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: RequestInit, bypass: string | null): Promise<Response> {
   let target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
@@ -510,6 +511,8 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
     const { status } = response
     const page = /^text\/html\b/i.test(response.headers.get('content-type') ?? '') && !response.headers.has('content-disposition')
     if (page && ((status >= 200 && status < 300) || status === 401 || status === 403)) throw new Wall(status)
+    // The board's own 401 has no `x-vercel-error`: Vercel sets it only on errors it answers itself.
+    if (status === 401 && response.headers.has('x-vercel-error')) throw new Wall(status)
     return response
   }
 }
@@ -567,13 +570,14 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
     protectionBypass?: Bypasses
     ssoProtection?: unknown
     passwordProtection?: unknown
+    passport?: unknown
   } | null
   // Without the project's settings, creating could add a second bypass.
   if (!details) throw blocked("can't read its project's settings: ask for access")
   const existing = automationBypass(details.protectionBypass)
   if (existing) return { secret: existing, created: false }
   // An HTML page from an unprotected project isn't a wall: it isn't a board, so nothing gets created.
-  if (!details.ssoProtection && !details.passwordProtection)
+  if (!details.ssoProtection && !details.passwordProtection && !details.passport)
     throw new BoardError('no_board', `no board at ${url}: it answered with a web page, and its Vercel project isn't protected`, 0)
   const created = (await api('PATCH', `/v1/projects/${project.projectId}/protection-bypass${scope}`)) as { protectionBypass?: Bypasses } | null
   const secret = automationBypass(created?.protectionBypass)
