@@ -207,7 +207,8 @@ reply in an existing thread rather than starting one.
   `board/`. Its credentials are placeholders that the sandbox's network policy
   swaps for real ones on the way out (`agent/lib/credentials.ts`): put in place
   with git's identity at every turn's start, and again before a `bash` call when
-  they're within 15m of dying or eve swapped in a new sandbox (`stale` in `tokens.ts`). The OIDC tokens die with the function's own,
+  they're within 15m of dying (`stale` in `tokens.ts`). A sandbox eve recreates is
+  found at a turn's start, so it gets them then. The OIDC tokens die with the function's own,
   which Vercel reuses for 90 of its 120 minutes, and GitHub's are asked for with
   30m left, so a long turn renews them as it goes. The policy also pins who Eve
   is on the board (a profile named for the thread, like `clever-lemur-1956`, and

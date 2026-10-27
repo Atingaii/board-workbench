@@ -9,12 +9,10 @@ test("expiresAt: a JWT's exp, in milliseconds", () => {
   assert.equal(expiresAt(`e30.${payload}.sig`), 1_791_394_851_000);
 });
 
-test("stale: a sandbox gets new tokens in their last minutes, or when it's a sandbox they didn't go to", () => {
+test("stale: a sandbox's tokens are replaced in their last minutes, or when it has none, and not before", () => {
   const now = Date.now();
   // A function's token reused for 90 of its 120 minutes: 30 left, so a long turn replaces it 15 in.
-  assert.equal(stale(now + 30 * MIN, "sbx_1", "sbx_1", now), false);
-  assert.equal(stale(now + 30 * MIN, "sbx_1", "sbx_1", now + 30 * MIN - REFRESH_LEAD_MS), true);
-  assert.equal(stale(0, "", "sbx_1", now), true);
-  // eve replaced the sandbox: the new one starts on deny-all.
-  assert.equal(stale(now + 60 * MIN, "sbx_1", "sbx_2", now), true);
+  assert.equal(stale(now + 30 * MIN, now), false);
+  assert.equal(stale(now + 30 * MIN, now + 30 * MIN - REFRESH_LEAD_MS), true);
+  assert.equal(stale(0, now), true);
 });

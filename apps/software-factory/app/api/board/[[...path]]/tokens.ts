@@ -5,6 +5,5 @@ export function expiresAt(jwt: string) {
   return JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64url").toString()).exp * 1000;
 }
 
-/** Whether a sandbox needs new tokens: they're near their end, or it isn't the sandbox they went to. */
-export const stale = (until: number, had: string, sandbox: string, now: number) =>
-  had !== sandbox || until - REFRESH_LEAD_MS <= now;
+/** Whether tokens that die at `until` are near their end. */
+export const stale = (until: number, now: number) => until - REFRESH_LEAD_MS <= now;

@@ -12,14 +12,13 @@ import type { Board } from "./board";
 const GITHUB_MS = 30 * 60_000;
 const GIT_EMAIL = "pi@vboard-factory.playground-vercel.tools";
 
-const given = defineState("factory.credentials", () => ({ until: 0, sandbox: "" }));
+const given = defineState("factory.credentials", () => ({ until: 0 }));
 
-/** Puts fresh tokens and git's identity in the sandbox: always with `force`, else when they're near their end or it's a new sandbox. */
+/** Puts fresh tokens and git's identity in the sandbox: always with `force` (each turn's start, which also covers a sandbox eve recreated), else when they're near their end. */
 export async function give(ctx: Pick<ToolContext, "getSandbox">, board: Board, { force = false } = {}) {
-  const sandbox = await ctx.getSandbox(environment);
   const now = Date.now();
-  const { until, sandbox: had } = given.get();
-  if (!force && !stale(until, had, sandbox.name, now)) return;
+  if (!force && !stale(given.get().until, now)) return;
+  const sandbox = await ctx.getSandbox(environment);
   const [{ getToken }, { getVercelOidcToken }] = await Promise.all([import("@vercel/connect"), import("@vercel/oidc")]);
   const [gateway, boardToken, github] = await Promise.all([
     getVercelOidcToken(),
@@ -32,5 +31,5 @@ export async function give(ctx: Pick<ToolContext, "getSandbox">, board: Board, {
     command: `git config --global user.name ${JSON.stringify(eveName(board.thread))} && git config --global user.email ${GIT_EMAIL}`,
   });
   if (git.exitCode !== 0) throw new Error(`git config failed: ${git.stderr.slice(-300)}`);
-  given.update(() => ({ until: Math.min(expiresAt(gateway), expiresAt(boardToken), now + GITHUB_MS), sandbox: sandbox.name }));
+  given.update(() => ({ until: Math.min(expiresAt(gateway), expiresAt(boardToken), now + GITHUB_MS) }));
 }
