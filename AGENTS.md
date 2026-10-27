@@ -223,6 +223,22 @@ reply in an existing thread rather than starting one.
   has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
   branch's first commit if it has none yet.
   `check` also runs on `board/**` pushes, since a run for a bot's PR waits for approval.
+- The eve agent (`apps/software-factory/agent/`, mounted at `/eve/v1` by
+  `withEve` in `next.config.ts`) is the same agent on eve's harness, behind a
+  flag: `FACTORY_EVE_FROM=<thread id>` sends that thread and every later one to
+  it (`eve.ts` beside the board route), and leaves threads Pi already has with
+  Pi. Unset, nothing changes. Pi's instructions, name, model and skills carry
+  over (`harness.ts` holds what both share; `agent/skills` links to `skills/`).
+  Each thread's task gets one eve session, kept in the factory's Redis
+  (`board-factory-eve:*`), and every message says which thread it's about: the
+  eve channel puts that in the turn's auth, where the instructions and the
+  credentials read it. The sandbox is eve's Vercel Sandbox, set up once at build
+  into a snapshot (`agent/sandbox.ts`). Its network policy is Pi's plus
+  `github.com`: git goes through the `github/vboard-factory` connector's token,
+  not Sandbox git credentials, since eve owns the sandbox. Credentials are
+  handed over when a turn starts and again before a `bash` call once they're
+  within 15m of dying, so there's no timer. The computer tool runs the same
+  desktop from eve's function, and eve's subagent tool is off.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments` (`fsBlob()`). Pi attaches a screenshot to the reply
