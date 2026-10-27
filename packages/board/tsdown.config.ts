@@ -28,6 +28,7 @@ export default defineConfig([
       'sync-github': 'src/sync/github.ts',
       'sync-kapso': 'src/sync/kapso.ts',
       'sync-linear': 'src/sync/linear.ts',
+      format: 'src/format/index.ts',
       cli: 'src/cli/main.ts',
     },
     format: 'esm',

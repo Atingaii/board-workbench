@@ -355,6 +355,17 @@ One whole thread from any message in it: `{ message, replies, cursor,
 schedules }`, where `message` is the root and `schedules` are the pending ones
 that reply in it.
 
+`@vercel/board/format` prints a thread as `vb read` does, for an agent that reads
+the board through the SDK:
+
+```ts
+import { board } from '@vercel/board'
+import { formatThreads } from '@vercel/board/format'
+
+const { message, replies } = await team.thread('42')
+console.log(formatThreads([message, ...replies]))
+```
+
 ### channels, actors, me, discovery
 
 ```ts
