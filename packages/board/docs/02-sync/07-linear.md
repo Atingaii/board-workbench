@@ -51,28 +51,30 @@ in the map stays off the board, except threads someone syncs by hand.
 2. **Comments** arrive as replies. A reply to a comment stays in that comment's
    thread on Linear, and a board reply to one goes back into it. Edits and
    deletes sync too.
-3. **Moving the issue** to another state updates `state`. A new title edits the
-   root to say it.
+3. **Moving the issue** to another state updates `state`, and to another team
+   keeps the same thread. A new title edits a root that Linear opened to say it.
 4. **A root posted on the board** in a mirrored channel opens an issue in that
    team. Its first line is the title, and the whole message is the description.
-   Editing the root edits the description; deleting it on the board leaves the
-   issue open on Linear.
+   Editing the root edits the description. Deleting it on the board leaves the
+   issue open on Linear, and a new title on Linear leaves the root as written.
 
 | Thing | ID |
 | --- | --- |
 | A team, the channel | `linear:ENG` |
-| An issue | `linear:ENG:<issueId>` |
-| A comment thread, grouped under its issue | `linear:ENG:<issueId>:c:<commentId>` |
+| An issue | `linear:issue:<issueId>` |
+| A comment thread, grouped under its issue | `linear:issue:<issueId>:c:<commentId>` |
 
-`<issueId>` is the issue's UUID, which stays the same when the issue is renamed. A
-comment thread isn't a sync target: sync its issue.
+`<issueId>` is the issue's UUID, which stays the same when the issue moves teams
+or is renamed. To sync a thread by hand, name the issue by its identifier, its
+UUID, or its ID: `vb sync 812 linear:ENG-123`. A comment thread isn't a sync
+target: sync its issue.
 
 ## Events
 
 | Event | What the mirror does |
 | --- | --- |
 | `issue.created` | A root labeled `issue=ENG-123` and `state=<type>` |
-| `issue.updated` | A new state sets `state`; a new title edits the root. Other changes write nothing |
+| `issue.updated` | A new state sets `state`; a new title edits a root Linear opened. Other changes write nothing |
 | `comment` | A reply. Edits and deletes sync too |
 
 `state` is the workflow state's type: `triage`, `backlog`, `unstarted`,
@@ -88,19 +90,36 @@ A comment on an issue that opened before you mapped its team still lands: the
 board fetches the issue through Linear's API, creates its root, then posts the
 comment as a reply.
 
+## Reactions
+
+A reaction on the board goes to its comment on Linear, while it's added: Linear
+reacts to comments, not issues, and the adapter can't take one back. Reactions
+on Linear stay there, since Linear's reaction webhooks don't say which issue
+they're on.
+
 ## Setup
 
 1. Create a Linear app (**Settings > API > Applications**), through Vercel
    Connect or by hand, with the `read`, `write`, `comments:create`, and
-   `issues:create` scopes.
+   `issues:create` scopes, installed as the app (`actor=app`).
 2. Subscribe its webhook to **Issues** and **Comments**, for the teams you map.
 3. Point the webhook at `https://<host>/api/board/webhooks/linear`: Connect's
    trigger path, or the app's webhook URL with its signing secret.
 
-Without Connect, pass your own adapter, in its default `comments` mode:
+Without Connect, pass your own adapter, in its default `comments` mode, with the
+app's own credentials:
 
 ```ts
 // in board({ sync: { … } }):
 // import { createLinearAdapter } from '@chat-adapter/linear'
-linear({ adapter: createLinearAdapter({ apiKey: process.env.LINEAR_API_KEY!, webhookSecret: process.env.LINEAR_WEBHOOK_SECRET! }) }, teams({ ENG: 'dev' })),
+linear({
+  adapter: createLinearAdapter({
+    clientCredentials: { clientId: process.env.LINEAR_CLIENT_ID!, clientSecret: process.env.LINEAR_CLIENT_SECRET! },
+    webhookSecret: process.env.LINEAR_WEBHOOK_SECRET!,
+  }),
+}, teams({ ENG: 'dev' })),
 ```
+
+> [!WARNING]
+> The adapter takes the token's user for itself and skips what they write. With a
+> personal API key, that's you: your own comments never reach the board.
