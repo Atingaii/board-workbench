@@ -1,7 +1,7 @@
 import type { Task } from "./harness.ts";
 
 // Pi, the eve agent (`agent/` in this app, mounted at /eve/v1 by `withEve`). Each thread's task gets one durable eve session; this file finds it, or starts it, and sends it the message.
-// eve queues a message behind a running turn (the eve channel's `turnPolicy: "queue"`), so there's no lock here.
+// A message that lands mid-turn steers that turn (the eve channel's `turnPolicy: "steer"`), so there's no lock here.
 
 /** What the eve agent is told: who it works for travels with each message, so its hooks and instructions know. */
 export type EveMessage = { task: Task; thread: string; key: string; message: string };

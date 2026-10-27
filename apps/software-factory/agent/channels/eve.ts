@@ -8,8 +8,8 @@ import { boardFrom } from "../lib/board";
 // model sees.
 export default eveChannel({
   auth: [vercelOidc(), localDev()],
-  // A message waits for the turn before it; news piling up behind one turn joins into the next, as with Pi.
-  turnPolicy: "queue",
+  // A message that lands mid-turn steers it: Pi sees it at its next step instead of after the turn.
+  turnPolicy: "steer",
   onMessage(ctx) {
     const auth = defaultEveAuth(ctx);
     const board = boardFrom(ctx.eve.clientContext);

@@ -173,9 +173,9 @@ reply in an existing thread rather than starting one.
   its clone (deepsec only fails on net-new findings, so reused state could look
   clean). Pi reacts `:secure:` only when deepsec exits 0. On a thread that isn't
   a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
-  Messages wait behind a running turn (the eve channel's `turnPolicy: "queue"`),
-  and ones piled up there join into one turn, since Pi reads what's new itself:
-  a burst of replies costs one turn, not one each. Each message is sent once
+  A message that lands during a turn steers it (the eve channel's
+  `turnPolicy: "steer"`): Pi sees it at its next step, and a burst of replies
+  costs no extra turns. Each message is sent once
   (`told:` keys in `eve.ts`). A message that can't reach Pi is
   tried 3 times, then the watcher replies "Pi couldn't start" in the thread
   instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
