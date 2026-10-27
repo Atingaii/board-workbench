@@ -533,7 +533,7 @@ core
 
 watchers
   passed   matches a registered tail, hands the match to a pull, and takes its ack
-  passed   wakes by path only where its discovery says so
+  passed   wakes by path only where its discovery says so, and only a Vercel project
 
 sync
   passed   keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced

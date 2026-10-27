@@ -1,4 +1,4 @@
-import type { MessageView } from '../api/routes.ts'
+import type { MessageView, RegistrationView } from '../api/routes.ts'
 import { BoardError } from '../client/client.ts'
 import type { Board } from '../server/board.ts'
 
@@ -52,6 +52,11 @@ async function rejects(attempt: Promise<unknown>, status: number, code: string, 
     throw new Mismatch(`${what}: expected ${status} ${code}, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
   }
   throw new Mismatch(`${what}: expected ${status} ${code}, and it succeeded`)
+}
+
+/** Where a registration is woken, to put back after a check replaces it: its path on a board that wakes by path, or its url. */
+function wokenAt(registered: RegistrationView | undefined): { url: string | null } | { path: string } {
+  return registered?.path ? { path: registered.path } : { url: registered?.url ?? null }
 }
 
 /** An ID or cursor as the protocol shapes them: a string of 1 to 128 characters. */
@@ -288,7 +293,7 @@ const CHECKS: Check[] = [
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, and checking would replace them'
       // Nothing's woken while it checks, and an empty one gets back where it's woken after.
-      const url = registered?.url ?? null
+      const where = wokenAt(registered)
       await ctx.board.register({ url: null, watch: { conformance: { tail: `${ctx.channel} --label conformance=${ctx.labels.conformance}` } } })
       try {
         const message = await post(ctx, 'conformance: for a watcher')
@@ -300,29 +305,30 @@ const CHECKS: Check[] = [
         await ctx.board.ack(match.id, { lease: match.lease })
         await rejects(ctx.board.ack(match.id, { lease: match.lease }), 404, 'no_match', 'acking a match twice')
       } finally {
-        await ctx.board.register({ url, watch: {} })
+        await ctx.board.register({ ...where, watch: {} })
       }
     },
   },
   {
     group: 'watchers',
-    name: 'wakes by path only where its discovery says so',
+    name: 'wakes by path only where its discovery says so, and only a Vercel project',
     run: async (ctx) => {
-      // Refused, a path replaces nothing, so this half runs whatever the token has registered.
-      if (!(await ctx.board.discovery()).wake_by_path) {
-        await rejects(ctx.board.register({ path: '/conformance', watch: {} }), 501, 'no_wake_by_path', 'a path, on a board that wakes only urls')
-        return
-      }
+      // Even a refusal can replace them: a board that doesn't know `path` reads one as a registration with nothing in it.
       const registered = (await ctx.board.watchers()).find((r) => r.owner === ctx.me.principal)
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, and checking would replace them'
-      const url = registered?.url ?? null
+      const where = wokenAt(registered)
+      const attempt = () => ctx.board.register({ path: '/conformance', watch: {} })
       try {
-        const view = await ctx.board.register({ path: '/conformance', watch: {} })
-        same(view.path, '/conformance', "the registration's path")
-        same(view.url, null, "the registration's url")
+        if (!(await ctx.board.discovery()).wake_by_path) await rejects(attempt(), 501, 'no_wake_by_path', 'a path, on a board that wakes only urls')
+        else if (!ctx.me.principal.startsWith('vercel:project:')) await rejects(attempt(), 403, 'not_a_project', "a path, from a token that isn't a Vercel project's")
+        else {
+          const view = await attempt()
+          same(view.path, '/conformance', "the registration's path")
+          same(view.url, null, "the registration's url")
+        }
       } finally {
-        await ctx.board.register({ url, watch: {} })
+        await ctx.board.register({ ...where, watch: {} })
       }
     },
   },
@@ -339,7 +345,7 @@ const CHECKS: Check[] = [
       const registered = (await ctx.board.watchers()).find((registration) => registration.owner === ctx.me.principal)
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, which registering would replace'
-      const url = registered?.url ?? null
+      const where = wokenAt(registered)
       try {
         await ctx.board.register({ url: null, watch: {}, sync: [{ key, platform: key }] })
       } catch (error) {
@@ -354,7 +360,7 @@ const CHECKS: Check[] = [
           id: `conformance-sync-${ctx.labels.conformance}`,
         })
       } catch (error) {
-        await ctx.board.register({ url, watch: {} }).catch(() => {})
+        await ctx.board.register({ ...where, watch: {} }).catch(() => {})
         if (error instanceof BoardError && error.status === 403) return `this token can't sync in ${ctx.channel}`
         throw error
       }
@@ -392,7 +398,7 @@ const CHECKS: Check[] = [
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin }).catch(() => {})
         // And a second root, on a board that took one.
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin: { thread, message: '3' } }).catch(() => {})
-        await ctx.board.register({ url, watch: {} }).catch(() => {})
+        await ctx.board.register({ ...where, watch: {} }).catch(() => {})
       }
     },
   },

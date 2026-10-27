@@ -181,7 +181,8 @@ export const RegisterBody = z
     /**
      * Where to wake the caller on its own Vercel project, on a board whose discovery says
      * `wake_by_path`. The board takes the project and environment from the caller's token and
-     * finds the deployment, so a project can only register itself.
+     * finds the deployment, so a project can only register itself, and anyone else gets 403
+     * `not_a_project`.
      */
     path: z
       .string()
