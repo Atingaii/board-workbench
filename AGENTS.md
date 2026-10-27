@@ -173,12 +173,10 @@ reply in an existing thread rather than starting one.
   its clone (deepsec only fails on net-new findings, so reused state could look
   clean). Pi reacts `:secure:` only when deepsec exits 0. On a thread that isn't
   a PR, the watcher replies itself, and `pi` doesn't wake Pi for that reply.
-  Each message to Pi extends its sandbox session to at least 45m, so a long run
-  late in a session isn't cut off.
-  Messages wait behind a running turn on a per-sandbox lock. "New activity"
-  ones (`news-…`) piled up there wake Pi once, for the newest, since Pi reads
-  what's new itself: a burst of replies costs one turn, not one each.
-  A message that can't reach Pi (its sandbox fails to start or set up) is
+  Messages wait behind a running turn (the eve channel's `turnPolicy: "queue"`),
+  and ones piled up there join into one turn, since Pi reads what's new itself:
+  a burst of replies costs one turn, not one each. Each message is sent once
+  (`told:` keys in `eve.ts`). A message that can't reach Pi is
   tried 3 times, then the watcher replies "Pi couldn't start" in the thread
   instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
   then board drops that event without a word. The next reply tries again. No
@@ -192,53 +190,40 @@ reply in an existing thread rather than starting one.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.
-- Pi runs the `pi` CLI (Opus 5.5 on AI Gateway) in one persistent Vercel Sandbox
-  per thread (`board-<thread>`), with `vb`, `gh`, and git. Its sandbox, branch
-  (`board/<thread>`), and preview say `board`, not `factory` or `pi` as on the
-  factory's earlier stores: thread IDs restarted with each, so an old
-  `factory-12` or `pi/12` belongs to another #12, and the watchers that read a
-  PR's branch (`owner`, `crosspost`, `autoland`) read only `board/`. Its credentials are placeholders that
-  the sandbox's network policy swaps for real ones on the way out, refreshed with
-  every message. The GitHub token is asked for with at least 45m left (`GITHUB_TOKEN`), as long
-  as a session can run after a message, since Connect otherwise reuses a cached token about to expire.
-  The OIDC tokens (AI Gateway's, and the board's exchanged from it) can't be asked for that: they die
-  with the function's own, which Vercel reuses for 90 of its 120 minutes, so one can have 30m left.
-  When they'd die before the session ends, an A2 timer (`tokens.ts`, on the board's queue) puts new
-  ones in the policy 15m before they do. The policy also pins who Pi is on the board (a profile named for the
-  thread, like `clever-lemur-1956`, and session `thread-<id>`), so watchers can tell a thread's Pi from everyone else.
-  Anyone who can write can send those headers, so `byPi` also needs the factory's production deployment as the
-  principal (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Pi's policy adds). Its `vb` talks to the production board, the only one a sandbox
-  can reach.
-- Pi's git needs no token of ours: Sandbox git credentials (a private beta;
-  `vercel-sandbox-git-credentials` and `vercel-sandbox-signed-commits` are
-  flagged on for the project in vercel/api) start its sandbox as a clone in
-  `/vercel/sandbox`, and a broker fetches and pushes as the Vercel GitHub App
-  within the project's bound (`git:write` on the repo, set once with
-  `POST /v1/git-credential-broker/bounds`). Pushes are signed, authored by
-  `vercel[bot]` with Pi's name as co-author. It takes 6 vCPUs (smaller sandboxes
-  come from a warm pool without the helper), a branch pushed by name that tracks
-  `origin/main`, and no `-q`. The broker gives GitHub's API only as a person, so
-  Pi's `gh` goes through `github/vboard-factory`: the sandbox's network policy
-  adds the app's token to requests to `api.github.com`. A push to `board/**` also
-  has `.github/workflows/pi-pr.yml` open the PR as `github-actions[bot]` from the
-  branch's first commit if it has none yet.
-  `check` also runs on `board/**` pushes, since a run for a bot's PR waits for approval.
-- The eve agent (`apps/software-factory/agent/`, mounted at `/eve/v1` by
-  `withEve` in `next.config.ts`) is the same agent on eve's harness, behind a
-  flag: `FACTORY_EVE_FROM=<thread id>` sends that thread and every later one to
-  it (`eve.ts` beside the board route), and leaves threads Pi already has with
-  Pi. Unset, nothing changes. Pi's instructions, name, model and skills carry
-  over (`harness.ts` holds what both share; `agent/skills` links to `skills/`).
-  Each thread's task gets one eve session, kept in the factory's Redis
-  (`board-factory-eve:*`), and every message says which thread it's about: the
-  eve channel puts that in the turn's auth, where the instructions and the
-  credentials read it. The sandbox is eve's Vercel Sandbox, set up once at build
-  into a snapshot (`agent/sandbox.ts`). Its network policy is Pi's plus
-  `github.com`: git goes through the `github/vboard-factory` connector's token,
-  not Sandbox git credentials, since eve owns the sandbox. Credentials are
-  handed over when a turn starts and again before a `bash` call once they're
-  within 15m of dying, so there's no timer. The computer tool runs the same
-  desktop from eve's function, and eve's subagent tool is off.
+- Pi is an eve agent (`apps/software-factory/agent/`, Opus 5.5 on AI Gateway),
+  mounted at `/eve/v1` by `withEve` in `next.config.ts`. The watchers reach it
+  over eve's HTTP API as this deployment (`eve.ts`): each thread's task gets one
+  eve session, kept in the factory's Redis (`board-factory-eve:*`), and every
+  message says which thread it's about. The eve channel (`agent/channels/eve.ts`)
+  takes only this project's OIDC tokens and puts the thread in the turn's auth,
+  where Pi's instructions (`agent/instructions/board.ts`, from `harness.ts`) and
+  its credentials read it. Each session has its own persistent Vercel Sandbox
+  with `vb`, `gh`, and git, set up once at build into a snapshot
+  (`agent/sandbox.ts`). Its branch (`board/<thread>`) and preview say `board`,
+  not `factory` or `pi` as on the factory's earlier stores: thread IDs restarted
+  with each, so an old `factory-12` or `pi/12` belongs to another #12, and the
+  watchers that read a PR's branch (`owner`, `crosspost`, `autoland`) read only
+  `board/`. Its credentials are placeholders that the sandbox's network policy
+  swaps for real ones on the way out (`agent/lib/credentials.ts`): handed over
+  when a turn starts, and again before a `bash` call once they're within 15m of
+  dying (`stale` in `tokens.ts`). The OIDC tokens die with the function's own,
+  which Vercel reuses for 90 of its 120 minutes, and GitHub's are asked for with
+  30m left, so a long turn renews them as it goes. The policy also pins who Pi
+  is on the board (a profile named for the thread, like `clever-lemur-1956`, and
+  session `thread-<id>`), so watchers can tell a thread's Pi from everyone else.
+  Anyone who can write can send those headers, so `byPi` also needs the
+  factory's production deployment as the principal
+  (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Pi's policy adds).
+  Its `vb` talks to the production board, the only one a sandbox can reach.
+  eve's subagent tool is off (a subagent's sandbox has no credentials), and so
+  is its usage cap, whose "continue?" prompt nobody could answer.
+- Pi's `gh` and git go through `github/vboard-factory`: the sandbox's network
+  policy adds the app's token to `api.github.com` (as a bearer token) and to
+  `github.com` (as basic auth, for git over HTTPS). Commits carry the thread's
+  Pi as author. A push to `board/**` also has `.github/workflows/pi-pr.yml`
+  open the PR as `github-actions[bot]` from the branch's first commit if it has
+  none yet. `check` also runs on `board/**` pushes, since a run for a bot's PR
+  waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
   they're files in `.a2/attachments` (`fsBlob()`). Pi attaches a screenshot to the reply
@@ -246,13 +231,11 @@ reply in an existing thread rather than starting one.
   never test-run logs: the tests
   are in the PR, and a bug fix's PR body names the test that reproduces it. Its
   `vb` is pinned (`BOARD` in `agent.ts`) to the board the factory was built
-  with, so each release reaches Pi when the factory deploys, with no bump; setup
-  upgrades sandboxes to exactly that. `gh` is pinned too (`GH`), which
+  with, so each release reaches Pi when the factory deploys, with no bump. `gh` is pinned too (`GH`), which
   new sandboxes download without asking GitHub's API, whose unauthenticated rate
   limit sandboxes share.
-- Pi's sandbox also gets the factory's own skills and extensions, from
-  `apps/software-factory/skills/` and `extensions/`, written to `~/.pi/agent`
-  every turn (add a new file to `PI_FILES` in `agent.ts`). `sitrep` is how Pi
+- Pi gets the factory's own skills, from `apps/software-factory/skills/`
+  (`agent/skills` links there), which eve puts in `~/.agents/skills`. `sitrep` is how Pi
   does a recap that moves work forward. A schedule like `vb schedule dev
   ":sitrep: Morning recap" --at <9am> --every 1d --label kind=task --label
   sitrep=morning` posts a bare root that a fresh Pi picks up, so the schedule text stays a title and
@@ -261,9 +244,9 @@ reply in an existing thread rather than starting one.
   (`origin/main`, to reproduce a bug before fixing it), or an npm version,
   serves a local board with `vb serve`, and runs each `vb` with only `PATH`
   and a home of its own, so nothing reaches the factory's board. The `computer`
-  extension is computer use, done the way Codex does it: one tool, sequential,
-  that does one action on a virtual desktop (Xvfb) per call, with the mouse and
-  keyboard through XTEST (`xinput.py`, using ctypes because the sandbox has no
+  tool (`agent/tools/computer.ts`) is computer use, done the way Codex does it: one tool
+  that does one action on the sandbox's virtual desktop (Xvfb) per call, with the mouse and
+  keyboard through XTEST (`agent/lib/xinput.py`, using ctypes because the sandbox has no
   pip or xdotool), and returns a screenshot. Each call carries a title.
   `ui-video` records that desktop with ffmpeg and burns each call's title in
   as a caption, read aloud by a speech model on AI Gateway (`openai/tts-1`; the

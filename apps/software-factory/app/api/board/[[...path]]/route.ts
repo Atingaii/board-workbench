@@ -4,8 +4,8 @@ import { render } from "@vercel/board/sync";
 import { channels, slack } from "@vercel/board/sync-slack";
 import { github, repos } from "@vercel/board/sync-github";
 import { vercelBlob } from "@vercel/board/backend-a2/blob-vercel";
-import { queues, store, tokensQueue } from "./a2";
-import { byAgent, byPi, byWatcher, piTokens, taskMessage, tellPi } from "./agent";
+import { queues, store } from "./a2";
+import { byAgent, byPi, byWatcher, taskMessage, tellPi } from "./agent";
 import { classifyThread } from "./classify";
 import { isPiKind, PI_KINDS, piTask, scheduled, scheduledThread } from "./kinds";
 import { security } from "./security";
@@ -191,5 +191,3 @@ const factory = board({
 
 export const GET = factory.fetch, POST = factory.fetch;
 export const scheduler = queues.handler(...backend.servers);
-// Pi's token refreshes have a queue of their own (`tokens.ts`).
-export const tokensScheduler = tokensQueue.handler(piTokens.server);

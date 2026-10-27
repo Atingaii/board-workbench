@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { security } from "../app/api/board/[[...path]]/security.ts";
-import { extension } from "../app/api/board/[[...path]]/agent.ts";
 
 function event() {
   return {
@@ -111,16 +110,6 @@ test("a retried callback sends Pi the same deduplication key", async () => {
   await h.run();
   await h.run();
   assert.deepEqual(h.notifications.map(n => n.key), ["security-88", "security-88"]);
-});
-
-test("a message late in a sandbox session extends it to a full turn, and an early one doesn't", () => {
-  const now = Date.parse("2026-10-07T17:00:00Z");
-  const min = 60_000;
-  assert.equal(extension(new Date(now + 5 * min), now), 40 * min);
-  assert.equal(extension(new Date(now - min), now), 46 * min);
-  assert.equal(extension(new Date(now + 45 * min), now), 0);
-  assert.equal(extension(new Date(now + 60 * min), now), 0);
-  assert.equal(extension(undefined, now), 0);
 });
 
 test("runs deepsec in a worktree named for the event, and attaches its files by full path", async () => {

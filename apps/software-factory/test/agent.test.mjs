@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GITHUB_TOKEN, byAgent, byPi, byWatcher, piAvatar, piName, sourceLink, startOrSay, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
+import { byAgent, byPi, byWatcher, piAvatar, piName, sourceLink, startOrSay, taskMessage } from "../app/api/board/[[...path]]/agent.ts";
 
 // Pi posts as the factory's production deployment.
 process.env.VERCEL_PROJECT_ID = "prj_factory";
@@ -81,27 +81,6 @@ test("byPi: only the factory's production deployment, since anyone who can write
 
 test("piAvatar: a PNG generated from each Pi's name", () => {
   assert.equal(piAvatar("1956"), "https://vercel.com/api/www/avatar?s=64&format=png&u=clever-lemur-1956");
-});
-
-test("GITHUB_TOKEN: Pi never gets a cached GitHub token that dies before its session ends", async () => {
-  const { getToken } = await import("@vercel/connect");
-  const realFetch = globalThis.fetch;
-  let minted = 0;
-  globalThis.fetch = async () => {
-    minted++;
-    // Each token Connect mints here has 44 minutes left, a minute short of a sandbox session.
-    return Response.json({ token: `t${minted}`, expiresAt: Date.now() + 44 * 60_000, connector: { id: "c", uid: "u", type: "github" } });
-  };
-  try {
-    const options = { vercelToken: "oidc" };
-    // The default 30s buffer hands the token out again: the bug.
-    const app = { subject: { type: "app" } };
-    assert.equal(await getToken("github/test", app, options), await getToken("github/test", app, options));
-    // Pi's asks for one that lasts the whole session, so it isn't reused.
-    assert.notEqual(await getToken("github/test", GITHUB_TOKEN, options), await getToken("github/test", GITHUB_TOKEN, options));
-  } finally {
-    globalThis.fetch = realFetch;
-  }
 });
 
 test("byWatcher: the board's watchers' own notes, which wake neither Pi nor triage", () => {

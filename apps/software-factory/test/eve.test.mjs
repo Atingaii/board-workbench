@@ -3,8 +3,7 @@ import { execFile } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { eveHarness, memory, tellEve } from "../app/api/board/[[...path]]/eve.ts";
-import { evePolicy, piName, policy } from "../app/api/board/[[...path]]/harness.ts";
+import { memory, tellEve } from "../app/api/board/[[...path]]/eve.ts";
 import { boardFrom, boardOf } from "../agent/lib/board.ts";
 import { script } from "../agent/lib/computer.ts";
 
@@ -33,16 +32,6 @@ function fakeEve() {
     reset: async (session) => void resets.push(session),
   };
 }
-
-test("eveHarness: threads from FACTORY_EVE_FROM on go to eve; earlier ones, and all without it, stay with Pi", () => {
-  assert.equal(eveHarness("900", "900"), true);
-  assert.equal(eveHarness("901", "900"), true);
-  assert.equal(eveHarness("899", "900"), false);
-  assert.equal(eveHarness("900", undefined), false);
-  assert.equal(eveHarness("900", ""), false);
-  assert.equal(eveHarness("900", "soon"), false);
-  assert.equal(eveHarness("abc", "1"), false);
-});
 
 test("tellEve: a thread's first message makes its session, later ones go to the same one, with the thread they're about", async () => {
   const sessions = memory(new Map());
@@ -122,21 +111,6 @@ test("boardFrom and boardOf: a session knows its thread from the turn's auth, or
     { task: "thread", thread: "900" },
   );
   assert.equal(boardOf({ auth: { current: auth({}), initiator: null } }), null);
-});
-
-test("evePolicy: Pi's credentials and identity, plus git to github.com as the factory GitHub App", () => {
-  const tokens = { gateway: "g", board: "b", github: "h" };
-  const eve = evePolicy("900", tokens, "bypass");
-  const pi = policy("900", tokens, "bypass");
-  const { "github.com": git, ...rest } = eve.allow;
-  assert.deepEqual(rest, pi.allow);
-  assert.deepEqual(git, [
-    { transform: [{ headers: { authorization: `Basic ${Buffer.from("x-access-token:h").toString("base64")}` } }] },
-  ]);
-  // Everything else stays reachable without credentials, and last, as in Pi's.
-  assert.equal(Object.keys(eve.allow).at(-1), "*");
-  const board = eve.allow["vboard-factory.playground-vercel.tools"][0].transform[0].headers;
-  assert.equal(board["x-board-profile"], piName("900"));
 });
 
 test("computer: each call starts the desktop if it's down, then acts and screenshots, with text reaching the shell as data", () => {

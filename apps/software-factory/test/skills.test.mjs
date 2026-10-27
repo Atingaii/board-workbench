@@ -5,35 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { piAvatar, piFiles, piName, piPreview, piSandbox, policy } from "../app/api/board/[[...path]]/agent.ts";
+import { piAvatar, piName, piPreview, policy } from "../app/api/board/[[...path]]/agent.ts";
 import { routes } from "../../../packages/board/src/api/routes.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const script = join(root, "skills/ui-video/scripts/ui-video");
 const tokens = { gateway: "g", board: "b", github: "h" };
-
-test("piFiles: the ui-video, verify-board, sitrep and pr-description skills and the computer tool go in Pi's home, scripts executable", async () => {
-  const files = await piFiles(root);
-  const home = "/home/vercel-sandbox/.pi/agent";
-  assert.deepEqual(
-    files.map((f) => [f.path, f.mode]),
-    [
-      [`${home}/skills/ui-video/SKILL.md`, 0o644],
-      [`${home}/skills/ui-video/scripts/ui-video`, 0o755],
-      [`${home}/skills/verify-board/SKILL.md`, 0o644],
-      [`${home}/skills/verify-board/scripts/verify-board`, 0o755],
-      [`${home}/skills/sitrep/SKILL.md`, 0o644],
-      [`${home}/skills/pr-description/SKILL.md`, 0o644],
-      [`${home}/extensions/computer/index.ts`, 0o644],
-      [`${home}/extensions/computer/xinput.py`, 0o755],
-    ],
-  );
-  assert.match(String(files[0].content), /^---\nname: ui-video\ndescription: .+\n---\n/);
-  assert.match(String(files[2].content), /^---\nname: verify-board\ndescription: .+\n---\n/);
-  assert.match(String(files[4].content), /^---\nname: sitrep\ndescription: .+\n---\n/);
-  assert.match(String(files[5].content), /^---\nname: pr-description\ndescription: .+\n---\n/);
-  assert.match(String(files[6].content), /registerTool\(computer\)/);
-});
 
 test("policy: Pi's own branch preview gets past Vercel Authentication, and no other deployment sees the secret", () => {
   const allow = policy("3100", tokens, "s3cret").allow;
@@ -44,10 +21,6 @@ test("policy: Pi's own branch preview gets past Vercel Authentication, and no ot
   assert.deepEqual(withSecret.map(([host]) => host).sort(), ["vboard-factory.playground-vercel.tools", piPreview("3100")].sort());
   assert.deepEqual(allow["*"], []);
   assert.equal(policy("3100", tokens, undefined).allow[piPreview("3100")], undefined);
-});
-
-test("a thread's sandbox is board-<thread>, not an old board's factory-<thread>", () => {
-  assert.equal(piSandbox("3100"), "board-3100");
 });
 
 // The headers the sandbox's proxy adds to a request for `path` on `host`, as it reads a rule's path match.
@@ -116,10 +89,14 @@ test("policy: Pi's credentials and identity reach every board route vb calls, an
   }
 });
 
-test("policy: Pi's GitHub API calls always carry the factory GitHub App's token", () => {
-  assert.deepEqual(policy("3100", tokens, undefined).allow["api.github.com"], [
-    { transform: [{ headers: { authorization: "Bearer h" } }] },
+test("policy: Pi's gh and git always go as the factory GitHub App", () => {
+  const allow = policy("3100", tokens, undefined).allow;
+  assert.deepEqual(allow["api.github.com"], [{ transform: [{ headers: { authorization: "Bearer h" } }] }]);
+  assert.deepEqual(allow["github.com"], [
+    { transform: [{ headers: { authorization: `Basic ${Buffer.from("x-access-token:h").toString("base64")}` } }] },
   ]);
+  // Everything else stays reachable without credentials, and last.
+  assert.equal(Object.keys(allow).at(-1), "*");
 });
 
 // ui-video is for Pi's Linux sandbox: an X11 desktop, bash 4, and GNU date and stat. Elsewhere (macOS) it can't run.

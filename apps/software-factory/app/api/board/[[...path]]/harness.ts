@@ -2,7 +2,7 @@ import type { NetworkPolicy } from "@vercel/sandbox";
 import pkg from "@vercel/board/package.json" with { type: "json" };
 import { REPO } from "./github.ts";
 
-// What a thread's agent is, whichever harness runs it (Pi in `agent.ts`, or the eve agent in `agent/`): its name,
+// What a thread's Pi is, shared by the board's watchers (`agent.ts`) and the eve agent itself (`agent/`): its name,
 // its instructions, the tools its sandbox gets, and the network policy that puts real credentials on the wire.
 
 /** The production board the agent's `vb` talks to. */
@@ -167,10 +167,10 @@ export function policy(
   bypass: string | undefined,
 ): NetworkPolicy {
   const protection = bypass ? { "x-vercel-protection-bypass": bypass } : {};
-  // git itself goes through the sandbox's git credentials (`GIT`), so only the API gets the app's token.
+  const git = Buffer.from(`x-access-token:${tokens.github}`).toString("base64");
   return {
     allow: {
-      // Pi speaks the Anthropic messages API to AI Gateway, which reads x-api-key.
+      // eve calls the model from its own function; the sandbox's AI Gateway calls are ui-video's voice.
       "ai-gateway.vercel.sh": [
         { transform: [{ headers: { "x-api-key": tokens.gateway, authorization: `Bearer ${tokens.gateway}` } }] },
       ],
@@ -191,25 +191,10 @@ export function policy(
         },
       ],
       ...(bypass ? { [piPreview(thread)]: [{ transform: [{ headers: protection }] }] } : {}),
+      // gh and git, as the factory GitHub App.
       "api.github.com": [{ transform: [{ headers: { authorization: `Bearer ${tokens.github}` } }] }],
+      "github.com": [{ transform: [{ headers: { authorization: `Basic ${git}` } }] }],
       "*": [],
     },
   };
-}
-/**
- * The eve agent's sandbox policy: Pi's, plus git over HTTPS to github.com as the factory GitHub App. Pi's git goes
- * through Sandbox git credentials instead; eve owns its sandboxes, so its git takes the connector's token, as gh does.
- * AI Gateway's stays, for what the sandbox itself asks of it (ui-video's voice); eve calls the model from its function.
- */
-export function evePolicy(
-  thread: string,
-  tokens: { gateway: string; board: string; github: string },
-  bypass: string | undefined,
-): NetworkPolicy {
-  const { allow } = policy(thread, tokens, bypass) as { allow: Record<string, unknown> };
-  const { "*": rest, ...hosts } = allow;
-  const basic = Buffer.from(`x-access-token:${tokens.github}`).toString("base64");
-  return {
-    allow: { ...hosts, "github.com": [{ transform: [{ headers: { authorization: `Basic ${basic}` } }] }], "*": rest },
-  } as NetworkPolicy;
 }

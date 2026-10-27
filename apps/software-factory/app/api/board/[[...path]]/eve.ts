@@ -1,17 +1,7 @@
 import type { Task } from "./harness.ts";
 
-// The eve agent (`agent/` in this app, mounted at /eve/v1 by `withEve`): the same work as Pi, on eve's harness.
-// Each thread's task gets one durable eve session; this file finds it, or starts it, and sends it the message.
+// Pi, the eve agent (`agent/` in this app, mounted at /eve/v1 by `withEve`). Each thread's task gets one durable eve session; this file finds it, or starts it, and sends it the message.
 // eve queues a message behind a running turn (the eve channel's `turnPolicy: "queue"`), so there's no lock here.
-
-/**
- * Whether a thread goes to the eve agent: `FACTORY_EVE_FROM` names the first thread that does, so threads Pi
- * already has keep their Pi (eve can't pick up a Pi session's history). Unset, everything stays with Pi.
- */
-export function eveHarness(thread: string, from = process.env.FACTORY_EVE_FROM) {
-  if (!from || !/^\d{1,15}$/.test(from) || !/^\d{1,15}$/.test(thread)) return false;
-  return Number(thread) >= Number(from);
-}
 
 /** What the eve agent is told: who it works for travels with each message, so its hooks and instructions know. */
 export type EveMessage = { task: Task; thread: string; key: string; message: string };

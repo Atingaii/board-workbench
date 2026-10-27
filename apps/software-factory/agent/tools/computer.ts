@@ -2,8 +2,8 @@ import { defineTool, toolOutput, toolOutputPart } from "eve/tools";
 import { z } from "zod";
 import { ACTIONS, HEIGHT, script, SHOT, WIDTH } from "../lib/computer";
 
-// Pi's computer tool (`extensions/computer`), for eve: the same desktop, actions and screenshots, driven from eve's
-// function in the sandbox, where Pi's ran inside it. While ui-video records, each call's title is the caption.
+// Computer use, the way Codex does it: one tool that does one action on the sandbox's virtual desktop (Xvfb) per
+// call, driven from eve's function, and returns a screenshot. While ui-video records, each call's title is the caption.
 
 export default defineTool({
   description: `Use a virtual ${WIDTH}x${HEIGHT} desktop like a person: see it, click, type. Each call does one action and returns a screenshot of the screen afterwards, so look at it before the next action. Coordinates are pixels from the top-left of that screenshot.
