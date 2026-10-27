@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOARD, eveName, eveSession, policy } from "../app/api/board/[[...path]]/harness.ts";
-import { eveBoard, runBoard } from "../agent/lib/board-tool.ts";
+import { eveBoard, runBoard, SANDBOX_HOME } from "../agent/lib/vb-tool.ts";
 import { caller, deploymentToken, personToken, PROJECT_ID, testBoard } from "../../../packages/board/test/harness.ts";
 
 // The factory runs in production, so its own production deployment, Eve, has full access.
 process.env.VERCEL_ENV = "production";
 
-// The board tool against an in-process board, as the factory's own production deployment, the way
+// The vb tool against an in-process board, as the factory's own production deployment, the way
 // Eve's token reaches it: only the transport is the test's.
 async function setup(thread = "1419") {
   const board = testBoard({ url: BOARD });
@@ -28,7 +28,7 @@ async function setup(thread = "1419") {
 
 const noFiles = async () => null;
 
-test("board tool: writes as the thread's Eve, with the headers vb gets from the network policy", async () => {
+test("vb tool: writes as the thread's Eve, with the headers vb gets from the network policy", async () => {
   const { eve, root, sent, token } = await setup();
   const id = await runBoard(eve, { action: "reply", target: `#${root.id}`, text: "on it" }, noFiles);
   const { replies } = await eve.thread(root.id);
@@ -42,7 +42,7 @@ test("board tool: writes as the thread's Eve, with the headers vb gets from the 
   for (const [name, value] of Object.entries(rule.transform[0].headers)) assert.equal(sent.at(-1).get(name), value);
 });
 
-test("board tool: read prints the thread as vb read does, and --json's messages", async () => {
+test("vb tool: read prints the thread as vb read does, and --json's messages", async () => {
   const { eve, root } = await setup();
   await runBoard(eve, { action: "reply", target: root.id, text: "first reply" }, noFiles);
   const text = await runBoard(eve, { action: "read", target: root.id }, noFiles);
@@ -54,16 +54,18 @@ test("board tool: read prints the thread as vb read does, and --json's messages"
   assert.deepEqual(json.map((m) => m.text), ["add a vb tool to eve", "first reply"]);
 });
 
-test("board tool: read lists a channel's threads, filtered by text", async () => {
+test("vb tool: read lists a channel's threads, filtered by text", async () => {
   const { eve, person } = await setup();
   await person("POST", "/messages", { channel: "dev", text: "something else", noSync: true });
   const text = await runBoard(eve, { action: "read", target: "dev", text: "vb tool" }, noFiles);
   assert.match(text, /^dev · 1 thread · cursor/);
   assert.match(text, /add a vb tool to eve/);
   assert.doesNotMatch(text, /something else/);
+  assert.match(await runBoard(eve, { action: "read", target: "dev", text: "nothing like this" }, noFiles), /^dev · 0 threads/);
+  await assert.rejects(runBoard(eve, { action: "read", target: "dve" }, noFiles), /no channel dve/);
 });
 
-test("board tool: react, label, and typing", async () => {
+test("vb tool: react, label, and typing", async () => {
   const { eve, root } = await setup();
   assert.equal(await runBoard(eve, { action: "react", target: root.id, emoji: "eyes" }, noFiles), "ok");
   assert.equal(await runBoard(eve, { action: "label", target: root.id, label: ["reproduced=yes"] }, noFiles), "ok");
@@ -80,7 +82,7 @@ test("board tool: react, label, and typing", async () => {
   await assert.rejects(runBoard(eve, { action: "react", target: "dev", emoji: "eyes" }, noFiles), /message ID/);
 });
 
-test("board tool: reply attaches files read from the sandbox", async () => {
+test("vb tool: reply attaches files read from the sandbox", async () => {
   const { eve, root } = await setup();
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
   const files = { "/tmp/shot.png": png };
@@ -89,6 +91,12 @@ test("board tool: reply attaches files read from the sandbox", async () => {
   const reply = (await eve.thread(root.id)).replies.find((m) => m.id === id);
   assert.deepEqual(reply.attachments.map((a) => [a.name, a.size]), [["shot.png", png.byteLength]]);
   await assert.rejects(runBoard(eve, { action: "reply", target: root.id, text: "x", attach: ["/tmp/missing.png"] }, read), /no such file/);
+  // ~ and $HOME are the sandbox's home, as Eve's own file tools read them.
+  files[`${SANDBOX_HOME}/board/shot.png`] = png;
+  for (const path of ["~/board/shot.png", "$HOME/board/shot.png"]) {
+    const id = await runBoard(eve, { action: "reply", target: root.id, text: "again", attach: [path] }, read);
+    assert.equal((await eve.thread(root.id)).replies.find((m) => m.id === id).attachments[0].name, "shot.png");
+  }
   const big = async () => new Uint8Array(4 * 1024 * 1024 + 1);
   await assert.rejects(runBoard(eve, { action: "reply", target: root.id, text: "x", attach: ["/tmp/big.mp4"] }, big), /over 4 MB/);
 });

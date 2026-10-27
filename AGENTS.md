@@ -216,7 +216,7 @@ reply in an existing thread rather than starting one.
   factory's production deployment as the principal
   (`vercel:project:<VERCEL_PROJECT_ID>:production`, the token Eve's policy adds).
   Its `vb` talks to the production board, the only one a sandbox can reach.
-  Its `board` tool (`agent/tools/board.ts`) reads, replies (with files from the sandbox), reacts,
+  Its `vb` tool (`agent/tools/vb.ts`) reads, replies (with files from the sandbox), reacts,
   labels, and shows typing straight from the function, in one request, printing what `vb` would
   (`@vercel/board/format`): it sends the headers the policy adds (`eveHeaders`), so Eve is the same
   author either way, and `vb` in the sandbox keeps the rest.

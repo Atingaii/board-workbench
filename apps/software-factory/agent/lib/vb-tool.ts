@@ -2,9 +2,9 @@ import { board as boardAt, type Board } from "@vercel/board";
 import { http } from "@vercel/board/backend-http";
 import { actorName, formatSchedule, formatThreads, formatThreadSummaries, reactionNames, terminalText } from "@vercel/board/format";
 import { z } from "zod";
-import { BOARD, eveAvatar, eveHeaders, eveName } from "../../app/api/board/[[...path]]/harness.ts";
+import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER } from "../../app/api/board/[[...path]]/harness.ts";
 
-// The board tool: what Eve does on the board most (read, reply, react, label, typing), straight from
+// The vb tool: what Eve does on the board most (read, reply, react, label, typing), straight from
 // the function to the board, without starting `vb` in the sandbox. It's who `vb` is there: the same
 // token, profile, and session the sandbox's network policy adds.
 
@@ -29,7 +29,7 @@ export const inputSchema = z.object({
   attach: z
     .array(z.string())
     .optional()
-    .describe("reply: files in the sandbox to attach (up to 4 MB each), absolute or relative to the workspace root."),
+    .describe("reply: files in the sandbox to attach (up to 4 MB each), absolute, in ~ or $HOME, or relative to the workspace root."),
 });
 
 export type BoardInput = z.infer<typeof inputSchema>;
@@ -64,6 +64,12 @@ function labelPairs(values: string[] | undefined): Record<string, string> {
   return pairs;
 }
 
+/** The sandbox's home, where clones and skills live. */
+export const SANDBOX_HOME = `/home/${SANDBOX_USER}`;
+
+/** A path as the model writes it: `~/…` and `$HOME/…` are in the sandbox's home, as Eve's file tools read them. */
+export const sandboxPath = (path: string, home = SANDBOX_HOME) => path.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+
 /** What vb warns on stderr: a mention that matched no one notifies no one. */
 const unknown = (handles: string[] | undefined) =>
   handles?.length ? `\nwarning: ${handles.map((h) => `@${h}`).join(", ")} matched no one on the board, so it stays plain text and notifies no one` : "";
@@ -95,6 +101,9 @@ export async function runBoard(
         ...(input.label?.length ? { label: input.label } : {}),
         ...(input.limit ? { limit: input.limit } : {}),
       });
+      // Nothing in a channel that doesn't exist is a typo, not an empty channel.
+      if (!page.threads.length && !(await board.channels()).some((c) => c.path === target || c.path.startsWith(target.replace(/\/?$/, "/"))))
+        throw new Error(`no channel ${target}: vb channels lists them`);
       if (input.json) return page.threads.map((t) => JSON.stringify(t)).join("\n");
       const count = `${page.threads.length} ${page.threads.length === 1 ? "thread" : "threads"}`;
       const list = page.threads.length ? `\n\n${formatThreadSummaries(page.threads, { channel: target.endsWith("/") })}` : "";
@@ -104,7 +113,7 @@ export async function runBoard(
       const id = idOf(input.target);
       const files: { path: string; data: Uint8Array }[] = [];
       for (const path of input.attach ?? []) {
-        const data = await readFile(path);
+        const data = await readFile(sandboxPath(path));
         if (!data) throw new Error(`no such file: ${path}`);
         if (data.byteLength > ATTACH_BYTES_MAX) throw new Error(`${path} is over 4 MB, the most an attachment can be`);
         files.push({ path, data });
