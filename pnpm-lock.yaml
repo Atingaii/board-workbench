@@ -173,6 +173,9 @@ importers:
       '@chat-adapter/github':
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+      '@chat-adapter/linear':
+        specifier: ^4.41.1
+        version: 4.41.1(ai@7.0.130(zod@4.6.5))(graphql@17.0.2)(zod@4.6.5)
       '@chat-adapter/slack':
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(debug@4.4.3)(zod@4.6.5)
@@ -358,6 +361,10 @@ packages:
 
   '@chat-adapter/github@4.41.1':
     resolution: {integrity: sha512-yNQj3FSmJqW8gdV9LB1HrGUMQfuL8cPQPQ7wx7fbZnU3EWCdLgmFWYZN2Mu8bA0BWKdin9F2sUnbl4Cmx/U4uQ==}
+    engines: {node: '>=20'}
+
+  '@chat-adapter/linear@4.41.1':
+    resolution: {integrity: sha512-68ejJXBHSe/pgXNTa1yvSps4AJt+4JcSlIRsDxZr0odYoEdKA0tk3vG05XhqYYG4rAR8SHML0y0LkX7uoouYRQ==}
     engines: {node: '>=20'}
 
   '@chat-adapter/shared@4.41.1':
@@ -559,6 +566,11 @@ packages:
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
+  '@graphql-typed-document-node/core@3.2.0':
+    resolution: {integrity: sha512-mB9oAsNCm9aM3/SOv4YtBMqZbYj10R7dkq8byBqxGY/ncFwhf2oQzMV+LCRlWoDSEBJ3COiR1yeDvMtsoOsuFQ==}
+    peerDependencies:
+      graphql: ^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0 || ^14.0.0 || ^15.0.0 || ^16.0.0 || ^17.0.0
+
   '@hono/node-server@2.1.3':
     resolution: {integrity: sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw==}
     engines: {node: '>=20'}
@@ -749,6 +761,10 @@ packages:
   '@kapso/whatsapp-cloud-api@0.2.3':
     resolution: {integrity: sha512-qYZbxBvX6kX7I7dI0PX1W6TWUYQkJKXnf7UqmeWlYALIgsiP5CvFvH45jsWrdjdUPwK1emsyIuHKReDBd7j/Sg==}
     engines: {node: '>=20.19'}
+
+  '@linear/sdk@76.0.0':
+    resolution: {integrity: sha512-Xt0x5Kl6qBoWhGFypb8ykyP+c5kT7scmRPs1uJidSPOaRgkMJ/4y41QpmZCWCBUMmZtf/O0VktgQio6rLXT94w==}
+    engines: {node: '>=18.x'}
 
   '@manypkg/find-root@3.1.0':
     resolution: {integrity: sha512-BcSqCyKhBVZ5YkSzOiheMCV41kqAFptW6xGqYSTjkVTl9XQpr+pqHhwgGCOHQtjDCv7Is6EFyA14Sm5GVbVABA==}
@@ -1930,6 +1946,10 @@ packages:
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
     engines: {node: '>= 0.4'}
+
+  graphql@17.0.2:
+    resolution: {integrity: sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==}
+    engines: {node: ^22.0.0 || ^24.0.0 || ^25.0.0 || >=26.0.0}
 
   has-symbols@1.1.0:
     resolution: {integrity: sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==}
@@ -3242,6 +3262,18 @@ snapshots:
       - workflow
       - zod
 
+  '@chat-adapter/linear@4.41.1(ai@7.0.130(zod@4.6.5))(graphql@17.0.2)(zod@4.6.5)':
+    dependencies:
+      '@chat-adapter/shared': 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+      '@linear/sdk': 76.0.0(graphql@17.0.2)
+      chat: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+    transitivePeerDependencies:
+      - ai
+      - graphql
+      - supports-color
+      - workflow
+      - zod
+
   '@chat-adapter/shared@4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)':
     dependencies:
       chat: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
@@ -3385,6 +3417,10 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
+  '@graphql-typed-document-node/core@3.2.0(graphql@17.0.2)':
+    dependencies:
+      graphql: 17.0.2
+
   '@hono/node-server@2.1.3(hono@4.13.12)':
     dependencies:
       hono: 4.13.12
@@ -3522,6 +3558,12 @@ snapshots:
   '@kapso/whatsapp-cloud-api@0.2.3':
     dependencies:
       zod: 4.6.5
+
+  '@linear/sdk@76.0.0(graphql@17.0.2)':
+    dependencies:
+      '@graphql-typed-document-node/core': 3.2.0(graphql@17.0.2)
+    transitivePeerDependencies:
+      - graphql
 
   '@manypkg/find-root@3.1.0':
     dependencies:
@@ -4554,6 +4596,8 @@ snapshots:
   github-slugger@2.0.0: {}
 
   gopd@1.2.0: {}
+
+  graphql@17.0.2: {}
 
   has-symbols@1.1.0: {}
 

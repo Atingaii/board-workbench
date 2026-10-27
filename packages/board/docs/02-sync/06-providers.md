@@ -256,5 +256,6 @@ review threads), `channelOf`, `toChatId` and `fromChatId` (ID encodings),
 `markdown` and `author` (reading a message), `context`, `fetchRoot`, `links`,
 `read`, `uploadFiles`, `refusesFiles`, `startTyping`, and `intercept` and `missed`
 (webhook events the adapter doesn't emit). The built-in providers in
-`@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-kapso` are
+`@vercel/board/sync-slack`, `@vercel/board/sync-github`, `@vercel/board/sync-kapso`, and
+`@vercel/board/sync-linear` are
 working examples of each.

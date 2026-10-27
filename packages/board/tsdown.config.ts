@@ -27,6 +27,7 @@ export default defineConfig([
       'sync-slack': 'src/sync/slack.ts',
       'sync-github': 'src/sync/github.ts',
       'sync-kapso': 'src/sync/kapso.ts',
+      'sync-linear': 'src/sync/linear.ts',
       cli: 'src/cli/main.ts',
     },
     format: 'esm',

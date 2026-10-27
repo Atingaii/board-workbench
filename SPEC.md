@@ -149,6 +149,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
+| `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`), and `withUserTokens()` and `connectUserTokens()` | server |
 | `@vercel/board/sync/chat` | `ChatSyncProvider`, for a sync provider of your own on a Chat SDK adapter | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
@@ -492,8 +493,9 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
   `@vercel/board/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
   `@vercel/board/backend-a2/store-sqlite` uses Node's own `node:sqlite`.
 - **Peers, optional, for sync: `chat`, `@chat-adapter/slack`,
-  `@chat-adapter/github`, `@vercel/connect`.** `@vercel/board/sync-slack` and
-  `@vercel/board/sync-github` build their adapters with them, from Connect or from
+  `@chat-adapter/github`, `@chat-adapter/linear`, `@vercel/connect`.**
+  `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and
+  `@vercel/board/sync-linear` build their adapters with them, from Connect or from
   secrets. `@vercel/board/sync-kapso` takes an adapter you install
   (`@kapso/chat-adapter`). Your own adapters must match the `chat` version
   that board builds its Chat instances with. You don't install a Chat SDK
@@ -2537,8 +2539,8 @@ webhook: Connect's OIDC verifier, or the platform's own signature check.
 `@vercel/board/sync` exports `SyncProvider`, shared schemas, and the sync function's types and helpers.
 The engine calls the provider's methods; it does not access an SDK adapter or
 transport configuration. A provider can implement its own SDK integration or
-extend `ChatSyncProvider` from `@vercel/board/sync/chat`. Slack, GitHub, and Kapso share
-that bridge. Importing the native contract does not load Chat SDK.
+extend `ChatSyncProvider` from `@vercel/board/sync/chat`. Slack, GitHub, Kapso, and Linear
+share that bridge. Importing the native contract does not load Chat SDK.
 
 ```ts
 import { SyncProvider, type Receive } from '@vercel/board/sync'
@@ -2604,8 +2606,8 @@ board configures every Chat instance itself:
   arrives while the thread's handler is still running is dropped, which would
   lose replies sent in quick succession. Ordering comes from the inbound lane
   instead.
-- **One Chat instance per provider.** `slack()`, `github()`, and `kapso()`
-  each make one, with one adapter, so two Slack entries never share one and
+- **One Chat instance per provider.** `slack()`, `github()`, `kapso()`, and
+  `linear()` each make one, with one adapter, so two Slack entries never share one and
   collide on `slack:`. board translates between Chat SDK IDs and its
   key-prefixed external IDs; a provider used under two keys takes each
   webhook's key from the request it's handling.
