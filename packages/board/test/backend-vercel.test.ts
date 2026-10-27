@@ -33,7 +33,8 @@ describe('vercel()', () => {
       'schedules: schedules a reply, lists it, and cancels it': 'skipped',
       'attachments: takes a file, posts it, and gives it back': 'skipped',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'failed',
-      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, and a receipt": 'failed',
+      'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'failed',
+      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',
     })
   }, 30_000)
 
