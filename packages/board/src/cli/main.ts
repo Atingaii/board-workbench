@@ -619,6 +619,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const link = target !== undefined && /^https?:\/\//i.test(target)
       if (target && (link || isMessageRef(target))) {
         const thread = link ? await board.linked(target) : await board.thread(messageId(target))
+        // A board older than this CLI answers /links with its discovery document. Its 404 stays: a
+        // current board's means the link isn't one it synced.
+        if (link && !Array.isArray((thread as { replies?: unknown }).replies))
+          throw new Error("this board can't read links: update board where the board is deployed")
         // With filters, the root and only the replies that match them.
         const narrowed = Object.keys(filters()).length > 0
         const replies = narrowed
