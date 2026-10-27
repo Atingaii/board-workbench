@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -13,7 +12,6 @@ import { http } from '../backend-http/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
-import { startInspector } from '../inspect/server.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
@@ -39,9 +37,9 @@ import {
   type HookAgent,
 } from './hooks.ts'
 
-const HELP = `board ${VERSION}: a message board you mount in one route
+const help = () => `${app.name} ${VERSION}: a message board you mount in one route
 
-usage: board <command> [options]      (also installed as \`vb\`)
+usage: ${app.name} <command> [options]${app.name === 'board' ? '      (also installed as `vb`)' : ''}
 
   whoami                                   who am I, on which board, with which token, and what I can do
   link <url>                               link this project to a board (.board/config.json)
@@ -90,13 +88,7 @@ usage: board <command> [options]      (also installed as \`vb\`)
                                            after a turn that didn't update the board, remind the agent to (linked projects only)
 
   tail [channel] [filters] [--all]         live, until Ctrl-C
-  wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)
-
-  inspect [--port N] [--no-open]           the board in your browser, as you: read, post, react (local only)
-  serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
-                                           run a board on this machine (127.0.0.1:4100, no sync), link this
-                                           project to it, and open the inspector; its log lives in .board/,
-                                           and you're local:user:<your OS user> (or --handle)
+  wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit (124 on timeout)${Object.keys(app.commands).length > 0 ? `\n\n${Object.values(app.commands).map((command) => command.help).join('\n')}` : ''}
 
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
@@ -164,9 +156,13 @@ function markAttachmentId(args: string[]): string[] {
   return args
 }
 /** Commands that are gone, and what to run instead. Their flags don't matter: an old hook's `vb update --skip` gets this too. */
-const REMOVED: Record<string, string> = {
-  update: "`vb update` is gone: reply in the thread you're working in (vb reply <id>), or post where it fits (vb post <channel>)",
-  stuck: '`vb stuck` is gone: a board on a2() keeps its dead letters in A2, on the backend\'s `servers`',
+function removedCommand(word: string): string | undefined {
+  const cli = named()
+  const removed: Record<string, string> = {
+    update: `\`${cli} update\` is gone: reply in the thread you're working in (${cli} reply <id>), or post where it fits (${cli} post <channel>)`,
+    stuck: `\`${cli} stuck\` is gone: a board on a2() keeps its dead letters in A2, on the backend's \`servers\``,
+  }
+  return Object.hasOwn(removed, word) ? removed[word] : undefined
 }
 
 /** The command word: the first argument that isn't a flag or a string flag's value. */
@@ -180,21 +176,60 @@ function commandWord(args: string[]): string | undefined {
   return undefined
 }
 
-const parsed = (() => {
-  const args = withMentions(process.argv.slice(2))
-  const removed = REMOVED[commandWord(args) ?? '']
+const parseAll = (args: string[]) => parseArgs({ args, allowPositionals: true, options: OPTIONS })
+
+/** A command an app adds to board's: `serve` and `inspect`, in the standalone `board`. */
+export type Command = {
+  /** Its lines in `help`, indented as the others are. */
+  help: string
+  run(args: string[], context: CommandContext): Promise<number>
+}
+
+/** What a command an app adds gets from the CLI it runs in. */
+export type CommandContext = {
+  flags: Flags
+  out: (text: string) => void
+  usage: (message: string) => Error
+  portFlag: () => number | undefined
+  connection: typeof connection
+  client: () => Board
+  openBrowser: (url: string) => void
+  saveLink: typeof saveLink
+  linkedByServe: (root: string) => boolean
+}
+
+/**
+ * The CLI an app runs: its name, as help, usage, and errors say it (`board`, `vercel board`),
+ * the command an agent's hook runs it with later (found when it isn't given), and its own commands.
+ */
+export type App = { name: string; command?: string; commands: Record<string, Command> }
+
+type Flags = ReturnType<typeof parseAll>['values']
+
+// What one run parsed, which every command reads. A process runs one command at a time.
+let app: App = { name: 'board', commands: {} }
+let flags = {} as Flags
+let positionals: string[] = []
+
+/** How messages name this CLI: `vb` for the standalone one, as they always have, or the app's own name. */
+const named = () => (app.name === 'board' ? 'vb' : app.name)
+
+/** Parses `argv` for this run: false, once the error line is out, when it doesn't. */
+function parse(argv: string[]): boolean {
+  const args = withMentions(argv)
+  const removed = removedCommand(commandWord(args) ?? '')
   try {
     if (removed) throw new UsageError(removed)
-    return parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS })
+    const parsed = parseAll(markAttachmentId(args))
+    flags = parsed.values
+    positionals = parsed.positionals.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
+    return true
   } catch (error) {
     const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
-    process.stderr.write(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`board help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
-    return null
+    process.stderr.write(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`${app.name} help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
+    return false
   }
-})()
-// A misused flag runs nothing: the end of this file exits 2, once the error line is out.
-const { values: flags, positionals: marked } = parsed ?? { values: {} as NonNullable<typeof parsed>['values'], positionals: [] as string[] }
-const positionals = marked.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
+}
 
 // What a person reads can't drive their terminal; what a program reads is byte for byte what the board said.
 const out = (text: string) => process.stdout.write(`${terminalText(text)}\n`)
@@ -279,8 +314,19 @@ function filters(channel?: string): Filters & { after?: string } {
  * The board this command talks to, `--url`'s or the one the environment points at, as `--as`
  * says: a handle on it, and how it reaches it (the credentials `vb` finds, `--handle`'s handle).
  */
+/** The board the environment points at; with none, how to point at one, with the commands this app has. */
+function configuredUrl(): string {
+  try {
+    return boardUrl()
+  } catch (error) {
+    if (!(error instanceof BoardError) || error.code !== 'no_board') throw error
+    const ways = [`run \`${app.name} link <url>\``, 'set BOARD_URL', `run \`${app.name} use <url>\``, ...(app.commands.serve ? [`\`${app.name} serve\` for a local one`] : [])]
+    throw new BoardError('no_board', `no board URL: ${ways.slice(0, -1).join(', ')}, or ${ways.at(-1)}`, 0)
+  }
+}
+
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
-  const at = (url ?? boardUrl()).replace(/\/+$/, '')
+  const at = (url ?? configuredUrl()).replace(/\/+$/, '')
   const handle = options.handle ?? flags.handle
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
@@ -349,6 +395,7 @@ function runsCli(bin: string, self: string): boolean {
  * this version through npx; otherwise this CLI's full path.
  */
 function cliCommand(): { command: string; note?: string } {
+  if (app.command) return { command: app.command }
   const self = realpathSync(process.argv[1]!)
   const installed = globalVb()
   if (!fromNpx(self)) {
@@ -488,17 +535,17 @@ async function identity(args: string[]): Promise<number> {
     if (flags.json) return printJson(view), 0
     if (view.links.length === 0) out('no linked accounts')
     for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
-    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (vb identity link <key>)`)
+    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (${named()} identity link <key>)`)
     return 0
   }
   if (sub === 'unlink') {
-    if (!target || args.length !== 2) throw new UsageError('usage: board identity unlink <account>   (a handle or actor ID from `vb identity`)')
+    if (!target || args.length !== 2) throw new UsageError(`usage: ${app.name} identity unlink <account>   (a handle or actor ID from \`${app.name} identity\`)`)
     const result = await board.unlinkAccount(target)
     if (flags.json) printJson(result)
     else out(`unlinked ${result.actor}`)
     return 0
   }
-  if (sub !== 'link' || !target || args.length !== 2) throw new UsageError('usage: board identity [link <key> [--code] [--no-wait] | unlink <account>]')
+  if (sub !== 'link' || !target || args.length !== 2) throw new UsageError(`usage: ${app.name} identity [link <key> [--code] [--no-wait] | unlink <account>]`)
   const before = new Set((await board.identity()).links.map((link) => `${link.actor}|${link.at}`))
   // The entry's platform, as the board lists it: what the code is posted from, or the sign-in is for.
   const platform = (await board.discovery().catch(() => null))?.sync.find((entry) => entry.key === target)?.platform ?? target
@@ -541,13 +588,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
   switch (command) {
     case undefined:
     case 'help':
-      out(HELP)
+      out(help())
       return 0
 
     case 'link':
     case 'use': {
       const url = args[0]
-      if (!url || args.length !== 1) throw new UsageError(`usage: board ${command} <url>`)
+      if (!url || args.length !== 1) throw new UsageError(`usage: ${app.name} ${command} <url>`)
       const discovery = await connection(url).board.discovery()
       const root = command === 'link' ? projectDir() : null
       await saveLink(root, discovery.url)
@@ -580,7 +627,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'conformance': {
-      if (args.length > 0) throw new UsageError('usage: board conformance [--channel <c>]')
+      if (args.length > 0) throw new UsageError(`usage: ${app.name} conformance [--channel <c>]`)
       const report = await conformance(client(), flags.channel ? { channel: flags.channel } : {})
       if (flags.json) printJson(report)
       else out(formatConformance(report))
@@ -660,9 +707,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'post': {
       const [target, body] = args
-      if (!target) throw new UsageError('usage: board post <channel|id> "<text>"')
+      if (!target) throw new UsageError(`usage: ${app.name} post <channel|id> "<text>"`)
       const re = isMessageRef(target) ? messageId(target) : undefined
-      if (re !== undefined && flags.sync?.length) throw new UsageError('--sync attaches whole threads: post to a channel, or use vb sync <id> <target>')
+      if (re !== undefined && flags.sync?.length) throw new UsageError(`--sync attaches whole threads: post to a channel, or use ${named()} sync <id> <target>`)
       if (flags.sync?.length && flags['no-sync']) throw new UsageError('--sync and --no-sync contradict each other')
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
@@ -708,7 +755,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         return 0
       }
       const [target, body] = args
-      if (!target) throw new UsageError('usage: board schedule <channel|id> "<text>" (--in 1d | --at <time> | --every 30m)')
+      if (!target) throw new UsageError(`usage: ${app.name} schedule <channel|id> "<text>" (--in 1d | --at <time> | --every 30m)`)
       if (!flags.in && !flags.at && !flags.every) throw new UsageError('say when: --in 1d, --at <time>, or --every 30m')
       if (flags.sync?.length) throw new UsageError('a schedule posts where you point it: --sync is for post')
       const times = flags.times === undefined ? undefined : Number(flags.times)
@@ -765,7 +812,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           // What installing again would change, and whether the board the hook runs is older than this one.
           const cli = cliOf(installed)
           const problems = outdated(agent, installed)
-          if (!versions.has(cli)) versions.set(cli, hookVersion(cli))
+          // A host answers `--version` with its own version, not board's, so its hook isn't checked by it.
+          if (!versions.has(cli)) versions.set(cli, app.command ? null : hookVersion(cli))
           const version = versions.get(cli)
           const behind = version != null && olderVersion(version, VERSION)
           if (behind) problems.push(`runs board ${version}, not ${VERSION}`)
@@ -773,7 +821,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           if (problems.length === 0) continue
           for (const problem of problems) out(`  ${problem}`)
           const global = behind && cli === 'vb'
-          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`vb hooks install ${agent}`] : [])]
+          const fixes = [...(global ? ['npm i -g @vercel/board'] : []), ...(problems.length > (global ? 1 : 0) ? [`${named()} hooks install ${agent}`] : [])]
           out(`  fix with ${fixes.join(', then ')}`)
         }
         return 0
@@ -788,7 +836,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         }
         return 0
       }
-      if (action !== 'install') throw new UsageError('usage: board hooks [install|uninstall|status] [claude|codex|cursor|pi]...')
+      if (action !== 'install') throw new UsageError(`usage: ${app.name} hooks [install|uninstall|status] [claude|codex|cursor|pi]...`)
       const { command: cli, note } = cliCommand()
       // One block per agent: its name and file, then what happened and what's left to do, indented.
       for (const agent of agents) {
@@ -801,8 +849,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         // "already installed" only when nothing was written: a new hook command, rule, or dropped rule is an update.
         out(`${AGENTS[agent].name}  ${tilde(AGENTS[agent].file())}`)
         out(`  ${!had ? 'added the turn-end hook' : changed || added.length > 0 || dropped ? 'updated' : 'already installed'}`)
-        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : 'vb runs without asking'}`)
-        if (agent === 'cursor' && !rules) out('  npm i -g @vercel/board lets Cursor run vb without asking')
+        if (added.length > 0) out(`  ${agent === 'claude' ? 'reply, post, read, and channels run without asking' : `${named()} runs without asking`}`)
+        if (agent === 'cursor' && !rules && !app.command) out('  npm i -g @vercel/board lets Cursor run vb without asking')
         if (agent === 'codex') {
           if (changed) out('  approve it once in Codex with /hooks')
           let host: string | null = null
@@ -812,7 +860,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           } catch {}
           const config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')
           const profile = codexNetwork(host)
-          out(`  to let vb reach the board from Codex's sandbox, add to ${tilde(config)}:`)
+          out(`  to let ${named()} reach the board from Codex's sandbox, add to ${tilde(config)}:`)
           out('')
           out(['# a permission profile (beta) that opens the network to just the board', '', '# at the top, before any [table]', profile.top, '', '# anywhere (merge [features] into yours)', profile.tables].join('\n').replace(/^(?=.)/gm, '    '))
         }
@@ -820,7 +868,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (note) out(`${note[0]!.toUpperCase()}${note.slice(1)}.`)
       out('The hooks remind once per turn without a board update.')
-      out('They stay quiet outside projects linked with `vb link <url>`.')
+      out(`They stay quiet outside projects linked with \`${named()} link <url>\`.`)
       return 0
     }
 
@@ -870,7 +918,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'react': {
       const id = messageId(args[0])
-      if (!args[1]) throw new UsageError('usage: board react <id> <emoji> [--remove]')
+      if (!args[1]) throw new UsageError(`usage: ${app.name} react <id> <emoji> [--remove]`)
       let emoji: string
       try {
         emoji = normalizeEmoji(args[1])
@@ -886,7 +934,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const set = labelPairs(args.slice(1))
       const unset = flags.unset ?? []
       if (Object.keys(set).length === 0 && unset.length === 0)
-        throw new UsageError('usage: board label <id> k=v... [--unset k]...')
+        throw new UsageError(`usage: ${app.name} label <id> k=v... [--unset k]...`)
       await client().label(id, { set, unset })
       return 0
     }
@@ -915,7 +963,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'download': {
       const id = args[0]
-      if (!id) throw new UsageError('usage: board download <attachment> [path]   (the id `vb read` shows on a file line)')
+      if (!id) throw new UsageError(`usage: ${app.name} download <attachment> [path]   (the id \`${app.name} read\` shows on a file line)`)
       const response = await client().download(id)
       const data = new Uint8Array(await response.arrayBuffer())
       if (args[1] === '-') return process.stdout.write(data), 0
@@ -929,7 +977,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'inbox': {
       const key = args[0]
-      if (!key) throw new UsageError('usage: board inbox <key> [channel] [--limit N]')
+      if (!key) throw new UsageError(`usage: ${app.name} inbox <key> [channel] [--limit N]`)
       const events = await client().inbox(key, {
         ...(args[1] ? { channel: args[1] } : {}),
         ...(flags.limit ? { limit: Number(flags.limit) } : {}),
@@ -959,30 +1007,36 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const label = joined.name ? `#${joined.name}` : joined.channel
         return out(joined.joined ? `joined ${label}` : `already in ${label}`), 0
       }
-      if (sub !== 'read' || !target) throw new UsageError('usage: board sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel|link>')
+      if (sub !== 'read' || !target) throw new UsageError(`usage: ${app.name} sources <key> read <channel|thread|link> [--limit N], or sources <key> join <channel|link>`)
       const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
       if (flags.json) return printJson(read), 0
-      return out(formatSourceRead(key, read)), 0
+      return out(formatSourceRead(key, read, Date.now(), named())), 0
     }
 
     case 'tail': {
       const controller = new AbortController()
-      process.once('SIGINT', () => controller.abort())
-      for await (const event of client().events(
-        { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
-        { signal: controller.signal },
-      ))
-        printEvent(event)
+      // Its handler goes when it's done: inside another CLI, the process goes on, and Ctrl-C should stop it.
+      const stop = () => controller.abort()
+      process.once('SIGINT', stop)
+      try {
+        for await (const event of client().events(
+          { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
+          { signal: controller.signal },
+        ))
+          printEvent(event)
+      } finally {
+        process.off('SIGINT', stop)
+      }
       return 0
     }
 
     case 'wait': {
       const controller = new AbortController()
-      process.once('SIGINT', () => controller.abort())
-      const event = await client().wait(filters(args[0]), {
-        timeout: flags.timeout ?? '30m',
-        signal: controller.signal,
-      })
+      const stop = () => controller.abort()
+      process.once('SIGINT', stop)
+      const event = await client()
+        .wait(filters(args[0]), { timeout: flags.timeout ?? '30m', signal: controller.signal })
+        .finally(() => process.off('SIGINT', stop))
       if (!event) {
         if (!controller.signal.aborted) process.stderr.write('timed out\n')
         return 124
@@ -991,89 +1045,50 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'serve': {
-      if (args.length > 0) throw new UsageError('usage: board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]')
-      const port = portFlag()
-      const root = projectDir()
-      const { localHandle, serveLocal } = await import('./serve.ts')
-      const handle = flags.handle ?? process.env.BOARD_HANDLE
-      const local = await serveLocal({
-        dir: flags.dir ?? join(root, '.board'),
-        ...(port !== undefined ? { port } : {}),
-        ...(handle ? { handle: localHandle(handle) } : {}),
-      })
-      let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
-      try {
-        // Link this project, unless it's linked to another board (a remote one, or a \`board()\` dev
-        // server on localhost): then say how to reach this one. A link an earlier \`vb serve\` wrote moves.
-        const linked = projectUrl()
-        if (linked === undefined || linked === local.url || linkedByServe(root)) {
-          await saveLink(root, local.url, { serve: true })
-          if (linked !== local.url) out(`linked ${root} to ${local.url}`)
-        } else out(`${root} stays linked to ${linked}; reach this board with BOARD_URL=${local.url}`)
-        out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
-        if (!flags['no-inspect']) {
-          // With this board's token, whatever BOARD_TOKEN says.
-          const { board } = connection(local.url, { token: local.token, handle: local.handle })
-          inspector = await startInspector({ client: board.as(null) })
-          out(`inspector at ${inspector.url}`)
-          if (!flags['no-open']) openBrowser(inspector.url)
-        }
-        await new Promise<void>((resolve) => {
-          process.once('SIGINT', resolve)
-          process.once('SIGTERM', resolve)
-        })
-      } finally {
-        await inspector?.close()
-        await local.close()
-      }
-      return 0
+    default: {
+      const own = app.commands[command]
+      if (own) return own.run(args, context())
+      throw new UsageError(`unknown command: ${command} (run \`${app.name} help\`)`)
     }
-
-    case 'inspect': {
-      const port = portFlag()
-      const inspector = await startInspector({ client: client(), ...(port !== undefined ? { port } : {}) })
-      out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)
-      if (!flags['no-open']) openBrowser(inspector.url)
-      await new Promise<void>((resolve) => {
-        process.once('SIGINT', resolve)
-        process.once('SIGTERM', resolve)
-      })
-      await inspector.close()
-      return 0
-    }
-
-    default:
-      throw new UsageError(`unknown command: ${command} (run \`board help\`)`)
   }
 }
 
-if (parsed === null) {
-  exit(2)
-} else if (flags.version) {
-  out(VERSION)
-} else if (flags.help) {
-  out(HELP)
-} else {
-  const [command, ...args] = positionals
-  run(command, args).then(
-    (code) => exit(code),
-    (error: unknown) => {
-      // A board's error says what the board said: it can't drive the terminal either.
-      process.stderr.write(`${terminalText(`error: ${(error as Error).message}`)}\n`)
-      exit(error instanceof UsageError ? 2 : 1)
-    },
-  )
-}
+
+/** What a command an app adds gets: this run's flags, and the helpers board's own commands use. */
+const context = (): CommandContext => ({
+  flags,
+  out,
+  usage: (message) => new UsageError(message),
+  portFlag,
+  connection,
+  client,
+  openBrowser,
+  saveLink,
+  linkedByServe,
+})
 
 /**
- * Exits once stdout and stderr have flushed. On a pipe, writes can still be
- * queued when a command returns, and `process.exit` would drop them: a long
- * `read <id> --json` would reach a slow reader cut off.
+ * Runs board's CLI on `argv` (what follows the command name) as `app`, and answers its exit
+ * code: 0 success, 1 error, 2 misuse, 124 when `wait` times out. Errors are one `error: …` line
+ * on stderr. A long-running command (`tail`, `serve`) answers once it's stopped.
  */
-function exit(code: number) {
-  let pending = 2
-  const done = () => --pending === 0 && process.exit(code)
-  process.stdout.write('', done)
-  process.stderr.write('', done)
+export async function main(argv: string[], options: App): Promise<number> {
+  app = options
+  if (!parse(argv)) return 2
+  if (flags.version) {
+    out(VERSION)
+    return 0
+  }
+  if (flags.help) {
+    out(help())
+    return 0
+  }
+  const [command, ...args] = positionals
+  try {
+    return await run(command, args)
+  } catch (error) {
+    // A board's error says what the board said: it can't drive the terminal either.
+    process.stderr.write(`${terminalText(`error: ${(error as Error).message}`)}\n`)
+    return error instanceof UsageError ? 2 : 1
+  }
 }
