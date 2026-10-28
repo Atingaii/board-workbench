@@ -29,11 +29,18 @@ const SHORT: Record<string, string> = Object.fromEntries(
   Object.entries(OPTIONS).flatMap(([name, option]) => ('short' in option ? [[option.short, name]] : [])),
 )
 
-/** Whether `arg` is a string option written apart from its value (`--limit 5`, `-n 5`), whose value is the next argument. */
+/**
+ * Whether `arg` is a string option written apart from its value, whose value is the next argument:
+ * `--limit 5`, `-n 5`, or the last of a group of short ones, `-an 5`.
+ */
 function takesValue(arg: string): boolean {
   if (arg.includes('=')) return false
-  const name = arg.startsWith('--') ? arg.slice(2) : arg.length === 2 ? SHORT[arg[1]!] : undefined
-  return name !== undefined && OPTIONS[name as keyof typeof OPTIONS]?.type === 'string'
+  const string = (name: string | undefined) => name !== undefined && OPTIONS[name as keyof typeof OPTIONS]?.type === 'string'
+  if (arg.startsWith('--')) return string(arg.slice(2))
+  // In a group, a string option takes what follows it in the group, or, last, the next argument.
+  const letters = arg.slice(1)
+  const first = [...letters].findIndex((letter) => string(SHORT[letter]))
+  return first === letters.length - 1
 }
 
 /** A command's own name for `word`, which may be one of its aliases (`rm` is `delete`). */
@@ -70,18 +77,13 @@ function removedCommand(word: string): string | undefined {
 }
 
 /**
- * The command `argv` runs, by its own name (`delete` for `rm`): the first argument that isn't a
- * flag or a string flag's value (a bare `--mentions` takes none).
+ * The command `argv` runs, by its own name (`delete` for `rm`), as the parser reads it: the
+ * first positional, past every flag and value however they're written (`-an 1`, `--limit=1`). A
+ * bare `--mentions` takes none.
  */
 export function commandWord(argv: string[]): string | undefined {
-  const args = withMentions(argv)
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!
-    if (arg === '--') return canonical(args[i + 1])
-    if (!arg.startsWith('-') || arg === '-') return canonical(arg)
-    if (takesValue(arg)) i++
-  }
-  return undefined
+  const { positionals } = parseArgs({ args: markAttachmentId(withMentions(argv)), allowPositionals: true, options: OPTIONS, strict: false })
+  return canonical(positionals[0])
 }
 
 const parseAll = (args: string[]) => parseArgs({ args, allowPositionals: true, options: OPTIONS })

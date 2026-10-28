@@ -41,6 +41,8 @@ describe('vb()', () => {
     const first = (await vb(team, ['post', 'dev', 'gone soon', '--no-sync'])).stdout.trim()
     // A caller that doesn't delete doesn't by another name either.
     expect(await vb(team, ['rm', first], { refuse: ['delete'] })).toMatchObject({ code: 2, stderr: "error: delete isn't available here\n" })
+    // However its flags are grouped: -a and -n with its value, before the command.
+    expect(await vb(team, ['-an', '1', 'delete', first], { refuse: ['delete'] })).toMatchObject({ code: 2, stderr: "error: delete isn't available here\n" })
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).deleted).toBe(false)
     expect((await vb(team, ['rm', first])).code).toBe(0)
     expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).deleted).toBe(true)

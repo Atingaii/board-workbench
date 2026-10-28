@@ -1,7 +1,6 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { build } from 'tsdown'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { commands, usage, type CliCommand } from '../src/cli/commands.ts'
 import { local } from '../src/cli/local.ts'
@@ -45,6 +44,8 @@ describe("the CLI's commands, as data", () => {
     expect(read.stdout).toMatch(/^usage: board read \[channel\|id\|link\] \[filters\] \[options\]\n\nthe latest threads/)
     expect(read.stdout).toMatch(/\noptions:\n  -n, --limit <N>  threads to list \(default: 50\)\n/)
     expect(read.stdout).toMatch(/\nfilters:\n  --re <id> +in a thread/)
+    // A bare --mentions means you: its value is optional.
+    expect(read.stdout).toMatch(/\n  --mentions \[@handle\] +mentioning a handle/)
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
     expect((await capture(() => main(['help', 'identity', 'link'], app))).stdout).toMatch(/^usage: board identity link <key> \[options\]\n/)
     expect((await capture(() => main(['sources', 'slack', 'read', '--help'], app))).stdout).toMatch(/^usage: board sources <key> read <target> \[options\]\n/)
@@ -81,21 +82,17 @@ describe("the CLI's commands, as data", () => {
       }
   })
 
-  it('loads nothing but data, so a CLI that runs board can read its commands on every start', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'board-commands-'))
-    const entry = join(import.meta.dirname, `.commands-entry-${process.pid}.ts`)
-    await writeFile(entry, "export { commands, globalOptions, filters } from '../src/cli/commands.ts'\n")
-    try {
-      await build({ config: false, entry: { commands: entry }, outDir: dir, platform: 'node', format: 'esm', dts: false, clean: false, logLevel: 'silent', deps: { alwaysBundle: [/.*/], onlyBundle: false } })
-      const files = (await readdir(dir)).filter((name) => /\.m?js$/.test(name))
-      const code = (await Promise.all(files.map((name) => readFile(join(dir, name), 'utf8')))).join('\n')
-      expect(files).toHaveLength(1)
-      expect(code).not.toMatch(/\bimport\b[^\n]*\bfrom\b/)
-      // zod is what the rest of the CLI parses with.
-      expect(code).not.toContain('ZodError')
-    } finally {
-      await rm(entry, { force: true })
-      await rm(dir, { recursive: true, force: true })
-    }
-  }, 60_000)
+  it('ships as data that imports nothing, so a CLI that runs board can read its commands on every start', async () => {
+    const root = join(import.meta.dirname, '..')
+    const exports = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).exports as Record<string, { default: string }>
+    const entry = join(root, exports['./cli/commands']!.default)
+    // Statements that import, static (`import … from`, `export … from`) or dynamic (`import(…)`), not data that says from.
+    const imports = (code: string) =>
+      [...code.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']/gm)].map((match) => match[1] ?? match[2]!)
+    // The entry re-exports one chunk of its own, the data, and that chunk imports nothing.
+    const fromEntry = imports(await readFile(entry, 'utf8'))
+    expect(fromEntry).toHaveLength(1)
+    expect(fromEntry[0]).toMatch(/^\.\/commands-[\w-]+\.mjs$/)
+    expect(imports(await readFile(join(dirname(entry), fromEntry[0]!), 'utf8'))).toEqual([])
+  })
 })

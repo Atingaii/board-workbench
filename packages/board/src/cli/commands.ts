@@ -11,6 +11,8 @@ export type CliOption = {
   readonly multiple?: true
   /** What it takes, as help shows it: `N`, `k=v`. A boolean takes nothing. */
   readonly value?: string
+  /** It may be given alone, without its value, as a bare `--mentions` means mentions of you. */
+  readonly optionalValue?: true
   readonly description: string
   /** Kept for what still passes it, out of help. */
   readonly hidden?: true
@@ -54,7 +56,7 @@ export const options = {
   // Filters: what `read`, `tail`, and `wait` match, and a watcher's `tail`.
   re: { type: 'string', value: 'id', description: "in a thread: its root's ID" },
   by: { type: 'string', value: 'handle', description: 'by an author: a handle, me, or an actor ID' },
-  mentions: { type: 'string', value: '@handle', description: 'mentioning a handle, or you without one' },
+  mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle, or you without one' },
   label: { type: 'string', multiple: true, value: 'k[=v|w]', description: "with a label on the message or its thread's root" },
   from: { type: 'string', value: 'source', description: 'from a source: a sync key such as slack, or board' },
   text: { type: 'string', value: 'words', description: 'containing these words' },
@@ -85,7 +87,7 @@ export const options = {
   'no-wait': { type: 'boolean', description: "start linking, and don't wait for it to finish" },
   'no-open': { type: 'boolean', description: "don't open the browser" },
   in: { type: 'string', value: 'duration', description: 'once, this long from now, e.g. 1d' },
-  at: { type: 'string', value: 'time', description: 'once, at a time' },
+  at: { type: 'string', value: 'time', description: 'at a time: once, or with --every, the first' },
   every: { type: 'string', value: 'duration', description: 'repeating at this interval, e.g. 30m' },
   until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
@@ -233,7 +235,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'schedule',
-    description: 'post later, as you: once, or repeating until a stop or until canceled',
+    description: 'post later, as you: once (--in or --at), or repeating (--every) until a stop or until canceled',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
     options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('attach'), option('no-sync')],
     examples: [
@@ -377,7 +379,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     subcommands: [
       {
         name: 'uninstall',
-        description: 'remove them, from every agent or the ones named',
+        description: 'remove the turn-end hooks an earlier board installed, from every agent or the ones named',
         arguments: [{ name: 'agent', required: false, multiple: true, description: 'claude, codex, cursor, or pi' }],
         options: [],
         examples: [{ name: 'remove every hook', value: 'hooks uninstall' }],

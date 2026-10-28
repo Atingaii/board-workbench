@@ -44,7 +44,7 @@ function rows(entries: readonly (readonly [string, string])[], pad = padOf(entri
 
 /** An option as help writes it: `--limit <N>`, `-h, --help`, `--label <k[=v|w]>...`. */
 export const flag = (option: CliOption): string =>
-  `${option.short ? `-${option.short}, ` : ''}--${option.name}${option.value ? ` <${option.value}>` : ''}${option.multiple ? '...' : ''}`
+  `${option.short ? `-${option.short}, ` : ''}--${option.name}${option.value ? (option.optionalValue ? ` [${option.value}]` : ` <${option.value}>`) : ''}${option.multiple ? '...' : ''}`
 
 const shown = (list: readonly CliOption[]) => list.filter((option) => !option.hidden)
 
