@@ -38,9 +38,9 @@ const code = await createApp({ appName: 'vercel board' }).run(process.argv.slice
 `run` answers the exit code, and never exits the process itself.
 
 With no board URL anywhere, it talks to your team's board in Vercel's API:
-the team of the linked project (`.vercel/project.json`), or `VERCEL_ORG_ID`'s,
-or else your login's default team. `--scope <team>` picks another, by its
-slug or ID. It reads and writes as you, with the login the Vercel CLI hands it
+`VERCEL_ORG_ID`'s, or the team of the nearest linked project
+(`.vercel/project.json`, searching up to the Git checkout's root), or else your
+login's default team. `--scope <team>` picks another, by its slug or ID. It reads and writes as you, with the login the Vercel CLI hands it
 (`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`.
 
 ### In-process, on a handle
@@ -127,7 +127,9 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
   object per line, each a message, event, channel, actor, or schedule as the
   [HTTP API](./03-http.md#routes) sends it. See [JSON output](#json-output).
 - **Writes print the new message's ID** on stdout (the whole message with
-  `--json`), so a script can chain them: `id=$(vb post ops "…")`.
+  `--json`), so a script can chain them: `id=$(vb post ops "…")`. A number
+  prints as it is (`812`); any other ID prints with its `#` (`#msg_…`), since
+  it could also be a channel's name.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
 - **Text can come from stdin.** Pass `-` as the text. It may be left out when

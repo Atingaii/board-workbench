@@ -50,6 +50,21 @@ export function projectDir(cwd = process.cwd()): string {
   }
 }
 
+/**
+ * The nearest Vercel project link (`.vercel/project.json`), searching up from the current
+ * directory to a Git checkout's root, as a project link is found. Null when there's none.
+ */
+export function vercelProjectFile(cwd = process.cwd()): string | null {
+  let directory = resolve(cwd)
+  while (true) {
+    const file = join(directory, '.vercel', 'project.json')
+    if (existsSync(file)) return file
+    const parent = dirname(directory)
+    if (isCheckout(directory) || parent === directory) return null
+    directory = parent
+  }
+}
+
 export function projectUrl(): string | undefined {
   const path = join(projectDir(), '.board', 'config.json')
   let contents: string

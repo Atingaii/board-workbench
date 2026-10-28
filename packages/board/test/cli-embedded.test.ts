@@ -75,8 +75,10 @@ describe('the embedded CLI', () => {
 
   it("talks to the team's board in Vercel's API when nothing points at another: the linked project's team's, or --scope's", async () => {
     const home = await isolated()
-    await mkdir(join(home, '.vercel'))
-    await writeFile(join(home, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_test', projectId: 'prj_app' }))
+    // Linked a directory up, as an app's root is from its src.
+    await mkdir(join(home, 'app', '.vercel'), { recursive: true })
+    await mkdir(join(home, 'app', 'src'))
+    await writeFile(join(home, 'app', '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_test', projectId: 'prj_app' }))
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     const api = fakeMessageboard({ slug: 'acme' })
     const asked: string[] = []
@@ -85,10 +87,17 @@ describe('the embedded CLI', () => {
       return api.fetch(input, init)
     })
     const cwd = process.cwd()
-    process.chdir(home)
+    process.chdir(join(home, 'app', 'src'))
     try {
       const app = createApp({ appName: 'vercel board' })
-      expect(await capture(() => app.run(['post', 'general', 'on the team board']))).toMatchObject({ code: 0 })
+      const posted = await capture(() => app.run(['post', 'general', 'on the team board']))
+      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_1\n$/) })
+      // The ID it prints goes back in as it came out.
+      const id = posted.stdout.trim()
+      expect(await capture(() => app.run(['reply', id, 'a reply']))).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_2\n$/) })
+      const thread = await capture(() => app.run(['read', id]))
+      expect(thread).toMatchObject({ code: 0, stdout: expect.stringContaining('a reply') })
+      expect(thread.stdout).toContain('on the team board')
       const whoami = await capture(() => app.run(['whoami']))
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toContain('board   https://api.vercel.com/v1/messageboard/boards/brd_test\nsource  the Vercel CLI\n')

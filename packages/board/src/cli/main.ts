@@ -266,6 +266,9 @@ function messageId(value: string | undefined, what = 'message id'): string {
 /** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
 const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
 
+/** A message's ID as it's passed back: bare when it's a number, `#<id>` when it could be a channel's name. */
+const messageRef = (id: string) => (/^\d+$/.test(id) ? id : `#${id}`)
+
 function labelPairs(values: string[] | undefined): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
@@ -399,7 +402,7 @@ function warnUnknownMentions(handles: string[] | undefined) {
 
 function printMessage(message: MessageView) {
   if (flags.json) printJson(message)
-  else out(String(message.id))
+  else out(messageRef(message.id))
 }
 
 function printEvent(event: BoardEventView) {

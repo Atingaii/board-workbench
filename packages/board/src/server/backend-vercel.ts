@@ -905,11 +905,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     ...unsupported,
     async discovery() {
       const who = { profile: null, session: null }
+      const team = await teamId()
       return {
         version: VERSION,
         url: `${origin}/v1/messageboard${await onBoard(who)}`,
         audience: origin,
-        team_id: await teamId(),
+        // The team's ID: the API says it when this board names the team by its slug, or not at all.
+        team_id: team?.startsWith('team_') ? team : (await self(who)).teamId,
         project_id: null,
         sync: [],
         // The API finds a project's deployment for a path, and wakes it through its Deployment Protection.
