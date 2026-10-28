@@ -1,6 +1,6 @@
 import { board as boardAt, type Board } from "@vercel/board";
 import { http } from "@vercel/board/backend-http";
-import { vb } from "@vercel/board/cli";
+import { commandWord, vb } from "@vercel/board/cli";
 import { z } from "zod";
 import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
 
@@ -71,5 +71,7 @@ export async function runVb(board: Board, args: string[], files: () => Promise<S
     readFile: async (path) => (await files()).readBinaryFile({ path: sandboxPath(path) }),
     writeFile: async (path, content) => (await files()).writeBinaryFile({ path: sandboxPath(path), content }),
   });
-  return [stdout.trimEnd(), stderr.trimEnd(), code === 0 ? "" : `(exit ${code})`].filter(Boolean).join("\n") || "(no output)";
+  const word = commandWord(args);
+  const elsewhere = word === "tail" || word === "wait" ? `run vb ${word} in bash instead` : "";
+  return [stdout.trimEnd(), stderr.trimEnd(), elsewhere, code === 0 ? "" : `(exit ${code})`].filter(Boolean).join("\n") || "(no output)";
 }

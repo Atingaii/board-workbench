@@ -56,8 +56,10 @@ test("vb tool: prints what vb prints, and says how a command failed", async () =
   assert.equal(await run("label", root.id, "kind=bug"), "(no output)");
   assert.match(await run("whoami"), /isn't available in-process[\s\S]*\(exit 2\)$/);
   // tail and wait would hold every other Eve's calls on the instance: they stay in bash.
-  for (const args of [["tail", "dev"], ["wait", "dev"], ["--as", "x", "tail", "dev"], ["--by", "ada", "wait"]])
-    assert.equal(await run(...args), `error: ${args.includes("tail") ? "tail" : "wait"} isn't available here\n(exit 2)`);
+  for (const args of [["tail", "dev"], ["wait", "dev"], ["--as", "x", "tail", "dev"], ["--by", "ada", "wait"], ["--mentions", "tail", "dev"]]) {
+    const word = args.includes("tail") ? "tail" : "wait";
+    assert.equal(await run(...args), `error: ${word} isn't available here\nrun vb ${word} in bash instead\n(exit 2)`);
+  }
   // A reply saying "wait" is a reply.
   assert.match(await run("reply", root.id, "wait"), /^\d+$/);
 });
