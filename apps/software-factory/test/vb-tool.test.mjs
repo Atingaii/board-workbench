@@ -56,7 +56,8 @@ test("vb tool: prints what vb prints, and says how a command failed", async () =
   assert.equal(await run("label", root.id, "kind=bug"), "(no output)");
   assert.match(await run("whoami"), /isn't available in-process[\s\S]*\(exit 2\)$/);
   // tail and wait would hold every other Eve's calls on the instance: they stay in bash.
-  for (const command of ["tail", "wait"]) assert.match(await run(command, "dev"), /isn't for the vb tool[\s\S]*\(exit 2\)$/);
+  for (const args of [["tail", "dev"], ["wait", "dev"], ["--as", "triage", "tail", "dev"]])
+    assert.match(await run(...args), /isn't for the vb tool[\s\S]*\(exit 2\)$/, args.join(" "));
 });
 
 test("vb tool: --attach and download use the sandbox's files, ~ and $HOME in its home", async () => {

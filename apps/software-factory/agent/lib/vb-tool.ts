@@ -1,6 +1,6 @@
 import { board as boardAt, type Board } from "@vercel/board";
 import { http } from "@vercel/board/backend-http";
-import { vb } from "@vercel/board/cli";
+import { commandWord, vb } from "@vercel/board/cli";
 import { z } from "zod";
 import { BOARD, eveAvatar, eveHeaders, eveName, SANDBOX_USER, VB_ROUTES } from "../../app/api/board/[[...path]]/harness.ts";
 
@@ -53,7 +53,7 @@ export type SandboxFiles = {
 /** Runs a vb command as Eve, and says what it printed, as bash would: stdout, then stderr, then a failure's exit code. */
 export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>, signal?: AbortSignal): Promise<string> {
   // They wait for the board, and every Eve on this instance waits behind them: a tool call can't.
-  const word = args.find((arg) => !arg.startsWith("-"));
+  const word = commandWord(args);
   if (word === "tail" || word === "wait") return `error: ${word} isn't for the vb tool: it holds every other vb call while it waits. Run vb ${word} in bash.\n(exit 2)`;
   const { code, stdout, stderr } = await vb(board, args, {
     ...(signal ? { signal } : {}),

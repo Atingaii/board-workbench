@@ -166,7 +166,7 @@ function removedCommand(word: string): string | undefined {
 }
 
 /** The command word: the first argument that isn't a flag or a string flag's value. */
-function commandWord(args: string[]): string | undefined {
+export function commandWord(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
     if (arg === '--') return args[i + 1]

@@ -51,7 +51,8 @@ describe('vb()', () => {
     const team = await handle()
     expect(await vb(team, ['read', '--url', 'https://elsewhere.test/api/board'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/--url doesn't apply/) })
     // tail and wait hold every later call: only with a signal to stop them.
-    for (const command of ['tail', 'wait']) expect(await vb(team, [command, 'dev'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
+    for (const args of [['tail', 'dev'], ['wait', 'dev'], ['--as', 'triage', 'tail', 'dev'], ['--timeout', '1m', 'wait']])
+      expect(await vb(team, args)).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
     const controller = new AbortController()
     const tail = vb(team, ['tail', 'dev'], { signal: controller.signal })
     controller.abort()

@@ -2,7 +2,9 @@
 // command but `serve` and `inspect`, which run something on this machine, and loads neither: no
 // A2 and no inspector reach an app that bundles it.
 import type { Board } from '../server/index.ts'
-import { main, mainWith } from './main.ts'
+import { commandWord, main, mainWith } from './main.ts'
+
+export { commandWord }
 
 /**
  * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). An agent's hook
@@ -45,7 +47,7 @@ let queue: Promise<unknown> = Promise.resolve()
  */
 export function vb(board: Board, argv: string[], options: VbOptions = {}): Promise<VbResult> {
   // `tail` never ends by itself and `wait` runs up to 30 minutes, holding every later call: only with a way to stop them.
-  const word = argv.find((arg) => !arg.startsWith('-'))
+  const word = commandWord(argv)
   if ((word === 'tail' || word === 'wait') && !options.signal)
     return Promise.resolve({ code: 2, stdout: '', stderr: `error: ${word} runs until it's stopped, and vb() runs one call at a time: pass a signal\n` })
   const result = queue.then(async () => {

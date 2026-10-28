@@ -65,6 +65,10 @@ your machine (`link`, `use`, `whoami`, `identity`, `hooks`, `serve`,
 `wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
 every later call until it ends: they answer 2 without a `signal`.
 
+`commandWord(argv)` answers the command `argv` runs (`tail` for
+`['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
+itself.
+
 ## Configuration
 
 | Setting | Flag | Env | Default |
