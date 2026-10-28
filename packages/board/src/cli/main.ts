@@ -24,6 +24,21 @@ class UsageError extends Error {}
 /** What the parser accepts: every option, by name (`commands.ts`). */
 const OPTIONS = options
 
+/** Options by their short letter: `n` is `limit`. */
+const SHORT: Record<string, string> = Object.fromEntries(
+  Object.entries(OPTIONS).flatMap(([name, option]) => ('short' in option ? [[option.short, name]] : [])),
+)
+
+/** Whether `arg` is a string option written apart from its value (`--limit 5`, `-n 5`), whose value is the next argument. */
+function takesValue(arg: string): boolean {
+  if (arg.includes('=')) return false
+  const name = arg.startsWith('--') ? arg.slice(2) : arg.length === 2 ? SHORT[arg[1]!] : undefined
+  return name !== undefined && OPTIONS[name as keyof typeof OPTIONS]?.type === 'string'
+}
+
+/** A command's own name for `word`, which may be one of its aliases (`rm` is `delete`). */
+const canonical = (word: string | undefined) => (word === undefined ? word : (commands.find((command) => command.aliases?.includes(word))?.name ?? word))
+
 // No argument can hold a NUL, so a marked one can't be anything else.
 const MARK = '\0'
 
@@ -40,7 +55,7 @@ function markAttachmentId(args: string[]): string[] {
     if (!arg.startsWith('-') || arg === '-') positionals.push(arg)
     else if (positionals.length === 1 && positionals[0] === 'download' && AttachmentId.safeParse(arg).success)
       return [...args.slice(0, i), `${MARK}${arg}`, ...args.slice(i + 1)]
-    else if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+    else if (takesValue(arg)) i++
   }
   return args
 }
@@ -54,14 +69,17 @@ function removedCommand(word: string): string | undefined {
   return Object.hasOwn(removed, word) ? removed[word] : undefined
 }
 
-/** The command word: the first argument that isn't a flag or a string flag's value (a bare `--mentions` takes none). */
+/**
+ * The command `argv` runs, by its own name (`delete` for `rm`): the first argument that isn't a
+ * flag or a string flag's value (a bare `--mentions` takes none).
+ */
 export function commandWord(argv: string[]): string | undefined {
   const args = withMentions(argv)
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
-    if (arg === '--') return args[i + 1]
-    if (!arg.startsWith('-') || arg === '-') return arg
-    if (!arg.includes('=') && OPTIONS[arg.slice(2) as keyof typeof OPTIONS]?.type === 'string') i++
+    if (arg === '--') return canonical(args[i + 1])
+    if (!arg.startsWith('-') || arg === '-') return canonical(arg)
+    if (takesValue(arg)) i++
   }
   return undefined
 }
@@ -859,7 +877,8 @@ export async function main(argv: string[], options: App): Promise<number> {
     out(help(positionals))
     return 0
   }
-  const [command, ...args] = positionals
+  const [word, ...args] = positionals
+  const command = canonical(word)
   try {
     if (io.board) {
       if (flags.url || flags.handle) throw new UsageError(`--${flags.url ? 'url' : 'handle'} doesn't apply: the board handle you pass says which board and who`)

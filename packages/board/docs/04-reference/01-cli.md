@@ -333,7 +333,8 @@ vb --version            # or -v
 ```
 
 A command's page has its arguments, options, and examples, and `--help` is
-always help, never the command it's on:
+always help, never the command it's on. Options take the short letters Vercel's
+CLI uses: `-n` for `--limit`, `-a` for `--all`, `-u` for `--until`.
 
 ```text
 $ vb react --help
@@ -485,7 +486,7 @@ person can edit their agents' messages. Mentions resolve again.
 ### delete
 
 ```text
-vb delete <id>
+vb delete <id>   # or vb rm, vb del
 ```
 
 Deletes a message, leaving a tombstone. Only its author's principal may delete

@@ -45,7 +45,7 @@ const serve: Command = {
     description:
       "run a board on this machine (127.0.0.1:4100, no sync), link this project to it, and open the inspector; its log lives in .board/, and you're local:user:<your OS user> (or --handle)",
     arguments: [],
-    options: [option('port', 'the port to listen on (default 4100)'), option('dir'), option('no-inspect'), option('no-open')],
+    options: [option('port', 'the port to listen on (default: 4100)'), option('dir'), option('no-inspect'), option('no-open')],
     examples: [{ name: 'run a board here, and open it', value: 'serve' }],
   },
   async run(args, { flags, out, usage, portFlag, connection, openBrowser, saveLink, linkedByServe }: CommandContext) {

@@ -23,9 +23,12 @@ async function capture(run: () => Promise<number>) {
 
 const app = { name: 'board', commands: local }
 
-/** Every command and subcommand, with the path that names it. */
+/** Every command and subcommand, with the path that names it, and each again by its aliases. */
 const paths = (list: readonly CliCommand[]): CliCommand[][] =>
-  list.flatMap((command) => [[command], ...(command.subcommands ?? []).map((sub) => [command, sub])])
+  list.flatMap((command) => [
+    ...[command, ...(command.aliases ?? []).map((alias) => ({ ...command, name: alias }))].map((named) => [named]),
+    ...(command.subcommands ?? []).map((sub) => [command, sub]),
+  ])
 const every = paths([...commands, ...Object.values(local).map((command) => command.spec)])
 
 /** A command line as a shell splits it: words, and quoted words whole. */
@@ -40,7 +43,7 @@ describe("the CLI's commands, as data", () => {
     const read = await capture(() => main(['read', '--help'], app))
     expect(read.code).toBe(0)
     expect(read.stdout).toMatch(/^usage: board read \[channel\|id\|link\] \[filters\] \[options\]\n\nthe latest threads/)
-    expect(read.stdout).toMatch(/\noptions:\n  --limit <N>  threads to list \(default 50\)\n/)
+    expect(read.stdout).toMatch(/\noptions:\n  -n, --limit <N>  threads to list \(default: 50\)\n/)
     expect(read.stdout).toMatch(/\nfilters:\n  --re <id> +in a thread/)
     expect(read.stdout).toContain("\nexamples:\n  list a channel's latest threads\n    board read dev\n")
     expect((await capture(() => main(['help', 'identity', 'link'], app))).stdout).toMatch(/^usage: board identity link <key> \[options\]\n/)
@@ -72,7 +75,9 @@ describe("the CLI's commands, as data", () => {
       for (const example of path.at(-1)!.examples) {
         const shown = await capture(() => main([...words(example.value), '--help'], app))
         expect(shown, example.value).toMatchObject({ code: 0, stderr: '' })
-        expect(shown.stdout.split('\n')[0], example.value).toBe(`usage: board ${usage(path)}${shown.stdout.split('\n')[0]!.endsWith(' [options]') ? ' [options]' : ''}`)
+        // An alias's page is its command's, by its own name.
+        const named = path.map((command) => commands.find((own) => own.aliases?.includes(command.name)) ?? command)
+        expect(shown.stdout.split('\n')[0], example.value).toBe(`usage: board ${usage(named)}${shown.stdout.split('\n')[0]!.endsWith(' [options]') ? ' [options]' : ''}`)
       }
   })
 

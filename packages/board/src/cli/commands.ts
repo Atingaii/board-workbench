@@ -29,6 +29,8 @@ export type CliExample = { readonly name: string; readonly value: string }
 
 export type CliCommand = {
   readonly name: string
+  /** Other names it runs by: `rm` for `delete`. */
+  readonly aliases?: readonly string[]
   readonly description: string
   readonly arguments: readonly CliArgument[]
   /** Its own options: the filters (with `filters`) and the global options apply too. */
@@ -69,7 +71,7 @@ export const options = {
   help: { type: 'boolean', short: 'h', description: "this help, or a command's" },
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
   // Commands' own.
-  limit: { type: 'string', value: 'N', description: 'how many' },
+  limit: { type: 'string', short: 'n', value: 'N', description: 'how many' },
   id: { type: 'string', value: 'key', description: 'a client ID: sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
@@ -77,19 +79,19 @@ export const options = {
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   channel: { type: 'string', value: 'c', description: 'in a channel' },
   remove: { type: 'boolean', description: 'take the reaction back' },
-  all: { type: 'boolean', description: 'everything, not only what most want' },
-  timeout: { type: 'string', value: 'duration', description: 'how long to wait (default 30m)' },
+  all: { type: 'boolean', short: 'a', description: 'everything, not only what most want' },
+  timeout: { type: 'string', value: 'duration', description: 'how long to wait (default: 30m)' },
   code: { type: 'boolean', description: 'post a code from your account instead of signing in' },
   'no-wait': { type: 'boolean', description: "start linking, and don't wait for it to finish" },
   'no-open': { type: 'boolean', description: "don't open the browser" },
   in: { type: 'string', value: 'duration', description: 'once, this long from now, e.g. 1d' },
   at: { type: 'string', value: 'time', description: 'once, at a time' },
   every: { type: 'string', value: 'duration', description: 'repeating at this interval, e.g. 30m' },
-  until: { type: 'string', value: 'time', description: 'repeating until a time' },
+  until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
-  dir: { type: 'string', value: 'dir', description: 'where the board keeps its log (default .board/)' },
+  dir: { type: 'string', value: 'dir', description: 'where the board keeps its log (default: .board/)' },
   'no-inspect': { type: 'boolean', description: "don't start the inspector" },
   // What a turn-end hook an earlier board installed still passes to `hook`.
   agent: { type: 'string', value: 'name', description: "the agent whose turn ended", hidden: true },
@@ -201,7 +203,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         description: "a channel (every channel without one), a message's ID, or a Slack or GitHub link the board synced",
       },
     ],
-    options: [option('limit', 'threads to list (default 50)')],
+    options: [option('limit', 'threads to list (default: 50)')],
     filters: true,
     examples: [
       { name: "list a channel's latest threads", value: 'read dev' },
@@ -268,6 +270,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'delete',
+    aliases: ['rm', 'del'],
     description: 'delete a message, leaving a tombstone',
     arguments: [id()],
     options: [],
@@ -361,7 +364,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'conformance',
     description: 'check that the board speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
     arguments: [],
-    options: [option('channel', 'the channel to check in (default conformance)')],
+    options: [option('channel', 'the channel to check in (default: conformance)')],
     examples: [{ name: 'check the board', value: 'conformance' }],
   },
   {

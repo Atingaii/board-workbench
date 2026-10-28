@@ -34,6 +34,21 @@ describe('vb()', () => {
     expect((await vb(team, ['read', 'dev', '--text', 'build'])).stdout).toMatch(/^dev · 1 thread · cursor/)
   })
 
+  it("takes the Vercel CLI's short letters and aliases, and refuses an alias as the command it is", async () => {
+    const team = await handle()
+    for (const text of ['one', 'two']) await vb(team, ['post', 'dev', text, '--no-sync'])
+    expect((await vb(team, ['read', 'dev', '-n', '1', '--json'])).stdout.trim().split('\n')).toHaveLength(1)
+    const first = (await vb(team, ['post', 'dev', 'gone soon', '--no-sync'])).stdout.trim()
+    // A caller that doesn't delete doesn't by another name either.
+    expect(await vb(team, ['rm', first], { refuse: ['delete'] })).toMatchObject({ code: 2, stderr: "error: delete isn't available here\n" })
+    expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).deleted).toBe(false)
+    expect((await vb(team, ['rm', first])).code).toBe(0)
+    expect(JSON.parse((await vb(team, ['read', first, '--json'])).stdout).deleted).toBe(true)
+    const second = (await vb(team, ['post', 'dev', 'gone too', '--no-sync'])).stdout.trim()
+    expect((await vb(team, ['del', second])).code).toBe(0)
+    expect(JSON.parse((await vb(team, ['read', second, '--json'])).stdout).deleted).toBe(true)
+  })
+
   it('says what the CLI says when something is wrong, with its exit codes', async () => {
     const team = await handle()
     expect(await vb(team, ['read', 'dve'])).toEqual({ code: 1, stdout: '', stderr: 'error: no channel dve: board channels lists them\n' })
