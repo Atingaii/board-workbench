@@ -1,9 +1,13 @@
 import { REPO } from "./github.ts";
+import { sourceOfPr } from "./inthread.ts";
 
 // What the factory imports from GitHub but keeps on the board, out of Slack, or off the board altogether.
 
-type GitHubEvent = { kind: string; thread: string; subthread: string | null; type: string; labels?: Record<string, string> };
-type Board = { messages(query: { channel: string; label: Record<string, string>; limit: number }): Promise<{ messages: unknown[] }> };
+type GitHubEvent = { kind: string; thread: string; subthread: string | null; type: string; labels?: Record<string, string>; raw?: unknown };
+type Board = {
+  messages(query: { channel: string; label: Record<string, string>; limit: number }): Promise<{ messages: unknown[] }>;
+  thread(id: string): Promise<{ message: { re: string | null; channel: string; noSync: boolean; deleted: boolean; labels: Record<string, string> } }>;
+};
 
 /**
  * Whether a GitHub event's board reply stays off Slack: inline review threads (comments on
@@ -30,10 +34,36 @@ export async function unseenPr(event: GitHubEvent, board: Board, channel: string
   return messages.length === 0;
 }
 
+/**
+ * The thread a new factory PR's root lives in (`source=<thread>`): its `board/<thread>` branch's
+ * thread, when that's a live root in `channel` that syncs (every one does to Slack, `devMirror`).
+ * Null for a PR that already has a root, which stays where it is, and for a source that's
+ * missing, deleted, elsewhere, kept off Slack, or a factory PR's own root: that PR keeps a Slack thread of its own.
+ */
+export async function sourceThread(event: GitHubEvent, board: Board, channel: string): Promise<string | null> {
+  if (event.kind !== "lifecycle") return null;
+  const source = sourceOfPr(event.raw);
+  const number = /:(\d+)$/.exec(event.thread)?.[1];
+  if (!source || !number) return null;
+  const { messages } = await board.messages({ channel, label: { pr: `${REPO}#${number}` }, limit: 1 });
+  if (messages.length) return null;
+  // A missing thread is a 404; anything else throws, so the import is retried.
+  const root = await board.thread(source).then(
+    (thread) => thread.message,
+    (error: { status?: number }) => {
+      if (error?.status === 404) return null;
+      throw error;
+    },
+  );
+  // A PR root that itself lives in another thread isn't on Slack either.
+  const shown = root && root.re === null && root.channel === channel && !root.noSync && !root.deleted && !root.labels.source;
+  return shown ? source : null;
+}
+
 // Going out, a function gets a delivery it never calls: nothing written on the board or in Slack reaches GitHub.
 type Outbound = { direction: "out"; deliver(): Promise<void> };
 type PullsSync =
-  | { direction: "in"; event: GitHubEvent; board: Board; import(channel: string, overrides: { noSync: boolean }): Promise<unknown> }
+  | { direction: "in"; event: GitHubEvent; board: Board; import(channel: string, overrides: { noSync: boolean; labels?: Record<string, string> }): Promise<unknown> }
   | Outbound;
 type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> } | Outbound;
 
@@ -41,12 +71,14 @@ type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> }
  * PR threads come in from GitHub and go nowhere back: a reply on the board, an Eve's included, stays
  * in Slack and on the board, so a conversation about a PR doesn't end up as comments on it.
  * Inline review threads and "closed by …" replies stay out of Slack; comments on a PR the board
- * has no thread for stay on GitHub.
+ * has no thread for stay on GitHub. A factory PR's root (its branch is `board/<thread>`) is labeled
+ * `source=<thread>`, so it lives in that thread instead of Slack's channel (`inthread.ts`).
  */
 export async function pulls(sync: PullsSync): Promise<void> {
   if (sync.direction === "out") return;
   if (await unseenPr(sync.event, sync.board, "dev")) return;
-  await sync.import("dev", { noSync: boardOnly(sync.event) });
+  const source = await sourceThread(sync.event, sync.board, "dev");
+  await sync.import("dev", { noSync: boardOnly(sync.event), ...(source ? { labels: { source } } : {}) });
 }
 
 /**

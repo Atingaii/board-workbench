@@ -128,3 +128,23 @@ test("runs deepsec in a worktree named for the event, and attaches its files by 
   assert.ok(m.includes("attach /tmp/deepsec-91/deepsec.log"));
   assert.ok(m.includes("attach /tmp/deepsec-91/deepsec.md"));
 });
+
+test(":security: on a factory PR's line in its source thread reviews that PR, and :secure: goes on the line", async () => {
+  const input = event();
+  input.message = { ...input.message, id: "3000", re: "2036", labels: { pr: "vercel-labs/board#53", state: "open", "pr.thread": "59" } };
+  const h = harness();
+  await h.run(input);
+  assert.deepEqual(h.replies, []);
+  assert.equal(h.notifications[0].thread, "59");
+  assert.ok(h.notifications[0].message.includes("in board thread #59."));
+  assert.ok(h.notifications[0].message.includes("vb react 3000 secure"));
+  assert.ok(h.notifications[0].message.includes("post your replies in #2036."));
+});
+
+test(":security: on an ordinary reply does nothing", async () => {
+  const input = event();
+  input.message = { ...input.message, re: "58", labels: {} };
+  const h = harness();
+  await h.run(input);
+  assert.deepEqual([...h.replies, ...h.notifications, ...h.reactions], []);
+});
