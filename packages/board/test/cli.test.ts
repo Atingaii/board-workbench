@@ -13,29 +13,20 @@ useBoard()
 const OLD_THREADS = "error: this board can't list threads: update board where the board is deployed\n"
 
 describe('cli', () => {
-  it('links a checkout from a subdirectory, ignores the link, and reads it from other subdirectories', async () => {
-    const root = await tmp('board-link-')
-    const directory = join(root, 'packages', 'app')
-    const global = await tmp('board-global-')
-    await mkdir(directory, { recursive: true })
-    await writeFile(join(root, '.git'), 'gitdir: /worktree')
-    await writeFile(join(root, '.gitignore'), 'node_modules')
-    await mkdir(join(global, 'board'))
-    await writeFile(join(global, 'board', 'config.json'), JSON.stringify({ url: 'http://global.invalid/api/board' }))
-    const local = { BOARD_URL: undefined, XDG_CONFIG_HOME: global }
-
-    expect(await vb(['link', `${url}/`], local, undefined, directory)).toMatchObject({
-      code: 0, stderr: '', stdout: `linked ${root} to ${url}\n`,
+  it('says how to point it at a board when nothing does, and that link and use are gone', async () => {
+    const root = await tmp('board-none-')
+    expect(await vb(['whoami'], { BOARD_URL: undefined }, undefined, root)).toEqual({
+      code: 1,
+      stdout: '',
+      stderr: "error: no board: pass --url <url> (or set BOARD_URL), --scope <team> for a team's board in Vercel's API, run it in a Vercel project (vercel link) for its team's, or `vb serve` for a local one\n",
     })
-    expect(JSON.parse(await readFile(join(root, '.board', 'config.json'), 'utf8'))).toEqual({ url })
-    expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules\n.board/\n')
-    expect(JSON.parse(await readFile(join(global, 'board', 'config.json'), 'utf8'))).toEqual({ url: 'http://global.invalid/api/board' })
-    expect(await vb(['whoami', '--json'], local, undefined, directory)).toMatchObject({ code: 0, stderr: '' })
-
-    expect((await vb(['link', url], local, undefined, root)).code).toBe(0)
-    expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules\n.board/\n')
-  }, 20_000)
-
+    for (const command of ['link', 'use'])
+      expect(await vb([command, url], {}, undefined, root)).toEqual({
+        code: 2,
+        stdout: '',
+        stderr: `error: \`vb ${command}\` is gone: pass --url <url> (or set BOARD_URL), and in a Vercel project its team's board needs neither\n`,
+      })
+  })
   it("shows a message's control characters as pictures, so they never drive the terminal, and keeps them as they are in --json", async () => {
     // A retitle, a screen clear, and a carriage return that would write over the line.
     const text = 'look \u001b]0;pwned\u0007\u001b[2Jhere\r\nand\rthere \u009b31m'
@@ -49,38 +40,31 @@ describe('cli', () => {
     expect(JSON.parse((await vb(['read', id, '--json'])).stdout.trim().split('\n')[0]!).text).toBe(text)
   })
 
-  it('links a directory without Git in place', async () => {
-    const root = await tmp('board-link-')
-    // Unlinked, with no saved board: it says how to get one.
-    const unlinked = { BOARD_URL: undefined, XDG_CONFIG_HOME: await tmp('board-global-') }
-    expect(await vb(['whoami'], unlinked, undefined, root)).toEqual({
-      code: 1, stdout: '', stderr: "error: no board URL: pass --scope <team> for a team's board in Vercel's API, run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n",
-    })
-    expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
-    expect(JSON.parse(await readFile(join(root, '.board', 'config.json'), 'utf8'))).toEqual({ url })
-    expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('.board/\n')
-  })
-
-  it('treats only a real .git as a checkout root: a HEAD inside, or a gitdir: file', async () => {
-    const parent = await tmp('board-link-')
-    const child = join(parent, 'child')
-    await mkdir(join(parent, '.git'))
-    await mkdir(child)
-    expect(await vb(['link', url], {}, undefined, child)).toMatchObject({ code: 0, stdout: `linked ${child} to ${url}\n` })
-    await writeFile(join(parent, '.git', 'HEAD'), 'ref: refs/heads/main\n')
-    const other = join(parent, 'other')
-    await mkdir(other)
-    expect(await vb(['link', url], {}, undefined, other)).toMatchObject({ code: 0, stdout: `linked ${parent} to ${url}\n` })
-    const worktree = await tmp('board-link-')
+  it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
+    // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
+    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have.
+    const outside = await tmp('board-vercel-')
+    await mkdir(join(outside, '.vercel'))
+    await writeFile(join(outside, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_x', projectId: 'prj_x' }))
+    const teamBoard = /not signed in to Vercel/
+    const noBoard = /^error: no board: /
+    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
+    const checkout = join(outside, 'repo')
+    await mkdir(join(checkout, '.git', 'x'), { recursive: true })
+    await mkdir(join(checkout, 'src'))
+    // An empty .git isn't a checkout: the search goes on up, to the project.
+    expect(await run(join(checkout, 'src'))).toMatch(teamBoard)
+    await writeFile(join(checkout, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    expect(await run(join(checkout, 'src'))).toMatch(noBoard)
+    const worktree = join(outside, 'worktree')
+    await mkdir(join(worktree, 'src'), { recursive: true })
     await writeFile(join(worktree, '.git'), 'gitdir: /repo/.git/worktrees/x\n')
-    await mkdir(join(worktree, 'src'))
-    expect(await vb(['link', url], {}, undefined, join(worktree, 'src'))).toMatchObject({ code: 0, stdout: `linked ${worktree} to ${url}\n` })
-    const stray = await tmp('board-link-')
+    expect(await run(join(worktree, 'src'))).toMatch(noBoard)
+    const stray = join(outside, 'stray')
+    await mkdir(join(stray, 'src'), { recursive: true })
     await writeFile(join(stray, '.git'), 'not a pointer')
-    await mkdir(join(stray, 'src'))
-    expect(await vb(['link', url], {}, undefined, join(stray, 'src'))).toMatchObject({ code: 0, stdout: `linked ${join(stray, 'src')} to ${url}\n` })
-  }, 20_000)
-
+    expect(await run(join(stray, 'src'))).toMatch(teamBoard)
+  }, 30_000)
   it('says a board is behind Vercel Deployment Protection, and passes the bypass secret', async () => {
     const board = testBoard({ url: undefined })
     const walls = {
@@ -100,8 +84,7 @@ describe('cli', () => {
       try {
         expect(await vb(['whoami'], { ...signedOut, BOARD_URL: at, BOARD_TOKEN: await personToken('u_julian', at) }), kind).toEqual({ code: 1, stdout: '', stderr: line })
         // Discovery, without a token yet.
-        const root = await tmp('board-link-')
-        expect(await vb(['link', at], signedOut, undefined, root), kind).toEqual({ code: 1, stdout: '', stderr: line })
+        expect(await vb(['whoami'], { ...signedOut, BOARD_URL: at }), kind).toEqual({ code: 1, stdout: '', stderr: line })
         expect(await vb(['whoami'], { BOARD_URL: at, BOARD_TOKEN: await personToken('u_julian', at), VERCEL_AUTOMATION_BYPASS_SECRET: 'stale' }), kind).toEqual({
           code: 1,
           stdout: '',
@@ -139,8 +122,8 @@ describe('cli', () => {
   it('keeps its own error for a non-board HTML page, and keeps credentials off other origins', async () => {
     const missing = await serve(async () => new Response('<!DOCTYPE html><h1>404</h1>', { status: 404, headers: { 'content-type': 'text/html' } }))
     try {
-      const root = await tmp('board-link-')
-      expect(await vb(['link', `${missing.origin}/api/board`], {}, undefined, root)).toEqual({
+      // Before any token: what its discovery found.
+      expect(await vb(['whoami', '--url', `${missing.origin}/api/board`], { BOARD_TOKEN: undefined })).toEqual({
         code: 1, stdout: '', stderr: `error: no board at ${missing.origin}/api/board (404)\n`,
       })
     } finally {
@@ -164,73 +147,35 @@ describe('cli', () => {
       const at = `${moved.origin}/old/api/board`
       const token = await personToken('u_julian', `${target.origin}/api/board`)
       const me = await vb(['whoami', '--json'], { BOARD_URL: at, BOARD_TOKEN: token, VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
-      expect(seen.moved).toEqual([`Bearer ${token}`, `Bearer ${token}`])
-      expect(seen.board).toEqual([null, null])
+      // Its discovery, which sends nothing, and /me, whose token stays on the origin it was asked for.
+      expect(seen.moved.filter(Boolean)).toEqual([`Bearer ${token}`, `Bearer ${token}`])
+      expect(seen.board).toEqual([null, null, null, null])
       expect(me.code).toBe(1)
     } finally {
       await Promise.all([moved.close(), target.close()])
     }
   }, 20_000)
 
-  it('lets explicit and environment URLs override the project link', async () => {
-    const root = await tmp('board-link-')
-    await mkdir(join(root, '.board'))
-    await writeFile(join(root, '.board', 'config.json'), JSON.stringify({ url: 'http://project.invalid/api/board' }))
-    const fromEnv = await vb(['whoami', '--json'], {}, undefined, root)
-    expect(fromEnv.code).toBe(0)
-    expect(JSON.parse(fromEnv.stdout).board).toBe(url)
-    const explicit = await vb(['whoami', '--url', url, '--json'], { BOARD_URL: 'http://env.invalid/api/board' }, undefined, root)
-    expect(explicit.code).toBe(0)
-    expect(JSON.parse(explicit.stdout).board).toBe(url)
-  }, 20_000)
-
-  it('stops at a nested Git checkout and falls back to the global board', async () => {
-    const root = await tmp('board-link-')
-    const nested = join(root, 'other-project')
-    const global = await tmp('board-global-')
-    await mkdir(join(root, '.board'))
-    await writeFile(join(root, '.board', 'config.json'), JSON.stringify({ url: 'http://parent.invalid/api/board' }))
-    await mkdir(join(nested, '.git'), { recursive: true })
-    await writeFile(join(nested, '.git', 'HEAD'), 'ref: refs/heads/main\n')
-    const local = { BOARD_URL: undefined, XDG_CONFIG_HOME: global }
-    expect((await vb(['use', url], local, undefined, nested)).code).toBe(0)
-    const me = await vb(['whoami', '--json'], local, undefined, nested)
-    expect(me.code).toBe(0)
-    expect(JSON.parse(me.stdout).board).toBe(url)
-  }, 20_000)
-
-  it('reports a malformed project link instead of using the global board', async () => {
-    const root = await tmp('board-link-')
-    const global = await tmp('board-global-')
-    await mkdir(join(root, '.board'))
-    const local = { BOARD_URL: undefined, XDG_CONFIG_HOME: global }
-    expect((await vb(['use', url], local, undefined, root)).code).toBe(0)
-    for (const contents of ['{', '{"url":12}', '{"url":"ftp://board.test"}']) {
-      await writeFile(join(root, '.board', 'config.json'), contents)
-      expect(await vb(['whoami'], local, undefined, root)).toMatchObject({
-        code: 1,
-        stderr: `error: invalid board link at ${join(root, '.board', 'config.json')}: expected an http(s) url\n`,
-      })
-    }
-    expect((await vb(['whoami', '--url', url], local, undefined, root)).code).toBe(0)
-  }, 20_000)
-
-  it('keeps the link when discovery fails and rejects missing or extra arguments', async () => {
-    const root = await tmp('board-link-')
-    expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
-    const path = join(root, '.board', 'config.json')
-    const before = await readFile(path, 'utf8')
-    const unavailable = await serve(async () => new Response('unavailable', { status: 503 }))
+  it("never reaches a board a checkout's .board/config.json names, with the environment's token or bypass", async () => {
+    const seen: string[] = []
+    const elsewhere = await serve(async (request) => {
+      seen.push(`${request.headers.get('authorization')} ${request.headers.get('x-vercel-protection-bypass')}`)
+      return new Response('{}', { headers: { 'content-type': 'application/json' } })
+    })
     try {
-      expect((await vb(['link', unavailable.origin], {}, undefined, root)).code).toBe(1)
+      const root = await tmp('board-carried-')
+      await mkdir(join(root, '.board'))
+      await writeFile(join(root, '.board', 'config.json'), JSON.stringify({ url: `${elsewhere.origin}/api/board` }))
+      const secrets = { BOARD_URL: undefined, BOARD_TOKEN: 'a-token-for-my-board', VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' }
+      expect(await vb(['read', 'dev'], secrets, undefined, root)).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: no board: /) })
+      expect(seen).toEqual([])
+      // BOARD_URL and --url are the board.
+      expect(JSON.parse((await vb(['whoami', '--json'], {}, undefined, root)).stdout).board).toBe(url)
+      expect(JSON.parse((await vb(['whoami', '--url', url, '--json'], { BOARD_URL: 'http://env.invalid/api/board' }, undefined, root)).stdout).board).toBe(url)
     } finally {
-      await unavailable.close()
+      await elsewhere.close()
     }
-    expect(await readFile(path, 'utf8')).toBe(before)
-    expect(await vb(['link'], {}, undefined, root)).toMatchObject({ code: 2, stderr: 'error: usage: board link <url>\n' })
-    expect(await vb(['link', url, 'dev'], {}, undefined, root)).toMatchObject({ code: 2, stderr: 'error: usage: board link <url>\n' })
   }, 20_000)
-
   it('posts, replies, reacts, labels, and reads a thread', async () => {
     const posted = await vb(['post', 'errors-www', 'deploy failed on a1b2c3', '--label', 'status=open'])
     expect(posted).toMatchObject({ code: 0, stderr: '' })

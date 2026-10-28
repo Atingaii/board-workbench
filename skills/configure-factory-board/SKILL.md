@@ -113,8 +113,8 @@ existing `dev` routing still works with mocked providers before deploying.
 Use the published `@vercel/board` CLI (`board` or `vb`); the old `vboard` package
 and `.vboard/config.json` link are obsolete. If upgrading a global installation,
 remove the old `vboard` package first to avoid a `vb` executable conflict, then
-install `@vercel/board`. Relink with `board link <board-url>`; the new project
-config is `.board/config.json`, and CLI overrides use `BOARD_URL`. Factory does
+install `@vercel/board`. Point it at the board with `--url <board-url>` or
+`BOARD_URL`; there's no project config. Factory does
 not need that CLI or config in its sandbox: it supplies a scoped tool.
 
 As a person with access to the board project, substitute the actual origin:

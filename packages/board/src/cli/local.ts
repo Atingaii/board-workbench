@@ -1,8 +1,9 @@
 // The standalone `board` CLI's own commands, which run something on this machine: `serve` (a board
 // on A2) and `inspect` (the inspector's page). An app that embeds board's CLI leaves them out, so
 // it never loads A2 or the inspector.
+import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { projectDir, projectUrl } from '../client/node.ts'
+import { projectDir } from '../client/node.ts'
 import { startInspector } from '../inspect/server.ts'
 import { option } from './commands.ts'
 import type { Command, CommandContext } from './main.ts'
@@ -39,16 +40,27 @@ const inspect: Command = {
   },
 }
 
+/** Keeps the local board's log (`.board/`) out of the project's Git. */
+async function ignoreLog(root: string) {
+  const path = join(root, '.gitignore')
+  const ignore = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return ''
+    throw error
+  })
+  if (!ignore.split(/\r?\n/).some((line) => /^\/?\.board\/?$/.test(line)))
+    await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.board/\n`)
+}
+
 const serve: Command = {
   spec: {
     name: 'serve',
     description:
-      "run a board on this machine (127.0.0.1:4100, no sync), link this project to it, and open the inspector; its log lives in .board/, and you're local:user:<your OS user> (or --handle)",
+      "run a board on this machine (127.0.0.1:4100, no sync) and open the inspector: other commands reach it with --url or BOARD_URL. Its log lives in .board/, and you're local:user:<your OS user> (or --handle)",
     arguments: [],
     options: [option('port', 'the port to listen on (default: 4100)'), option('dir'), option('no-inspect'), option('no-open')],
     examples: [{ name: 'run a board here, and open it', value: 'serve' }],
   },
-  async run(args, { flags, out, usage, portFlag, connection, openBrowser, saveLink, linkedByServe }: CommandContext) {
+  async run(args, { flags, out, usage, portFlag, connection, openBrowser }: CommandContext) {
     if (args.length > 0) throw usage('usage: board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]')
     const port = portFlag()
     const root = projectDir()
@@ -61,14 +73,9 @@ const serve: Command = {
     })
     let inspector: Awaited<ReturnType<typeof startInspector>> | null = null
     try {
-      // Link this project, unless it's linked to another board (a remote one, or a \`board()\` dev
-      // server on localhost): then say how to reach this one. A link an earlier \`vb serve\` wrote moves.
-      const linked = projectUrl()
-      if (linked === undefined || linked === local.url || linkedByServe(root)) {
-        await saveLink(root, local.url, { serve: true })
-        if (linked !== local.url) out(`linked ${root} to ${local.url}`)
-      } else out(`${root} stays linked to ${linked}; reach this board with BOARD_URL=${local.url}`)
+      if (!flags.dir) await ignoreLog(root)
       out(`serving a local board at ${local.url} as ${local.principal}, its log in ${local.dir}  (Ctrl-C to stop)`)
+      out(`reach it with --url ${local.url}, or BOARD_URL=${local.url}`)
       if (!flags['no-inspect']) {
         // With this board's token, whatever BOARD_TOKEN says.
         const { board } = connection(local.url, { token: local.token, handle: local.handle })

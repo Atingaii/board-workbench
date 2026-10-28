@@ -9,7 +9,7 @@ The surface is the `vb` CLI against a local board (`vb serve`, `packages/board/s
 SQLite log and attachments under the project's `.board/`, a scheduler in its process, a local
 issuer, `127.0.0.1:4100`, no sync.
 Everything runs in a fresh Vercel Sandbox, so nothing on this machine (your `~/.config/board`,
-a linked project, a global `vb`) leaks into the result. The inspector (`vb inspect --no-open`)
+your `BOARD_URL`, a global `vb`) leaks into the result. The inspector (`vb inspect --no-open`)
 is a secondary surface; see [features/README.md](features/README.md).
 
 All scripts live in `.claude/skills/verify-board/scripts/` and run from anywhere in the repo.
@@ -35,7 +35,7 @@ last stdout line. It:
 3. links `/vercel/bin/vb` to the CLI under test (a symlink, as npm would);
 4. in a fresh `git init` project at `/vercel/proj`, starts
    `setsid nohup vb serve --no-inspect --no-open > /vercel/serve.log &`;
-5. readiness: polls `vb whoami` every 0.5s for 30s; on success prints the serve log
+5. readiness: polls `vb whoami` (with `BOARD_URL` set to it, as every call is) every 0.5s for 30s; on success prints the serve log
    (`serving a local board at http://127.0.0.1:4100/api/board as local:user:ubuntu, ...`).
 
 If any step fails, `up.sh` runs `down.sh` itself so nothing is stranded (`VERIFY_KEEP=1` keeps the
@@ -65,8 +65,8 @@ timeout: tear it down and launch again.
 
 ## Drive
 
-Two wrappers. Both run in `/vercel/proj` (the served, linked project), pass stdout, stderr, and the
-exit code through, and append each call to the transcript.
+Two wrappers. Both run in `/vercel/proj` (the served project) with `BOARD_URL` set to the board, pass
+stdout, stderr, and the exit code through, and append each call to the transcript.
 
 ```bash
 $V/vb.sh "$S" post dev "hello from a sandbox" --label kind=bug   # argv, no shell; prints the id
@@ -110,7 +110,7 @@ teardown:
 | `up.log` | setup output: create, install, build, serve |
 | `doctor.txt` | each doctor run |
 | `transcript.txt` | every `vb.sh`/`sh.sh` call: `$ command`, output, `[exit N]` when nonzero |
-| `files/` | from `collect.sh` (run by `down.sh`): `.board/` (`board.db` + WAL, `attachments/`, `config.json`), `serve.log`, `read.json` (`vb read <id> --json` of every thread), `files.txt` |
+| `files/` | from `collect.sh` (run by `down.sh`): `.board/` (`board.db` + WAL, `attachments/`), `serve.log`, `read.json` (`vb read <id> --json` of every thread), `files.txt` |
 | `down.txt` | the removal |
 
 Proof standards:

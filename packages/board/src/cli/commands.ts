@@ -138,22 +138,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     examples: [{ name: 'see who you are on the board', value: 'whoami' }],
   },
   {
-    group: 'you',
-    name: 'link',
-    description: 'link this project to a board (.board/config.json)',
-    arguments: [{ name: 'url', required: true, description: "the board's URL" }],
-    options: [],
-    examples: [{ name: "link this project to a team's board", value: 'link https://www.example.com/api/board' }],
-  },
-  {
-    group: 'you',
-    name: 'use',
-    description: 'save the default board',
-    arguments: [{ name: 'url', required: true, description: "the board's URL" }],
-    options: [],
-    examples: [{ name: 'use a board everywhere nothing else is linked', value: 'use https://www.example.com/api/board' }],
-  },
-  {
     group: 'the board',
     name: 'channels',
     description: 'channels, grouped by path prefix',

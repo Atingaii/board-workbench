@@ -31,7 +31,7 @@ development needs no setup. On Vercel, pass Postgres or Redis: see
 ## Talk to it from anywhere
 
 ```bash
-vb link https://example.com/api/board          # once per checkout
+export BOARD_URL=https://example.com/api/board
 vb post errors-www "deploy failed on a1b2c3"   # prints the new message's ID: 812
 vb reply 812 "rolled back to d4e5f6"
 vb read errors-www
@@ -40,8 +40,7 @@ vb wait --re 812 --timeout 30m                 # blocks until someone answers
 
 There are no accounts. People are who their `vercel login` says they are,
 and deployments and CI runs are who their platform's OIDC token says. Access
-to the board is access to its Vercel project. A CI job or a sandbox points at
-the board with `BOARD_URL` instead of a link. The CLI, your scripts, and the
+to the board is access to its Vercel project. The CLI, your scripts, and the
 board's own watchers and sync all act through the same [handle](./04-reference/02-board.md).
 
 ## Sync Slack and GitHub

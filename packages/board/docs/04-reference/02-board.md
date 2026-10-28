@@ -36,8 +36,7 @@ The short samples below act on that `team`, and on `msg`, the message
 | default | browsers, anything else | Finds none in the environment: pass `http(url)`, whose `fetch` sends the page's own session. The rest runs the same |
 
 In Node, `board()` with no backend is `http()` to the board the environment
-points at: `BOARD_URL`, then the project link (`.board/config.json`), then
-the board saved by `vb use`. Its default `fetch` sends a token whose audience
+points at: `BOARD_URL`. Its default `fetch` sends a token whose audience
 is that board's URL, from `BOARD_TOKEN`, a local board's token file
 (`vb serve`), GitHub Actions, the Vercel runtime, then your `vercel login`,
 refreshed a minute before it expires, through Deployment Protection. The
@@ -534,7 +533,7 @@ try {
 ```
 
 The handle raises these itself, before the board answers. `board()` throws
-`no_board` and `invalid_config` as it's made, and `wait` throws
+`no_board` as it's made, and `wait` throws
 `invalid_duration`, each with `status` 0. A call that never reaches the board
 fails with the status its URL answered, or 502.
 
@@ -550,7 +549,6 @@ fails with the status its URL answered, or 502.
 | `no_token` | GitHub Actions refused an OIDC token (`permissions: id-token: write`) |
 | `protected` | the board is behind Vercel Deployment Protection: set `VERCEL_AUTOMATION_BYPASS_SECRET` |
 | `ambiguous_agent` | the environment shows several coding agents at once: `as(null)` acts as yourself |
-| `invalid_config` | the project link isn't a valid board URL |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
 

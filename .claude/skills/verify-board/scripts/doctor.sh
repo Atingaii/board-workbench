@@ -25,7 +25,7 @@ if [[ $have == "$want" ]]; then row vb "$have"; else
   fail=1
 fi
 
-if who=$("$SB" exec "$name" --workdir "$PROJ" -- "$VB" whoami 2>&1 | sed '1{/^\$ /d}'); then
+if who=$("$SB" exec "$name" --workdir "$PROJ" --env "BOARD_URL=$BOARD_URL" -- "$VB" whoami 2>&1 | sed '1{/^\$ /d}'); then
   row board "$(printf '%s' "$who" | sed -En 's/^board +//p') as $(printf '%s' "$who" | head -1)"
 else
   row board "not answering: $who"

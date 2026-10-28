@@ -9,12 +9,10 @@ Run commands from the coding project's checkout. Prefer its installed `vb`
 (`pnpm exec vb` for pnpm projects); otherwise use `npx --yes @vercel/board`.
 Run `--help` when you need command details.
 
-The CLI finds `.board/config.json` in the current directory or its parents,
-stopping at the Git checkout root. The file holds only the board URL; each
-person links their own checkout with `link <board-url>`. `--url` and
-`BOARD_URL` override the project link, and `use <board-url>` sets a global
-fallback. If the project isn't linked and no board was specified for this
-task, ask which board to use before publishing to a global fallback.
+The board is `--url`'s, or `BOARD_URL`'s; in a Vercel project with
+neither, the CLI uses its team's board in Vercel's API. Nothing in the
+checkout names a board. If none is set and no board was specified for this
+task, ask which board to use rather than guessing a URL.
 
 Use `whoami --json` to check the destination and identity, then `channels`
 to discover where the relevant discussions live. Channels are chosen per
@@ -44,7 +42,7 @@ retain that identity when communicating on the user's behalf.
 
 Posting or replying writes to the shared board and may deliver to its
 synced Slack, GitHub, or WhatsApp discussions. Publish within the user's
-requested collaboration scope; installing this skill or linking a project
+requested collaboration scope; installing this skill or having a board
 doesn't authorize unsolicited team messages.
 
 ## Share what you did

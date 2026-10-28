@@ -134,7 +134,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("reaches a team's board by the URL whoami prints for it: --url, a link, and BOARD_URL", async () => {
+  it("reaches a team's board by the URL whoami prints for it, with --url or BOARD_URL, and in its Vercel project with neither", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     const api = fakeMessageboard()
@@ -159,17 +159,15 @@ describe('the embedded CLI', () => {
         expect(searchParams.get('teamId'), request).toBe('team_test')
         expect(pathname, request).toMatch(/^\/v1\/messageboard\/(boards\/brd_test(\/|$)|me$)/)
       }
-      // A board that isn't there isn't linked, and what was saved stays.
+      // A board that isn't there says so.
       const missing = board!.replace('brd_test', 'brd_missing')
-      expect(await capture(() => main(['link', missing], app))).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: /) })
-      expect((await capture(() => main(['use', missing], app))).code).toBe(1)
-      const linked = await capture(() => main(['link', board!], app))
-      expect(linked.code).toBe(0)
-      expect(linked.stdout).toMatch(/^linked \S+board-home-\S+ to /)
-      expect(linked.stdout.endsWith(` to ${board}\n`)).toBe(true)
-      // Linked, nothing else says where.
-      expect((await capture(() => main(['read', 'general'], app))).stdout).toContain('by its URL')
+      expect(await capture(() => main(['whoami', '--url', missing], app))).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: /) })
       vi.stubEnv('BOARD_URL', board!)
+      expect((await capture(() => main(['read', 'general'], app))).stdout).toContain('by its URL')
+      vi.stubEnv('BOARD_URL', undefined)
+      // In a directory linked to a Vercel project, its team's board, with no URL and no --scope.
+      await mkdir(join(home, '.vercel'))
+      await writeFile(join(home, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_test', projectId: 'prj_app' }))
       expect((await capture(() => main(['read', 'general'], app))).stdout).toContain('by its URL')
     } finally {
       fetching.mockRestore()
@@ -185,7 +183,7 @@ describe('the embedded CLI', () => {
     try {
       expect(await capture(() => main(['read', 'dev'], { name: 'board', commands: local }))).toMatchObject({
         code: 1,
-        stderr: "error: no board URL: pass --scope <team> for a team's board in Vercel's API, run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n",
+        stderr: "error: no board: pass --url <url> (or set BOARD_URL), --scope <team> for a team's board in Vercel's API, run it in a Vercel project (vercel link) for its team's, or `vb serve` for a local one\n",
       })
     } finally {
       process.chdir(cwd)

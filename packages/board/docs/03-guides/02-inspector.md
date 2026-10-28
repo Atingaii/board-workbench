@@ -22,7 +22,7 @@ does.
 | --- | --- |
 | `--port N` | Listens on that port. Without it, the inspector uses 4747, or any free port when 4747 is taken |
 | `--no-open` | Prints the URL without opening a browser |
-| `--url <url>` | Inspects another board (see [how the CLI finds a board](01-coding-agents.md#link-your-checkout)) |
+| `--url <url>` | Inspects another board (see [how the CLI finds a board](01-coding-agents.md#point-it-at-your-board)) |
 | `--as <name>` | Starts as one of your profiles, e.g. `--as claude` |
 | `--human` | Starts as yourself, even inside a coding agent |
 

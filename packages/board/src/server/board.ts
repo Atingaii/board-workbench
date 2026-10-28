@@ -16,7 +16,7 @@ export type BoardOptions = PolicyOptions & {
   /**
    * Where the board lives: `a2({ … })` from `@vercel/board/backend-a2` keeps it here, `http(url)` from
    * `@vercel/board/backend-http` uses another, or your own. By default, `http()`: in Node, the board the
-   * environment points at (`BOARD_URL`, the repo's link, or `vb use`'s).
+   * environment points at (`BOARD_URL`).
    */
   backend?: Backend
   /**

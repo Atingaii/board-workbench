@@ -6,7 +6,7 @@ import { createBoard, type Board, type BoardOptions } from './board.ts'
 /**
  * The handle on a board. With a `backend`, the board lives there: `a2()` keeps it in this
  * deployment, `http(url)` uses another. Without one, it's `http()` to the board the environment
- * points at: `BOARD_URL`, then the repo's link (`vb link`, `vb serve`), then `vb use`'s.
+ * points at: `BOARD_URL`.
  */
 export function board(options: BoardOptions = {}): Board {
   return createBoard(options, { http: () => http(), sync: () => import('../sync/engine.ts'), serving: () => import('./serving.ts') })
