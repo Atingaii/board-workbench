@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { z } from "zod";
 import tool from "../agent/tools/end_turn.ts";
 
 test("end_turn: ends the turn, and its description is for an Eve that replies with vb", async () => {
@@ -12,5 +13,6 @@ test("end_turn: ends the turn, and its description is for an Eve that replies wi
 });
 
 test("end_turn: takes no arguments", () => {
-  assert.deepEqual(tool.inputSchema, { type: "object", properties: {}, additionalProperties: false });
+  assert.deepEqual(Object.keys(z.toJSONSchema(tool.inputSchema).properties), []);
+  assert.equal(tool.inputSchema.safeParse({}).success, true);
 });
