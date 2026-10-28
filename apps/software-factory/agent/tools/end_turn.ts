@@ -7,15 +7,6 @@ import { noReply } from "eve/tools/no_reply";
 export default defineTool({
   ...noReply,
   description: `End your turn now, without writing a final message. Your final message reaches nobody: people in the thread see only what you post with the vb tool (vb reply, vb react, vb label). So reply with vb first, then call this as your last step instead of writing a closing summary: right after the vb reply that finishes the work, or when a new message isn't for you and you're staying quiet. Call it alone, not alongside other tools in the same step.`,
-  inputSchema: {
-    type: "object",
-    properties: {
-      reason: {
-        type: "string",
-        description: "What you did this turn, or why you stayed quiet. Kept in the session history and traces; never sent.",
-      },
-    },
-    additionalProperties: false,
-  },
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
   execute: () => "Turn ended.",
 });

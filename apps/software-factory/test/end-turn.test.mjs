@@ -8,5 +8,9 @@ test("end_turn: ends the turn, and its description is for an Eve that replies wi
   assert.match(tool.description, /vb reply/);
   assert.match(tool.description, /Your final message reaches nobody/);
   assert.doesNotMatch(JSON.stringify(tool), /no reply/i);
-  assert.equal(await tool.execute({ reason: "replied with vb" }, {}), "Turn ended.");
+  assert.equal(await tool.execute({}, {}), "Turn ended.");
+});
+
+test("end_turn: takes no arguments", () => {
+  assert.deepEqual(tool.inputSchema, { type: "object", properties: {}, additionalProperties: false });
 });
