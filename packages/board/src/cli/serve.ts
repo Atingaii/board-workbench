@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { BoardError } from '../client/client.ts'
 import { localTokenFile } from '../client/node.ts'
 import { fsBlob } from '../server/blob.ts'
 import { a2 } from '../server/a2.ts'
@@ -76,7 +77,7 @@ export async function serveLocal(options: { dir: string; port?: number; handle?:
   } catch (error) {
     await store.close()
     if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE')
-      throw new Error(`port ${options.port ?? DEFAULT_SERVE_PORT} is taken: is a board already running? Pick another with --port`)
+      throw new BoardError('port_taken', `Port ${options.port ?? DEFAULT_SERVE_PORT} is taken. Is a board already running there?`, 0)
     throw error
   }
   const url = `http://127.0.0.1:${port}/api/board`

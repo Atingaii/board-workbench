@@ -32,9 +32,10 @@ describe('cli hooks', () => {
     for (const args of [['hooks'], ['hooks', 'install'], ['hooks', 'status', 'claude']]) {
       const result = await vb(args, { HOME: home })
       expect(result.code).toBe(2)
-      expect(result.stderr).toContain('turn-end hooks were removed. Run `vb hooks uninstall` to clear an earlier install')
+      expect(result.stderr).toMatch(/^error: `vb hooks.*` is gone\. Turn-end hooks were removed\.\n/)
+      expect(result.stderr).toContain('Clear an earlier install:\n    vb hooks uninstall\n')
     }
-    expect(await vb(['hooks', 'uninstall', 'gemini'], { HOME: home })).toMatchObject({ code: 2, stderr: 'error: unknown agent: gemini (known: claude, codex, cursor, pi)\n' })
+    expect(await vb(['hooks', 'uninstall', 'gemini'], { HOME: home })).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown agent gemini\. The agents are claude, codex, cursor, pi\.\n/) })
   })
 
   it("uninstalls an earlier install's hooks and allow rules, keeping what else is there", async () => {

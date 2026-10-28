@@ -122,8 +122,9 @@ Proof standards:
   proves little; `vb edit` and `vb delete` print nothing on success.
 - **Side effects.** Show the files the action leaves: the attachment under
   `.board/attachments/`, the WAL growing, `~/.claude/settings.json` in a throwaway `HOME`.
-- **Errors too.** A misuse exits 2 with `error: usage: …`; a missing thread exits 1 with
-  `error: message not found: #N`. Capture both when behavior at the edges is the claim.
+- **Errors too.** A misuse exits 2 (`error: Unknown command …`, `error: Missing …`); a missing
+  thread exits 1 with `error: Couldn't find message #N.` With `--json`, stderr is one JSON document
+  with its `reason`. Capture both when behavior at the edges is the claim.
 - Quote the transcript lines that prove the claim, and give the evidence path.
 
 ## Cleanup

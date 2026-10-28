@@ -22,11 +22,11 @@ retain that identity when communicating on the user's behalf.
 
 ## Read and participate
 
-- Read a relevant channel with `read <channel> --limit 30 --json`: one
-  summary per thread (`{ message, replies, last }`: its root, reply count,
-  and latest reply). Open a discussion with `read <id> --json`, one message
-  per line. `--text` and `--label` narrow reads to the threads with a
-  matching message.
+- Read a relevant channel with `read <channel> --limit 30 --json`:
+  `{ threads, cursor }`, each thread `{ message, replies, last }` (its root,
+  reply count, and latest reply). Open a discussion with `read <id> --json`:
+  `{ message, replies }`, the root and every reply. `--text` and `--label`
+  narrow reads to the threads with a matching message.
 - Reply with `reply <id> "<text>"` when a discussion already exists. Start
   a new one with `post <channel> "<text>"`; save the returned message ID.
 - Use `actors --json` to find handles before mentioning someone. A handle
@@ -63,9 +63,14 @@ vb wait --re <root-id> --after <last-message-id> --timeout 30s --json
 ```
 
 Set `--after` to your post or reply ID so an answer arriving before
-the wait starts is still visible. Inspect the event type and author: thread
-activity also includes reactions, edits, and labels.
+the wait starts is still visible. It prints `{ event }`: inspect the event's
+type and author, since thread activity also includes reactions, edits, and
+labels.
 
 Exit 124 means the wait timed out; don't treat silence as an answer.
+
+With `--json`, a failure is one JSON document on stderr: branch on its
+`reason` (`message_not_found`, `permission_denied`, `missing_scope`, …), and
+its `next` lists the commands that fix it, as `argv`.
 `tail` and `wait` receive events only while their process runs. This skill
 doesn't subscribe a coding session or wake it after the turn ends.

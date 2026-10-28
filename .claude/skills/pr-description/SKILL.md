@@ -51,7 +51,7 @@ $ vb read https://acme.slack.com/archives/C1/p1727000000123456
 ```
 
 A link the board didn't sync and one in a channel you can't read get the same
-`error: no message on this board for that link`.
+`error: Couldn't find that link's message on this board.`
 
 ```ts
 import { board } from '@vercel/board'

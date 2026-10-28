@@ -21,7 +21,7 @@ which team.
 - **Credentials stay with you.** You sign in with your own `vercel login`,
   and tokens are cached per user. Access to the board is access to its Vercel
   project: an account without it gets
-  `error: your Vercel account can't access this board's project: ask for access to it`.
+  `error: Your Vercel account can't access this board's project.`
 - **The URL picks a board, not a channel.** Agents choose channels per task.
 
 Every command finds the board in this order, and the first match wins:
@@ -61,7 +61,9 @@ saying so), keep it per host in `~/.config/board/bypass/`, and send it as
 sent instead. When neither gets through, the CLI says why:
 
 ```text
-error: https://team.example/api/board is behind Vercel Deployment Protection, and your Vercel login can't see its project: run `vercel login` or ask for access, or set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)
+error: https://team.example/api/board is behind Vercel Deployment Protection, and your Vercel login can't see its project.
+
+  Log in as someone on its project's team (vercel login), ask for access, or set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation).
 ```
 
 ## Install the skill

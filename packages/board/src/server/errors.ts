@@ -3,10 +3,13 @@ import { ZodError } from 'zod'
 export class HttpError extends Error {
   readonly status: number
   readonly code: string
-  constructor(status: number, code: string, message: string) {
+  /** What fixes it, when the handle that raised it knows (`BoardError`'s `hint`). */
+  readonly hint: string | undefined
+  constructor(status: number, code: string, message: string, options: { hint?: string } = {}) {
     super(message)
     this.status = status
     this.code = code
+    this.hint = options.hint
   }
 }
 
@@ -47,11 +50,11 @@ function reported(issue: ZodError['issues'][number]): ZodError['issues'][number]
   return first ? reported({ ...first, path: [...issue.path, ...first.path] }) : issue
 }
 
-/** Every failure becomes `{ error: { code, message } }` with a matching status. */
+/** Every failure becomes `{ error: { code, message, hint? } }` with a matching status. */
 export function toErrorResponse(error: unknown): Response {
   if (error instanceof RejectedError) return error.response
   if (error instanceof HttpError)
-    return json({ error: { code: error.code, message: error.message } }, error.status)
+    return json({ error: { code: error.code, message: error.message, ...(error.hint !== undefined ? { hint: error.hint } : {}) } }, error.status)
   if (error instanceof ZodError) {
     const issue = error.issues[0] && reported(error.issues[0])
     const path = issue?.path.length ? `${issue.path.join('.')}: ` : ''

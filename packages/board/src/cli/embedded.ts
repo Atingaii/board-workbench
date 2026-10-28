@@ -2,19 +2,33 @@
 // command but `serve` and `inspect`, which run something on this machine, and loads neither: no
 // A2 and no inspector reach an app that bundles it.
 import type { Board } from '../server/index.ts'
-import { commandWord, main, mainWith } from './main.ts'
+import { exitCode, failureDocument, formatFailure, type Failure, type Warning } from './failure.ts'
+import { commandWord, Failed, main, mainWith } from './main.ts'
 
 export { commandWord }
+export { commandLine, failureLines } from './failure.ts'
+export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
 
 /**
  * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). With no board
  * URL anywhere, it talks to the team's board in Vercel's API: `VERCEL_ORG_ID`'s, the nearest linked
  * project's team's (`.vercel`), your login's, or `--scope`'s. `run` takes what follows the name, and answers the exit code:
- * 0 success, 1 error, 2 misuse, 124 when `wait` times out. It never exits the process itself. One `run`
+ * 0 success, 1 error, 2 misuse, 124 when `wait` times out, 130 when Ctrl-C stops it. It never exits the process itself. One `run`
  * at a time: a run's flags are the CLI's while it runs.
+ *
+ * A failure goes to `onError`, with whether the run asked for `--json`, to show as the app shows
+ * its own, and a warning to `onWarning` (with `--json`, it's in the result). Without them, the CLI
+ * prints its own on stderr.
  */
-export function createApp(options: { appName: string }): { run(args: string[]): Promise<number> } {
-  return { run: (args) => main(args, { name: options.appName, commands: {}, teamBoard: true }) }
+export function createApp(options: {
+  appName: string
+  onError?: (failure: Failure, mode: { json: boolean }) => void
+  onWarning?: (warning: Warning) => void
+}): { run(args: string[]): Promise<number> } {
+  const { appName, onError, onWarning } = options
+  return {
+    run: (args) => main(args, { name: appName, commands: {}, teamBoard: true, ...(onError ? { onError } : {}), ...(onWarning ? { onWarning } : {}) }),
+  }
 }
 
 /** Where a `vb()` command's files come from and go, and what stops it. A command that needs one it lacks says so. */
@@ -34,8 +48,15 @@ export type VbOptions = {
 /** What a `vb()` command printed, and its exit code: 0, 1 for an error, 2 for misuse, 124 when `wait` timed out. */
 export type VbResult = { code: number; stdout: string; stderr: string }
 
-const lacking = (what: string) => async (): Promise<never> => {
-  throw new Error(`${what}: pass it in vb()'s options`)
+const lacking = (what: string, option: string) => async (): Promise<never> => {
+  throw new Failed({ class: 'usage', reason: 'not_available', message: `${what} here: pass ${option} in vb()'s options.` })
+}
+
+/** A call `vb()` answers itself, printed as the CLI would print it. */
+function refused(argv: string[], failure: Failure): Promise<VbResult> {
+  const json = argv.slice(0, argv.includes('--') ? argv.indexOf('--') : undefined).includes('--json')
+  const stderr = json ? JSON.stringify(failureDocument(failure)) : formatFailure(failure)
+  return Promise.resolve({ code: exitCode(failure), stdout: '', stderr: `${stderr}\n` })
 }
 
 // Runs share the CLI's flags, so one runs at a time; the rest wait their turn.
@@ -52,9 +73,13 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
   // `tail` never ends by itself and `wait` runs up to 30 minutes, holding every later call: only with a way to stop them.
   const word = commandWord(argv)
   if (word !== undefined && options.refuse?.includes(word))
-    return Promise.resolve({ code: 2, stdout: '', stderr: `error: ${word} isn't available here\n` })
+    return refused(argv, { class: 'usage', reason: 'not_available', message: `${word} isn't available here.` })
   if ((word === 'tail' || word === 'wait') && !options.signal)
-    return Promise.resolve({ code: 2, stdout: '', stderr: `error: ${word} runs until it's stopped, and vb() runs one call at a time: pass a signal\n` })
+    return refused(argv, {
+      class: 'usage',
+      reason: 'not_available',
+      message: `${word} runs until it's stopped, and vb() runs one call at a time: pass a signal.`,
+    })
   const result = queue.then(async () => {
     let stdout = ''
     let stderr = ''
@@ -63,9 +88,9 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
       board,
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
-      readFile: options.readFile ? async (path) => options.readFile!(path) : lacking('--attach reads files'),
-      writeFile: options.writeFile ? async (path, data) => options.writeFile!(path, data) : lacking('download saves files'),
-      stdin: options.stdin !== undefined ? async () => options.stdin! : lacking('- reads stdin'),
+      readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach can't read files", 'readFile'),
+      writeFile: options.writeFile ? async (path, data) => options.writeFile!(path, data) : lacking("download can't save files", 'writeFile'),
+      stdin: options.stdin !== undefined ? async () => options.stdin! : lacking("- can't read stdin", 'stdin'),
       ...(options.signal ? { signal: options.signal } : {}),
     })
     return { code, stdout, stderr }

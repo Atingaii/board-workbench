@@ -106,7 +106,7 @@ describe("a person's token from `vercel login`", () => {
     const bearers = network(api, evilBoard(null))
     await expect(client(EVIL).channels()).rejects.toMatchObject({
       code: 'wrong_project',
-      message: `the board at ${EVIL} says its project is prj_victim, but it's a deployment of prj_evil, so vb won't sign in to it`,
+      message: `The board at ${EVIL} says its project is prj_victim, but it's a deployment of prj_evil, so no token is minted for it.`,
     })
     expect(api.calls).toEqual(['GET /v13/deployments/evil.example'])
     expect(exchange).not.toHaveBeenCalled()
@@ -118,7 +118,8 @@ describe("a person's token from `vercel login`", () => {
     const bearers = network(api, evilBoard('team_victim'))
     await expect(client(EVIL).channels()).rejects.toMatchObject({
       code: 'no_access',
-      message: "your Vercel login can't see the project evil.example belongs to: run `vercel login` or ask for access to it",
+      message: "Your Vercel login can't see the project evil.example belongs to.",
+      hint: expect.stringContaining('vercel login'),
     })
     expect(api.calls.length).toBeGreaterThan(0)
     expect(api.calls.filter((call) => !call.startsWith('GET '))).toEqual([])

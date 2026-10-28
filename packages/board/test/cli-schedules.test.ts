@@ -18,7 +18,7 @@ describe('cli schedules', () => {
       expect(once).toMatchObject({ code: 0, stderr: '' })
       expect(once.stdout).toMatch(new RegExp(`^s\\d+  #${root} · once · next in 1s \\(.+\\) · by julian\\n    friendly ping: review\\?\\n$`))
       const repeat = await vb(['schedule', root, 'check prod', '--every', '30m', '--for', '1d', '--json'], as)
-      const { id } = JSON.parse(repeat.stdout)
+      const { id } = JSON.parse(repeat.stdout).schedule
 
       const before = (await vb(['read', root], as)).stdout
       expect(before).toContain('  s1  #')
@@ -34,7 +34,7 @@ describe('cli schedules', () => {
       expect((await vb(['schedules', root], as)).stdout).toBe('no pending schedules\n')
       expect((await vb(['schedules', '--all'], as)).stdout).toMatch(/· done · 1 sent · by julian[\s\S]*· canceled · by julian/)
 
-      expect(await vb(['schedule', root, 'when?'], as)).toMatchObject({ code: 2, stderr: 'error: say when: --in 1d, --at <time>, or --every 30m\n' })
+      expect(await vb(['schedule', root, 'when?'], as)).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't schedule a message without a time: pass --in 1d, --at <time>, or --every 30m\.\n/) })
       expect((await vb(['schedule', root, 'x', '--at', 'soonish'], as)).code).toBe(2)
     } finally {
       await scheduled.close()
@@ -43,9 +43,12 @@ describe('cli schedules', () => {
 
   it('says so when the board has no scheduler', async () => {
     const root = (await vb(['post', 'dev', 'no queue here'])).stdout.trim()
-    expect(await vb(['schedule', root, 'later', '--in', '1h'])).toMatchObject({
-      code: 1,
-      stderr: 'error: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
+    const later = await vb(['schedule', root, 'later', '--in', '1h', '--json'])
+    expect(later).toMatchObject({ code: 1, stdout: '' })
+    expect(JSON.parse(later.stderr)).toMatchObject({
+      reason: 'no_scheduler',
+      message: `Can't schedule a message in #${root}. This board doesn't support it.`,
+      data: { error: { message: 'this board has no scheduler: pass `scheduler` to `a2()` to send later' } },
     })
   })
 })

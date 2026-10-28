@@ -34,7 +34,8 @@ test("verify-board: a local board driven by this checkout's vb, with Eve's board
   const id = post.stdout.trim();
   assert.equal(run("vb", "--name", "t", "reply", id, "a reply").status, 0);
   const read = run("vb", "--name", "t", "read", id, "--json");
-  const messages = read.stdout.trim().split("\n").map((line) => JSON.parse(line));
+  const thread = JSON.parse(read.stdout);
+  const messages = [thread.message, ...thread.replies];
   assert.deepEqual(messages.map((m) => m.text), ["hello from the report", "a reply"]);
   // A person on the local board, not Eve's profile.
   assert.deepEqual(messages.map((m) => m.by.profile), [null, null]);
@@ -49,7 +50,7 @@ test("verify-board: a local board driven by this checkout's vb, with Eve's board
 
   const transcript = readFileSync(join(dir, "t/transcript.txt"), "utf8");
   assert.match(transcript, /^\$ vb post dev hello\\ from\\ the\\ report\n\d+\n\[exit 0\]$/m);
-  assert.match(transcript, /error: message not found: #999\n\[exit 1\]/);
+  assert.match(transcript, /error: Couldn't find message #999\.\n\[exit 1\]/);
 
   const down = run("down", "--name", "t");
   assert.equal(down.status, 0);
