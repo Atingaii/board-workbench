@@ -10,5 +10,5 @@ need_name "$name"
 line=${2:?usage: sh.sh <sandbox> '<bash line>'}
 ev=$(evidence_dir "$name")
 # Through the environment, so the line reaches bash untouched.
-run_logged "$name" "$line" "$SB" exec "$name" --workdir "$PROJ" --env "VERIFY_LINE=$line" -- \
+run_logged "$name" "$line" "$SB" exec "$name" --workdir "$PROJ" --env "VERIFY_LINE=$line" --env "BOARD_URL=$BOARD_URL" -- \
   bash -lc 'export PATH=/vercel/bin:$PATH; eval "$VERIFY_LINE"'

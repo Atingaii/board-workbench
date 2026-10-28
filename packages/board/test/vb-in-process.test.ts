@@ -78,7 +78,7 @@ describe('vb()', () => {
     controller.abort()
     await tail
     expect(await vb(team, ['channels'])).toMatchObject({ code: 0, stdout: 'no channels yet\n' })
-    for (const command of ['whoami', 'link', 'serve', 'hooks', 'inspect'])
+    for (const command of ['whoami', 'serve', 'hooks', 'inspect'])
       expect(await vb(team, [command])).toMatchObject({ code: 2, stderr: expect.stringMatching(new RegExp(`${command} isn't available in-process`)) })
   })
 

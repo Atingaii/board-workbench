@@ -13,7 +13,7 @@
 
 ## How to get to it (user POV)
 
-From a project linked to a board (`vb serve` links it), run `vb post dev "…"`, note the id, then
+With `BOARD_URL` pointed at a board (`vb serve` prints it), run `vb post dev "…"`, note the id, then
 `vb reply <id> "…"` and `vb read <id>` to see the thread.
 
 ## Driving it with the sandbox

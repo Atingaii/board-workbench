@@ -1,12 +1,11 @@
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { readFile, stat, writeFile } from 'node:fs/promises'
+import { basename } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { BoardEventView, MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { boardUrl, configDir, connect, projectDir } from '../client/node.ts'
+import { boardUrl, connect, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { credentialSource, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
@@ -72,6 +71,8 @@ function removedCommand(word: string): string | undefined {
   const removed: Record<string, string> = {
     update: `\`${cli} update\` is gone: reply in the thread you're working in (${cli} reply <id>), or post where it fits (${cli} post <channel>)`,
     stuck: `\`${cli} stuck\` is gone: a board on a2() keeps its dead letters in A2, on the backend's \`servers\``,
+    link: `\`${cli} link\` is gone: pass --url <url> (or set BOARD_URL), and in a Vercel project its team's board needs neither`,
+    use: `\`${cli} use\` is gone: pass --url <url> (or set BOARD_URL), and in a Vercel project its team's board needs neither`,
   }
   return Object.hasOwn(removed, word) ? removed[word] : undefined
 }
@@ -104,8 +105,6 @@ export type CommandContext = {
   connection: typeof connection
   client: () => Board
   openBrowser: (url: string) => void
-  saveLink: typeof saveLink
-  linkedByServe: (root: string) => boolean
 }
 
 /**
@@ -115,7 +114,10 @@ export type CommandContext = {
 export type App = {
   name: string
   commands: Record<string, Command>
-  /** With no board URL anywhere, it talks to the team's board in Vercel's API, as `vercel board` does. */
+  /**
+   * With no board URL, it talks to the team's board in Vercel's API even outside a Vercel project:
+   * your login's team, as `vercel board` does. Without it, only in one (or with `--scope`).
+   */
   teamBoard?: boolean
 }
 
@@ -270,15 +272,15 @@ function configuredUrl(): string | null {
     return boardUrl()
   } catch (error) {
     if (!(error instanceof BoardError) || error.code !== 'no_board') throw error
-    if (app.teamBoard) return null
+    // In a Vercel project, its team's board.
+    if (app.teamBoard || process.env.VERCEL_ORG_ID || vercelProjectFile()) return null
     const ways = [
-      "pass --scope <team> for a team's board in Vercel's API",
-      `run \`${app.name} link <url>\``,
-      'set BOARD_URL',
-      `run \`${app.name} use <url>\``,
-      ...(app.commands.serve ? [`\`${app.name} serve\` for a local one`] : []),
+      'pass --url <url> (or set BOARD_URL)',
+      "--scope <team> for a team's board in Vercel's API",
+      'run it in a Vercel project (vercel link) for its team\'s',
+      ...(app.commands.serve ? [`\`${named()} serve\` for a local one`] : []),
     ]
-    throw new BoardError('no_board', `no board URL: ${ways.slice(0, -1).join(', ')}, or ${ways.at(-1)}`, 0)
+    throw new BoardError('no_board', `no board: ${ways.slice(0, -1).join(', ')}, or ${ways.at(-1)}`, 0)
   }
 }
 
@@ -309,8 +311,8 @@ function profileFlag(): ProfileOption | undefined {
 /**
  * The board this command talks to, as `--as` says: a handle on it, where it is (null until its
  * discovery says, for a team's board), and how it reaches it. It's `--url`'s; a team's board in
- * Vercel's API for `--scope` or `--team`; the one the environment points at; or, for an app with
- * a team board, the linked project's team's, or your login's.
+ * Vercel's API for `--scope` or `--team`; the one the environment points at; or the team's board
+ * of the Vercel project it runs in, or, for an app with a team board, your login's.
  */
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
   const profile = profileFlag()
@@ -395,31 +397,6 @@ function openBrowser(url: string) {
   child.unref()
 }
 
-/** Writes the board link: the project's `.board/` (kept out of Git), or the saved default when `root` is null. */
-async function saveLink(root: string | null, url: string, extra: Record<string, unknown> = {}) {
-  const directory = root === null ? configDir() : join(root, '.board')
-  if (root !== null) {
-    const path = join(root, '.gitignore')
-    const ignore = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return ''
-      throw error
-    })
-    if (!ignore.split(/\r?\n/).some((line) => /^\/?\.board\/?$/.test(line)))
-      await appendFile(path, `${ignore && !ignore.endsWith('\n') ? '\n' : ''}.board/\n`)
-  }
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  await writeFile(join(directory, 'config.json'), `${JSON.stringify({ url, ...extra }, null, 2)}\n`, { mode: 0o600 })
-}
-
-/** Whether the project's link was written by `vb serve` (`"serve": true`), so a new run may move it. */
-function linkedByServe(root: string): boolean {
-  try {
-    return JSON.parse(readFileSync(join(root, '.board', 'config.json'), 'utf8')).serve === true
-  } catch {
-    return false
-  }
-}
-
 function portFlag(): number | undefined {
   const port = flags.port === undefined ? undefined : Number(flags.port)
   if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port <= 65535))
@@ -494,21 +471,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       out(help(args))
       return 0
 
-    case 'link':
-    case 'use': {
-      const url = args[0]
-      if (!url || args.length !== 1) throw new UsageError(`usage: ${app.name} ${command} <url>`)
-      const discovery = await connection(url).board.discovery()
-      const root = command === 'link' ? projectDir() : null
-      await saveLink(root, discovery.url)
-      out(root === null ? `using ${discovery.url}` : `linked ${root} to ${discovery.url}`)
-      return 0
-    }
-
     case 'whoami': {
       const { board, url: given, transport } = connection()
-      const me = await board.me()
-      const url = given ?? (await board.discovery()).url
+      // Its discovery too, so a URL to a board that isn't there, or you can't reach, says so.
+      const [me, discovered] = await Promise.all([board.me(), board.discovery()])
+      const url = given ?? discovered.url
       const source = transport.source()
       if (flags.json) {
         printJson({ ...me, board: url, source })
@@ -887,8 +854,6 @@ const context = (): CommandContext => ({
   connection,
   client,
   openBrowser,
-  saveLink,
-  linkedByServe,
 })
 
 /**
@@ -924,7 +889,7 @@ export async function main(argv: string[], options: App): Promise<number> {
 }
 
 /** The commands about the machine the CLI runs on, not the board: none of them run in-process. */
-const MACHINE = new Set(['link', 'use', 'whoami', 'identity', 'hooks', 'hook', 'serve', 'inspect'])
+const MACHINE = new Set(['whoami', 'identity', 'hooks', 'hook', 'serve', 'inspect'])
 
 /** `main()` with `io` in place of the terminal, for `vb()`. One run at a time, as `main()`'s. */
 export async function mainWith(argv: string[], options: App, with_: Io): Promise<number> {

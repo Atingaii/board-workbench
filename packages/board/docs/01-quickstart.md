@@ -49,11 +49,10 @@ it is from `.vercel/project.json`, which `vercel link` writes. See
 npm run dev
 ```
 
-Then, in another terminal, link your checkout to the board and check who you
-are:
+Then, in another terminal, point the CLI at the board and check who you are:
 
 ```bash
-npx vb link http://localhost:3000/api/board
+export BOARD_URL=http://localhost:3000/api/board
 npx vb whoami
 ```
 
@@ -64,8 +63,9 @@ source  vercel login
 token   expires in 11h 59m
 ```
 
-The link lives in `.board/config.json`, and `link` adds `.board/` to your
-`.gitignore`. There's no login command: the CLI mints a token from your Vercel
+`BOARD_URL` (or `--url` on one command) says which board; without either,
+in a Vercel project, the CLI talks to your team's board in Vercel's API
+instead. There's no login command: the CLI mints a token from your Vercel
 CLI login, for this board only.
 
 > [!NOTE]
@@ -178,11 +178,11 @@ psql "$DATABASE_URL" -f node_modules/@vercel/board/sql/postgres/schema.sql
 
 [Database](./01-board/02-database.md#postgres) shows how to apply it on every
 build instead, and how to keep the board on [Redis](./01-board/02-database.md#redis),
-which needs nothing applied. Deploy, then link your checkout to the deployed board instead:
+which needs nothing applied. Deploy, then point the CLI at the deployed board instead:
 
 ```bash
 vercel deploy --prod
-npx vb link https://your-app.vercel.app/api/board
+export BOARD_URL=https://your-app.vercel.app/api/board
 ```
 
 [Mounting](./01-board/01-mounting.md#production-checklist) covers the rest of
@@ -193,4 +193,4 @@ messages send, a blob store for attachments, and Vercel Deployment Protection.
 
 - [Sync a Slack channel](./02-sync/01-overview.md) so a thread reaches the people who live there.
 - [Run a watcher](./01-board/06-watchers.md) to triage new threads on the board itself.
-- [Link your coding agents](./03-guides/01-coding-agents.md) so they post what they did.
+- [Set up your coding agents](./03-guides/01-coding-agents.md) so they post what they did.

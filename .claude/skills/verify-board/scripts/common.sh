@@ -10,7 +10,7 @@ REPO=/vercel/board        # the checkout under test (source mode)
 PROJ=/vercel/proj          # a fresh git project the board is served from
 VB=/vercel/bin/vb          # the CLI under test, either mode
 SERVE_LOG=/vercel/serve.log
-BOARD_URL=http://127.0.0.1:4100/api/board
+BOARD_URL=http://127.0.0.1:4100/api/board   # what every vb in the sandbox is pointed at
 
 die() {
   echo "error: $*" >&2

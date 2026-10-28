@@ -106,23 +106,26 @@ function vb(cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
 }
 
 describe('vb serve', () => {
-  it('runs a board this project and its agents use with no setup, and keeps its log across runs', async () => {
+  it('runs a board here, says how to reach it, and keeps its log across runs', async () => {
     const { project, env } = await setup()
     const first = serveIn(project, env)
     const url = await first.url
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/api\/board$/)
-    expect(JSON.parse(await readFile(join(project, '.board', 'config.json'), 'utf8'))).toEqual({ url, serve: true })
+    // It links nothing: other commands reach it by its URL, and its log stays out of Git.
+    await expect.poll(first.output).toContain(`reach it with --url ${url}, or BOARD_URL=${url}`)
+    expect(existsSync(join(project, '.board', 'config.json'))).toBe(false)
     expect(await readFile(join(project, '.gitignore'), 'utf8')).toBe('.board/\n')
+    const at = { ...env, BOARD_URL: url }
 
-    const whoami = await vb(project, env, ['whoami', '--json'])
+    const whoami = await vb(project, at, ['whoami', '--json'])
     expect(whoami.stderr).toBe('')
     expect(JSON.parse(whoami.stdout)).toMatchObject({ actor: 'local:user:julian', handle: 'julian', board: url })
 
     // An agent in the same checkout is "claude via julian".
-    const posted = await vb(project, { ...env, CLAUDECODE: '1' }, ['post', 'local', 'from claude', '--json'])
+    const posted = await vb(project, { ...at, CLAUDECODE: '1' }, ['post', 'local', 'from claude', '--json'])
     expect(posted.code).toBe(0)
     expect(JSON.parse(posted.stdout).by).toMatchObject({ actor: 'local:user:julian+claude' })
-    const reply = await vb(join(project), env, ['reply', String(JSON.parse(posted.stdout).id), 'from julian'])
+    const reply = await vb(join(project), at, ['reply', String(JSON.parse(posted.stdout).id), 'from julian'])
     expect(reply.code).toBe(0)
 
     const tokenFile = withConfig(env.XDG_CONFIG_HOME, () => localTokenFile(url))
@@ -132,34 +135,15 @@ describe('vb serve', () => {
     expect(existsSync(tokenFile)).toBe(false)
     expect(existsSync(join(project, '.board', 'board.db'))).toBe(true)
 
-    // A new run, on another port, relinks the project and still has the thread.
+    // A new run, on another port, still has the thread.
     const second = serveIn(project, env)
     const again = await second.url
-    const read = await vb(project, env, ['read', 'local', '--json'])
+    const read = await vb(project, { ...env, BOARD_URL: again }, ['read', 'local', '--json'])
     expect(read.stderr).toBe('')
     expect(read.stdout).toContain('from claude')
     expect(read.stdout).toContain('from julian')
-    expect(JSON.parse(await readFile(join(project, '.board', 'config.json'), 'utf8'))).toEqual({ url: again, serve: true })
     second.child.kill('SIGINT')
     expect(await second.exited).toBe(0)
-  })
-
-  it.each([
-    ['a remote board', 'https://board.example.com/api/board'],
-    ["its own board() dev server", 'http://localhost:3000/api/board'],
-    ['a loopback board vb link wrote', 'http://127.0.0.1:4100/api/board'],
-  ])("doesn't steal a project's link to %s", async (_, link) => {
-    const { project, env } = await setup()
-    await mkdir(join(project, '.board'))
-    await writeFile(join(project, '.board', 'config.json'), JSON.stringify({ url: link }))
-    const serving = serveIn(project, env)
-    const url = await serving.url
-    await expect.poll(serving.output).toContain(`reach this board with BOARD_URL=${url}`)
-    expect(JSON.parse(await readFile(join(project, '.board', 'config.json'), 'utf8'))).toEqual({ url: link })
-    const whoami = await vb(project, { ...env, BOARD_URL: url }, ['whoami', '--json'])
-    expect(JSON.parse(whoami.stdout)).toMatchObject({ actor: 'local:user:julian' })
-    serving.child.kill('SIGINT')
-    expect(await serving.exited).toBe(0)
   })
 
   it("opens the inspector as you on this board, whatever BOARD_TOKEN holds", async () => {

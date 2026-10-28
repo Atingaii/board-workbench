@@ -13,18 +13,6 @@ import { BoardError, type ProfileOption, type Resolvable } from './client.ts'
 export const configDir = () =>
   join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'board')
 
-/** The board saved by `board use <url>`. */
-export function savedUrl(): string | undefined {
-  try {
-    const { url } = JSON.parse(readFileSync(join(configDir(), 'config.json'), 'utf8')) as {
-      url?: string
-    }
-    return url
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * A Git checkout's root: `.git` is a directory with a `HEAD`, or a worktree's
  * `gitdir:` file. A stray empty `.git` (say, in `~` or `/tmp`) isn't one.
@@ -39,11 +27,11 @@ function isCheckout(directory: string): boolean {
   }
 }
 
+/** The project `cwd` is in: its Git checkout's root, or `cwd` outside one. */
 export function projectDir(cwd = process.cwd()): string {
   let directory = resolve(cwd)
   while (true) {
-    if (existsSync(join(directory, '.board', 'config.json')) || isCheckout(directory))
-      return directory
+    if (isCheckout(directory)) return directory
     const parent = dirname(directory)
     if (parent === directory) return resolve(cwd)
     directory = parent
@@ -52,7 +40,7 @@ export function projectDir(cwd = process.cwd()): string {
 
 /**
  * The nearest Vercel project link (`.vercel/project.json`), searching up from the current
- * directory to a Git checkout's root, as a project link is found. Null when there's none.
+ * directory to a Git checkout's root. Null when there's none.
  */
 export function vercelProjectFile(cwd = process.cwd()): string | null {
   let directory = resolve(cwd)
@@ -63,22 +51,6 @@ export function vercelProjectFile(cwd = process.cwd()): string | null {
     if (isCheckout(directory) || parent === directory) return null
     directory = parent
   }
-}
-
-export function projectUrl(): string | undefined {
-  const path = join(projectDir(), '.board', 'config.json')
-  let contents: string
-  try {
-    contents = readFileSync(path, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw error
-  }
-  try {
-    const { url } = JSON.parse(contents)
-    if (typeof url === 'string' && ['http:', 'https:'].includes(new URL(url).protocol)) return url
-  } catch {}
-  throw new BoardError('invalid_config', `invalid board link at ${path}: expected an http(s) url`, 0)
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
@@ -290,11 +262,10 @@ async function githubActionsToken(audience: string): Promise<string> {
   return ((await response.json()) as { value: string }).value
 }
 
-/** The board the environment points at: `BOARD_URL`, the project's link (`vb link`, `vb serve`), or `vb use`'s. */
+/** The board the environment points at: `BOARD_URL`. */
 export function boardUrl(): string {
-  const url = (process.env.BOARD_URL ?? projectUrl() ?? savedUrl())?.replace(/\/+$/, '')
-  if (!url)
-    throw new BoardError('no_board', 'no board URL: run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one', 0)
+  const url = process.env.BOARD_URL?.replace(/\/+$/, '')
+  if (!url) throw new BoardError('no_board', 'no board URL: set BOARD_URL', 0)
   return url
 }
 

@@ -83,7 +83,7 @@ sbx_script "$name" "set -e
   mkdir -p $PROJ && cd $PROJ && git init -q
   setsid nohup $VB serve --no-inspect --no-open >$SERVE_LOG 2>&1 < /dev/null &
   for i in \$(seq 60); do
-    $VB whoami >/dev/null 2>&1 && exit 0
+    BOARD_URL=$BOARD_URL $VB whoami >/dev/null 2>&1 && exit 0
     sleep 0.5
   done
   echo 'the board never answered:' >&2; cat $SERVE_LOG >&2; exit 1" >>"$log" 2>&1

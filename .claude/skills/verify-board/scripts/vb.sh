@@ -13,4 +13,4 @@ need_name "$name"
 shift
 ev=$(evidence_dir "$name")
 printf -v shown ' %q' "$@"
-run_logged "$name" "vb$shown" "$SB" exec "$name" --workdir "$PROJ" -- "$VB" "$@"
+run_logged "$name" "vb$shown" "$SB" exec "$name" --workdir "$PROJ" --env "BOARD_URL=$BOARD_URL" -- "$VB" "$@"

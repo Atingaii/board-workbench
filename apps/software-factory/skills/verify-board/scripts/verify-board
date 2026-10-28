@@ -49,7 +49,7 @@ case "$cmd" in
     rm -rf "$RUN/home" "$RUN/work" "$RUN/board"
     mkdir -p "$RUN/home" "$RUN/work"
     : > "$RUN/transcript.txt"
-    # The board's project: a scratch repo, so `vb serve` links it and not the checkout Pi works in.
+    # The board's project: a scratch repo, so `vb serve` touches nothing in the checkout Pi works in.
     git -C "$RUN/work" init -q
     if [ -n "$published" ]; then
       echo "installing @vercel/board@$published" >&2

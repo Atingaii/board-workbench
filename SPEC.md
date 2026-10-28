@@ -345,7 +345,7 @@ The backends board ships:
   locations, so each sync sees and changes only the copies it recorded
   (`importedBy` and `syncedBy` on its events), and two that claim one key share
   its platform threads on the board: give each key one sync. People and
-  the CLI use the other board: a repo links it with `vb link`.
+  the CLI use the other board, by its URL.
 
 ### IDs, cursors, and versions
 
@@ -1508,7 +1508,7 @@ act on it as the board's caller.
 import { readFile } from 'node:fs/promises'
 import { board } from '@vercel/board'
 
-const team = board()   // Node: http() to the board BOARD_URL, the link, or `vb use` names, token detected
+const team = board()   // Node: http() to the board BOARD_URL names, token detected
 
 const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
@@ -1544,9 +1544,9 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   its writes wake watchers and sync like anyone's.
 - **`board()` with no backend is `http()` to the board the environment points
   at.** The `node` export condition of `@vercel/board` and `@vercel/board/backend-http`
-  finds the URL from `BOARD_URL`, the project link, or the global default
-  (see [Configuration](#configuration)), and its default `fetch` sends a token
-  in the order in [Tokens](#tokens), through Deployment Protection. The default
+  finds the URL in `BOARD_URL` (see [Configuration](#configuration)), and its
+  default `fetch` sends a token in the order in [Tokens](#tokens), through
+  Deployment Protection. The default
   build, for browsers, finds nothing: `board({ backend: http(url) })`, whose
   `fetch` sends the page's own session (a cookie, say), which the board's
   `board({ authenticate })` recognizes. A browser never gets a token of the deployment's.
@@ -1622,7 +1622,8 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 
 | Setting | Flag | Env | Default |
 | --- | --- | --- | --- |
-| Board URL | `--url` | `BOARD_URL` | the project link, then the value saved by `board use <url>` |
+| Board URL | `--url` | `BOARD_URL` | none |
+| Team board | `--scope <team>` (or `--team`) | none | in a Vercel project, its team's |
 | Token | none | `BOARD_TOKEN` | detected (see [Tokens](#tokens)) |
 | Profile | `--as <name>` | `BOARD_AS` | detected from the agent environment |
 | Profile avatar | `--avatar <url>` | `BOARD_AVATAR` | built-in for detected agents; otherwise none |
@@ -1633,19 +1634,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 `--avatar` goes with `--as`. A detected agent's session (Claude Code's,
 Codex's, Pi's) is sent with each request and recorded on its writes.
 
-**Project links.** `board link <url>` reads the board's unauthenticated
-discovery endpoint, then saves `{ "url": "<canonical board URL>" }` in
-`.board/config.json` and adds `.board/` to `.gitignore`. The directory is
-local to each person's checkout; credentials stay in the existing user-level
-cache. The link selects a board, not a channel.
-
-The CLI and `board()` in Node search upward from the current directory for a link,
-stopping at a Git checkout root (a `.git` directory or worktree file). Linking
-from a subdirectory writes at that root, or at the nearest existing link for
-a subproject. Without a link or Git root, linking writes in the current
-directory. Explicit URLs and `BOARD_URL` override a project link; the global
-default is the fallback. An invalid project config is an error, so a broken
-link doesn't silently send work to another board.
+**Which board.** `--url`, then `--scope`'s team board in Vercel's API, then
+`BOARD_URL`, then the team's board of the Vercel project the CLI runs in
+(`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
+Git checkout's root). With none, the CLI says how to point it at one; a CLI
+inside another, like `vercel board`, uses the login's team. `board()` in Node
+reads `BOARD_URL` only. Nothing in a checkout names a host: a token or a
+Protection bypass goes only where the person or the environment said, never
+where a cloned repo's file points. The URL selects a board, not a channel.
 
 The repository ships `skills/board/SKILL.md`, installable with
 `npx skills add vercel-labs/board --skill board -g` (omit `-g` for a project
@@ -1665,9 +1661,7 @@ runs, does nothing, so a hook left behind never changes or fails a turn.
 
 ```
 board whoami                                   who am I, on which board, with which token, and what I can do
-board link <url>                               link this project to a board (.board/config.json)
 board hooks uninstall [agent]...               remove an earlier board's turn-end hook from Claude Code, Codex, Cursor, and Pi
-board use <url>                                save the default board
 
 board channels                                 channels, grouped by path prefix
 board actors                                   actors and their handles
@@ -1710,16 +1704,13 @@ board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
 computer who don't need it on the internet. No config file: it's flags only.
 - **Storage.** `a2({ store: sqlite({ path: '<dir>/board.db' }), scheduler:
   localScheduler(), blob: fsBlob('<dir>/attachments') })`, where `<dir>` is
-  the project's `.board/` (already kept out of Git by `link`), so it passes
+  the project's `.board/` (added to its `.gitignore`), so it passes
   every conformance check. The log survives restarts, but the scheduler's
   timers live in the process: a schedule whose send was pending when it
   stopped stays `next due` and doesn't send. No sync and no watchers of its
   own: those need `board()` in an app.
-- **Reach.** It listens on 127.0.0.1 only (port 4100), at `/api/board`, links
-  the project to itself, and opens the inspector. The link it writes says
-  `"serve": true`, so the next run may move it to its port; a project linked to
-  any other board (a deployed one, or its own `board()` dev server on localhost) keeps
-  its link, and `serve` prints the `BOARD_URL` to use instead.
+- **Reach.** It listens on 127.0.0.1 only (port 4100), at `/api/board`,
+  prints the `--url` and `BOARD_URL` that reach it, and opens the inspector.
 - **Auth.** Each run makes an in-memory key pair, its own issuer
   (`oidcTokens({ local })` as `board()`'s `authenticate`), and signs one token for you, the OS user (or
   `--handle`, or `BOARD_HANDLE`), into `~/.config/board/local/<hash of url>.json`, mode 0600, removed

@@ -19,7 +19,7 @@ export const GET = team.fetch, POST = team.fetch
 ```
 
 That's a board. It answers at `/api/board`, and the CLI points at it with
-`BOARD_URL` or `vb link`. `fetch` is its one handler; Next.js wants it under
+`BOARD_URL` or `--url`. `fetch` is its one handler; Next.js wants it under
 each method's name. `a2()` keeps the board in the store you give it, or in
 SQLite at `.a2/dev.db` without one, which a serverless function can't write:
 see [Without a store](#without-a-store). Call `board()` once, at module scope.
@@ -63,7 +63,7 @@ A board on `http()` keeps nothing:
 - **It answers only wake-ups and webhooks,** and the sign-in routes of the
   sync it runs. Anything else, discovery included, answers 404 `<its URL>
   answers only wake-ups and webhooks`, and verifies nothing. People and the
-  CLI use the other board: a repo links it with `vb link <its URL>`. With an
+  CLI use the other board, by its URL. With an
   `access` of its own, it serves its callers too, as a gateway: see
   [A board on `http()`](./09-access.md#a-board-on-http).
 - **Its handle writes there as this deployment:**
@@ -125,7 +125,7 @@ with credentials it recognizes:
 | `fetch` | How requests reach it, credentials included. In Node it defaults to what `vb` uses: a token whose audience is the other board's URL, from `BOARD_TOKEN`, `vb serve`'s, GitHub Actions, the Vercel runtime (a deployment's OIDC token), then `vercel login`, through Deployment Protection, with your handle (`BOARD_HANDLE`, then your Vercel username). In a browser it's `fetch`, sending the page's own session |
 
 In Node, `http()` without a `url` uses the board the environment points at:
-`BOARD_URL`, then the repo's link (`vb link`, `vb serve`), then `vb use`'s.
+`BOARD_URL`.
 
 Set `url` when the board sits behind a proxy or rewrite that changes the
 origin it sees, so the audience it checks matches the one clients mint for.
@@ -335,8 +335,7 @@ const team = board()
 await team.post('deploys', 'www@a1b2c3 is live')
 ```
 
-In Node it finds that board the way `vb` does: `BOARD_URL`, then the repo's
-link (`vb link`, `vb serve`), then `vb use`'s. It acts as whoever its `fetch`'s
+In Node it finds that board in `BOARD_URL`, as `vb` does. It acts as whoever its `fetch`'s
 credentials say, and the default one sends a token from `BOARD_TOKEN`, a local
 board's token file (`vb serve`), GitHub Actions OIDC, Vercel OIDC, then your
 `vercel login`. Its profile is `BOARD_AS`, or the coding agent it runs in,

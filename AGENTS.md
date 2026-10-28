@@ -109,11 +109,13 @@ pnpm dev                                       # the board at /api/board
 BOARD_URL=https://vboard-factory.playground-vercel.tools/api/board pnpm exec vb inspect
 ```
 
-This repo's board is the factory. `.board/` is gitignored, so each checkout
-links itself: `vb whoami` says "no board URL" until you run
-`vb link https://vboard-factory.playground-vercel.tools/api/board` at the
-root. Posts to `dev` reach Slack's #development-messageboard and GitHub, so
-reply in an existing thread rather than starting one.
+This repo's board is the factory. Nothing in a checkout names a board, so set
+`BOARD_URL=https://vboard-factory.playground-vercel.tools/api/board` where you
+run `vb` (or pass `--url`): without it, `vb whoami` says how to point it at
+one, and in `apps/software-factory`, a Vercel project, it talks to
+vercel-internal-playground's team board in Vercel's API instead. Posts to `dev`
+reach Slack's #development-messageboard and GitHub, so reply in an existing
+thread rather than starting one.
 
 - Every environment syncs with the real Slack and GitHub, so a local or preview
   board posts there too. `VERCEL_ENV` only picks the store (`a2.ts`) and where

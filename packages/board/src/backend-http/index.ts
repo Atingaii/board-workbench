@@ -11,7 +11,7 @@ const environment: Environment = {
 
 /**
  * The board at `url`, which keeps the log: this board uses it as this deployment. Without a
- * `url`, the one the environment points at: `BOARD_URL`, the repo's link, or `vb use`'s.
+ * `url`, the one the environment points at: `BOARD_URL`.
  * Without a `fetch`, it sends the credentials `vb` would.
  */
 export function http(url?: string, options: HttpOptions = {}): HttpBackend {
