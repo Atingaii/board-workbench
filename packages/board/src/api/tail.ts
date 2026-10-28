@@ -1,15 +1,9 @@
 import { z } from 'zod'
+import { options } from '../cli/commands.ts'
 import { Filters } from './routes.ts'
 
 /** The filter flags `read`, `tail`, and `wait` share, and that a watcher's `tail` accepts. */
-export const FILTER_FLAGS = {
-  re: { type: 'string' },
-  by: { type: 'string' },
-  mentions: { type: 'string' },
-  label: { type: 'string', multiple: true },
-  from: { type: 'string' },
-  text: { type: 'string' },
-} as const
+export const FILTER_FLAGS = { re: options.re, by: options.by, mentions: options.mentions, label: options.label, from: options.from, text: options.text }
 
 /** `--mentions` alone means mentions of me; `--mentions @ada`, mentions of ada. */
 export function withMentions(args: readonly string[]): string[] {
