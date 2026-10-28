@@ -1,12 +1,13 @@
-import { RegisterBody, routes, type Discovery, type MatchView, type Me, type RegistrationView } from '../api/routes.ts'
+import { RegisterBody, routes, type Discovery, type Me } from '../api/routes.ts'
 import type { Method, Protocol } from '../api/protocol.ts'
 import { BoardError, createBoardClient, type BoardClient, type ProfileOption } from '../client/client.ts'
 import { DERIVED_ID, derivedId, keyId, sha256 } from '../client/ids.ts'
 import { ATTACHMENT_BYTES_MAX, type Attachment } from '../contract/schemas.ts'
-import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type Identity, type ProtocolMethods, type SelfCaller } from './backend.ts'
+import { SYNC, type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods, type SelfCaller } from './backend.ts'
 import { forbidden, HttpError, json } from './errors.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
+import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { canonicalWatchers, type SyncEntrySpec, type WatcherSpec } from './watchers-hash.ts'
 
 export type HttpOptions = {
@@ -42,7 +43,7 @@ const PROFILE_RULE = 'ids start with a letter and use up to 32 letters, numbers,
  * principal (editing, deleting, scheduling, and uploading, since a file is its uploader's to read
  * and attach until a message carries it), which the board it uses can't tell them apart for.
  */
-const PROJECTS_OWN = new Set<Method>([
+export const PROJECTS_OWN = new Set<Method>([
   'identity', 'edit', 'delete', 'schedule', 'cancelSchedule', 'upload', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack',
   'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'syncRoots', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
   'syncCode', 'syncAccount', 'syncUnlink',
@@ -63,7 +64,7 @@ function profileOf(handle: string): string {
  * middleware's): a write by a watcher's profile never wakes that watcher. One that would be gets a
  * number, `fix-2`.
  */
-function callerProfile(handle: string, own: Iterable<string>): string {
+export function callerProfile(handle: string, own: Iterable<string>): string {
   const taken = new Set([...own, 'middleware', 'client'].map((name) => name.toLowerCase()))
   const base = profileOf(handle)
   let name = base
@@ -78,13 +79,6 @@ function scopeOf(identity: Identity): string | null {
   const entries = Object.entries(access.summary()).map(([pattern, permissions]) => `${pattern}=${permissions.join(',')}`)
   return entries.length > 0 ? entries.join(';') : '*='
 }
-
-/** Registering again this soon after the same registration only repeats it. */
-const REGISTER_EVERY_MS = 10_000
-/** How long one wake-up runs matches before it leaves the rest to the next. */
-const DRAIN_MS = 4 * 60_000
-/** A pull with nothing to hand out holds this long, when the board pulls on its own. */
-const POLL_WAIT_S = 25
 
 const describe = (error: unknown) => ((error instanceof Error ? error.message : String(error)) || 'unknown error').slice(0, 500)
 
@@ -386,148 +380,35 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     },
   }
 
-  /** Only an https URL can be woken; anything else pulls on its own. */
-  const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
-
   /**
    * Where the remote wakes this board: on a board that wakes by path, the path on this project,
-   * which gets through its Deployment Protection, from production or from a preview of a branch,
-   * which it names; anywhere else (off Vercel, development, a custom environment), its URL.
+   * which gets through its Deployment Protection (`wakePath`); anywhere else, its URL.
    */
-  async function wakeAt(here: string | null): Promise<{ url: string | null } | { path: string; branch?: string }> {
-    const env = typeof process !== 'undefined' && process.env.VERCEL === '1' ? process.env : null
-    // A custom environment says `preview` in VERCEL_ENV and its own name in VERCEL_TARGET_ENV.
-    const environment = env?.VERCEL_TARGET_ENV || env?.VERCEL_ENV
-    const branch = environment === 'preview' ? env?.VERCEL_GIT_COMMIT_REF || null : null
-    if (!here || (environment !== 'production' && !branch) || !(await discovery()).wake_by_path) return { url: here }
-    return { path: new URL(here).pathname, ...(branch ? { branch } : {}) }
+  async function wakeAt(here: string | null): Promise<WakeAt> {
+    const path = wakePath(here)
+    return path && (await discovery()).wake_by_path ? path : { url: here }
   }
 
-  let last: { url: string | null; at: number; result: RegistrationView } | null = null
-  let registering: Promise<RegistrationView> | null = null
-  /** Registers this board's watchers with the remote, as itself, replacing its last registration. */
-  async function register(here: string | null): Promise<RegistrationView> {
-    const current = await watchersHash()
-    if (last && last.url === here && last.result.hash === current && Date.now() - last.at < REGISTER_EVERY_MS) return last.result
-    registering ??= wakeAt(here)
-      .then((where) => own.register({ ...where, watch: specs, ...(sync.length > 0 ? { sync } : {}) }))
-      .then((result) => {
-        last = { url: here, at: Date.now(), result }
-        return result
-      })
-      .finally(() => {
-        registering = null
-      })
-    return registering
-  }
-
-  /** Runs one match and acks it: done, its error, or a skip for a watcher this board no longer has. */
-  async function runOne(match: MatchView) {
-    let outcome: { error?: string; skip?: boolean } = {}
-    if (!bound().subscriptions[match.watcher]) outcome = { skip: true }
-    else
-      try {
-        await bound().run(match.watcher, match.event, { trigger: `watch:${match.watcher}:${match.id}`, attempt: match.attempt + 1 })
-      } catch (error) {
-        console.error(`[board] watcher ${match.watcher} failed:`, error)
-        outcome = { error: describe(error) }
-      }
-    // A lease that ran out was pulled again: that pull's ack is the one that counts.
-    await own.ack(match.id, { lease: match.lease, ...outcome }).catch((error) => console.error(`[board] couldn't ack a match:`, describe(error)))
-  }
-
-  /**
-   * Pulls and runs what's matched until nothing's left, or this run's time is up, and what sync
-   * queued in its inbox. A thread's matches come one at a time.
-   */
-  async function drain(): Promise<number> {
-    let ran = 0
-    const until = Date.now() + DRAIN_MS
-    while (Date.now() < until) {
-      const matches = await own.matches({ limit: 10 })
-      if (matches.length === 0) break
-      // Each is a different watcher's or thread's oldest, so they run side by side.
-      await Promise.all(matches.map(runOne))
-      ran += matches.length
-    }
-    // An inbox event whose wait after an error is over: what woke this board may be it.
-    return ran + (await bound().pull())
-  }
-
-  let polling: AbortController | null = null
-  /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
-  function poll() {
-    if (polling) return
-    const controller = (polling = new AbortController())
-    void (async () => {
-      for (let pause = 1000; !controller.signal.aborted; ) {
-        try {
-          await register(null)
-          const matches = await own.matches({ limit: 10, wait: POLL_WAIT_S, signal: controller.signal })
-          await Promise.all(matches.map(runOne))
-          // Sync's inbox too: an event that failed tries again once its wait is over.
-          await bound().pull()
-          pause = 1000
-        } catch (error) {
-          if (controller.signal.aborted) break
-          console.error(`[board] couldn't pull matches from ${remote}:`, describe(error))
-          await new Promise((resolve) => setTimeout(resolve, pause))
-          pause = Math.min(pause * 2, 60_000)
-        }
-      }
-    })()
-  }
-
-  let started: Promise<void> | null = null
-  /**
-   * On first use, a board with watchers or sync registers them if it knows its URL. One on Vercel
-   * learns its mount path from a request (a `POST /watchers`, a webhook, or a wake-up); one that
-   * can't be woken registers without one and pulls instead. Resolves once the first try is done.
-   */
-  function start(): Promise<void> {
-    if (started) return started
-    if (Object.keys(specs).length === 0 && sync.length === 0) return Promise.resolve()
-    const here = wakeable(bound().url())
-    if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
-    started = register(here).then(
-      () => {},
-      (error: unknown) => console.error(`[board] couldn't register with ${remote}:`, describe(error)),
-    )
-    if (!here) poll()
-    return started
-  }
-
-  const routesHere: BackendRoute[] = [
-    {
-      // Nothing in a wake-up is trusted: it only says to pull, and what's pulled comes with this board's own credentials.
-      method: 'POST',
-      path: '/wake',
-      async handle(request) {
-        started ??= Promise.resolve()
-        if (request.headers.get('x-board-watchers') !== (await watchersHash())) await register(wakeable(bound().url())).catch(rethrow)
-        return json({ ran: await drain().catch(rethrow) })
-      },
+  const runner = registrant({
+    remote,
+    registry: {
+      register: (where) => own.register({ ...where, watch: specs, ...(sync.length > 0 ? { sync } : {}) }),
+      matches: (query) => own.matches(query),
+      ack: (id, body) => own.ack(id, body),
     },
-    {
-      // Anyone may ask: it sends this board's own watchers, with this board's own credentials. A
-      // handle here registers its own, on the board it uses, as the protocol's route does.
-      method: 'POST',
-      path: '/watchers',
-      async handle(request, { caller }) {
-        if (caller) return json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal))
-        started ??= Promise.resolve()
-        const here = wakeable(bound().url())
-        const registration = await register(here).catch(rethrow)
-        if (!here) poll()
-        return json(registration)
-      },
-    },
-  ]
+    wakeAt,
+    binding: bound,
+    hash: watchersHash,
+    hasWork: () => Object.keys(specs).length > 0 || sync.length > 0,
+    rethrow,
+    registerFor: async (caller, request) => json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal)),
+  })
+  const start = runner.start
 
   const backend = {
     ...methods,
     // Its own routes are wake-ups: who may do what on the board it uses is that board's to say.
-    routes: routesHere,
+    routes: runner.routes,
     // The log is the board it uses': a board here serves requests only with an `access` of its own.
     keeps: false,
     bind(next: BoardBinding) {
@@ -546,12 +427,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
       binding = next
     },
     /** Registers this board's watchers with the board it uses now, as `POST /watchers` does. */
-    registerWatchers: () => register(wakeable(bound().url())),
+    registerWatchers: runner.registerNow,
     /** Stops pulling, for a board that pulls on its own. */
-    close: () => {
-      polling?.abort()
-      polling = null
-    },
+    close: runner.close,
   }
   return backend satisfies Backend
 }
