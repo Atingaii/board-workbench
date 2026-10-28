@@ -40,7 +40,8 @@ const code = await createApp({ appName: 'vercel board' }).run(process.argv.slice
 With no board URL anywhere, it talks to your team's board in Vercel's API:
 `VERCEL_ORG_ID`'s, or the team of the nearest linked project
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
-login's default team. `--scope <team>` picks another, by its slug or ID. It reads and writes as you, with the login the Vercel CLI hands it
+login's default team. `--scope <team>` picks another, by its slug or ID. It
+reads and writes as you, with the login the Vercel CLI hands it
 (`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`.
 
 ### In-process, on a handle
