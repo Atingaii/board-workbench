@@ -166,6 +166,6 @@ describe('vb serve', () => {
     const port = new URL(await first.url).port
     const second = await vb(project, env, ['serve', '--port', port, '--no-inspect'])
     expect(second.code).toBe(1)
-    expect(second.stderr).toBe(`error: Can't run vb serve. Its port is taken.\n  Port ${port} is taken. Is a board already running there?\n\n  Pick another port:\n    vb serve --port <PORT>\n`)
+    expect(second.stderr).toBe(`error: Port ${port} is taken. Is a board already running there?\n\n  Pick another port:\n    vb serve --port <PORT>\n`)
   })
 })

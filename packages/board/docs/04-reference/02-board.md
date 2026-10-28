@@ -516,8 +516,11 @@ which only the handle reaches. A handle on `http()` finds the board it uses in
 ## Errors
 
 A failed request throws a `BoardError` with the board's `code`, its
-`message`, the HTTP `status`, and, when the handle or the board knows what
-fixes it, a `hint` (`Run vercel login.`).
+`message`, the HTTP `status`, and, when there's one, a `hint` for what fixes
+it (`Run vercel login.`). `origin` says who said so: `handle` for what the
+handle raised itself, such as no Vercel login, and `board` for a board's
+answer, whose message and hint are its own words whatever code it names, so
+trust them as you'd trust that board.
 
 ```ts
 // anywhere in Node:

@@ -460,79 +460,57 @@ function missing(): string | undefined {
 }
 
 /**
- * What `error` means for this run, in the Vercel CLI's terms. Its headline and its ways out are
- * this CLI's own words, chosen by the error's code and what this machine shows: a board can name
- * any code, so its message and hint stay under the headline and in `data`, never in what to run.
+ * What `error` means for this run, in the Vercel CLI's terms. What the handle raised itself says
+ * what and why, and its hint what fixes it. What a board answered is said by what this run was
+ * doing, with the board's words under it and in `data`, never in what to run: a board can answer
+ * with any code, the handle's own included.
  */
 function failureOf(error: unknown): Failure {
   if (error instanceof Failed) return error.failure
   const message = error instanceof Error ? error.message : String(error)
-  const { code, status, hint } = error as { code?: unknown; status?: unknown; hint?: unknown }
+  const { code, status, hint, origin } = error as { code?: unknown; status?: unknown; hint?: unknown; origin?: unknown }
   // Not the board's or the handle's: the system's (a file it couldn't write), or a bug.
   if (typeof code !== 'string' || typeof status !== 'number')
     return { class: 'unknown', reason: 'unexpected_error', message: `Failed to ${doing()}.`, details: [message] }
   const said = { error: { code, message, status, ...(typeof hint === 'string' ? { hint } : {}) } }
-  const known = (kind: Failure['class'], reason: string, headline: string, next: Recovery[] = []): Failure => ({
-    class: kind, reason, message: headline, details: [message], ...(next.length ? { next } : {}), data: said,
-  })
-  const bypass = `set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)`
-  const login: Recovery = { instruction: "Log in as someone on its project's team", argv: ['vercel', 'login'] }
-  // What the handle raises itself, and a board may answer too.
-  switch (code) {
-    case 'not_logged_in':
-      return { class: 'auth', reason: 'login_required', message: "You're not logged in to Vercel.", next: [{ instruction: 'Log in', argv: ['vercel', 'login'] }], data: said }
-    case 'no_access':
-      return known('permission', 'permission_denied', "Your Vercel login can't access the board's project.", [login, { instruction: 'Or ask for access to it.' }])
-    case 'wrong_project':
-      return known('permission', 'wrong_project', "The board's host is another project's deployment, so no token is minted for it.")
-    case 'protected':
-      return known(
-        'permission',
-        'deployment_protected',
-        "Can't reach the board. It's behind Vercel Deployment Protection.",
-        // On Vercel, a deployment gets through by its project's trust, not a login or a secret.
-        process.env.VERCEL === '1'
-          ? [{ instruction: "Add this project and environment to the board project's Deployment Protection Trusted Sources." }]
-          : process.env.VERCEL_AUTOMATION_BYPASS_SECRET
-          ? [{ instruction: `Check VERCEL_AUTOMATION_BYPASS_SECRET against Project → Settings → Deployment Protection → Protection Bypass for Automation.` }]
-          : [login, { instruction: `Or ${bypass}.` }],
-      )
-    case 'no_project':
-      return known('platform', 'no_project', "The board doesn't know its Vercel project, so there's no token to mint for it.", [{ instruction: 'Pass a token it accepts in BOARD_TOKEN.' }])
-    case 'no_token':
-      return known(
-        'auth',
-        'token_unavailable',
-        "There's no token to reach the board with.",
-        [
-          {
-            instruction: process.env.GITHUB_ACTIONS
-              ? 'Give the job `permissions: id-token: write`.'
-              : process.env.VERCEL === '1'
-                ? 'Enable OIDC on this project, or pass a token the board accepts in BOARD_TOKEN.'
-                : 'Pass a token it accepts in BOARD_TOKEN.',
-          },
-        ],
-      )
-    case 'no_board':
-      return known('not_found', 'board_not_found', reached ? `Couldn't find a board at ${reached}.` : "Couldn't find the team's board.")
-    case 'too_many_redirects':
-      return known('network', 'network_error', "Couldn't reach the board. It redirected too many times.")
-    case 'invalid_duration':
-      return known('usage', 'invalid_arguments', '--timeout takes a duration like 30s, 10m, or 1h.', [helpRecovery()])
-    case 'wrong_audience':
-      return known('usage', 'wrong_url', 'The board says its URL is another one.', [{ instruction: 'Pass the URL it names with --url.' }])
-    case 'ambiguous_agent':
-      return known('usage', 'ambiguous_agent', "Several coding agents' environments are set, so it can't tell which one is writing.", [
-        { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
-        { instruction: 'Or as yourself', argv: rerun('--human') },
-      ])
-    case 'too_large':
-      return known('limit', 'payload_too_large', `Can't ${doing()}. It's too large.`)
-    case 'upload_failed':
-      return known('platform', 'upload_failed', `Failed to ${doing()}.`)
-    case 'port_taken':
-      return known('conflict', 'port_taken', `Can't ${doing()}. Its port is taken.`, [{ instruction: 'Pick another port', argv: [...cli(), current.command ?? 'serve', '--port', '<PORT>'] }])
+  if (origin === 'handle') {
+    const fix: Recovery[] = typeof hint === 'string' ? [{ instruction: hint }] : []
+    const own = (kind: Failure['class'], reason: string, next: Recovery[] = fix): Failure => ({
+      class: kind, reason, message, ...(next.length ? { next } : {}), data: said,
+    })
+    switch (code) {
+      case 'not_logged_in':
+        return { class: 'auth', reason: 'login_required', message: "You're not logged in to Vercel.", next: [{ instruction: 'Log in', argv: ['vercel', 'login'] }], data: said }
+      case 'no_access':
+        return own('permission', 'permission_denied')
+      case 'wrong_project':
+        return own('permission', 'wrong_project')
+      case 'protected':
+        return own('permission', 'deployment_protected')
+      case 'no_project':
+        return own('platform', 'no_project')
+      case 'no_token':
+        return own('auth', 'token_unavailable')
+      case 'no_board':
+        return own('not_found', 'board_not_found')
+      case 'too_many_redirects':
+        return own('network', 'network_error')
+      case 'invalid_duration':
+        return own('usage', 'invalid_arguments', [helpRecovery()])
+      case 'wrong_audience':
+        return own('usage', 'wrong_url')
+      case 'ambiguous_agent':
+        return own('usage', 'ambiguous_agent', [
+          { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
+          { instruction: 'Or as yourself', argv: rerun('--human') },
+        ])
+      case 'too_large':
+        return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
+      case 'upload_failed':
+        return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
+      case 'port_taken':
+        return own('conflict', 'port_taken', [{ instruction: 'Pick another port', argv: [...cli(), current.command ?? 'serve', '--port', '<PORT>'] }])
+    }
   }
   // The board's, said by what this run was doing, with its own words under it. Which board it was
   // matters when reaching it is what failed.

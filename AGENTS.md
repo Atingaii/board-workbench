@@ -421,11 +421,13 @@ for a person at a terminal first; `--json` is for programs.
   what failed and why, and at most two ways out, each a command as argv or a
   sentence. `vb` prints them on stderr as `error: <headline>`, with each way
   out two spaces in after a blank line; with `--json`, as one JSON document.
-  `vercel board` shows the same data as its own (`createApp({ onError })`). Every
-  headline and way out is the CLI's own, chosen by the error's code and what the
-  machine shows: a board can answer any code, so an error's `message` and `hint`,
-  the handle's or a board's, go under the headline and in `data`, never in what
-  to run.
+  `vercel board` shows the same data as its own (`createApp({ onError })`). An
+  error the handle raised itself (`origin: 'handle'`) says what and why in
+  `message` and what fixes it in `hint`. What a board answered (`origin:
+  'board'`) is said by what the command was doing, the board's words only under
+  it and in `data`, never in what to run: a board can answer with any code. A
+  handle's message shows a value a board gave only when it fits its shape (a
+  project ID, a URL).
 - **`--json` is one document**, keyed by what it holds (`{ threads, cursor }`,
   `{ message, outcome }`), with a write's `warnings` in it. Only `tail`, which
   streams, prints a line per event.
