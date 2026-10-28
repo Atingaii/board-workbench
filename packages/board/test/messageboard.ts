@@ -341,6 +341,8 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     const rest = onBoard[2] ?? ''
     let found: RegExpExecArray | null
 
+    if (method === 'GET' && rest === '') return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
+
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
       return { channels: name === null ? channels : channels.filter((c) => c.name === name), cursor: null }

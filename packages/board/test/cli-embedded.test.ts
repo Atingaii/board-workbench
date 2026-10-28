@@ -100,7 +100,7 @@ describe('the embedded CLI', () => {
       expect(thread.stdout).toContain('on the team board')
       const whoami = await capture(() => app.run(['whoami']))
       expect(whoami.code).toBe(0)
-      expect(whoami.stdout).toContain('board   https://api.vercel.com/v1/messageboard/boards/brd_test\nsource  the Vercel CLI\n')
+      expect(whoami.stdout).toContain('board   https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test\nsource  the Vercel CLI\n')
       const read = await capture(() => app.run(['read', 'general', '--scope', 'acme', '--json']))
       expect(read.code).toBe(0)
       expect(JSON.parse(read.stdout.trim().split('\n')[0]!)).toMatchObject({ message: { text: 'on the team board' } })
@@ -134,6 +134,50 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("reaches a team's board by the URL whoami prints for it: --url, a link, and BOARD_URL", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard()
+    const asked: string[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      asked.push(`${init?.method ?? 'GET'} ${String(input instanceof Request ? input.url : input)}`)
+      return api.fetch(input, init)
+    })
+    const app = { name: 'board', commands: local }
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const whoami = await capture(() => main(['whoami', '--scope', 'test'], app))
+      const board = /^board +(\S+)$/m.exec(whoami.stdout)?.[1]
+      expect(board).toBe('https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')
+      asked.length = 0
+      expect((await capture(() => main(['post', 'general', 'by its URL', '--url', board!], app))).code).toBe(0)
+      // The URL's own board, in its own team: no other is looked for.
+      expect(asked.length).toBeGreaterThan(0)
+      for (const request of asked) {
+        const { pathname, searchParams } = new URL(request.split(' ')[1]!)
+        expect(searchParams.get('teamId'), request).toBe('team_test')
+        expect(pathname, request).toMatch(/^\/v1\/messageboard\/(boards\/brd_test(\/|$)|me$)/)
+      }
+      // A board that isn't there isn't linked, and what was saved stays.
+      const missing = board!.replace('brd_test', 'brd_missing')
+      expect(await capture(() => main(['link', missing], app))).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: /) })
+      expect((await capture(() => main(['use', missing], app))).code).toBe(1)
+      const linked = await capture(() => main(['link', board!], app))
+      expect(linked.code).toBe(0)
+      expect(linked.stdout).toMatch(/^linked \S+board-home-\S+ to /)
+      expect(linked.stdout.endsWith(` to ${board}\n`)).toBe(true)
+      // Linked, nothing else says where.
+      expect((await capture(() => main(['read', 'general'], app))).stdout).toContain('by its URL')
+      vi.stubEnv('BOARD_URL', board!)
+      expect((await capture(() => main(['read', 'general'], app))).stdout).toContain('by its URL')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('says how to point it at a board with the commands it has, standalone, where there is no team board', async () => {
     const home = await isolated()
     const cwd = process.cwd()
@@ -141,7 +185,7 @@ describe('the embedded CLI', () => {
     try {
       expect(await capture(() => main(['read', 'dev'], { name: 'board', commands: local }))).toMatchObject({
         code: 1,
-        stderr: 'error: no board URL: run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n',
+        stderr: "error: no board URL: pass --scope <team> for a team's board in Vercel's API, run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n",
       })
     } finally {
       process.chdir(cwd)
