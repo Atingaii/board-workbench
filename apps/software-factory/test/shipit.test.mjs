@@ -220,3 +220,18 @@ test("a failed Eve handoff can retry with the same deduplication key", async () 
   await watcher.run({ event: event() });
   assert.deepEqual(notifications.map(n => n.key), ["shipit-71", "shipit-71"]);
 });
+
+test("shipit on a factory PR's line in its source thread merges that PR, and a failure goes to the PR's thread", async () => {
+  const card = () => {
+    const input = event();
+    input.message = { ...input.message, id: "3000", re: "2036", labels: { pr: "vercel-labs/board#53", state: "open", "pr.thread": "59" } };
+    return input;
+  };
+  const h = harness([open(), merged()]);
+  await h.run(card());
+  assert.equal(h.requests[1].url, "https://api.github.com/repos/vercel-labs/board/pulls/53/merge");
+  const failed = harness([{ body: { merged: false, state: "closed" } }]);
+  await failed.run(card());
+  assert.equal(failed.notifications[0].thread, "59");
+  assert.match(failed.notifications[0].message, /in board thread #59\./);
+});

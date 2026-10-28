@@ -48,8 +48,8 @@ test("everything else keeps the default", () => {
   assert.equal(renderForSlack(issue), `**julianbenegas (github)**: ${issue.message.text}`);
 });
 
-test("crosspost links go without a label", () => {
-  const text = ":crosspost: [#105 Link threads](https://vercel.slack.com/archives/C0C6MNT9LLC/p1791405000000100)";
-  const message = { re: "2326", text, labels: {}, by: { actor: "board:watch:crosspost" } };
-  assert.equal(renderForSlack({ ...input(message), label: "crosspost" }), text);
+test("a factory PR's message in its source thread is the PR's line without a name", () => {
+  const labels = { pr: "vercel-labs/board#68", state: "merged", "pr.thread": "2400" };
+  const card = input({ re: "2036", labels, by: { actor: "board:watch:in-thread" } }, { label: "in-thread" });
+  assert.equal(renderForSlack(card), ":pr-merged: [#68 RFC: \\[Declared\\] actors](https://github.com/vercel-labs/board/pull/68)");
 });

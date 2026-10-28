@@ -12,7 +12,7 @@ import { security } from "./security";
 import { shipit } from "./shipit";
 import { autoland } from "./autoland";
 import { owner } from "./owner";
-import { crosspost } from "./crosspost";
+import { devMirror, inThread } from "./inthread";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
 import { issues, pulls } from "./quiet";
@@ -50,8 +50,8 @@ const factory = board({
       render(
         renderForSlack,
         channels({
-          // #development-messageboard
-          C0C8XN8SQRG: "dev",
+          // #development-messageboard. A factory PR's root doesn't start a thread there: it lives in its source thread.
+          C0C8XN8SQRG: devMirror("dev"),
         }),
       ),
     ),
@@ -64,8 +64,8 @@ const factory = board({
     autoland: autoland(),
     // A factory PR's root names whose it is: the person who opened its source thread.
     owner: owner(),
-    // A factory PR's Slack thread and the Slack thread it was built for link to each other.
-    crosspost: crosspost(),
+    // A factory PR's one-line message goes in the thread it was built for, whose root's PR emoji follows its state.
+    "in-thread": inThread(),
     security: security({ tellEve }),
     // Every non-PR dev thread gets a kind, judged from all of it whenever a person posts,
     // so a chat that turns into a bug report becomes kind=bug. Bugs get 🐛 in Slack too.

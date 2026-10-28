@@ -96,7 +96,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const { shipit } = await import("../app/api/board/[[...path]]/shipit.ts");
   const { security } = await import("../app/api/board/[[...path]]/security.ts");
   const { owner } = await import("../app/api/board/[[...path]]/owner.ts");
-  const { crosspost } = await import("../app/api/board/[[...path]]/crosspost.ts");
+  const { inThread } = await import("../app/api/board/[[...path]]/inthread.ts");
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
   const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
   const { github, repos } = await import("../../../packages/board/src/sync/github.ts");
@@ -105,7 +105,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const githubPlatform = fakePlatform("github");
   const watched = [];
   const noEve = async () => { throw new Error("must not start a live agent"); };
-  const watchers = { autoland: autoland(), shipit: shipit({ tellEve: noEve }), security: security({ tellEve: noEve }), owner: owner(), crosspost: crosspost() };
+  const watchers = { autoland: autoland(), shipit: shipit({ tellEve: noEve }), security: security({ tellEve: noEve }), owner: owner(), "in-thread": inThread() };
   const board = testBoard({
     ...options,
     sync: {
@@ -169,4 +169,78 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   while (slackPlatform.posts.length === slackBeforeIssue && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(slackPlatform.posts.slice(slackBeforeIssue).some((post) => /Existing issue response/.test(post.text)));
   assert.equal(githubPlatform.posts.length, 0);
+});
+
+test("a factory PR lives in the thread it was built for: its line there, a PR emoji on the root, no channel post", async () => {
+  const { inThread, devMirror } = await import("../app/api/board/[[...path]]/inthread.ts");
+  const { renderForSlack } = await import("../app/api/board/[[...path]]/render.ts");
+  const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
+  const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
+  const { render } = await import("../../../packages/board/src/sync/fn.ts");
+  const { github, repos } = await import("../../../packages/board/src/sync/github.ts");
+  const { issues, pulls } = await import("../app/api/board/[[...path]]/quiet.ts");
+  const slackPlatform = fakePlatform("slack");
+  const githubPlatform = fakePlatform("github");
+  const board = testBoard({
+    ...options,
+    sync: {
+      slack: slack({ adapter: slackPlatform.adapter }, render(renderForSlack, channels({ C1: devMirror("dev") }))),
+      github: github({ adapter: githubPlatform.adapter }, repos({ "vercel-labs/board": { pulls, issues } })),
+    },
+    watch: { "in-thread": inThread() },
+  });
+  const operator = caller(board.fetch, await personToken());
+  const until = Date.now() + 5000;
+  const waitFor = async (check) => {
+    let value;
+    while (!(value = await check()) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(value);
+    return value;
+  };
+  const source = (await operator("POST", "/messages", { channel: "dev", text: "Post PRs in the thread" })).body.message;
+  await waitFor(() => slackPlatform.channelPosts.length === 1);
+  const pr = (action, extra = {}) => board.fetch(new Request(`${URL}/webhooks/github`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-github-delivery": `in-thread-${action}` },
+    body: JSON.stringify({
+      action, repository: { full_name: "vercel-labs/board" }, sender: { login: "factory[bot]", id: 9 },
+      pull_request: {
+        number: 77, title: "Post PRs in their thread", html_url: "https://github.com/vercel-labs/board/pull/77", draft: false, merged: false,
+        head: { ref: `board/${source.id}`, repo: { full_name: "vercel-labs/board" } }, ...extra,
+      },
+    }),
+  }));
+  await pr("opened");
+  const root = await waitFor(async () => {
+    const found = (await operator("GET", "/messages?channel=dev&label=pr")).body.messages.find((m) => m.re === null && m.labels.card);
+    return found;
+  });
+  assert.equal(root.labels.source, source.id);
+  const card = await waitFor(() => slackPlatform.posts.find((post) => post.text.includes("#77")));
+  assert.equal(JSON.parse(card.text).markdown, ":pr: [#77 Post PRs in their thread](https://github.com/vercel-labs/board/pull/77)");
+  assert.ok(card.threadId.endsWith(slackPlatform.channelPosts[0].id), "in the source's Slack thread");
+  await waitFor(() => slackPlatform.reactions.some((r) => r.emoji === "pr" && r.added));
+  assert.equal(slackPlatform.channelPosts.length, 1, "the PR starts no thread in the channel");
+
+  await pr("closed", { merged: true });
+  await waitFor(() => slackPlatform.reactions.some((r) => r.emoji === "pr-merged" && r.added));
+  assert.ok(slackPlatform.reactions.some((r) => r.emoji === "pr" && !r.added));
+  await waitFor(() => slackPlatform.edits.some((edit) => String(edit.text ?? JSON.stringify(edit)).includes(":pr-merged: [#77")));
+  assert.equal(slackPlatform.channelPosts.length, 1);
+
+  // A source thread kept off Slack can't show its PR, so that PR starts its own thread in the channel.
+  const hidden = (await operator("POST", "/messages", { channel: "dev", text: "Board-only thread", noSync: true })).body.message;
+  await board.fetch(new Request(`${URL}/webhooks/github`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-github-delivery": "in-thread-hidden" },
+    body: JSON.stringify({
+      action: "opened", repository: { full_name: "vercel-labs/board" }, sender: { login: "factory[bot]", id: 9 },
+      pull_request: {
+        number: 78, title: "From a board-only thread", html_url: "https://github.com/vercel-labs/board/pull/78", draft: false, merged: false,
+        head: { ref: `board/${hidden.id}`, repo: { full_name: "vercel-labs/board" } },
+      },
+    }),
+  }));
+  await waitFor(() => slackPlatform.channelPosts.length === 2);
+  assert.match(slackPlatform.channelPosts[1].text, /#78 From a board-only thread/);
 });
