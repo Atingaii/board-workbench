@@ -1,5 +1,18 @@
 # vboard
 
+## 0.20.0
+
+### Minor Changes
+
+- 276a99f: `@vercel/board/cli` runs board's CLI inside another one, as `vercel board` will: `createApp({ appName }).run(args)` answers the exit code. Help, usage, and errors use `appName`, and an agent's hook runs it by that name. It has every command but `serve` and `inspect`, so an app that bundles it brings no A2 and no inspector. The CLI also takes your Vercel login from `VERCEL_AUTH_TOKEN`, which the Vercel CLI sets for a CLI it runs, before `vercel login`.
+- ae89dbf: `vb sources <key> join <channel|link>` (`joinSource`, `POST /sources/:key/join`) adds the Slack app to a public channel so `vb sources <key> read` can read it, without syncing it. Off unless the board opts in with `slack({ ..., join: true })`, which also needs the app's `channels:join` scope; otherwise it answers 403 `join_disabled`. Private and Slack Connect channels are never joined, and it needs `manage` in every channel, like reads.
+- e03011e: `vb()` from `@vercel/board/cli` runs a vb command on a board handle in-process and returns what the CLI prints (`{ code, stdout, stderr }`), for agents' tools and scripts that would otherwise start a CLI for each call. Files come from its options (`readFile` for `--attach`, `writeFile` for `download`, `stdin` for `-`), and `signal` stops `tail` and `wait`; `refuse` lists commands a caller doesn't run. It runs the CLI's own commands, so the two can't drift. `commandWord(argv)` names the command an argv runs, past flags and their values.
+
+### Patch Changes
+
+- 22daeb8: A read by ID on an instance whose tables are behind the log (new tables, or tables rebuilt from the log) waits until they've caught up with the whole log, once per instance. Before, it waited only through the message's own index, so a thread could show its root without the reactions, edits, or replies that came after it until the tables caught up.
+- 5fdc9ac: `board.register()`'s input and `RegistrationView` are unions: `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both, so TypeScript refuses a registration with a `url` and a `path`, or a `branch` without a `path`, which the board refused with a 400 already. `RegisterInput` names the input. A request that fails a union is told the closest option's first issue, so these keep saying which field is wrong.
+
 ## 0.19.0
 
 ### Minor Changes
