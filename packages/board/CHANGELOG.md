@@ -1,5 +1,11 @@
 # vboard
 
+## 0.23.0
+
+### Minor Changes
+
+- f44f69d: GitHub sync keeps a PR's latest commit on its root as `head=<sha>`, and updates it on every push (`pr.synchronized`), so a watcher can tell when a PR it judged has changed.
+
 ## 0.22.0
 
 ### Minor Changes
