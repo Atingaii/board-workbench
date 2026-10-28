@@ -63,11 +63,9 @@ your machine (`link`, `use`, `whoami`, `identity`, `hooks`, `serve`,
 `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
 `writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
 `wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
-every later call until it ends: they answer 2 without a `signal`.
-
-`commandWord(argv)` answers the command `argv` runs (`tail` for
-`['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
-itself.
+every later call until it ends: they answer 2 without a `signal`. `refuse`
+names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
+for an agent's tool, which can't stream.
 
 ## Configuration
 

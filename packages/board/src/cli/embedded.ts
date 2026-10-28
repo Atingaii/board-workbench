@@ -4,8 +4,6 @@
 import type { Board } from '../server/index.ts'
 import { commandWord, main, mainWith } from './main.ts'
 
-export { commandWord }
-
 /**
  * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). An agent's hook
  * runs it the same way, by that name. `run` takes what follows the name, and answers the exit code:
@@ -26,6 +24,8 @@ export type VbOptions = {
   stdin?: string
   /** Stops `tail` and `wait`, as Ctrl-C does. */
   signal?: AbortSignal
+  /** Commands this caller doesn't run, which answer 2: `['tail', 'wait']` for an agent's tool. */
+  refuse?: string[]
 }
 
 /** What a `vb()` command printed, and its exit code: 0, 1 for an error, 2 for misuse, 124 when `wait` timed out. */
@@ -48,6 +48,8 @@ let queue: Promise<unknown> = Promise.resolve()
 export function vb(board: Board, argv: string[], options: VbOptions = {}): Promise<VbResult> {
   // `tail` never ends by itself and `wait` runs up to 30 minutes, holding every later call: only with a way to stop them.
   const word = commandWord(argv)
+  if (word !== undefined && options.refuse?.includes(word))
+    return Promise.resolve({ code: 2, stdout: '', stderr: `error: ${word} isn't available here\n` })
   if ((word === 'tail' || word === 'wait') && !options.signal)
     return Promise.resolve({ code: 2, stdout: '', stderr: `error: ${word} runs until it's stopped, and vb() runs one call at a time: pass a signal\n` })
   const result = queue.then(async () => {
