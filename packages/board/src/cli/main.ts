@@ -166,7 +166,7 @@ function removedCommand(word: string): string | undefined {
 }
 
 /** The command word: the first argument that isn't a flag or a string flag's value. */
-function commandWord(args: string[]): string | undefined {
+export function commandWord(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
     if (arg === '--') return args[i + 1]
@@ -226,14 +226,47 @@ function parse(argv: string[]): boolean {
     return true
   } catch (error) {
     const unknown = (error as { code?: string }).code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && /'([^']+)'/.exec((error as Error).message)?.[1]
-    process.stderr.write(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`${app.name} help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
+    io.error(terminalText(`error: ${unknown ? `unknown option: ${unknown} (run \`${app.name} help\`; text starting with - goes after --, as in -- "${unknown}")` : (error as Error).message}`) + '\n')
     return false
   }
 }
 
+/**
+ * Where a run's output goes and its files come from: the terminal and this machine's, or for
+ * `vb()`, its caller's, with the board handle it runs on.
+ */
+export type Io = {
+  write(chunk: string | Uint8Array): void
+  error(chunk: string): void
+  /** A file's bytes, for `--attach`; null when there's no such file. */
+  readFile(path: string): Promise<Uint8Array | null>
+  /** Saves a file, for `download`. */
+  writeFile(path: string, data: Uint8Array): Promise<void>
+  /** What `-` reads. */
+  stdin(): Promise<string>
+  /** Stops `tail` and `wait`; without one, Ctrl-C does. */
+  signal?: AbortSignal
+  /** The handle to run on, in place of the one the environment and `--url` find. */
+  board?: Board
+}
+
+const TERMINAL: Io = {
+  write: (chunk) => void process.stdout.write(chunk),
+  error: (chunk) => void process.stderr.write(chunk),
+  async readFile(path) {
+    const info = await stat(path).catch(() => null)
+    if (!info?.isFile()) return null
+    if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+    return new Uint8Array(await readFile(path))
+  },
+  writeFile: (path, data) => writeFile(path, data),
+  stdin: readStdin,
+}
+let io: Io = TERMINAL
+
 // What a person reads can't drive their terminal; what a program reads is byte for byte what the board said.
-const out = (text: string) => process.stdout.write(`${terminalText(text)}\n`)
-const printJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`)
+const out = (text: string) => io.write(`${terminalText(text)}\n`)
+const printJson = (value: unknown) => io.write(`${JSON.stringify(value)}\n`)
 
 /** A message's ID as you'd write it: `#812` or `812`. It's passed to the board as it is. */
 function messageId(value: string | undefined, what = 'message id'): string {
@@ -258,28 +291,21 @@ function labelPairs(values: string[] | undefined): Record<string, string> {
 async function text(value: string | undefined): Promise<string> {
   if (value === undefined) throw new UsageError('missing message text')
   if (value !== '-') return value
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-  return Buffer.concat(chunks).toString('utf8').replace(/\n$/, '')
+  return (await io.stdin()).replace(/\n$/, '')
 }
 
 
-/** Uploads each `--attach` file, checking them all before sending any. */
+/** Uploads each `--attach` file, reading them all before sending any. */
 async function attachments(board: ReturnType<typeof client>): Promise<Attachment[]> {
-  const paths = flags.attach ?? []
-  for (const path of paths) {
-    const info = await stat(path).catch(() => null)
-    if (!info?.isFile()) throw new UsageError(`no such file: ${path}`)
-    if (info.size > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+  const files: { path: string; data: Uint8Array }[] = []
+  for (const path of flags.attach ?? []) {
+    const data = await io.readFile(path)
+    if (!data) throw new UsageError(`no such file: ${path}`)
+    if (data.byteLength > DIRECT_UPLOAD_BYTES_MAX) throw new UsageError(`${path} is over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be`)
+    files.push({ path, data })
   }
   const uploaded: Attachment[] = []
-  for (const path of paths)
-    uploaded.push(
-      await board.upload({
-        data: new Uint8Array(await readFile(path)),
-        name: basename(path),
-      }),
-    )
+  for (const { path, data } of files) uploaded.push(await board.upload({ data: new Uint8Array(data), name: basename(path) }))
   return uploaded
 }
 
@@ -340,8 +366,13 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   return { url: at, transport, board: profile !== undefined ? board.as(profile) : board }
 }
 
-/** A handle on the board this command talks to. */
-const client = (): Board => connection().board
+/** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
+function client(): Board {
+  if (!io.board) return connection().board
+  if (flags.human) return io.board.as(null)
+  if (flags.as) return io.board.as(flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as)
+  return io.board
+}
 
 /**
  * What names an agent's turns, for the turn-end hook: its session, or for
@@ -457,7 +488,7 @@ function warnUnknownMentions(handles: string[] | undefined) {
   const names = handles.map((handle) => `@${handle}`)
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
   const one = names.length === 1
-  process.stderr.write(terminalText(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one`) + '\n')
+  io.error(terminalText(`warning: ${list} ${one ? 'matches' : 'match'} no one on the board, so ${one ? 'it stays' : 'they stay'} plain text and ${one ? 'notifies' : 'notify'} no one`) + '\n')
 }
 
 function printMessage(message: MessageView) {
@@ -580,7 +611,7 @@ async function identity(args: string[]): Promise<number> {
       return 0
     }
   }
-  process.stderr.write('timed out\n')
+  io.error('timed out\n')
   return 124
 }
 
@@ -966,11 +997,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (!id) throw new UsageError(`usage: ${app.name} download <attachment> [path]   (the id \`${app.name} read\` shows on a file line)`)
       const response = await client().download(id)
       const data = new Uint8Array(await response.arrayBuffer())
-      if (args[1] === '-') return process.stdout.write(data), 0
+      if (args[1] === '-') return io.write(data), 0
       const disposition = response.headers.get('content-disposition') ?? ''
       const named = /filename\*=UTF-8''([^;]+)/.exec(disposition)?.[1]
       const path = args[1] ?? basename(named ? decodeURIComponent(named) : id)
-      await writeFile(path, data)
+      await io.writeFile(path, data)
       out(path)
       return 0
     }
@@ -1016,8 +1047,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'tail': {
       const controller = new AbortController()
       // Its handler goes when it's done: inside another CLI, the process goes on, and Ctrl-C should stop it.
-      const stop = () => controller.abort()
-      process.once('SIGINT', stop)
+      const release = stopOn(controller)
       try {
         for await (const event of client().events(
           { ...filters(args[0]), ...(flags.all ? { all: true } : {}) },
@@ -1025,20 +1055,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ))
           printEvent(event)
       } finally {
-        process.off('SIGINT', stop)
+        release()
       }
       return 0
     }
 
     case 'wait': {
       const controller = new AbortController()
-      const stop = () => controller.abort()
-      process.once('SIGINT', stop)
+      const release = stopOn(controller)
       const event = await client()
         .wait(filters(args[0]), { timeout: flags.timeout ?? '30m', signal: controller.signal })
-        .finally(() => process.off('SIGINT', stop))
+        .finally(release)
       if (!event) {
-        if (!controller.signal.aborted) process.stderr.write('timed out\n')
+        if (!controller.signal.aborted) io.error('timed out\n')
         return 124
       }
       printEvent(event)
@@ -1053,6 +1082,19 @@ async function run(command: string | undefined, args: string[]): Promise<number>
   }
 }
 
+
+/** Aborts `controller` on the run's signal, or Ctrl-C without one; the returned function stops listening. */
+function stopOn(controller: AbortController): () => void {
+  const stop = () => controller.abort()
+  if (io.signal) {
+    if (io.signal.aborted) stop()
+    io.signal.addEventListener('abort', stop, { once: true })
+    const signal = io.signal
+    return () => signal.removeEventListener('abort', stop)
+  }
+  process.once('SIGINT', stop)
+  return () => process.off('SIGINT', stop)
+}
 
 /** What a command an app adds gets: this run's flags, and the helpers board's own commands use. */
 const context = (): CommandContext => ({
@@ -1085,10 +1127,27 @@ export async function main(argv: string[], options: App): Promise<number> {
   }
   const [command, ...args] = positionals
   try {
+    if (io.board) {
+      if (flags.url || flags.handle) throw new UsageError(`--${flags.url ? 'url' : 'handle'} doesn't apply: the board handle you pass says which board and who`)
+      if (command !== undefined && MACHINE.has(command)) throw new UsageError(`${command} isn't available in-process: it's about the machine vb runs on`)
+    }
     return await run(command, args)
   } catch (error) {
     // A board's error says what the board said: it can't drive the terminal either.
-    process.stderr.write(`${terminalText(`error: ${(error as Error).message}`)}\n`)
+    io.error(`${terminalText(`error: ${(error as Error).message}`)}\n`)
     return error instanceof UsageError ? 2 : 1
+  }
+}
+
+/** The commands about the machine the CLI runs on, not the board: none of them run in-process. */
+const MACHINE = new Set(['link', 'use', 'whoami', 'identity', 'hooks', 'hook', 'serve', 'inspect'])
+
+/** `main()` with `io` in place of the terminal, for `vb()`. One run at a time, as `main()`'s. */
+export async function mainWith(argv: string[], options: App, with_: Io): Promise<number> {
+  io = with_
+  try {
+    return await main(argv, options)
+  } finally {
+    io = TERMINAL
   }
 }

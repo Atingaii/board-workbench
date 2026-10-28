@@ -38,6 +38,39 @@ const code = await createApp({ appName: 'vercel board' }).run(process.argv.slice
 
 `run` answers the exit code, and never exits the process itself.
 
+### In-process, on a handle
+
+`vb()` runs a command on a handle you already have and returns what the CLI
+would print, for an agent's tool, say, without starting a CLI for each call:
+
+```ts
+import { readFile } from 'node:fs/promises'
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
+import { vb } from '@vercel/board/cli'
+
+const team = board({ backend: http('https://www.example.com/api/board') }).as('triage')
+
+const { code, stdout, stderr } = await vb(team, ['read', '42'])
+await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
+  readFile: async (path) => new Uint8Array(await readFile(path)),
+})
+```
+
+Its arguments, output, and exit codes are the CLI's. The handle says which
+board and who, so `--url` and `--handle` don't apply, and the commands about
+your machine (`link`, `use`, `whoami`, `identity`, `hooks`, `serve`,
+`inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
+`writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
+`wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
+every later call until it ends: they answer 2 without a `signal`. `refuse`
+names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
+for an agent's tool, which can't stream.
+
+`commandWord(argv)` answers the command `argv` runs (`tail` for
+`['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
+itself.
+
 ## Configuration
 
 | Setting | Flag | Env | Default |
