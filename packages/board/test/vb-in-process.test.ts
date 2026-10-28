@@ -53,7 +53,8 @@ describe('vb()', () => {
     // tail and wait hold every later call: only with a signal to stop them.
     for (const args of [['tail', 'dev'], ['wait', 'dev'], ['--as', 'triage', 'tail', 'dev'], ['--timeout', '1m', 'wait']])
       expect(await vb(team, args)).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
-    expect(await vb(team, ['--as', 'x', 'tail', 'dev'], { signal: new AbortController().signal, refuse: ['tail'] })).toEqual({ code: 2, stdout: '', stderr: "error: tail isn't available here\n" })
+    for (const args of [['--as', 'x', 'tail', 'dev'], ['--mentions', 'tail', 'dev'], ['--mentions', '@ada', 'tail', 'dev']])
+      expect(await vb(team, args, { signal: new AbortController().signal, refuse: ['tail'] })).toEqual({ code: 2, stdout: '', stderr: "error: tail isn't available here\n" })
     expect((await vb(team, ['read', 'dev', '--text', 'tail'], { refuse: ['tail'] })).stderr).not.toMatch(/isn't available here/)
     const controller = new AbortController()
     const tail = vb(team, ['tail', 'dev'], { signal: controller.signal })

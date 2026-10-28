@@ -165,8 +165,9 @@ function removedCommand(word: string): string | undefined {
   return Object.hasOwn(removed, word) ? removed[word] : undefined
 }
 
-/** The command word: the first argument that isn't a flag or a string flag's value. */
-export function commandWord(args: string[]): string | undefined {
+/** The command word: the first argument that isn't a flag or a string flag's value (a bare `--mentions` takes none). */
+export function commandWord(argv: string[]): string | undefined {
+  const args = withMentions(argv)
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
     if (arg === '--') return args[i + 1]
