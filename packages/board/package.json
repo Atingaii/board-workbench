@@ -35,6 +35,10 @@
       "types": "./dist/cli-embedded.d.mts",
       "default": "./dist/cli-embedded.mjs"
     },
+    "./cli/commands": {
+      "types": "./dist/cli-commands.d.mts",
+      "default": "./dist/cli-commands.mjs"
+    },
     "./backend-a2": {
       "types": "./dist/backend-a2.d.mts",
       "default": "./dist/backend-a2.mjs"

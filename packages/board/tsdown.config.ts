@@ -33,6 +33,8 @@ export default defineConfig([
       cli: 'src/cli/bin.ts',
       // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `serve` or `inspect`.
       'cli-embedded': 'src/cli/embedded.ts',
+      // `@vercel/board/cli/commands`: the CLI's commands as data, for a host to render, with no imports.
+      'cli-commands': 'src/cli/commands.ts',
     },
     format: 'esm',
     platform: 'node',
