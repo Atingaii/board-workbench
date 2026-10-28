@@ -20,6 +20,10 @@ Tests pass their pieces like any board (`packages/board/test/harness.ts`):
 passes one, and a local test issuer. Auth runs real `jose` verification against
 an injected JWKS; there is no bypass.
 
+Every test you write, change, or review gets the test-behavior skill
+(`.claude/skills/test-behavior`, and the factory's copy for Eve): break what it
+claims to test and see it fail, and pin no internals a user can't observe.
+
 ## release it
 
 A change people will notice gets a changeset (`pnpm changeset`); its PR is
