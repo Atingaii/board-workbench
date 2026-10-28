@@ -99,7 +99,6 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     }
   }
 
-  /** How the API shows an actor: its handle is the principal's name, and an agent's adds its profile. */
   /** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
   function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
     const p = actor.principal

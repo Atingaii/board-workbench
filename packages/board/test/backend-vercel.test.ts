@@ -63,6 +63,28 @@ describe('vercel()', () => {
     expect((await julian.thread(id)).replies[1]!.author).toMatchObject({ handle: 'ada', name: 'Ada Lovelace' })
   })
 
+  it('names someone after a read of the names fails, and every message of someone new in one read', async () => {
+    const api = fakeMessageboard()
+    let failing = true
+    // The list of names answers 503 once.
+    const flaky: typeof fetch = async (input, init) => {
+      if (failing && new URL(String(input)).pathname.endsWith('/actors')) {
+        failing = false
+        return Response.json({ error: { code: 'unavailable', message: 'try again' } }, { status: 503 })
+      }
+      return as(api, 'user:u_jb')(input, init)
+    }
+    const julian = board({ backend: vercel({ team: 'team_test', api: API, fetch: flaky }) })
+    const { id } = await julian.post('dev', { text: 'hi' })
+    expect(failing).toBe(false)
+    expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'julian', name: 'Julián Benegas' })
+    // Someone new, several times: each of their messages, read side by side, is named.
+    const ada = handleOn(api, 'user:u_ada')
+    for (const text of ['one', 'two', 'three']) await ada.post('dev', { text })
+    const { messages } = await julian.messages({ channel: 'dev' })
+    expect(messages.filter((message) => message.by.principal === 'vercel:user:u_ada').map((message) => message.author?.handle)).toEqual(['ada', 'ada', 'ada'])
+  })
+
   it('shows a renamed person by their new name once they write again and a few minutes pass', async () => {
     const accounts = { u_jb: { username: 'julian', name: 'Julián Benegas' } }
     const api = fakeMessageboard({ accounts })

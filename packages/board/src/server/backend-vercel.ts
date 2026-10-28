@@ -376,10 +376,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   let actorNames: { at: number; views: Promise<Map<string, ApiActorView>> } | null = null
   /** How long names are kept before they're read again: someone renamed shows by their new name after this. */
   const NAMES_FRESH_MS = 5 * 60_000
-  /** Actors the API's list didn't have when it was read again for them: it isn't read again for them. */
+  /** Actors a list read again for them didn't have: it isn't read again for them. */
   const unlisted = new Set<string>()
-  const readNames = async (who: Who) =>
-    new Map((await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')).map((view) => [view.id, view] as const))
+  /** Reads the list, kept as the current one; a read that fails isn't kept, so the next name tries again. */
+  const readNames = (who: Who) => {
+    const views = (async () =>
+      new Map((await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')).map((view) => [view.id, view] as const)))()
+    const read = { at: Date.now(), views }
+    actorNames = read
+    views.catch(() => {
+      if (actorNames === read) actorNames = null
+    })
+    return read
+  }
+  /** The actor in a read of the list, or undefined when it doesn't have them or failed. */
+  const inList = (read: { views: Promise<Map<string, ApiActorView>> }, id: string) => read.views.then((views) => views.get(id), () => undefined)
 
   /**
    * An actor as board shows them: a person by their Vercel username and name, and an agent acting
@@ -388,13 +399,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * every few minutes, and at once for someone who wrote since it was.
    */
   async function nameOf(who: Who, actor: ApiActor): Promise<ActorView & { id: string }> {
-    const read = () => (actorNames = { at: Date.now(), views: readNames(who).catch(() => new Map()) })
-    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? read() : actorNames
-    let found = (await current.views).get(actor.id)
+    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
+    let found = await inList(current, actor.id)
     if (!found && !unlisted.has(actor.id)) {
-      unlisted.add(actor.id)
-      found = (await read().views).get(actor.id)
-      if (found) unlisted.delete(actor.id)
+      // Someone new since this list: one read again covers everyone it's missing, even several at once.
+      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
+      found = await inList(again, actor.id)
+      // Only a read that worked and still doesn't have them settles it.
+      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(actor.id)
     }
     const kind = found && apiKind(found.kind)
     // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
