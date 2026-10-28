@@ -906,6 +906,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async discovery() {
       const who = { profile: null, session: null }
       const team = await teamId()
+      // A board named by its ID is read, so `link` and `use` save only one there is and you can reach.
+      if (options.board) await api(who, 'GET', await onBoard(who))
       // The team's ID: the API says it when this board names the team by its slug, or not at all.
       const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       return {

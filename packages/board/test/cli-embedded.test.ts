@@ -138,7 +138,11 @@ describe('the embedded CLI', () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     const api = fakeMessageboard()
-    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const asked: string[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      asked.push(`${init?.method ?? 'GET'} ${String(input instanceof Request ? input.url : input)}`)
+      return api.fetch(input, init)
+    })
     const app = { name: 'board', commands: local }
     const cwd = process.cwd()
     process.chdir(home)
@@ -146,7 +150,19 @@ describe('the embedded CLI', () => {
       const whoami = await capture(() => main(['whoami', '--scope', 'test'], app))
       const board = /^board +(\S+)$/m.exec(whoami.stdout)?.[1]
       expect(board).toBe('https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')
+      asked.length = 0
       expect((await capture(() => main(['post', 'general', 'by its URL', '--url', board!], app))).code).toBe(0)
+      // The URL's own board, in its own team: no other is looked for.
+      expect(asked.length).toBeGreaterThan(0)
+      for (const request of asked) {
+        const { pathname, searchParams } = new URL(request.split(' ')[1]!)
+        expect(searchParams.get('teamId'), request).toBe('team_test')
+        expect(pathname, request).toMatch(/^\/v1\/messageboard\/(boards\/brd_test(\/|$)|me$)/)
+      }
+      // A board that isn't there isn't linked, and what was saved stays.
+      const missing = board!.replace('brd_test', 'brd_missing')
+      expect(await capture(() => main(['link', missing], app))).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: /) })
+      expect((await capture(() => main(['use', missing], app))).code).toBe(1)
       const linked = await capture(() => main(['link', board!], app))
       expect(linked.code).toBe(0)
       expect(linked.stdout).toMatch(/^linked \S+board-home-\S+ to /)
