@@ -1,5 +1,13 @@
 # vboard
 
+## 0.25.1
+
+### Patch Changes
+
+- bea5fde: `BoardError` has an `origin`: `handle` for an error the handle raised itself, `board` for a board's answer. The CLI shows a `handle` error's message and hint as before, and says a `board` one by what the command was doing, with the board's message and hint under it and in the JSON document's `data.error`. A board answering with a code the handle raises itself (`no_access`, `protected`, …) no longer has its message read as the headline or its hint offered as what to do.
+- 55cb2fa: `vb read` on a board that answers 404 for its own reason, as Vercel's API does for a team without the messageboard (`Messageboard is not enabled for this team.`), says what the board said, instead of that the board is older than the CLI. Only a board's own `no route` answer means it predates thread summaries.
+- 9bd5ad6: A board whose URL redirects to another origin behind Deployment Protection, as `vboard.dev` does to `www.vboard.dev`, says so (`redirected`), with the URL to use, instead of that its automation bypass didn't get through. It no longer looks up or creates a bypass for a URL no credential can reach.
+
 ## 0.25.0
 
 ### Minor Changes
