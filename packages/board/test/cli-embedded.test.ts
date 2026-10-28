@@ -8,6 +8,7 @@ import { createApp } from '../src/cli/embedded.ts'
 import { main } from '../src/cli/main.ts'
 import { local } from '../src/cli/local.ts'
 import { env, url, useBoard } from './cli-harness.ts'
+import { fakeMessageboard } from './messageboard.ts'
 
 /** What `run` printed, and the exit code it answered. */
 async function capture(run: () => Promise<number>) {
@@ -72,14 +73,57 @@ describe('the embedded CLI', () => {
     expect(await capture(() => app.run(['--nope']))).toMatchObject({ code: 2, stderr: expect.stringContaining('(run `vercel board help`;') })
   })
 
-  it('says how to point it at a board with the commands it has: no serve', async () => {
+  it("talks to the team's board in Vercel's API when nothing points at another: the linked project's team's, or --scope's", async () => {
+    const home = await isolated()
+    // Linked a directory up, as an app's root is from its src.
+    await mkdir(join(home, 'app', '.vercel'), { recursive: true })
+    await mkdir(join(home, 'app', 'src'))
+    await writeFile(join(home, 'app', '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_test', projectId: 'prj_app' }))
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const asked: string[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      asked.push(String(input instanceof Request ? input.url : input))
+      return api.fetch(input, init)
+    })
+    const cwd = process.cwd()
+    process.chdir(join(home, 'app', 'src'))
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const posted = await capture(() => app.run(['post', 'general', 'on the team board']))
+      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_1\n$/) })
+      // The ID it prints goes back in as it came out.
+      const id = posted.stdout.trim()
+      expect(await capture(() => app.run(['reply', id, 'a reply']))).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_2\n$/) })
+      const thread = await capture(() => app.run(['read', id]))
+      expect(thread).toMatchObject({ code: 0, stdout: expect.stringContaining('a reply') })
+      expect(thread.stdout).toContain('on the team board')
+      const whoami = await capture(() => app.run(['whoami']))
+      expect(whoami.code).toBe(0)
+      expect(whoami.stdout).toContain('board   https://api.vercel.com/v1/messageboard/boards/brd_test\nsource  the Vercel CLI\n')
+      const read = await capture(() => app.run(['read', 'general', '--scope', 'acme', '--json']))
+      expect(read.code).toBe(0)
+      expect(JSON.parse(read.stdout.trim().split('\n')[0]!)).toMatchObject({ message: { text: 'on the team board' } })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+    const teams = asked.map((at) => {
+      const { origin, searchParams } = new URL(at)
+      return `${origin} ${searchParams.get('teamId') ?? `slug=${searchParams.get('slug')}`}`
+    })
+    expect(new Set(teams)).toEqual(new Set(['https://api.vercel.com team_test', 'https://api.vercel.com slug=acme']))
+  })
+
+  it('says how to point it at a board with the commands it has, standalone, where there is no team board', async () => {
     const home = await isolated()
     const cwd = process.cwd()
     process.chdir(home)
     try {
-      expect(await capture(() => createApp({ appName: 'vercel board' }).run(['read', 'dev']))).toMatchObject({
+      expect(await capture(() => main(['read', 'dev'], { name: 'board', commands: local }))).toMatchObject({
         code: 1,
-        stderr: 'error: no board URL: run `vercel board link <url>`, set BOARD_URL, or run `vercel board use <url>`\n',
+        stderr: 'error: no board URL: run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n',
       })
     } finally {
       process.chdir(cwd)

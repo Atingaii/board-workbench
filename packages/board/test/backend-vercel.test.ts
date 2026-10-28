@@ -155,6 +155,12 @@ describe('vercel()', () => {
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
+  it("says the team's ID in its discovery, though it's named by its slug", async () => {
+    const api = fakeMessageboard({ slug: 'acme' })
+    const team = board({ backend: vercel({ team: 'acme', api: API, fetch: as(api, 'user:u_jb') }) })
+    expect(await team.discovery()).toMatchObject({ team_id: 'team_test' })
+  })
+
   it("reads past the API's page of 100 after a cursor, as many as a read asks for", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)

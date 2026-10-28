@@ -8,6 +8,7 @@ import { FILTER_FLAGS, withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { boardUrl, configDir, connect, projectDir } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
+import { credentialSource, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
@@ -71,7 +72,7 @@ usage: ${app.name} <command> [options]${app.name === 'board' ? '      (also inst
 
 filters:  --re <id>  --by <handle>  --from <source>  --label k[=v|w]  --text <words>  --mentions [@handle]  --after <id>
           labels match a message or its thread's root; repeated flags all must match
-global:   --url <url>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
+global:   --url <url>  --scope <team>  --as <profile>  --avatar <url>  --human  --handle <h>  --json
 json:     one object per line (JSONL): { message, replies, last } for read <channel>, a message for read <id>
 text:     pass "-" to read it from stdin; it may be left out when you --attach
 env:      BOARD_URL  BOARD_TOKEN  BOARD_AS  BOARD_AVATAR  BOARD_HANDLE`
@@ -86,6 +87,8 @@ const OPTIONS = {
   human: { type: 'boolean' },
   handle: { type: 'string' },
   json: { type: 'boolean' },
+  scope: { type: 'string' },
+  team: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
   unset: { type: 'string', multiple: true },
@@ -182,7 +185,12 @@ export type CommandContext = {
  * The CLI an app runs: its name, as help, usage, and errors say it (`board`, `vercel board`),
  * and its own commands.
  */
-export type App = { name: string; commands: Record<string, Command> }
+export type App = {
+  name: string
+  commands: Record<string, Command>
+  /** With no board URL anywhere, it talks to the team's board in Vercel's API, as `vercel board` does. */
+  teamBoard?: boolean
+}
 
 type Flags = ReturnType<typeof parseAll>['values']
 
@@ -258,6 +266,9 @@ function messageId(value: string | undefined, what = 'message id'): string {
 /** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
 const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
 
+/** A message's ID as it's passed back: bare when it's a number, `#<id>` when it could be a channel's name. */
+const messageRef = (id: string) => (/^\d+$/.test(id) ? id : `#${id}`)
+
 function labelPairs(values: string[] | undefined): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
@@ -317,33 +328,46 @@ function filters(channel?: string): Filters & { after?: string } {
 }
 
 /**
- * The board this command talks to, `--url`'s or the one the environment points at, as `--as`
- * says: a handle on it, and how it reaches it (the credentials `vb` finds, `--handle`'s handle).
+ * The board the environment points at. With none, the team's board for an app that has one
+ * (null), or else how to point at one, with the commands this app has.
  */
-/** The board the environment points at; with none, how to point at one, with the commands this app has. */
-function configuredUrl(): string {
+function configuredUrl(): string | null {
   try {
     return boardUrl()
   } catch (error) {
     if (!(error instanceof BoardError) || error.code !== 'no_board') throw error
+    if (app.teamBoard) return null
     const ways = [`run \`${app.name} link <url>\``, 'set BOARD_URL', `run \`${app.name} use <url>\``, ...(app.commands.serve ? [`\`${app.name} serve\` for a local one`] : [])]
     throw new BoardError('no_board', `no board URL: ${ways.slice(0, -1).join(', ')}, or ${ways.at(-1)}`, 0)
   }
 }
 
+/** Who the handle writes as: `--as`'s profile (with `--avatar`), yourself with `--human`, or what the environment says. */
+function profileFlag(): ProfileOption | undefined {
+  if (flags.human) return null
+  if (!flags.as) return undefined
+  return flags.avatar ? { name: flags.as, avatar: flags.avatar } : flags.as
+}
+
+/**
+ * The board this command talks to, as `--as` says: a handle on it, where it is (null until its
+ * discovery says, for a team's board), and how it reaches it. It's `--url`'s; a team's board in
+ * Vercel's API for `--scope` or `--team`; the one the environment points at; or, for an app with
+ * a team board, the linked project's team's, or your login's.
+ */
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
-  const at = (url ?? configuredUrl()).replace(/\/+$/, '')
+  const profile = profileFlag()
+  const team = flags.scope ?? flags.team
+  const configured = url ?? (team === undefined ? configuredUrl() : null)
+  if (configured === null) {
+    const board = boardAt({ backend: vercel(team !== undefined ? { team } : {}) })
+    return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
+  }
+  const at = configured.replace(/\/+$/, '')
   const handle = options.handle ?? flags.handle
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
-  const profile: ProfileOption | undefined = flags.human
-    ? null
-    : flags.as
-      ? flags.avatar
-        ? { name: flags.as, avatar: flags.avatar }
-        : flags.as
-      : undefined
-  return { url: at, transport, board: profile !== undefined ? board.as(profile) : board }
+  return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
 }
 
 /** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
@@ -378,7 +402,7 @@ function warnUnknownMentions(handles: string[] | undefined) {
 
 function printMessage(message: MessageView) {
   if (flags.json) printJson(message)
-  else out(String(message.id))
+  else out(messageRef(message.id))
 }
 
 function printEvent(event: BoardEventView) {
@@ -519,8 +543,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'whoami': {
-      const { board, url, transport } = connection()
+      const { board, url: given, transport } = connection()
       const me = await board.me()
+      const url = given ?? (await board.discovery()).url
       const source = transport.source()
       if (flags.json) {
         printJson({ ...me, board: url, source })

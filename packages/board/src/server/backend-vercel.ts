@@ -77,7 +77,7 @@ type ApiRegistration = { owner: string; url: string | null; path?: string; branc
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
 export type VercelOptions = {
-  /** The team whose board it is (`team_…`). In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
+  /** The team whose board it is: its ID (`team_…`) or its slug. In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
   team?: string
   /** The board's ID. By default the team's board, which `GET /boards` names. */
   board?: string
@@ -211,7 +211,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | undefined>; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
     const url = new URL(`${origin}/v1/messageboard${path}`)
     const id = await teamId()
-    if (id) url.searchParams.set('teamId', id)
+    // A team's ID, or its slug, as Vercel's API takes either.
+    if (id) url.searchParams.set(id.startsWith('team_') ? 'teamId' : 'slug', id)
     for (const [name, value] of Object.entries(init.query ?? {})) if (value !== undefined) url.searchParams.set(name, value)
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (who.profile) headers['x-board-profile'] = who.profile.name
@@ -904,11 +905,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     ...unsupported,
     async discovery() {
       const who = { profile: null, session: null }
+      const team = await teamId()
       return {
         version: VERSION,
         url: `${origin}/v1/messageboard${await onBoard(who)}`,
         audience: origin,
-        team_id: await teamId(),
+        // The team's ID: the API says it when this board names the team by its slug, or not at all.
+        team_id: team?.startsWith('team_') ? team : (await self(who)).teamId,
         project_id: null,
         sync: [],
         // The API finds a project's deployment for a path, and wakes it through its Deployment Protection.
