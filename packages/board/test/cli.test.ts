@@ -35,6 +35,12 @@ describe('cli', () => {
     const json = await vb(['read', 'dev', '--json'], { BOARD_URL: undefined }, undefined, root)
     expect(json).toMatchObject({ code: 2, stdout: '' })
     expect(failure(json)).toMatchObject({ status: 'action_required', reason: 'missing_scope', next: [{ argv: ['vb', 'read', 'dev', '--json', '--scope', '<TEAM>'] }, {}] })
+    // The team goes where options go: before a --, after which everything is text.
+    const text = await vb(['post', 'dev', '--json', '--', '-1'], { BOARD_URL: undefined }, undefined, root)
+    expect(failure(text).next?.map((recovery) => recovery.argv)).toEqual([
+      ['vb', 'post', 'dev', '--json', '--scope', '<TEAM>', '--', '-1'],
+      ['vb', 'post', 'dev', '--json', '--url', '<URL>', '--', '-1'],
+    ])
     for (const command of ['link', 'use']) {
       const gone = await vb([command, url], {}, undefined, root)
       expect(gone).toMatchObject({ code: 2, stdout: '' })
@@ -558,6 +564,8 @@ describe('cli', () => {
     const unknown = await vb(['read', 'dev', '--frob'])
     expect(unknown).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option --frob for vb read\. Did you mean --from\?\n/) })
     expect(unknown.stderr).toContain('vb read --help')
+    // Only what the command takes: `reply` takes no --from, so it guesses nothing.
+    expect(await vb(['reply', '12', 'hi', '--frob'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --frob for vb reply\.\n/) })
     // Text that starts with - goes after --, and the error says how, for this very command.
     const dashed = await vb(['post', 'dev', '-1'])
     expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option -1 for vb post\./) })

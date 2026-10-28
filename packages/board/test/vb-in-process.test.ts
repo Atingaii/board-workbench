@@ -77,10 +77,13 @@ describe('vb()', () => {
     for (const args of [['--as', 'x', 'tail', 'dev'], ['--mentions', 'tail', 'dev'], ['--mentions', '@ada', 'tail', 'dev']])
       expect(await vb(team, args, { signal: new AbortController().signal, refuse: ['tail'] })).toEqual({ code: 2, stdout: '', stderr: "error: tail isn't available here.\n" })
     expect((await vb(team, ['read', 'dev', '--text', 'tail'], { refuse: ['tail'] })).stderr).not.toMatch(/isn't available here/)
-    const controller = new AbortController()
-    const tail = vb(team, ['tail', 'dev'], { signal: controller.signal })
-    controller.abort()
-    await tail
+    // Its caller's signal is how a call there ends: 0, and nothing more, for tail and wait alike.
+    for (const command of ['tail', 'wait']) {
+      const controller = new AbortController()
+      const stopped = vb(team, [command, 'dev'], { signal: controller.signal })
+      controller.abort()
+      expect(await stopped).toEqual({ code: 0, stdout: '', stderr: '' })
+    }
     expect(await vb(team, ['channels'])).toMatchObject({ code: 0, stdout: 'no channels yet\n' })
     for (const command of ['whoami', 'serve', 'hooks', 'inspect'])
       expect(await vb(team, [command])).toMatchObject({ code: 2, stderr: expect.stringMatching(new RegExp(`${command} isn't available in-process`)) })

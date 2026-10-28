@@ -15,7 +15,7 @@ import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
-import { commands, options, type CliCommand } from './commands.ts'
+import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
 import { closest, exitCode, failureDocument, formatFailure, type Failure, type Recovery, type Warning } from './failure.ts'
 
@@ -41,6 +41,12 @@ const helpRecovery = (command = current.command): Recovery => ({ instruction: 'S
 
 /** This CLI's name as argv, to build a command a person runs: `['vb']`, `['vercel', 'board']`. */
 const cli = () => named().split(' ')
+
+/** This run's command as typed, with `extra` where options go: before any `--`, after which everything is text. */
+function rerun(...extra: string[]): string[] {
+  const at = typed.indexOf('--')
+  return [...cli(), ...(at === -1 ? [...typed, ...extra] : [...typed.slice(0, at), ...extra, ...typed.slice(at)])]
+}
 
 /** What the parser accepts: every option, by name (`commands.ts`). */
 const OPTIONS = options
@@ -203,16 +209,28 @@ function parse(argv: string[]) {
 function parseFailure(error: Error & { code?: string }, argv: string[], word: string | undefined): Failed {
   const option = error.message.match(/--[a-z][\w-]*/)?.[0] ?? /'(-[^' ,]+)/.exec(error.message)?.[1]
   if (error.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && option) {
-    const guess = option.startsWith('--') ? closest(option.slice(2), Object.keys(OPTIONS)) : undefined
+    const guess = option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
     const next: Recovery[] = [{ instruction: 'See all options', argv: [...cli(), ...(word ? [word] : []), '--help'] }]
     const at = argv.indexOf(option)
-    if (word && TEXT.has(word) && at !== -1)
-      next.push({ instruction: 'Or, for text that starts with -, put it after --', argv: [...cli(), ...argv.slice(0, at), ...argv.slice(at + 1), '--', option] })
+    if (word && TEXT.has(word) && at !== -1) {
+      // The text goes first after the `--` there is, or a new one.
+      const rest = [...argv.slice(0, at), ...argv.slice(at + 1)]
+      const dash = rest.indexOf('--')
+      const text = dash === -1 ? [...rest, '--', option] : [...rest.slice(0, dash + 1), option, ...rest.slice(dash + 1)]
+      next.push({ instruction: 'Or, for text that starts with -, put it after --', argv: [...cli(), ...text] })
+    }
     const where = `${named()}${word ? ` ${word}` : ''}`
     return usage(`Unknown option ${option} for ${where}.${guess ? ` Did you mean --${guess}?` : ''}`, { reason: 'unknown_option', next })
   }
   if (error.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' && option) return usage(`${option} needs a value.`, { reason: 'missing_value' })
   return usage(sentence(error.message))
+}
+
+/** The options `word`'s command takes, its subcommands' and the filters included, and the ones every command takes. */
+function optionsOf(word: string | undefined): string[] {
+  const command = [...commands, ...Object.values(app.commands).map((own) => own.spec)].find((known) => known.name === word)
+  const own = command ? [command, ...(command.subcommands ?? [])].flatMap((c) => [...c.options, ...(c.filters ? filterOptions : [])]) : []
+  return [...own, ...globalOptions].map((option) => option.name)
 }
 
 /** `text` as a sentence: a capital first, and a period last. */
@@ -358,8 +376,8 @@ function configuredUrl(): string | null {
       actionRequired: true,
       message: "No board to use. Nothing sets one, and this directory isn't in a Vercel project.",
       next: [
-        { instruction: "Use a team's board", argv: [...cli(), ...typed, '--scope', '<TEAM>'] },
-        { instruction: 'Or a board at a URL', argv: [...cli(), ...typed, '--url', '<URL>'] },
+        { instruction: "Use a team's board", argv: rerun('--scope', '<TEAM>') },
+        { instruction: 'Or a board at a URL', argv: rerun('--url', '<URL>') },
       ],
     })
   }
@@ -482,8 +500,8 @@ function failureOf(error: unknown): Failure {
       return own('usage', 'wrong_url')
     case 'ambiguous_agent':
       return own('usage', 'ambiguous_agent', [
-        { instruction: 'Write as one of them', argv: [...cli(), ...typed, '--as', '<PROFILE>'] },
-        { instruction: 'Or as yourself', argv: [...cli(), ...typed, '--human'] },
+        { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
+        { instruction: 'Or as yourself', argv: rerun('--human') },
       ])
     case 'too_large':
       return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
@@ -1113,8 +1131,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         .wait(filters(args[0]), { timeout, signal: controller.signal })
         .finally(stop.release)
       if (!event) {
-        // Stopped, it says nothing: whoever stopped it knows.
-        if (controller.signal.aborted) return 130
+        // Stopped, it says nothing, and answers as `tail` does: whoever stopped it knows.
+        if (controller.signal.aborted) return stop.interrupted() ? 130 : 0
         throw new Failed({ class: 'timeout', reason: 'timeout', message: `Nothing matched within ${timeout}.` })
       }
       if (flags.json) result({ event })
