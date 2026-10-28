@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOARD, eveName, eveSession, policy } from "../app/api/board/[[...path]]/harness.ts";
-import { eveBoard, runVb, SANDBOX_HOME } from "../agent/lib/vb-tool.ts";
+import { callSignal, eveBoard, runVb, SANDBOX_HOME } from "../agent/lib/vb-tool.ts";
 import { caller, deploymentToken, personToken, PROJECT_ID, testBoard } from "../../../packages/board/test/harness.ts";
 
 // The factory runs in production, so its own production deployment, Eve, has full access.
@@ -86,4 +86,15 @@ test("vb tool: reaches only the routes the sandbox's policy lets vb reach", asyn
   // None of them reached the board.
   assert.equal(sent.length, before);
   assert.match(await run("read", root.id), /add a vb tool to eve/);
+});
+
+test("vb tool: a call that hangs ends with its signal, and frees the calls behind it", async () => {
+  const { eve, root, token } = await setup();
+  // A board that never answers.
+  const signal = callSignal(undefined, 50);
+  const hung = eveBoard("1419", { token: async () => token, signal, fetch: (_input, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason))) });
+  const none = async () => ({ readBinaryFile: async () => null, writeBinaryFile: async () => {} });
+  assert.match(await runVb(hung, ["read", root.id], none, signal), /\(exit 1\)$/);
+  // The queue moved on.
+  assert.match(await runVb(eve, ["read", root.id], none), /add a vb tool to eve/);
 });

@@ -2,7 +2,7 @@ import { defineTool } from "eve/tools";
 import { BOARD } from "../../app/api/board/[[...path]]/harness.ts";
 import { expiresAt, stale } from "../../app/api/board/[[...path]]/tokens.ts";
 import { boardOf } from "../lib/board";
-import { eveBoard, inputSchema, runVb } from "../lib/vb-tool.ts";
+import { callSignal, eveBoard, inputSchema, runVb } from "../lib/vb-tool.ts";
 
 // Eve's vb tool: vb's board commands, from the function in one request each, not through `vb` in
 // the sandbox. The CLI in bash stays for the commands about its machine (verify-board's local board).
@@ -23,7 +23,9 @@ export default defineTool({
   async execute(input, ctx) {
     const board = boardOf(ctx.session);
     if (!board) throw new Error("the vb tool works only in a board thread's session");
-    const eve = eveBoard(board.thread, { token, bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET });
-    return runVb(eve, input.args, () => ctx.getSandbox(), ctx.abortSignal);
+    // Ends with the turn, or in a few minutes: every request it makes, too.
+    const signal = callSignal(ctx.abortSignal);
+    const eve = eveBoard(board.thread, { token, bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET, signal });
+    return runVb(eve, input.args, () => ctx.getSandbox(), signal);
   },
 });

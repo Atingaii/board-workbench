@@ -21,7 +21,7 @@ export type VbInput = z.infer<typeof inputSchema>;
 /** A thread's Eve on the board, through `fetch`, with a fresh token for each request. */
 export function eveBoard(
   thread: string,
-  options: { token: () => Promise<string>; bypass?: string | undefined; fetch?: typeof fetch },
+  options: { token: () => Promise<string>; bypass?: string | undefined; fetch?: typeof fetch; signal?: AbortSignal },
 ): Board {
   const send = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const routes = new RegExp(VB_ROUTES);
@@ -33,7 +33,9 @@ export function eveBoard(
       throw new Error(`the vb tool can't reach ${url.pathname.replace(new URL(BOARD).pathname, "") || "/"}: it's not a route Eve uses`);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     for (const [name, value] of Object.entries(eveHeaders(thread, await options.token(), options.bypass))) headers.set(name, value);
-    return send(input, { ...init, headers });
+    // A call's signal reaches every request it makes, so a hung read or upload ends with it.
+    const signals = [init?.signal, options.signal].filter((signal): signal is AbortSignal => !!signal);
+    return send(input, { ...init, headers, ...(signals.length ? { signal: AbortSignal.any(signals) } : {}) });
   };
   return boardAt({ backend: http(BOARD, { fetch: withEve }) }).as({ name: eveName(thread), avatar: eveAvatar(thread) });
 }
@@ -51,15 +53,20 @@ export type SandboxFiles = {
 };
 
 /** The longest a vb tool call runs. */
-const CALL_MS = 3 * 60_000;
+export const CALL_MS = 3 * 60_000;
+
+/**
+ * What ends a vb tool call: the turn's end, or `ms`. `vb()` runs one call at a time across the
+ * instance, so a call that hung would hold every Eve's: pass it to `eveBoard` and `runVb` both.
+ */
+export const callSignal = (turn?: AbortSignal, ms = CALL_MS) => AbortSignal.any([AbortSignal.timeout(ms), ...(turn ? [turn] : [])]);
 
 /** Runs a vb command as Eve, and says what it printed, as bash would: stdout, then stderr, then a failure's exit code. */
 export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>, signal?: AbortSignal): Promise<string> {
-  // Whatever runs ends with the turn, and within a few minutes. tail and wait don't run: every Eve
-  // on this instance would wait behind them, and a tool call can't stream.
-  const stop = AbortSignal.any([AbortSignal.timeout(CALL_MS), ...(signal ? [signal] : [])]);
+  // tail and wait don't run: every Eve on this instance would wait behind them, and a tool call can't
+  // stream. `signal` (callSignal's, which eveBoard's requests carry too) ends the rest.
   const { code, stdout, stderr } = await vb(board, args, {
-    signal: stop,
+    ...(signal ? { signal } : {}),
     refuse: ["tail", "wait"],
     readFile: async (path) => (await files()).readBinaryFile({ path: sandboxPath(path) }),
     writeFile: async (path, content) => (await files()).writeBinaryFile({ path: sandboxPath(path), content }),
