@@ -490,7 +490,10 @@ function failureOf(error: unknown): Failure {
         'permission',
         'deployment_protected',
         "Can't reach the board. It's behind Vercel Deployment Protection.",
-        process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+        // On Vercel, a deployment gets through by its project's trust, not a login or a secret.
+        process.env.VERCEL === '1'
+          ? [{ instruction: "Add this project and environment to the board project's Deployment Protection Trusted Sources." }]
+          : process.env.VERCEL_AUTOMATION_BYPASS_SECRET
           ? [{ instruction: `Check VERCEL_AUTOMATION_BYPASS_SECRET against Project → Settings → Deployment Protection → Protection Bypass for Automation.` }]
           : [login, { instruction: `Or ${bypass}.` }],
       )
@@ -501,7 +504,15 @@ function failureOf(error: unknown): Failure {
         'auth',
         'token_unavailable',
         "There's no token to reach the board with.",
-        [{ instruction: process.env.GITHUB_ACTIONS ? 'Give the job `permissions: id-token: write`.' : 'Pass a token it accepts in BOARD_TOKEN.' }],
+        [
+          {
+            instruction: process.env.GITHUB_ACTIONS
+              ? 'Give the job `permissions: id-token: write`.'
+              : process.env.VERCEL === '1'
+                ? 'Enable OIDC on this project, or pass a token the board accepts in BOARD_TOKEN.'
+                : 'Pass a token it accepts in BOARD_TOKEN.',
+          },
+        ],
       )
     case 'no_board':
       return known('not_found', 'board_not_found', reached ? `Couldn't find a board at ${reached}.` : "Couldn't find the team's board.")

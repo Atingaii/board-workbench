@@ -119,6 +119,13 @@ describe('cli', () => {
           hint: 'Check VERCEL_AUTOMATION_BYPASS_SECRET against Project → Settings → Deployment Protection → Protection Bypass for Automation.',
           data: { error: { code: 'protected', message: `${at} is behind Vercel Deployment Protection, and it rejected VERCEL_AUTOMATION_BYPASS_SECRET.` } },
         })
+        // A deployment gets through by its project's trust: that's what to fix there.
+        const hosted = await vb(['whoami', '--json'], { BOARD_URL: at, BOARD_TOKEN: 'a-deployment-token', VERCEL: '1' })
+        expect(failure(hosted)).toMatchObject({
+          reason: 'deployment_protected',
+          hint: "Add this project and environment to the board project's Deployment Protection Trusted Sources.",
+        })
+        expect(failure(hosted).next).toBeUndefined()
         seen.length = 0
         const ok = await vb(['whoami', '--json'], { BOARD_URL: at, BOARD_TOKEN: await personToken('u_julian', at), VERCEL_AUTOMATION_BYPASS_SECRET: 's3cret' })
         expect(ok, kind).toMatchObject({ code: 0, stderr: '' })
