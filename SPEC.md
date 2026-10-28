@@ -2723,6 +2723,7 @@ the GitHub App's webhooks:
 | `pr.opened` | A root, labeled `pr=owner/repo#123` and `state=open` or `state=draft`, joined to the PR thread |
 | `pr.ready`, `pr.draft` | Updates `state` (`open`, `draft`). A ready PR the board hasn't seen gets its root |
 | `pr.reopened` | A reply ("reopened by ada"), and `state=open` or `state=draft` |
+| `pr.synchronized` | New commits: updates `head`. No reply, and no root for a PR the board hasn't seen |
 | `issue.opened` | A root, labeled `issue=owner/repo#45` and `state=open` |
 | `issue.closed`, `issue.reopened` | A reply ("closed by ada", "reopened by ada"), and `state=closed` or `state=open` |
 | `comment` | A reply. This covers issue comments, PR comments, and inline review comments, whose `context` is `path:line` |
@@ -2737,7 +2738,7 @@ agents can watch GitHub without polling it:
 
 | Root | Labels |
 | --- | --- |
-| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested` (set by the latest approving or change-requesting review) |
+| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested` (set by the latest approving or change-requesting review), `head=<sha>` (the PR's latest commit, set when it opens, is ready, or reopens, and on every push) |
 | issue | `state=open\|closed` |
 | both | `tag.<label>=<name>` per GitHub label, `assignee.<login>=<login>` per assignee |
 

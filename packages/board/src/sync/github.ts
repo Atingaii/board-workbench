@@ -111,8 +111,11 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
   const action = String(body.action ?? '')
   const sender = body.sender as User | undefined
   if (name === 'pull_request') {
-    const pr = body.pull_request as { number: number; title: string; html_url: string; draft?: boolean; merged?: boolean }
-    const pr_label = { pr: `${(body.repository as { full_name: string }).full_name}#${pr.number}` }
+    const pr = body.pull_request as { number: number; title: string; html_url: string; draft?: boolean; merged?: boolean; head?: { sha?: string } }
+    // The commit the PR is at, so a watcher can tell which commit it judged and notice when that's no longer it.
+    const sha = pr.head?.sha
+    const head: Record<string, string> = sha ? { head: sha } : {}
+    const pr_label = { pr: `${(body.repository as { full_name: string }).full_name}#${pr.number}`, ...head }
     const base = { title: `PR #${pr.number}: ${pr.title}`, url: pr.html_url, unset: [] as string[] }
     if (TAG_ACTIONS.includes(action))
       return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: `pr.${action}`, labels: {}, reply: null, createRoot: false } }
@@ -127,6 +130,10 @@ function lifecycle(name: string, body: Record<string, unknown>): { lifecycle: Li
       case 'edited':
         if (!(body.changes as { title?: unknown } | undefined)?.title) return null
         return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.edited', labels: {}, reply: null, createRoot: false, retitled: true } }
+      // New commits: only `head` changes, with no reply, since GitHub's own timeline already lists the pushes.
+      case 'synchronize':
+        if (!sha) return null
+        return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.synchronized', labels: head, reply: null, createRoot: false } }
       case 'ready_for_review':
         return { number: pr.number, user: sender ?? {}, lifecycle: { ...base, type: 'pr.ready', labels: { ...pr_label, state: 'open' }, reply: null, createRoot: true } }
       case 'converted_to_draft':
@@ -202,7 +209,7 @@ const NativeItem = z.looseObject({
   base: z.looseObject({ ref: z.string() }).optional(), head: z.looseObject({ ref: z.string() }).optional(),
 })
 export const GitHubPayload = z.looseObject({ pull_request: NativeItem.optional(), issue: NativeItem.optional(), action: z.string().optional() })
-const prTypes = ['pr.opened', 'pr.edited', 'pr.ready', 'pr.draft', 'pr.reopened', 'pr.closed', 'pr.labeled', 'pr.unlabeled', 'pr.assigned', 'pr.unassigned', 'review.submitted', 'review.dismissed'] as const
+const prTypes = ['pr.opened', 'pr.edited', 'pr.ready', 'pr.draft', 'pr.reopened', 'pr.synchronized', 'pr.closed', 'pr.labeled', 'pr.unlabeled', 'pr.assigned', 'pr.unassigned', 'review.submitted', 'review.dismissed'] as const
 const issueTypes = ['issue.opened', 'issue.edited', 'issue.closed', 'issue.reopened', 'issue.labeled', 'issue.unlabeled', 'issue.assigned', 'issue.unassigned'] as const
 const [messageEvent, editedEvent, deletedEvent, reactionEvent, lifecycleEvent] = eventSchema('github', 'comment').options
 const githubFields = { subject: GitHubSubject, raw: GitHubPayload }
