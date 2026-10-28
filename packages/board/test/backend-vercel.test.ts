@@ -10,7 +10,7 @@ const API = 'http://localhost'
 
 /** A handle on the fake's board through vercel(), as `principal`. */
 const handleOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
-  board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
+  board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal), files: api.files }) })
 
 /** A caller board() verified, with `can`: what a board with an `access` passes its backend. */
 const verified = (can: Can) =>
@@ -24,7 +24,7 @@ const verified = (can: Can) =>
   }) as unknown as Caller
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core and watchers, and keeps no schedules, files, or sync", async () => {
+  it("passes the conformance kit's core, attachments, and watchers, and keeps no schedules or sync", async () => {
     const report = await conformance(handleOn(fakeMessageboard()))
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
@@ -43,7 +43,7 @@ describe('vercel()', () => {
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'skipped',
-      'attachments: takes a file, posts it, and gives it back': 'skipped',
+      'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
       "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',

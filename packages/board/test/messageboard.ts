@@ -24,7 +24,9 @@ type Message = {
   labels: Record<string, string>
   /** Its post's place in its channel's feed, which a channel cursor counts. */
   feedSequence: number
+  attachments?: { id: string; name: string; type: string; size: number }[]
 }
+type Attachment = { id: string; boardId: string; name: string; type: string; size: number; sha256: string; state: 'pending' | 'ready'; messageId?: string; createdAt: number; createdBy: Actor }
 type Thread = {
   id: string
   channelId: string
@@ -69,6 +71,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const feeds = new Map<string, Change[]>()
   const actors = new Map<string, ActorView>()
   const requests: string[] = []
+  const attachments = new Map<string, Attachment>()
+  /** The bucket: bytes by attachment ID, as presigned PUTs leave them. */
+  const stored = new Map<string, Uint8Array<ArrayBuffer>>()
+  const STORAGE = 'http://storage.test/'
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
   type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
@@ -137,6 +143,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     // Up to 20 reactors an emoji, earliest first: the count is exact.
     ...(m.reactions.size ? { reactors: Object.fromEntries([...m.reactions].map(([emoji, by]) => [emoji, [...by.keys()].slice(0, 20)])) } : {}),
     ...(Object.keys(m.labels).length ? { labels: { ...m.labels } } : {}),
+    ...(m.attachments?.length ? { attachments: m.attachments } : {}),
   })
   const showThread = (t: Thread) => {
     const { messages, ...rest } = t
@@ -205,8 +212,16 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return channel
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string> }) {
-    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[] }) {
+    const files = (body.attachments ?? []).map((id) => {
+      const attachment = attachments.get(id)
+      if (!attachment || !samePrincipal(attachment.createdBy.principal, actor.principal)) throw new Refused(404, 'attachment_not_found')
+      if (attachment.state !== 'ready') throw new Refused(409, 'attachment_not_ready')
+      if (attachment.messageId) throw new Refused(409, 'attachment_already_posted')
+      return attachment
+    })
+    // A post with attachments may have no text.
+    if (typeof body.text !== 'string' || (!body.text.trim() && !(files.length && body.text === '')) || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
     if (body.replyTo !== undefined && (body.replyTo < 1 || body.replyTo > thread.messageCount)) throw new Refused(400, 'invalid_reply')
     const sequence = thread.messageCount + 1
     const createdAt = now()
@@ -224,7 +239,9 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       // A post's labels commit with it, so its event's message already has them.
       labels: { ...body.labels },
       feedSequence: 0,
+      ...(files.length ? { attachments: files.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
     }
+    for (const file of files) file.messageId = message.id
     thread.messages.push(message)
     thread.messageCount = sequence
     thread.lastActivityAt = createdAt
@@ -325,9 +342,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method
     requests.push(`${method} ${path}`)
-    const body = method === 'GET' ? {} : ((await request.json()) as Record<string, any>)
-    // Registering and acking watchers take no operation ID: each is idempotent as it is.
-    if (method !== 'GET' && !/\/watchers(\/|$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    // Completing an upload takes no body.
+    const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
+    // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(actor) }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
     if (method === 'POST' && path === '/boards/default') {
@@ -374,7 +392,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
       threads.set(thread.id, thread)
-      const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string> })
+      const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string>; attachments?: string[] })
       return { thread: showThread(thread), message: show(message) }
     }
     if ((found = /^\/messages\/([^/]+)$/.exec(rest)) && method === 'GET') {
@@ -391,6 +409,29 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       return again
     }
     if (rest === '/watchers' || rest.startsWith('/watchers/')) return watchers(method, rest, actor, body, url)
+    if (method === 'POST' && rest === '/attachments') {
+      const attachment: Attachment = { id: `att_${randomUUID()}`, boardId: boardId!, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
+      attachments.set(attachment.id, attachment)
+      return { attachment, upload: { url: `${STORAGE}${attachment.id}`, method: 'PUT', headers: { 'content-type': body.type, 'x-amz-checksum-sha256': body.sha256 }, expiresAt: now() + 600_000 } }
+    }
+    if ((found = /^\/attachments\/([^/]+)(\/complete)?$/.exec(rest))) {
+      const attachment = attachments.get(decodeURIComponent(found[1]!))
+      const own = attachment && samePrincipal(attachment.createdBy.principal, actor.principal)
+      if (method === 'POST' && found[2]) {
+        if (!attachment || !own) throw new Refused(404, 'attachment_not_found')
+        const bytes = stored.get(attachment.id)
+        if (!bytes) throw new Refused(409, 'attachment_not_uploaded')
+        if (bytes.byteLength !== attachment.size) throw new Refused(422, 'attachment_mismatch')
+        attachment.state = 'ready'
+        return { attachment }
+      }
+      if (method === 'GET' && !found[2]) {
+        const posted = attachment?.messageId ? MESSAGE_ID.exec(attachment.messageId) : null
+        const message = posted ? threads.get(`thr_${posted[1]}`)?.messages[Number(posted[2]) - 1] : undefined
+        if (!attachment || attachment.state !== 'ready' || !(own || (message && message.deletedAt === undefined))) throw new Refused(404, 'attachment_not_found')
+        return { attachment, url: `${STORAGE}${attachment.id}`, expiresAt: now() + 60_000 }
+      }
+    }
     if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
     if (method === 'GET' && rest === '/messages') {
       const channelId = url.searchParams.get('channelId') ?? ''
@@ -434,7 +475,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       }
       const again = repeat(actor, body.clientId)
       if (again) return again
-      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string })) }
+      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[] })) }
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)
@@ -453,7 +494,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       if (method === 'POST' && action === '/delete') {
         if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
         if (message.deletedAt === undefined) {
-          Object.assign(message, { text: '', deletedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
+          Object.assign(message, { text: '', attachments: undefined, deletedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
           emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, actor)
         }
         return { message: show(message) }
@@ -507,6 +548,19 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     requests,
     /** The watchers each principal registered, as the API keeps them. */
     registrations,
+    /** The attachments bucket, as presigned URLs reach it: a PUT stores bytes, a GET reads them. */
+    files: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const id = request.url.slice(STORAGE.length)
+      if (request.headers.has('authorization')) return new Response('credentials never go to storage', { status: 400 })
+      if (request.method === 'PUT') {
+        if (stored.has(id)) return new Response(null, { status: 412 })
+        stored.set(id, new Uint8Array(await request.arrayBuffer()))
+        return new Response(null, { status: 200 })
+      }
+      const bytes = stored.get(id)
+      return bytes ? new Response(bytes) : new Response(null, { status: 404 })
+    }) as typeof fetch,
     /** The API, as `fetch` reaches it. */
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
