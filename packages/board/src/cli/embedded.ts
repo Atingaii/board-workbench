@@ -4,6 +4,8 @@
 import type { Board } from '../server/index.ts'
 import { commandWord, main, mainWith } from './main.ts'
 
+export { commandWord }
+
 /**
  * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). An agent's hook
  * runs it the same way, by that name. `run` takes what follows the name, and answers the exit code:

@@ -67,6 +67,10 @@ every later call until it ends: they answer 2 without a `signal`. `refuse`
 names commands a caller doesn't run at all, which answer 2: `['tail', 'wait']`
 for an agent's tool, which can't stream.
 
+`commandWord(argv)` answers the command `argv` runs (`tail` for
+`['--as', 'triage', 'tail', 'dev']`), for a tool that keeps some commands to
+itself.
+
 ## Configuration
 
 | Setting | Flag | Env | Default |

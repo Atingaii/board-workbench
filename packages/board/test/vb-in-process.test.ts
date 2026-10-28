@@ -51,11 +51,8 @@ describe('vb()', () => {
     const team = await handle()
     expect(await vb(team, ['read', '--url', 'https://elsewhere.test/api/board'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/--url doesn't apply/) })
     // tail and wait hold every later call: only with a signal to stop them.
-    for (const command of ['tail', 'wait']) {
-      expect(await vb(team, [command, 'dev'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
-      // A flag's value before the command doesn't hide it.
-      expect(await vb(team, ['--as', 'triage', command, 'dev'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
-    }
+    for (const args of [['tail', 'dev'], ['wait', 'dev'], ['--as', 'triage', 'tail', 'dev'], ['--timeout', '1m', 'wait']])
+      expect(await vb(team, args)).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
     expect(await vb(team, ['--as', 'x', 'tail', 'dev'], { signal: new AbortController().signal, refuse: ['tail'] })).toEqual({ code: 2, stdout: '', stderr: "error: tail isn't available here\n" })
     expect((await vb(team, ['read', 'dev', '--text', 'tail'], { refuse: ['tail'] })).stderr).not.toMatch(/isn't available here/)
     const controller = new AbortController()
