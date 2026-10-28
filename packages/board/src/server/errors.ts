@@ -1,15 +1,19 @@
 import { ZodError } from 'zod'
+import { handleErrors, type ErrorOrigin } from '../client/client.ts'
 
 export class HttpError extends Error {
   readonly status: number
   readonly code: string
-  /** What fixes it, when the handle that raised it knows (`BoardError`'s `hint`). */
+  /** What fixes it, when there's one (`BoardError`'s `hint`). */
   readonly hint: string | undefined
-  constructor(status: number, code: string, message: string, options: { hint?: string } = {}) {
+  /** `handle` for a handle's own error on its way through: everything else is the board's. */
+  readonly origin: ErrorOrigin
+  constructor(status: number, code: string, message: string, options: { hint?: string; origin?: ErrorOrigin } = {}) {
     super(message)
     this.status = status
     this.code = code
     this.hint = options.hint
+    this.origin = options.origin ?? 'board'
   }
 }
 
@@ -53,8 +57,12 @@ function reported(issue: ZodError['issues'][number]): ZodError['issues'][number]
 /** Every failure becomes `{ error: { code, message, hint? } }` with a matching status. */
 export function toErrorResponse(error: unknown): Response {
   if (error instanceof RejectedError) return error.response
-  if (error instanceof HttpError)
-    return json({ error: { code: error.code, message: error.message, ...(error.hint !== undefined ? { hint: error.hint } : {}) } }, error.status)
+  if (error instanceof HttpError) {
+    const response = json({ error: { code: error.code, message: error.message, ...(error.hint !== undefined ? { hint: error.hint } : {}) } }, error.status)
+    // The handle's own stays the handle's for the handle in this process that reads it back.
+    if (error.origin === 'handle') handleErrors.add(response)
+    return response
+  }
   if (error instanceof ZodError) {
     const issue = error.issues[0] && reported(error.issues[0])
     const path = issue?.path.length ? `${issue.path.join('.')}: ` : ''

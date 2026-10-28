@@ -19,7 +19,7 @@ async function token(): Promise<string> {
   if (deployed()) return getVercelOidcToken()
   // With no login to send, that's what it says, as `http()`'s does, not that the API didn't answer.
   return vercelLogin().catch(() => {
-    throw new HttpError(401, 'not_logged_in', 'not signed in to Vercel: run `vercel login`')
+    throw new HttpError(401, 'not_logged_in', "You're not logged in to Vercel.", { hint: 'Run vercel login.', origin: 'handle' })
   })
 }
 

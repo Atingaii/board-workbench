@@ -55,6 +55,16 @@ export function vercelProjectFile(cwd = process.cwd()): string | null {
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
+const PROJECT_ID = /^prj_[A-Za-z0-9]{1,64}$/
+// An origin and a plain path, nothing a shell reads as anything else: `$(…)` and `;` can't be in one.
+const URL_SHAPE = /^https?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~%/-]{0,2000})?$/
+
+/**
+ * A value a board said, as a message can show it: only when it's what it should be (a project
+ * ID, a URL), since the handle's messages are trusted where a board's words aren't.
+ */
+const shown = (value: unknown, shape: RegExp): string | undefined => (typeof value === 'string' && shape.test(value) ? value : undefined)
+
 /** Where `vb serve` leaves the token for the board it runs at `url`: only this user can read it. */
 export function localTokenFile(url: string): string {
   const normalized = url.replace(/\/+$/, '')
@@ -158,7 +168,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   }
   if (cached) return cached
   if (!discovery.project_id)
-    throw new BoardError('no_project', `The board at ${discovery.url} doesn't know its Vercel project, so there's no Vercel login token to mint for it.`, 0, {
+    throw new BoardError('no_project', `The board at ${audience} doesn't know its Vercel project, so there's no Vercel login token to mint for it.`, 0, {
       hint: 'Pass a token it accepts in BOARD_TOKEN.',
     })
 
@@ -217,7 +227,7 @@ async function boardProject(url: string, discovery: Discovery, authToken: string
   if (found.projectId !== discovery.project_id)
     throw new BoardError(
       'wrong_project',
-      `The board at ${url} says its project is ${discovery.project_id}, but it's a deployment of ${found.projectId}, so no token is minted for it.`,
+      `The board at ${url} says its project is ${shown(discovery.project_id, PROJECT_ID) ?? 'another one'}, but it's a deployment of ${found.projectId}, so no token is minted for it.`,
       0,
     )
   return { id: found.projectId, team: found.ownerId.startsWith('team_') ? found.ownerId : null }
@@ -307,7 +317,9 @@ export function connect(
       if (!response.ok) throw new BoardError('no_board', `There's no board at ${url}: it answered ${response.status}.`, response.status)
       const found = (await response.json()) as Discovery
       if (found.audience !== url)
-        throw new BoardError('wrong_audience', `The board at ${url} says its URL is ${found.audience}.`, 0, { hint: `Use ${found.audience}.` })
+        throw new BoardError('wrong_audience', `The board at ${url} says its URL is ${shown(found.audience, URL_SHAPE) ?? 'another one'}.`, 0, {
+          hint: shown(found.audience, URL_SHAPE) ? `Use ${found.audience}.` : 'Use the URL its discovery names.',
+        })
       return found
     }))
 

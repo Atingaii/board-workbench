@@ -43,21 +43,38 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { parseSse } from './sse.ts'
 
 /**
- * What went wrong: `message` says what and why, `code` is what to branch on, and `hint`, when the
- * handle knows one, says what fixes it (`Set VERCEL_AUTOMATION_BYPASS_SECRET…`).
+ * Where an error came from: `handle`, raised by the handle on this machine (no Vercel login,
+ * Deployment Protection), or `board`, a board's answer, whose words are its own whatever code it
+ * names.
+ */
+export type ErrorOrigin = 'handle' | 'board'
+
+/**
+ * What went wrong: `message` says what and why, `code` is what to branch on, `hint`, when there's
+ * one, what fixes it, and `origin` who said so. Trust a `board` one's message and hint as you would
+ * the board.
  */
 export class BoardError extends Error {
   readonly code: string
   readonly status: number
   readonly hint: string | undefined
-  constructor(code: string, message: string, status: number, options: { hint?: string } = {}) {
+  readonly origin: ErrorOrigin
+  constructor(code: string, message: string, status: number, options: { hint?: string; origin?: ErrorOrigin } = {}) {
     super(message)
     this.name = 'BoardError'
     this.code = code
     this.status = status
     this.hint = options.hint
+    this.origin = options.origin ?? 'handle'
   }
 }
+
+/**
+ * The responses, made in this process, that carry an error the handle raised: a handle's request
+ * to a board in this process keeps its errors the handle's on the way back. Nothing a board sends
+ * can be one.
+ */
+export const handleErrors = new WeakSet<Response>()
 
 export type Resolvable<T> = T | (() => T | Promise<T>)
 const resolve = async <T>(value: Resolvable<T>): Promise<T> =>
@@ -511,7 +528,10 @@ async function toError(response: Response): Promise<BoardError> {
   try {
     const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
     if (body.error?.message)
-      return new BoardError(body.error.code ?? 'error', body.error.message, response.status, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
+      return new BoardError(body.error.code ?? 'error', body.error.message, response.status, {
+        ...(typeof body.error.hint === 'string' ? { hint: body.error.hint } : {}),
+        origin: handleErrors.has(response) ? 'handle' : 'board',
+      })
   } catch {}
   return new BoardError('http_error', `The board answered ${`${response.status} ${response.statusText}`.trim()}.`, response.status)
 }

@@ -85,7 +85,7 @@ const describe = (error: unknown) => ((error instanceof Error ? error.message : 
 /** The SDK's error, as the board answers it: the remote's own status and code, or 502 when it never answered. */
 const rethrow = (error: unknown): never => {
   if (error instanceof BoardError)
-    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, error.hint !== undefined ? { hint: error.hint } : {})
+    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, { ...(error.hint !== undefined ? { hint: error.hint } : {}), origin: error.origin })
   if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
   throw new HttpError(502, 'unreachable', `the board didn't answer: ${describe(error)}`)
 }
@@ -197,7 +197,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   /** The board it uses' discovery, for a handle here: who it is, and the sync entries it lists. */
   const discovery = () =>
     (discovered ??= doFetch(remote).then(async (response) => {
-      if (!response.ok) throw new HttpError(response.status >= 400 ? response.status : 502, 'no_board', `There's no board at ${remote}: it answered ${response.status}.`)
+      // This handle's own finding about the URL it was given, not the remote's words.
+      if (!response.ok)
+        throw new HttpError(response.status >= 400 ? response.status : 502, 'no_board', `There's no board at ${remote}: it answered ${response.status}.`, { origin: 'handle' })
       return (await response.json()) as Discovery
     }, rethrow)).catch((error: unknown) => {
       discovered = null

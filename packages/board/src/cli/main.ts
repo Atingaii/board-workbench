@@ -460,55 +460,57 @@ function missing(): string | undefined {
 }
 
 /**
- * What `error` means for this run, in the Vercel CLI's terms. The handle's own errors (`vercel
- * login` missing, Deployment Protection) say what and why themselves; the board's are said by what
- * this run was doing, with the board's own words under it.
+ * What `error` means for this run, in the Vercel CLI's terms. What the handle raised itself says
+ * what and why, and its hint what fixes it. What a board answered is said by what this run was
+ * doing, with the board's words under it and in `data`, never in what to run: a board can answer
+ * with any code, the handle's own included.
  */
 function failureOf(error: unknown): Failure {
   if (error instanceof Failed) return error.failure
   const message = error instanceof Error ? error.message : String(error)
-  const { code, status, hint } = error as { code?: unknown; status?: unknown; hint?: unknown }
+  const { code, status, hint, origin } = error as { code?: unknown; status?: unknown; hint?: unknown; origin?: unknown }
   // Not the board's or the handle's: the system's (a file it couldn't write), or a bug.
   if (typeof code !== 'string' || typeof status !== 'number')
     return { class: 'unknown', reason: 'unexpected_error', message: `Failed to ${doing()}.`, details: [message] }
-  const said = { error: { code, message, status } }
-  const fix: Recovery[] = typeof hint === 'string' ? [{ instruction: hint }] : []
-  const own = (kind: Failure['class'], reason: string, next: Recovery[] = fix): Failure => ({
-    class: kind, reason, message, ...(next.length ? { next } : {}), data: said,
-  })
-  // The handle's own, which say what happened and why.
-  switch (code) {
-    case 'not_logged_in':
-      return { class: 'auth', reason: 'login_required', message: "You're not logged in to Vercel.", next: [{ instruction: 'Log in', argv: ['vercel', 'login'] }], data: said }
-    case 'no_access':
-      return own('permission', 'permission_denied')
-    case 'wrong_project':
-      return own('permission', 'wrong_project')
-    case 'protected':
-      return own('permission', 'deployment_protected')
-    case 'no_project':
-      return own('platform', 'no_project')
-    case 'no_token':
-      return own('auth', 'token_unavailable')
-    case 'no_board':
-      return own('not_found', 'board_not_found')
-    case 'too_many_redirects':
-      return own('network', 'network_error')
-    case 'invalid_duration':
-      return own('usage', 'invalid_arguments', [helpRecovery()])
-    case 'wrong_audience':
-      return own('usage', 'wrong_url')
-    case 'ambiguous_agent':
-      return own('usage', 'ambiguous_agent', [
-        { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
-        { instruction: 'Or as yourself', argv: rerun('--human') },
-      ])
-    case 'too_large':
-      return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
-    case 'upload_failed':
-      return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
-    case 'port_taken':
-      return own('conflict', 'port_taken', [{ instruction: 'Pick another port', argv: [...cli(), current.command ?? 'serve', '--port', '<PORT>'] }])
+  const said = { error: { code, message, status, ...(typeof hint === 'string' ? { hint } : {}) } }
+  if (origin === 'handle') {
+    const fix: Recovery[] = typeof hint === 'string' ? [{ instruction: hint }] : []
+    const own = (kind: Failure['class'], reason: string, next: Recovery[] = fix): Failure => ({
+      class: kind, reason, message, ...(next.length ? { next } : {}), data: said,
+    })
+    switch (code) {
+      case 'not_logged_in':
+        return { class: 'auth', reason: 'login_required', message: "You're not logged in to Vercel.", next: [{ instruction: 'Log in', argv: ['vercel', 'login'] }], data: said }
+      case 'no_access':
+        return own('permission', 'permission_denied')
+      case 'wrong_project':
+        return own('permission', 'wrong_project')
+      case 'protected':
+        return own('permission', 'deployment_protected')
+      case 'no_project':
+        return own('platform', 'no_project')
+      case 'no_token':
+        return own('auth', 'token_unavailable')
+      case 'no_board':
+        return own('not_found', 'board_not_found')
+      case 'too_many_redirects':
+        return own('network', 'network_error')
+      case 'invalid_duration':
+        return own('usage', 'invalid_arguments', [helpRecovery()])
+      case 'wrong_audience':
+        return own('usage', 'wrong_url')
+      case 'ambiguous_agent':
+        return own('usage', 'ambiguous_agent', [
+          { instruction: 'Write as one of them', argv: rerun('--as', '<PROFILE>') },
+          { instruction: 'Or as yourself', argv: rerun('--human') },
+        ])
+      case 'too_large':
+        return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
+      case 'upload_failed':
+        return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
+      case 'port_taken':
+        return own('conflict', 'port_taken', [{ instruction: 'Pick another port', argv: [...cli(), current.command ?? 'serve', '--port', '<PORT>'] }])
+    }
   }
   // The board's, said by what this run was doing, with its own words under it. Which board it was
   // matters when reaching it is what failed.
