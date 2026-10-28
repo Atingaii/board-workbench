@@ -97,6 +97,10 @@ itself.
   `~/.config/board/config.json` (`$XDG_CONFIG_HOME/board`). A CLI inside
   another then talks to the team's board. A malformed project link is an
   error, not a fallback.
+- **A team's board has a URL too:** the one `whoami` prints for it
+  (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`), which
+  `link`, `use`, `--url`, and `BOARD_URL` take, so a project can link its
+  team's board and drop `--scope`.
 - **The token** resolves in this order: `BOARD_TOKEN`, a local board's own
   (from [`vb serve`](#serve), for a board on localhost), a GitHub Actions OIDC
   token (`permissions: id-token: write`), the Vercel runtime's OIDC token, then

@@ -337,9 +337,32 @@ function configuredUrl(): string | null {
   } catch (error) {
     if (!(error instanceof BoardError) || error.code !== 'no_board') throw error
     if (app.teamBoard) return null
-    const ways = [`run \`${app.name} link <url>\``, 'set BOARD_URL', `run \`${app.name} use <url>\``, ...(app.commands.serve ? [`\`${app.name} serve\` for a local one`] : [])]
+    const ways = [
+      "pass --scope <team> for a team's board in Vercel's API",
+      `run \`${app.name} link <url>\``,
+      'set BOARD_URL',
+      `run \`${app.name} use <url>\``,
+      ...(app.commands.serve ? [`\`${app.name} serve\` for a local one`] : []),
+    ]
     throw new BoardError('no_board', `no board URL: ${ways.slice(0, -1).join(', ')}, or ${ways.at(-1)}`, 0)
   }
+}
+
+/**
+ * A team's board in Vercel's API, by the URL its discovery names it with
+ * (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`): its board and team.
+ */
+function vercelBoard(url: string): { board: string; team?: string } | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  const found = /^\/v1\/messageboard\/boards\/([^/]+)\/?$/.exec(parsed.pathname)
+  if (parsed.origin !== 'https://api.vercel.com' || !found) return null
+  const team = parsed.searchParams.get('teamId')
+  return { board: decodeURIComponent(found[1]!), ...(team ? { team } : {}) }
 }
 
 /** Who the handle writes as: `--as`'s profile (with `--avatar`), yourself with `--human`, or what the environment says. */
@@ -364,6 +387,12 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
+  // A team's board in Vercel's API (what `whoami` prints for one) is reached through the API, as `--scope` is.
+  const onVercel = vercelBoard(at)
+  if (onVercel) {
+    const board = boardAt({ backend: vercel(onVercel) })
+    return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
+  }
   const handle = options.handle ?? flags.handle
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })

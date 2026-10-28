@@ -54,7 +54,7 @@ describe('cli', () => {
     // Unlinked, with no saved board: it says how to get one.
     const unlinked = { BOARD_URL: undefined, XDG_CONFIG_HOME: await tmp('board-global-') }
     expect(await vb(['whoami'], unlinked, undefined, root)).toEqual({
-      code: 1, stdout: '', stderr: 'error: no board URL: run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n',
+      code: 1, stdout: '', stderr: "error: no board URL: pass --scope <team> for a team's board in Vercel's API, run `board link <url>`, set BOARD_URL, run `board use <url>`, or `board serve` for a local one\n",
     })
     expect((await vb(['link', url], {}, undefined, root)).code).toBe(0)
     expect(JSON.parse(await readFile(join(root, '.board', 'config.json'), 'utf8'))).toEqual({ url })
