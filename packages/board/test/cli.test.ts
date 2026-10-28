@@ -148,6 +148,14 @@ describe('cli', () => {
         message: `${at} redirects to ${wall.origin}, and its credentials don't follow it there, so Deployment Protection turns it away.`,
         hint: `Use ${wall.origin}/api/board.`,
       })
+      // Through another origin first, it names the one with the wall, not one that redirects again.
+      const hop = await serve(async (request) => new Response(null, { status: 308, headers: { location: `${apex.origin}${new URL(request.url).pathname}` } }))
+      try {
+        const twice = await vb(['whoami', '--json'], { PATH: '', XDG_DATA_HOME: await tmp('board-data-'), BOARD_URL: `${hop.origin}/api/board` })
+        expect(failure(twice)).toMatchObject({ reason: 'wrong_url', hint: `Use ${wall.origin}/api/board.` })
+      } finally {
+        await hop.close()
+      }
     } finally {
       await Promise.all([apex.close(), wall.close()])
     }

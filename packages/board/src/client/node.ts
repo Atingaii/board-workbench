@@ -542,7 +542,7 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
   const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
   let headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
   if (bypass) headers.set('x-vercel-protection-bypass', bypass)
-  // The origin it was redirected to, once it left its own: a wall there is one no credential crosses.
+  // The last origin it was redirected to, once it left its own: a wall there is one no credential crosses.
   let moved: string | null = null
   const wall = (status: number) => (moved ? new Moved(moved, status) : new Wall(status))
   for (let hops = 0; ; hops++) {
@@ -554,7 +554,7 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
       if (method === 'GET' || method === 'HEAD') {
         if (hops >= 20) throw new BoardError('too_many_redirects', `${target} redirected more than 20 times.`, response.status)
         if (next.origin !== new URL(target).origin) {
-          moved ??= next.origin
+          moved = next.origin
           headers = new Headers(headers)
           headers.delete('authorization')
           headers.delete('x-vercel-trusted-oidc-idp-token')
