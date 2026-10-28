@@ -116,6 +116,24 @@ describe('the embedded CLI', () => {
     expect(new Set(teams)).toEqual(new Set(['https://api.vercel.com team_test', 'https://api.vercel.com slug=acme']))
   })
 
+  it("says you're not signed in when there's no Vercel login to reach the team's board with", async () => {
+    const home = await isolated()
+    const fetching = vi.spyOn(globalThis, 'fetch')
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await capture(() => createApp({ appName: 'vercel board' }).run(['whoami']))).toMatchObject({
+        code: 1,
+        stderr: 'error: not signed in to Vercel: run `vercel login`\n',
+      })
+      expect(fetching.mock.calls.filter(([input]) => String(input instanceof Request ? input.url : input).startsWith('https://api.vercel.com/v1/messageboard'))).toEqual([])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('says how to point it at a board with the commands it has, standalone, where there is no team board', async () => {
     const home = await isolated()
     const cwd = process.cwd()

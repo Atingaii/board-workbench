@@ -5,6 +5,7 @@ import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
 import { environmentProfile, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
+import { HttpError } from '../server/errors.ts'
 
 /** On Vercel, or with its OIDC token pulled (`vercel env pull`): a deployment acts as its project. */
 const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_TOKEN
@@ -16,7 +17,10 @@ const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_T
 async function token(): Promise<string> {
   if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN
   if (deployed()) return getVercelOidcToken()
-  return vercelLogin()
+  // With no login to send, that's what it says, as `http()`'s does, not that the API didn't answer.
+  return vercelLogin().catch(() => {
+    throw new HttpError(401, 'not_logged_in', 'not signed in to Vercel: run `vercel login`')
+  })
 }
 
 /** Where `token` comes from, in words: what `vb whoami` says. */
