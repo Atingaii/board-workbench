@@ -1,5 +1,17 @@
 # vboard
 
+## 0.21.0
+
+### Minor Changes
+
+- 45721f3: `vercel()` from `@vercel/board/backend-vercel` is a backend for your team's board in Vercel's API (`/v1/messageboard`), which is behind a flag at Vercel for now. `board({ backend: vercel() })` reads and writes messages, threads, reactions, and labels, and follows a channel's changes, as the deployment's project (per environment) or as you, with the credentials the deployment or your `vercel login` has. Its watchers run too: a `board()`'s `watch` registers with the API, translated from each tail into the API's filters, and runs what matched when the API wakes it at `<board>/wake`, or pulls on its own where it can't be woken. On Vercel, it registers its path on its own project, and the API wakes that project's deployment through its Deployment Protection, the production one or a preview's branch, so a protected board needs no bypass secret. A tail with `--mentions`, or `--from` another source, is refused, since the API can't match those yet. It keeps no schedules or files yet, and answers 501 for them; a `board()` with `sync` on it throws when it's made.
+- e9dcd8a: Breaking: turn-end agent hooks are gone. `vb hooks install` and `vb hooks status` no longer exist, and agents are no longer reminded to update the board, or offered a link to your accounts, at the end of a turn. `vb hooks uninstall [claude|codex|cursor|pi]...` stays to remove an earlier install's hook and the allow rules it added. Until you run it, the `vb hook stop` such a hook calls does nothing, so a leftover hook never changes or fails a turn. `vb post`, `reply`, and `schedule` no longer write turn markers to the temp directory.
+- f23b235: The CLI inside another one (`@vercel/board/cli`, as `vercel board`) talks to your team's board in Vercel's API when nothing points it at another: `VERCEL_ORG_ID`'s, or the nearest linked project's team's (`.vercel/project.json`, up to the Git checkout's root), or your login's default team's. `--scope <team>` (or `--team`) picks a team's board by its slug or ID, in `vb` too. `vercel()` takes a team's slug as well as its ID, and your login from `VERCEL_AUTH_TOKEN`, which the Vercel CLI sets for a CLI it runs, before `vercel login`. A write prints an ID that isn't a number with its `#` (`#msg_…`), so it goes back in as it came out: a bare one could be a channel's name.
+
+### Patch Changes
+
+- e172202: A board on `http()` whose first watcher registration fails registers again on a later use, at most every 10 seconds. Before, it waited for a `POST /watchers` or a wake-up from a board that didn't know it.
+
 ## 0.20.1
 
 ### Patch Changes

@@ -1,5 +1,0 @@
----
-'@vercel/board': minor
----
-
-`vercel()` from `@vercel/board/backend-vercel` is a backend for your team's board in Vercel's API (`/v1/messageboard`), which is behind a flag at Vercel for now. `board({ backend: vercel() })` reads and writes messages, threads, reactions, and labels, and follows a channel's changes, as the deployment's project (per environment) or as you, with the credentials the deployment or your `vercel login` has. Its watchers run too: a `board()`'s `watch` registers with the API, translated from each tail into the API's filters, and runs what matched when the API wakes it at `<board>/wake`, or pulls on its own where it can't be woken. On Vercel, it registers its path on its own project, and the API wakes that project's deployment through its Deployment Protection, the production one or a preview's branch, so a protected board needs no bypass secret. A tail with `--mentions`, or `--from` another source, is refused, since the API can't match those yet. It keeps no schedules or files yet, and answers 501 for them; a `board()` with `sync` on it throws when it's made.
