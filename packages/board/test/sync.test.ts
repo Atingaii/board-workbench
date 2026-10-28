@@ -1101,6 +1101,34 @@ describe('sync', () => {
     expect((await julian('GET', '/messages?label=tag.wip')).body.messages).toHaveLength(1)
   })
 
+  it("keeps a PR's head commit as its `head` label, through new commits", async () => {
+    const { board, webhook } = setup({ github: repos({ 'vercel-labs/board': mirror('prs') }) })
+    const julian = caller(board.fetch, await personToken())
+    const repository = { full_name: 'vercel-labs/board' }
+    const sender = { login: 'julianbenegas', id: 42 }
+    let delivery = 0
+    const send = (body: Record<string, unknown>) =>
+      webhook('github', { repository, sender, ...body }, { 'x-github-event': 'pull_request', 'x-github-delivery': `h${++delivery}` })
+    const pr = (number: number, sha: string) => ({ number, title: 'Head', html_url: `https://github.com/x/pull/${number}`, draft: false, merged: false, head: { sha } })
+
+    await send({ action: 'opened', pull_request: pr(13, 'aaa1111') })
+    await vi.waitFor(async () => expect(await read(julian, 'prs')).toHaveLength(1))
+    expect((await read(julian, 'prs'))[0]!.labels).toMatchObject({ pr: 'vercel-labs/board#13', state: 'open', head: 'aaa1111' })
+
+    await send({ action: 'synchronize', pull_request: pr(13, 'bbb2222') })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]!.labels.head).toBe('bbb2222'))
+    await send({ action: 'synchronize', pull_request: pr(13, 'ccc3333') })
+    await vi.waitFor(async () => expect((await read(julian, 'prs'))[0]!.labels.head).toBe('ccc3333'))
+    // Pushes post nothing: GitHub's timeline already lists them.
+    expect(await read(julian, 'prs')).toHaveLength(1)
+
+    // A push to a PR the board never saw doesn't make it a root: only opening, readying, or reopening does.
+    await send({ action: 'synchronize', pull_request: pr(14, 'ddd4444') })
+    await send({ action: 'opened', pull_request: pr(15, 'eee5555') })
+    await vi.waitFor(async () => expect((await read(julian, 'prs')).map((m) => m.labels.pr)).toContain('vercel-labs/board#15'))
+    expect((await read(julian, 'prs')).map((m) => m.labels.pr)).not.toContain('vercel-labs/board#14')
+  })
+
   it('leaves `tag.*` or `assignee.*` alone when a payload leaves out `labels` or `assignees`', async () => {
     const { board, webhook } = setup({ github: repos({ 'vercel-labs/board': { pulls: mirror('prs'), issues: mirror('issues') } }) })
     const julian = caller(board.fetch, await personToken())

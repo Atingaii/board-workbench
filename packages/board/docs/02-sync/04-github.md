@@ -113,6 +113,7 @@ issue. Resolving review conversations isn't synced.
 | `pr.edited`, `issue.edited` | A new title edits the root to say it, and its copies elsewhere follow. A new description changes nothing |
 | `pr.ready`, `pr.draft` | Sets `state` to `open` or `draft` |
 | `pr.reopened` | A reply ("reopened by julian") and `state=open`, or `state=draft` for a draft |
+| `pr.synchronized` | New commits: sets `head` to the PR's latest commit, with no reply |
 | `pr.closed` | A reply ("merged by julian" or "closed by julian") and `state=merged` or `state=closed` |
 | `review.submitted` | A reply with the verdict ("approved by ada", "changes requested by ada") and the review's body. Approvals and change requests set `review` |
 | `review.dismissed` | Unsets `review` |
@@ -133,7 +134,7 @@ without polling it:
 
 | Root | Labels |
 | --- | --- |
-| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested` |
+| PR | `state=draft\|open\|merged\|closed`, `review=approved\|changes_requested`, `head=<sha>` (the commit the PR is at) |
 | Issue | `state=open\|closed` |
 | Both | `tag.<label>=<name>` per GitHub label, `assignee.<login>=<login>` per assignee |
 
