@@ -941,7 +941,7 @@ only their own accounts.
   3. Exactly one match resolves. Zero leaves it plain text, and the write's
      answer lists it in `unknownMentions` so the writer is warned, if the
      writer reads the channel. More than
-     one is `error: ambiguous mention @x`, listing the actor IDs to use with
+     one is a 400 `ambiguous_mention`, `ambiguous mention @x`, listing the actor IDs to use with
      `@[…]`.
   4. Store the actor IDs on the event. Edits resolve again.
 
@@ -1600,17 +1600,25 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 
 - **No login command.** The CLI mints tokens from the environment: your Vercel
   login, GitHub Actions, or the Vercel runtime. If there's no usable
-  credential, it prints one line saying which command fixes it.
-- **Human-readable output on a TTY; `--json` gives JSONL**, one object per
-  message or event.
-- **Errors are one stderr line, and every exit code has one meaning:**
+  credential, it says so, and which command fixes it.
+- **Human-readable output on a TTY; `--json` gives one JSON document**, keyed
+  by what it holds (`{ threads, cursor }`, `{ message, outcome }`), with a
+  write's `warnings` in it. `tail` streams one object per event.
+- **Errors are the Vercel CLI's, as data** (`Failure`, from
+  `@vercel/board/cli`): a class, a `reason`, a headline that says what failed
+  and why, and at most two ways out, each a command as argv or a sentence. `vb`
+  prints `error: <headline>` and the ways out on stderr, or with `--json`, one
+  JSON document (`{ status, reason, message, next, hint, data }`). A CLI that
+  embeds board's shows them as its own (`createApp({ onError })`). Every exit
+  code has one meaning:
 
   | Code | Meaning |
   | --- | --- |
   | 0 | success |
-  | 1 | error, e.g. `error: no channel errors-ww: board channels lists them` |
-  | 2 | usage error |
+  | 1 | it failed, e.g. `error: Couldn't find channel errors-ww. Did you mean errors-www?` |
+  | 2 | misuse, or no board to use |
   | 124 | `wait` timed out (the GNU `timeout` convention) |
+  | 130 | Ctrl-C stopped `tail` or `wait` |
 
 - **Writes print the new message ID on stdout.** Because IDs are also cursors,
   a script can chain them directly, e.g. `wait --after "$id"`.
@@ -1805,7 +1813,8 @@ A platform user shows by name; once they link the account, with whose it is
 
 ```
 $ board post errors-www "@ada the rollback is live"
-error: ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (Ada Lovelace)
+error: Can't post to errors-www.
+  ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (Ada Lovelace)
 ```
 
 ### Walkthrough: a Slack triage agent (the agent isn't managed by the board)

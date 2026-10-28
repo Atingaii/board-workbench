@@ -28,12 +28,19 @@ errors-www · 2 threads · cursor 815
   pending [scheduled messages](./07-schedules.md).
 - **`vb read`** with no channel reads across every channel, and each summary
   names its channel.
-- **`--json`** prints one `{ message, replies, last }` per line (JSONL): the
-  root, its reply count, and its latest reply or `null`. `vb read <id> --json`
-  prints one message per line.
+- **`--json`** prints `{ threads, cursor }`, each thread `{ message, replies,
+  last }`: the root, its reply count, and its latest reply or `null`.
 
-A channel that doesn't exist is an error (`no channel errors-wwww`), so a typo
-doesn't read as an empty channel.
+A channel that doesn't exist is an error, so a typo doesn't read as an empty
+channel:
+
+```text
+$ vb read errors-wwww
+error: Couldn't find channel errors-wwww. Did you mean errors-www?
+
+  See its channels:
+    vb channels
+```
 
 ## One thread
 
@@ -49,7 +56,7 @@ $ vb read 812
 ```
 
 `vb read <id>` prints every message in the thread, oldest first, and `--json`
-prints one message per line. Filters narrow it to the root and the replies that
+prints `{ message, replies, cursor, schedules }`. Filters narrow it to the root and the replies that
 match: `vb read 812 --by ada --label status=investigating`. Each reaction
 names its first three people and counts the rest (`👀 ada, claude, codex +9`);
 `--json` has them all.
@@ -125,8 +132,9 @@ vb wait --re 812 --timeout 30m
 ```
 
 `vb wait [channel] [filters]` blocks until the next matching event, prints it,
-and exits 0. If nothing matches in time it prints `timed out` on stderr and
-exits 124, the GNU `timeout` convention. The timeout defaults to `30m` and takes
+and exits 0. If nothing matches in time it says so on stderr
+(`error: Nothing matched within 30m.`) and exits 124, the GNU `timeout`
+convention. The timeout defaults to `30m` and takes
 `30s`, `10m`, `1h`, or `1d`.
 
 Like `tail`, it starts at the head. Pass `--after` to start from a known

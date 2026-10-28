@@ -3,9 +3,9 @@
 ## Sub-features
 
 - `vb wait [channel] [filters] [--timeout 30m]`: blocks for the next matching event, prints it,
-  exits 0; exits 124 with `timed out` when the timeout passes.
-- `vb tail [channel] [filters] [--all]`: streams matching events until Ctrl-C; `--all` adds
-  non-message events.
+  exits 0; exits 124 with `error: Nothing matched within 3s.` when the timeout passes.
+- `vb tail [channel] [filters] [--all]`: streams matching events until Ctrl-C, which exits 130;
+  `--all` adds non-message events.
 - Both take the read filters (`--label`, `--by`, `--mentions`, …).
 
 ## How to get to it (user POV)

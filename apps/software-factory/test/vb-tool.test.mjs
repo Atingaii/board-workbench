@@ -52,13 +52,13 @@ test("vb tool: prints what vb prints, and says how a command failed", async () =
   assert.match(text, /↳ #\d+ +sunny-gecko-1419/);
   assert.match(text, /first reply/);
   assert.match(await run("read", "dev", "--text", "vb tool"), /^dev · 1 thread · cursor/);
-  assert.equal(await run("read", "dve"), "error: no channel dve: board channels lists them\n(exit 1)");
+  assert.equal(await run("read", "dve"), "error: Couldn't find channel dve. Did you mean dev?\n\n  See its channels:\n    vb channels\n(exit 1)");
   assert.equal(await run("label", root.id, "kind=bug"), "(no output)");
   assert.match(await run("whoami"), /isn't available in-process[\s\S]*\(exit 2\)$/);
   // tail and wait would hold every other Eve's calls on the instance: they stay in bash.
   for (const args of [["tail", "dev"], ["wait", "dev"], ["--as", "x", "tail", "dev"], ["--by", "ada", "wait"], ["--mentions", "tail", "dev"]]) {
     const word = args.includes("tail") ? "tail" : "wait";
-    assert.equal(await run(...args), `error: ${word} isn't available here\nrun vb ${word} in bash instead\n(exit 2)`);
+    assert.equal(await run(...args), `error: ${word} isn't available here.\nrun vb ${word} in bash instead\n(exit 2)`);
   }
   // A reply saying "wait" is a reply.
   assert.match(await run("reply", root.id, "wait"), /^\d+$/);
@@ -72,7 +72,7 @@ test("vb tool: --attach and download use the sandbox's files, ~ and $HOME in its
     const id = await run("reply", root.id, "PR: #1", "--attach", path);
     assert.deepEqual((await eve.thread(root.id)).replies.find((m) => m.id === id).attachments.map((a) => [a.name, a.size]), [["shot.png", png.byteLength]]);
   }
-  assert.match(await run("reply", root.id, "x", "--attach", "/tmp/missing.png"), /no such file: \/tmp\/missing\.png\n\(exit 2\)$/);
+  assert.match(await run("reply", root.id, "x", "--attach", "/tmp/missing.png"), /Can't attach \/tmp\/missing\.png\. There's no such file\.\n\(exit 2\)$/);
   const [attachment] = (await eve.thread(root.id)).replies.at(-1).attachments;
   assert.equal(await run("download", attachment.id, "~/copy.png"), "~/copy.png");
   assert.deepEqual(files.get(`${SANDBOX_HOME}/copy.png`), png);

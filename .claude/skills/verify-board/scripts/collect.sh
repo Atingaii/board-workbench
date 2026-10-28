@@ -11,9 +11,9 @@ need_name "$name"
 ev=$(evidence_dir "$name")
 sbx_script "$name" "cd $PROJ && export BOARD_URL=$BOARD_URL
   : > /tmp/read.json; : > /tmp/read.err
-  for c in \$($VB channels --json 2>>/tmp/read.err | node -e 'for (const l of require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\")) if (l) console.log(JSON.parse(l).path)'); do
-    # a line is a thread summary, or a message on releases before them: either way, its thread's root
-    for id in \$($VB read \"\$c\" --json --limit 500 2>>/tmp/read.err | node -e 'const ids = new Set(); for (const l of require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\")) if (l) { const t = JSON.parse(l); ids.add(t.message ? t.message.id : (t.re ?? t.id)) } console.log([...ids].join(\" \"))'); do
+  for c in \$($VB channels --json 2>>/tmp/read.err | node -e 'const l = require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\").filter(Boolean).map((x) => JSON.parse(x)); for (const c of l.length === 1 && l[0].channels ? l[0].channels : l) console.log(c.path)'); do
+    # one document of thread summaries, or on releases before it a line each (a summary, or a message): either way, each thread's root
+    for id in \$($VB read \"\$c\" --json --limit 500 2>>/tmp/read.err | node -e 'const l = require(\"fs\").readFileSync(0, \"utf8\").split(\"\\n\").filter(Boolean).map((x) => JSON.parse(x)); const ids = new Set(); for (const t of l.length === 1 && l[0].threads ? l[0].threads : l) ids.add(t.message ? t.message.id : (t.re ?? t.id)); console.log([...ids].join(\" \"))'); do
       $VB read \"\$id\" --json >> /tmp/read.json 2>>/tmp/read.err || true
     done
   done

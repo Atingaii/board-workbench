@@ -84,7 +84,8 @@ const describe = (error: unknown) => ((error instanceof Error ? error.message : 
 
 /** The SDK's error, as the board answers it: the remote's own status and code, or 502 when it never answered. */
 const rethrow = (error: unknown): never => {
-  if (error instanceof BoardError) throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message)
+  if (error instanceof BoardError)
+    throw new HttpError(error.status >= 400 ? error.status : 502, error.code, error.message, error.hint !== undefined ? { hint: error.hint } : {})
   if (error instanceof HttpError || (error instanceof Error && error.name === 'AbortError')) throw error
   throw new HttpError(502, 'unreachable', `the board didn't answer: ${describe(error)}`)
 }
@@ -196,7 +197,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
   /** The board it uses' discovery, for a handle here: who it is, and the sync entries it lists. */
   const discovery = () =>
     (discovered ??= doFetch(remote).then(async (response) => {
-      if (!response.ok) throw new HttpError(response.status >= 400 ? response.status : 502, 'no_board', `no board at ${remote} (${response.status})`)
+      if (!response.ok) throw new HttpError(response.status >= 400 ? response.status : 502, 'no_board', `There's no board at ${remote}: it answered ${response.status}.`)
       return (await response.json()) as Discovery
     }, rethrow)).catch((error: unknown) => {
       discovered = null
@@ -253,8 +254,9 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
         .catch(rethrow)
     if (response.ok) return response
     try {
-      const body = (await response.json()) as { error?: { code?: string; message?: string } }
-      if (body.error?.message) throw new HttpError(response.status, body.error.code ?? 'error', body.error.message)
+      const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
+      if (body.error?.message)
+        throw new HttpError(response.status, body.error.code ?? 'error', body.error.message, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
     } catch (error) {
       if (error instanceof HttpError) throw error
     }

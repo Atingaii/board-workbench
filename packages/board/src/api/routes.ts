@@ -679,7 +679,8 @@ export type SourceJoin = {
   joined: boolean
 }
 
-export type ApiError = { error: { code: string; message: string } }
+/** A failure: `code` to branch on, `message` to read, and `hint`, when the board knows one, for what fixes it. */
+export type ApiError = { error: { code: string; message: string; hint?: string } }
 
 /** A raw platform event, as `GET /inbox/:key` returns it. */
 export type InboxEntry = {

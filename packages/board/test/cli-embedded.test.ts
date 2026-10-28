@@ -67,10 +67,35 @@ describe('the embedded CLI', () => {
     expect(help.code).toBe(0)
     expect(help.stdout).toMatch(/^vercel board \d+\.\d+\.\d+\S*: a message board you mount in one route\n\nusage: vercel board <command> \[options\]\n/)
     expect(help.stdout).not.toMatch(/also installed as|^\s+(serve|inspect) \[/m)
-    expect(await capture(() => app.run(['serve']))).toMatchObject({ code: 2, stderr: 'error: unknown command: serve (run `vercel board help`)\n' })
+    expect(await capture(() => app.run(['serve']))).toEqual({ code: 2, stdout: '', stderr: 'error: Unknown command serve for vercel board.\n\n  See all commands:\n    vercel board help\n' })
     expect(await capture(() => app.run(['inspect']))).toMatchObject({ code: 2 })
-    expect(await capture(() => app.run(['conformance', 'extra']))).toMatchObject({ code: 2, stderr: 'error: usage: vercel board conformance [--channel <c>]\n' })
-    expect(await capture(() => app.run(['--nope']))).toMatchObject({ code: 2, stderr: expect.stringContaining('(run `vercel board help`;') })
+    const extra = await capture(() => app.run(['conformance', 'extra']))
+    expect(extra).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
+    expect(extra.stderr).toContain('    vercel board conformance --help\n')
+    expect(await capture(() => app.run(['--nope']))).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --nope for vercel board\.\n[\s\S]*    vercel board --help\n$/) })
+  })
+
+  it('hands failures and warnings to the app that runs it, to show as its own', async () => {
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
+    const failures: [unknown, { json: boolean }][] = []
+    const warned: unknown[] = []
+    const app = createApp({ appName: 'vercel board', onError: (failure, mode) => void failures.push([failure, mode]), onWarning: (warning) => void warned.push(warning) })
+    expect(await capture(() => app.run(['read', '99999']))).toEqual({ code: 1, stdout: '', stderr: '' })
+    expect(await capture(() => app.run(['read', '99999', '--json']))).toEqual({ code: 1, stdout: '', stderr: '' })
+    expect(failures).toEqual([
+      [expect.objectContaining({ class: 'not_found', reason: 'message_not_found', message: "Couldn't find message #99999." }), { json: false }],
+      [expect.objectContaining({ reason: 'message_not_found' }), { json: true }],
+    ])
+    // Misuse, with how to recover as a command it can run.
+    expect(await capture(() => app.run(['raed', 'dev']))).toMatchObject({ code: 2, stderr: '' })
+    expect(failures.at(-1)![0]).toMatchObject({ class: 'usage', reason: 'unknown_command', next: [{ argv: ['vercel', 'board', 'help'] }] })
+    const posted = await capture(() => app.run(['post', 'warned', 'ping @nobody-here']))
+    expect(posted).toMatchObject({ code: 0, stderr: '' })
+    expect(warned).toEqual([{ reason: 'unknown_mention', message: '@nobody-here matches no one on the board, so it stays plain text and notifies no one.' }])
+    // With --json, the warning is the result's, and the app hears nothing.
+    const json = await capture(() => app.run(['post', 'warned', 'ping @nobody-here', '--json']))
+    expect(JSON.parse(json.stdout)).toMatchObject({ outcome: 'posted', warnings: [{ reason: 'unknown_mention' }] })
+    expect(warned).toHaveLength(1)
   })
 
   it("talks to the team's board in Vercel's API when nothing points at another: the linked project's team's, or --scope's", async () => {
@@ -103,7 +128,7 @@ describe('the embedded CLI', () => {
       expect(whoami.stdout).toContain('board   https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test\nsource  the Vercel CLI\n')
       const read = await capture(() => app.run(['read', 'general', '--scope', 'acme', '--json']))
       expect(read.code).toBe(0)
-      expect(JSON.parse(read.stdout.trim().split('\n')[0]!)).toMatchObject({ message: { text: 'on the team board' } })
+      expect(JSON.parse(read.stdout).threads[0]).toMatchObject({ message: { text: 'on the team board' } })
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -124,7 +149,7 @@ describe('the embedded CLI', () => {
     try {
       expect(await capture(() => createApp({ appName: 'vercel board' }).run(['whoami']))).toMatchObject({
         code: 1,
-        stderr: 'error: not signed in to Vercel: run `vercel login`\n',
+        stderr: "error: You're not logged in to Vercel.\n\n  Log in:\n    vercel login\n",
       })
       expect(fetching.mock.calls.filter(([input]) => String(input instanceof Request ? input.url : input).startsWith('https://api.vercel.com/v1/messageboard'))).toEqual([])
     } finally {
@@ -182,8 +207,8 @@ describe('the embedded CLI', () => {
     process.chdir(home)
     try {
       expect(await capture(() => main(['read', 'dev'], { name: 'board', commands: local }))).toMatchObject({
-        code: 1,
-        stderr: "error: no board: pass --url <url> (or set BOARD_URL), --scope <team> for a team's board in Vercel's API, run it in a Vercel project (vercel link) for its team's, or `vb serve` for a local one\n",
+        code: 2,
+        stderr: expect.stringMatching(/^error: No board to use\. [\s\S]*\n    vb read dev --scope <TEAM>\n/),
       })
     } finally {
       process.chdir(cwd)

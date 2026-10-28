@@ -142,8 +142,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ            # saves after.png here; a path, or
   board's copy. See [Sync](../02-sync/01-overview.md).
 - **They need a blob store.** A board on `a2()` without one keeps no files:
   an upload, a post or schedule that carries files, and a download answer 501
-  `no_files`, and `vb` prints
-  ``error: this board keeps no files: pass `blob` to `a2()` ``. Sync brings a
+  `no_files`, and `vb` says it can't, with the board's words under it:
+  ``this board keeps no files: pass `blob` to `a2()` ``. Sync brings a
   platform's files over as links to where they live instead. See
   [Mounting](./01-mounting.md#without-a-blob-store).
 

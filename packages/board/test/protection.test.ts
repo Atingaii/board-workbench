@@ -164,7 +164,8 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     const fetch = vi.fn()
     await expect(handle({ url: BOARD_URL, fetch }).discovery()).rejects.toMatchObject({
       code: 'no_token',
-      message: expect.stringContaining('enable OIDC'),
+      message: expect.not.stringContaining('private runtime details'),
+      hint: expect.stringContaining('Enable OIDC'),
     })
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -173,7 +174,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     vi.stubEnv('VERCEL', '1')
     const { fetch, api } = protectedBoard()
     await expect(handle({ url: BOARD_URL, token: await personToken(), fetch }).discovery())
-      .rejects.toMatchObject({ code: 'protected', message: expect.stringContaining('Trusted Sources') })
+      .rejects.toMatchObject({ code: 'protected', hint: expect.stringContaining('Trusted Sources') })
     expect(api).toEqual([])
   })
 
@@ -343,7 +344,8 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
     await expect(client.discovery()).rejects.toMatchObject({
       code: 'protected',
-      message: `${BOARD_URL} is behind Vercel Deployment Protection, and your Vercel login can't see its project: run \`vercel login\` or ask for access, or set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → Deployment Protection → Protection Bypass for Automation)`,
+      message: `${BOARD_URL} is behind Vercel Deployment Protection, and your Vercel login can't see its project.`,
+      hint: expect.stringContaining('VERCEL_AUTOMATION_BYPASS_SECRET'),
     })
   })
 
@@ -362,7 +364,7 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     const client = handle({ url: BOARD_URL, token: await personToken(), fetch })
     await expect(client.discovery()).rejects.toMatchObject({
       code: 'no_board',
-      message: `no board at ${BOARD_URL}: it answered with a web page, and its Vercel project isn't protected`,
+      message: `There's no board at ${BOARD_URL}: it answered with a web page, and its Vercel project isn't protected.`,
     })
     expect(api.some((call) => call.startsWith('PATCH'))).toBe(false)
     expect(stderr).not.toHaveBeenCalled()

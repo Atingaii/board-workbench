@@ -156,7 +156,7 @@ describe('the CLI on a board that runs a sync', () => {
     // The team's board doesn't run the project's Slack: only the board that does reads it.
     expect(await on(['sources', 'slack', 'read', '#project-vercel-kit'], teamUrl)).toMatchObject({
       code: 1,
-      stderr: "error: this board doesn't run sync entry slack: read it where its sync runs\n",
+      stderr: "error: Can't read #project-vercel-kit on slack.\n  this board doesn't run sync entry slack: read it where its sync runs\n",
     })
   }, 20_000)
 
@@ -183,6 +183,6 @@ describe('the CLI on a board that runs a sync', () => {
       stdout: 'slack  C1:1727000000.123456  https://acme.slack.com/archives/C1/p1727000000123456\n',
       stderr: '',
     })
-    expect(await on(['read', 'https://acme.slack.com/archives/C1/p1727000009000000'])).toEqual({ code: 1, stdout: '', stderr: 'error: no message on this board for that link\n' })
+    expect(await on(['read', 'https://acme.slack.com/archives/C1/p1727000009000000'])).toEqual({ code: 1, stdout: '', stderr: "error: Couldn't find that link's message on this board.\n" })
   }, 20_000)
 })

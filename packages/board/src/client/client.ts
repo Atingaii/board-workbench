@@ -42,14 +42,20 @@ import type { Attachment } from '../contract/schemas.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { parseSse } from './sse.ts'
 
+/**
+ * What went wrong: `message` says what and why, `code` is what to branch on, and `hint`, when the
+ * handle knows one, says what fixes it (`Set VERCEL_AUTOMATION_BYPASS_SECRET…`).
+ */
 export class BoardError extends Error {
   readonly code: string
   readonly status: number
-  constructor(code: string, message: string, status: number) {
+  readonly hint: string | undefined
+  constructor(code: string, message: string, status: number, options: { hint?: string } = {}) {
     super(message)
     this.name = 'BoardError'
     this.code = code
     this.status = status
+    this.hint = options.hint
   }
 }
 
@@ -148,7 +154,7 @@ const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000,
 export function duration(value: string | number): number {
   if (typeof value === 'number') return value
   const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/)
-  if (!match) throw new BoardError('invalid_duration', `invalid duration: ${value}`, 0)
+  if (!match) throw new BoardError('invalid_duration', `${value} isn't a duration like 30s, 10m, or 1h.`, 0)
   return Number(match[1]) * UNITS[match[2] ?? 'ms']!
 }
 
@@ -325,16 +331,16 @@ export function createBoardClient(options: ClientOptions) {
       const type = input.type || (input.data instanceof Blob ? input.data.type : '') || typeOf(input.name)
       const size = input.data instanceof Blob ? input.data.size : input.data.byteLength
       if (size > ATTACHMENT_BYTES_MAX) {
-        if (size > DIRECT_UPLOAD_BYTES_MAX) throw new BoardError('too_large', `attachments are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB`, 413)
+        if (size > DIRECT_UPLOAD_BYTES_MAX) throw new BoardError('too_large', `Attachments are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB.`, 413)
         const ticket = await call<{ id: string; url: string; headers: Record<string, string> }>('POST', '/attachments/uploads', { body: { name: input.name, type, size } }).catch((error: unknown) => {
           // A board from before direct uploads has no such route.
           if (error instanceof BoardError && error.status === 404 && error.code === 'not_found')
-            throw new BoardError('too_large', `this board takes files of at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB`, 413)
+            throw new BoardError('too_large', `This board takes files of at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB.`, 413)
           throw error
         })
         // The store's URL carries its own signature: the board's token stays with the board.
         const put = await storeFetch(ticket.url, { method: 'PUT', headers: ticket.headers, body: input.data })
-        if (!put.ok) throw new BoardError('upload_failed', `the blob store refused the file: ${put.status} ${(await put.text().catch(() => '')).slice(0, 300) || put.statusText}`, put.status)
+        if (!put.ok) throw new BoardError('upload_failed', `The blob store refused the file: ${put.status} ${(await put.text().catch(() => '')).slice(0, 300) || put.statusText}`, put.status)
         return (await call<{ attachment: Attachment }>('POST', `/attachments/uploads/${encodeURIComponent(ticket.id)}`, { body: {} })).attachment
       }
       const response = await doFetch(`${base}/attachments`, {
@@ -503,9 +509,9 @@ export type { ActorView, BoardEventView, ChannelView, Discovery, EventsPage, Ide
 
 async function toError(response: Response): Promise<BoardError> {
   try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string } }
+    const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: unknown } }
     if (body.error?.message)
-      return new BoardError(body.error.code ?? 'error', body.error.message, response.status)
+      return new BoardError(body.error.code ?? 'error', body.error.message, response.status, typeof body.error.hint === 'string' ? { hint: body.error.hint } : {})
   } catch {}
-  return new BoardError('http_error', `${response.status} ${response.statusText}`, response.status)
+  return new BoardError('http_error', `The board answered ${`${response.status} ${response.statusText}`.trim()}.`, response.status)
 }

@@ -25,14 +25,15 @@ The board's environment is the one Vercel runs it in (`VERCEL_TARGET_ENV`,
 which names custom environments, or `VERCEL_ENV`). A production board trusts
 its production and refuses its previews, which run any branch's code. A
 preview board trusts its own previews, so a preview can call itself. Outside
-Vercel, only people get in without a rule.
+Vercel, only people get in without a rule. A refused token gets a 403 that
+says what would let it in:
 
 ```text
-error: this token can't use this board: it runs in production, so its preview deployments need vercelProject({ project: 'self', environments: ['preview'], can })
+this token can't use this board: it runs in production, so its preview deployments need vercelProject({ project: 'self', environments: ['preview'], can })
 ```
 
 A token no rule matches is refused the same way, with the rule that would let
-it in: `error: this token can't use this board: add githubActions({ repository:
+it in: `this token can't use this board: add githubActions({ repository:
 'acme/www', can }) to access`.
 
 ## Configure it
@@ -408,7 +409,7 @@ Reads show only what the caller can read, everywhere:
 - **What you can't read answers 404,** as if it didn't exist. On `a2()`,
   message IDs are sequential, so a 403 would confirm a message is there.
 - **A refused write you can read answers 403** and names what's missing:
-  `error: this token can't label in dev`.
+  `this token can't label in dev`.
 - **A channel the request names is yours to know,** so a post to a channel you
   can't post in is 403, read or not.
 - **Every check is against the channel the board looked up.** A reply's

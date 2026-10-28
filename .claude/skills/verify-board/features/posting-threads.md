@@ -48,6 +48,7 @@ sidecars); `collect.sh` copies it out.
   next post's id skips ahead. Read the id from `post`'s output; don't predict it.
 - `edit`, `delete`, `react`, and `label` print nothing on success: follow each with a read.
 - A repeated `--id` key returns the first post's id and posts nothing new.
-- Errors: `vb post` with no channel exits 2 (`error: usage: board post <channel|id> "<text>"`);
-  `vb reply 999999 …` exits 1 (`error: message not found: #999999`).
+- Errors: `vb post` with no channel exits 2 (`error: Missing the channel or message to post to.`);
+  `vb reply 999999 …` exits 1 (`error: Couldn't find message #999999.`). With `--json`, each is one
+  JSON document on stderr, with its `reason`.
 - `--attach` paths resolve in `/vercel/proj` (the wrappers' working directory).

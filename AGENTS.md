@@ -416,8 +416,18 @@ for a person at a terminal first; `--json` is for programs.
   four spaces and paste-complete, with its instructions as comments in it.
 - **Fit 80 columns.** Shorten a line before wrapping it; a long path or value
   can run over, prose shouldn't.
-- **Errors go to stderr** as `error: <what's wrong>` and, when there's one,
-  how to fix it, in one line.
+- **Errors are data, shaped like the Vercel CLI's** (`src/cli/failure.ts`): a
+  class that fixes the exit code, a `reason` to branch on, a headline that says
+  what failed and why, and at most two ways out, each a command as argv or a
+  sentence. `vb` prints them on stderr as `error: <headline>`, with each way
+  out two spaces in after a blank line; with `--json`, as one JSON document.
+  `vercel board` shows the same data as its own (`createApp({ onError })`). The
+  handle's own errors say what and why in `message` and what fixes it in
+  `hint`; the board's are said by what the command was doing, with the board's
+  words under it.
+- **`--json` is one document**, keyed by what it holds (`{ threads, cursor }`,
+  `{ message, outcome }`), with a write's `warnings` in it. Only `tail`, which
+  streams, prints a line per event.
 
 ## layering
 
@@ -485,5 +495,7 @@ from board's, on its own store and queue.
   read from a request body.
 - **Erasable TypeScript only** (`erasableSyntaxOnly`): no parameter properties,
   enums, or namespaces. Tests run the CLI from source with Node's type stripping.
-- **The CLI is a product surface.** Errors are one `error: …` line on stderr.
-  Exit codes: 0 success, 1 error, 2 misuse, 124 when `wait` times out.
+- **The CLI is a product surface.** Errors are the Vercel CLI's, as data (see
+  [cli design](#cli-design-srccli)). Exit codes: 0 success, 1 error, 2 misuse
+  (no board to use included), 124 when `wait` times out, 130 when Ctrl-C stops
+  `tail` or `wait`.

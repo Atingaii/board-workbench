@@ -92,8 +92,9 @@ export function detectAgent(env: NodeJS.ProcessEnv = process.env): DetectedAgent
   if (found.length > 1)
     throw new BoardError(
       'ambiguous_agent',
-      `several agent environments detected (${found.map((a) => a.profile).join(', ')}): choose one with a profile, or none`,
+      `Several coding agents' environments are set (${found.map((a) => a.profile).join(', ')}), so it can't tell which one is writing.`,
       0,
+      { hint: 'Pick one with a profile, or none to write as yourself.' },
     )
   return found[0] ?? null
 }
@@ -157,7 +158,9 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   }
   if (cached) return cached
   if (!discovery.project_id)
-    throw new BoardError('no_project', `the board at ${discovery.url} doesn't know its Vercel project`, 0)
+    throw new BoardError('no_project', `The board at ${discovery.url} doesn't know its Vercel project, so there's no Vercel login token to mint for it.`, 0, {
+      hint: 'Pass a token it accepts in BOARD_TOKEN.',
+    })
 
   const authToken = await vercelLogin().catch(() => null)
   const project = await boardProject(audience, discovery, authToken)
@@ -171,8 +174,9 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
     if (response.status === 403 || response.status === 404)
       throw new BoardError(
         'no_access',
-        "your Vercel account can't access this board's project: ask for access to it",
+        "Your Vercel account can't access this board's project.",
         response.status,
+        { hint: "Ask someone on the project's team for access to it." },
       )
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
     development = ((await response.json()) as { token: string }).token
@@ -207,11 +211,13 @@ async function boardProject(url: string, discovery: Discovery, authToken: string
     : vercelCliApi
   const found = await findProject(api, host)
   if (!found)
-    throw new BoardError('no_access', `your Vercel login can't see the project ${host} belongs to: run \`vercel login\` or ask for access to it`, 0)
+    throw new BoardError('no_access', `Your Vercel login can't see the project ${host} belongs to.`, 0, {
+      hint: "Log in as someone on the project's team (vercel login), or ask for access to it.",
+    })
   if (found.projectId !== discovery.project_id)
     throw new BoardError(
       'wrong_project',
-      `the board at ${url} says its project is ${discovery.project_id}, but it's a deployment of ${found.projectId}, so vb won't sign in to it`,
+      `The board at ${url} says its project is ${discovery.project_id}, but it's a deployment of ${found.projectId}, so no token is minted for it.`,
       0,
     )
   return { id: found.projectId, team: found.ownerId.startsWith('team_') ? found.ownerId : null }
@@ -225,7 +231,7 @@ async function tokenFromVercelCli(project: { id: string; team: string | null }):
     const { stdout } = await promisify(execFile)('vercel', args, { timeout: 30_000 })
     return (JSON.parse(stdout) as { token: string }).token
   } catch {
-    throw new BoardError('not_logged_in', 'not signed in to Vercel: run `vercel login`', 0)
+    throw new BoardError('not_logged_in', "You're not logged in to Vercel.", 0, { hint: 'Run vercel login.' })
   }
 }
 
@@ -256,8 +262,9 @@ async function githubActionsToken(audience: string): Promise<string> {
   if (!response.ok)
     throw new BoardError(
       'no_token',
-      `GitHub Actions refused an OIDC token (${response.status}): does the job have \`permissions: id-token: write\`?`,
+      `GitHub Actions refused an OIDC token (${response.status}).`,
       0,
+      { hint: 'Give the job `permissions: id-token: write`.' },
     )
   return ((await response.json()) as { value: string }).value
 }
@@ -265,7 +272,7 @@ async function githubActionsToken(audience: string): Promise<string> {
 /** The board the environment points at: `BOARD_URL`. */
 export function boardUrl(): string {
   const url = process.env.BOARD_URL?.replace(/\/+$/, '')
-  if (!url) throw new BoardError('no_board', 'no board URL: set BOARD_URL', 0)
+  if (!url) throw new BoardError('no_board', "There's no board URL: BOARD_URL isn't set.", 0, { hint: 'Set BOARD_URL, or pass the URL to http().' })
   return url
 }
 
@@ -297,10 +304,10 @@ export function connect(
   let discovery: Promise<Discovery> | undefined
   const discover = () =>
     (discovery ??= doFetch(url).then(async (response) => {
-      if (!response.ok) throw new BoardError('no_board', `no board at ${url} (${response.status})`, response.status)
+      if (!response.ok) throw new BoardError('no_board', `There's no board at ${url}: it answered ${response.status}.`, response.status)
       const found = (await response.json()) as Discovery
       if (found.audience !== url)
-        throw new BoardError('wrong_audience', `the board at ${url} says its URL is ${found.audience}: use that URL`, 0)
+        throw new BoardError('wrong_audience', `The board at ${url} says its URL is ${found.audience}.`, 0, { hint: `Use ${found.audience}.` })
       return found
     }))
 
@@ -396,7 +403,9 @@ async function hostedToken(url: string): Promise<string> {
     return await getVercelOidcToken({ audience: url })
   } catch (cause) {
     throw Object.assign(
-      new BoardError('no_token', `cannot obtain Vercel OIDC credentials for ${url}: enable OIDC on the calling project or supply token / BOARD_TOKEN; configure Deployment Protection Trusted Sources for its project and environment`, 0),
+      new BoardError('no_token', `This deployment can't get a Vercel OIDC token for ${url}.`, 0, {
+        hint: "Enable OIDC on its project, or pass a token (BOARD_TOKEN), and add its project to the board project's Deployment Protection Trusted Sources.",
+      }),
       { cause },
     )
   }
@@ -428,7 +437,9 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
         if (!(error instanceof Wall)) throw error
         // Hosted, try the board's trust in this project instead.
         if (process.env.VERCEL !== '1')
-          throw new BoardError('protected', `${url} is behind Vercel Deployment Protection and rejected VERCEL_AUTOMATION_BYPASS_SECRET; check it against ${WHERE}`, error.status)
+          throw new BoardError('protected', `${url} is behind Vercel Deployment Protection, and it rejected VERCEL_AUTOMATION_BYPASS_SECRET.`, error.status, {
+            hint: `Check VERCEL_AUTOMATION_BYPASS_SECRET against ${WHERE}.`,
+          })
         envRejected = true
       }
     }
@@ -442,7 +453,9 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
       }
       return through(doFetch, input, init, null).catch((error) => {
         throw error instanceof Wall
-          ? new BoardError('protected', `${url} rejected Vercel OIDC access: configure Deployment Protection Trusted Sources for the calling project and environment`, error.status)
+          ? new BoardError('protected', `${url} is behind Vercel Deployment Protection, and it rejected this deployment's Vercel OIDC token.`, error.status, {
+              hint: "Add this project and environment to the board project's Deployment Protection Trusted Sources.",
+            })
           : error
       })
     }
@@ -468,7 +481,9 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
       })
     } catch (error) {
       throw error instanceof Wall
-        ? new BoardError('protected', `${url} is behind Vercel Deployment Protection and its project's automation bypass didn't get through; set VERCEL_AUTOMATION_BYPASS_SECRET (${WHERE})`, error.status)
+        ? new BoardError('protected', `${url} is behind Vercel Deployment Protection, and its project's automation bypass didn't get through.`, error.status, {
+            hint: `Set VERCEL_AUTOMATION_BYPASS_SECRET (${WHERE}).`,
+          })
         : error
     }
   }
@@ -496,7 +511,7 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
       const next = new URL(location, target)
       if (next.pathname.startsWith('/sso-api')) throw new Wall(response.status)
       if (method === 'GET' || method === 'HEAD') {
-        if (hops >= 20) throw new BoardError('too_many_redirects', `too many redirects from ${target}`, response.status)
+        if (hops >= 20) throw new BoardError('too_many_redirects', `${target} redirected more than 20 times.`, response.status)
         if (next.origin !== new URL(target).origin) {
           headers = new Headers(headers)
           headers.delete('authorization')
@@ -544,8 +559,10 @@ type VercelApi = (method: 'GET' | 'PATCH', path: string) => Promise<unknown>
  * `protectionBypass` has it. When there's none, it's created.
  */
 async function projectBypass(url: string, host: string, doFetch: typeof fetch): Promise<{ secret: string; created: boolean }> {
-  const blocked = (why: string) =>
-    new BoardError('protected', `${url} is behind Vercel Deployment Protection, and your Vercel login ${why}, or set VERCEL_AUTOMATION_BYPASS_SECRET (${WHERE})`, 0)
+  const blocked = (why: string, fix: string) =>
+    new BoardError('protected', `${url} is behind Vercel Deployment Protection, and your Vercel login ${why}.`, 0, {
+      hint: `${fix}, or set VERCEL_AUTOMATION_BYPASS_SECRET (${WHERE}).`,
+    })
   let api: VercelApi
   try {
     const token = await vercelLogin()
@@ -562,7 +579,7 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
   }
 
   const project = await findProject(api, host)
-  if (!project) throw blocked("can't see its project: run `vercel login` or ask for access")
+  if (!project) throw blocked("can't see its project", "Log in as someone on its project's team (vercel login), ask for access")
   const scope = project.ownerId.startsWith('team_') ? `?teamId=${project.ownerId}` : ''
   const details = (await api('GET', `/v9/projects/${project.projectId}${scope}`)) as {
     name?: string
@@ -572,15 +589,15 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
     passport?: unknown
   } | null
   // Without the project's settings, creating could add a second bypass.
-  if (!details) throw blocked("can't read its project's settings: ask for access")
+  if (!details) throw blocked("can't read its project's settings", 'Ask for access to its project')
   const existing = automationBypass(details.protectionBypass)
   if (existing) return { secret: existing, created: false }
   // An HTML page from an unprotected project isn't a wall: it isn't a board, so nothing gets created.
   if (!details.ssoProtection && !details.passwordProtection && !details.passport)
-    throw new BoardError('no_board', `no board at ${url}: it answered with a web page, and its Vercel project isn't protected`, 0)
+    throw new BoardError('no_board', `There's no board at ${url}: it answered with a web page, and its Vercel project isn't protected.`, 0)
   const created = (await api('PATCH', `/v1/projects/${project.projectId}/protection-bypass${scope}`)) as { protectionBypass?: Bypasses } | null
   const secret = automationBypass(created?.protectionBypass)
-  if (!secret) throw blocked("can't read or create its project's automation bypass: ask a project admin")
+  if (!secret) throw blocked("can't read or create its project's automation bypass", 'Ask a project admin to create one')
   process.stderr.write(`created a Protection Bypass for Automation on the Vercel project ${details?.name ?? project.projectId}\n`)
   return { secret, created: true }
 }
@@ -616,7 +633,7 @@ const vercelCliApi: VercelApi = async (method, path) => {
     () => true,
     () => false,
   )
-  if (!(await vercelCli)) throw new BoardError('not_logged_in', 'not signed in to Vercel: run `vercel login`', 0)
+  if (!(await vercelCli)) throw new BoardError('not_logged_in', "You're not logged in to Vercel.", 0, { hint: 'Run vercel login.' })
   const args = ['api', path, '-X', method, '--raw', '--non-interactive']
   if (method === 'PATCH') args.push('--input', '-')
   try {
@@ -628,7 +645,7 @@ const vercelCliApi: VercelApi = async (method, path) => {
     return JSON.parse((await run).stdout)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-      throw new BoardError('not_logged_in', 'not signed in to Vercel: run `vercel login`', 0)
+      throw new BoardError('not_logged_in', "You're not logged in to Vercel.", 0, { hint: 'Run vercel login.' })
     return null
   }
 }

@@ -67,18 +67,26 @@ source  vercel login
 token   expires in 11h 42m
 ```
 
-When it can't, it says what fixes it:
+When it can't, it says why, then what fixes it:
 
 ```text
-error: not signed in to Vercel: run `vercel login`
-error: your Vercel login can't see the project www.example.com belongs to: run `vercel login` or ask for access to it
-error: your Vercel account can't access this board's project: ask for access to it
+$ vb whoami
+error: You're not logged in to Vercel.
+
+  Log in:
+    vercel login
+```
+
+```text
+error: Your Vercel login can't see the project www.example.com belongs to.
+
+  Log in as someone on the project's team (vercel login), or ask for access to it.
 ```
 
 When the board's host is another project's deployment, it gets no token:
 
 ```text
-error: the board at https://www.example.com/api/board says its project is prj_abc123, but it's a deployment of prj_def456, so vb won't sign in to it
+error: The board at https://www.example.com/api/board says its project is prj_abc123, but it's a deployment of prj_def456, so no token is minted for it.
 ```
 
 ## How the board verifies
@@ -248,10 +256,11 @@ vb reply 812 "@ada can you look? cc @julian/claude"
 
 ```text
 $ vb post errors-www "@ada the rollback is live"
-error: ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (ada)
+error: Can't post to errors-www.
+  ambiguous mention @ada: use @[slack:user:U0456] (ada) or @[vercel:user:u_9f] (ada)
 ```
 
-An `@[actor-id]` the board doesn't know fails with `error: unknown actor`. For
+An `@[actor-id]` the board doesn't know fails too, the board saying `unknown actor`. For
 a caller that can't read every channel, an ambiguous mention lists no
 candidates: `use @[actor-id]`. A caller that can't read the channel it writes
 in gets no warning for a handle no one has, since it would say which handles

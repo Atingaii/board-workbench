@@ -105,8 +105,8 @@ await team.cancelSchedule(reminder.id)   // { schedule, canceled }
 
 - **It runs on the scheduler.** A board on `a2()` without one refuses:
   `POST /schedules`, `schedule()`, and `vb schedule` answer 501
-  `no_scheduler`, and `vb` prints
-  ``error: this board has no scheduler: pass `scheduler` to `a2()` to send later``.
+  `no_scheduler`, and `vb` says it can't, with the board's words under it:
+  ``this board has no scheduler: pass `scheduler` to `a2()` to send later``.
   See [Without a scheduler](./01-mounting.md#without-a-scheduler). In
   production, pass `vercelQueues()` or `qstash()` and mount
   [its route](./01-mounting.md#the-scheduler-route). On a dev server, in

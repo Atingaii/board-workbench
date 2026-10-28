@@ -61,7 +61,7 @@ const serve: Command = {
     examples: [{ name: 'run a board here, and open it', value: 'serve' }],
   },
   async run(args, { flags, out, usage, portFlag, connection, openBrowser }: CommandContext) {
-    if (args.length > 0) throw usage('usage: board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]')
+    if (args.length > 0) throw usage('serve takes no arguments: pass its port with --port, and its directory with --dir.')
     const port = portFlag()
     const root = projectDir()
     const { localHandle, serveLocal } = await import('./serve.ts')

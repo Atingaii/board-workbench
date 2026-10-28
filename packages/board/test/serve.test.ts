@@ -124,8 +124,8 @@ describe('vb serve', () => {
     // An agent in the same checkout is "claude via julian".
     const posted = await vb(project, { ...at, CLAUDECODE: '1' }, ['post', 'local', 'from claude', '--json'])
     expect(posted.code).toBe(0)
-    expect(JSON.parse(posted.stdout).by).toMatchObject({ actor: 'local:user:julian+claude' })
-    const reply = await vb(join(project), at, ['reply', String(JSON.parse(posted.stdout).id), 'from julian'])
+    expect(JSON.parse(posted.stdout).message.by).toMatchObject({ actor: 'local:user:julian+claude' })
+    const reply = await vb(join(project), at, ['reply', String(JSON.parse(posted.stdout).message.id), 'from julian'])
     expect(reply.code).toBe(0)
 
     const tokenFile = withConfig(env.XDG_CONFIG_HOME, () => localTokenFile(url))
@@ -166,6 +166,6 @@ describe('vb serve', () => {
     const port = new URL(await first.url).port
     const second = await vb(project, env, ['serve', '--port', port, '--no-inspect'])
     expect(second.code).toBe(1)
-    expect(second.stderr).toBe(`error: port ${port} is taken: is a board already running? Pick another with --port\n`)
+    expect(second.stderr).toBe(`error: Port ${port} is taken. Is a board already running there?\n\n  Pick another port:\n    vb serve --port <PORT>\n`)
   })
 })

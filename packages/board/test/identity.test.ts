@@ -603,7 +603,7 @@ describe('vb identity', () => {
       for (const bad of ['-a Calculator', 'file:///etc/passwd', 'javascript:alert(1)']) {
         signIn = bad
         const linking = await run(url, 'token', ['identity', 'link', 'slack', '--no-wait'], undefined, { PATH: `${bin}:${process.env.PATH}` })
-        expect([linking.code, linking.stderr], bad).toEqual([1, `error: the board's sign-in isn't an http or https URL: ${JSON.stringify(bad)}\n`])
+        expect([linking.code, linking.stderr], bad).toEqual([1, `error: The board's sign-in isn't an http or https URL.\n  ${JSON.stringify(bad)}\n`])
       }
       expect(existsSync(opened)).toBe(false)
       signIn = `${url}/identity/sign-in?sync=slack&code=vb-AAAA-BBBB`

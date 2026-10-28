@@ -436,6 +436,10 @@ Every failure is JSON with a matching status:
 { "error": { "code": "message_not_found", "message": "message not found: #9999" } }
 ```
 
+When the board knows what fixes it, the error carries a `hint` too, as a board
+on `http()` does when its own handle can't reach the board it uses:
+`"hint": "Set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → …)."`.
+
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |

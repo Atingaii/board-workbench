@@ -35,7 +35,25 @@ import { createApp } from '@vercel/board/cli'
 const code = await createApp({ appName: 'vercel board' }).run(process.argv.slice(3))
 ```
 
-`run` answers the exit code, and never exits the process itself.
+`run` answers the exit code, and never exits the process itself. A failure is
+data too, for the CLI that runs board to show as it shows its own:
+
+```ts
+import { createApp, failureLines } from '@vercel/board/cli'
+
+const code = await createApp({
+  appName: 'vercel board',
+  // { class, reason, message, details, next: [{ instruction, argv }], data, … }
+  onError: (failure, { json }) => console.error(json ? JSON.stringify(failure) : failureLines(failure).join('\n')),
+  // { reason, message }: a write that went through, with something to say. With --json, it's in the result.
+  onWarning: (warning) => console.error(warning.message),
+}).run(process.argv.slice(3))
+```
+
+`class` fixes the exit code: `usage` and `missing_input` answer 2,
+`timeout` 124, `canceled` 130, and the rest 1. Without `onError`, board
+prints its own on stderr: `error: ` and the lines, or with `--json`, its
+[JSON document](#errors).
 
 The commands are data too, in `@vercel/board/cli/commands`, which imports
 nothing: each command's name, description, arguments, options, examples, and
@@ -141,10 +159,11 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
 - **What's written can't drive your terminal.** A message's control
   characters, ESC among them, print as their pictures (`␛`), and `--json`
   prints them as the board has them.
-- **On a terminal, output is for people.** `--json` prints JSONL instead: one
-  object per line, each a message, event, channel, actor, or schedule as the
-  [HTTP API](./03-http.md#routes) sends it. See [JSON output](#json-output).
-- **Writes print the new message's ID** on stdout (the whole message with
+- **On a terminal, output is for people.** `--json` prints one JSON document
+  instead, with what's in it as the [HTTP API](./03-http.md#routes) sends it,
+  indented at a terminal. `tail` prints one object per line, as they come. See
+  [JSON output](#json-output).
+- **Writes print the new message's ID** on stdout (`{ message, outcome }` with
   `--json`), so a script can chain them: `id=$(vb post ops "…")`. A number
   prints as it is (`812`); any other ID prints with its `#` (`#msg_…`), since
   it could also be a channel's name.
@@ -152,10 +171,13 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
 - **Text can come from stdin.** Pass `-` as the text. It may be left out when
   the message has `--attach` files.
-- **Errors are one line on stderr**, starting with `error:`.
+- **Errors go to stderr**: `error:` and what failed, then how to fix it, the
+  command to run indented under it. With `--json`, one JSON document instead.
+  See [Errors](#errors).
 - **A mention that matches no one** stays plain text, and the write warns on
   stderr:
-  `warning: @bob matches no one on the board, so it stays plain text and notifies no one`.
+  `warning: @bob matches no one on the board, so it stays plain text and notifies no one.`
+  With `--json`, the warning is in the result's `warnings`.
 
 ```text
 $ vb read 812
@@ -170,29 +192,66 @@ $ vb read 812
 
 ### JSON output
 
-| Command | One line per |
+| Command | Document |
 | --- | --- |
-| `read <channel>`, `read [filters]` | thread: `{ message, replies, last }`, the root, its reply count, and its latest reply or `null` |
-| `read <id>`, `read <link>` | message: `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }`, where `re` is the root's ID or `null` for a root |
-| `sync <id>` | target: `{ target, key, thread, message, url, undelivered }`, the message's copy there and the platform's link to it |
-| `tail`, `wait` | event: `{ cursor, type, createdAt, payload, message, actor }` |
-| `post`, `reply` | the new message |
+| `read <channel>`, `read [filters]` | `{ threads, cursor }`: each thread `{ message, replies, last }`, its root, its reply count, and its latest reply or `null`. `cursor` is where `tail` and `wait` read on from |
+| `read <id>`, `read <link>` | `{ message, replies, cursor, schedules }`: the root and its replies, each `{ id, channel, text, re, labels, reactions, by, author, createdAt, … }` |
+| `channels`, `actors`, `schedules`, `inbox`, `sources` | `{ channels }`, `{ actors }`, `{ schedules }`, `{ events }`, `{ sources }` |
+| `sync <id>` | `{ targets }`: each `{ target, key, thread, message, url, undelivered }`, the message's copy there and the platform's link to it |
+| `post`, `reply` | `{ message, outcome: "posted" }` |
+| `edit`, `delete`, `react`, `label` | `{ message: { id }, outcome }`, `outcome` being `edited`, `deleted`, `reacted` or `unreacted`, or `labeled` |
+| `schedule` | `{ schedule, outcome: "scheduled" }`; `schedule cancel`'s outcome is `canceled`, or `unchanged` when it already wasn't pending |
+| `wait` | `{ event }`: `{ cursor, type, createdAt, payload, message, actor }` |
+| `tail` | one event per line, as they come |
+| `whoami` | `{ actor, name, handle, profile, session, expiresAt, can, board, source }` |
 
-`read`'s lines carry no header and no cursor, so `jq` reads each as it is:
+A write's warnings are in its document, as
+`"warnings": [{ "reason": "unknown_mention", "message": "…" }]`.
 
 ```bash
-vb read prs --label state=open --json | jq -r '"#\(.message.id) \(.replies) \(.message.text)"'
-vb read 1204 --json | jq -r '.text'   # every message in one thread
+vb read prs --label state=open --json | jq -r '.threads[] | "#\(.message.id) \(.replies) \(.message.text)"'
+vb read 1204 --json | jq -r '.message.text, .replies[].text'   # every message in one thread
 ```
+
+### Errors
+
+An error says what failed and why, then each way out, likeliest first:
+
+```text
+$ vb raed dev
+error: Unknown command raed for vb. Did you mean read?
+
+  See all commands:
+    vb help
+```
+
+With `--json`, stdout stays empty and stderr gets one line, the Vercel CLI's
+error document:
+
+```json
+{"status":"error","reason":"unknown_command","message":"Unknown command raed for vb. Did you mean read?","next":[{"command":"vb help","argv":["vb","help"],"when":"See all commands"}]}
+```
+
+- **`reason` is what a program branches on:** `missing_scope`,
+  `login_required`, `permission_denied`, `deployment_protected`,
+  `board_not_found`, `message_not_found`, `channel_not_found`,
+  `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
+  the board's own codes, such as `already_synced` or `no_scheduler`.
+- **`next` is what to run**, each `{ command, argv, when }`, and `hint` what
+  to do when it isn't a command. `status` is `action_required` when the
+  command lacked something before it did anything: a team, say.
+- **`data.error` is the board's own error**, `{ code, message, status }`, when
+  it answered with one.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | error, e.g. `error: message not found: #9999` |
-| 2 | usage error: an unknown command or flag, a missing argument |
+| 1 | it failed: `error: Couldn't find message #9999.` |
+| 2 | misuse: an unknown command or option, a missing or malformed argument, or no board to use |
 | 124 | `wait` timed out (the GNU `timeout` convention), or `identity link` saw no link in time |
+| 130 | Ctrl-C stopped `tail` or `wait` |
 
 ## Setup
 

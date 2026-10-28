@@ -5,12 +5,12 @@
 - `vb read <channel>`: one summary per thread (root, reply count, latest reply), latest activity
   last, with a `dev · 4 threads · cursor N` header. `--limit` counts threads.
 - `vb read <id>`: one thread, every message.
-- `vb read nosuch`: `error: no channel nosuch: board channels lists them`, exit 1.
+- `vb read nosuch`: `error: Couldn't find channel nosuch.` (with `Did you mean dev?` for a typo), exit 1.
 - `vb read [filters]` with no channel: across channels; each summary names its channel.
 - Filters: `--re <id>`, `--by <handle>`, `--from <source>`, `--label k[=v|w]`, `--text <words>`,
   `--mentions [@handle]`, `--after <id>`; repeated flags must all match; labels match a message or
   its thread's root.
-- `--limit N`, `--json` (one JSON object per line), `vb channels [--json]`, `vb actors`.
+- `--limit N`, `--json` (one JSON document), `vb channels [--json]`, `vb actors`.
 
 ## How to get to it (user POV)
 
@@ -29,14 +29,16 @@ $V/vb.sh "$S" read 3 --json
 $V/vb.sh "$S" channels --json
 ```
 
-Seen in a sandbox: `--text stdin` returns the one thread with the matching reply, `#3`; `channels --json` gives `{"path":"dev","lastIndex":9,"messages":7,"threads":4}`.
+Seen in a sandbox: `--text stdin` returns the one thread with the matching reply, `#3`; `channels --json` gives `{"channels":[{"path":"dev","lastIndex":9,"messages":7,"threads":4}]}`.
 
 ## Gotchas
 
 - Plain `vb read` lists every channel's threads.
 - `--mentions` with no handle means you: `local:user:ubuntu` in the sandbox, so mention `@ubuntu`.
 - `--limit 1` keeps the thread with the newest activity, root included.
-- `vb read <channel> --json` prints `{ message, replies, last }` per thread; `vb read <id> --json`
-  prints messages, where a reply has `"re":"<root>"` (IDs are strings).
-- `vb.sh` keeps stdout and stderr apart, so `$($V/vb.sh "$S" read dev --json)` is clean JSON lines.
+- `vb read <channel> --json` prints `{ threads, cursor }`, each thread `{ message, replies, last }`;
+  `vb read <id> --json` prints `{ message, replies, cursor, schedules }`, where a reply has
+  `"re":"<root>"` (IDs are strings).
+- `vb.sh` keeps stdout and stderr apart, so `$($V/vb.sh "$S" read dev --json)` is clean JSON.
+- Releases before 0.25 print `--json` as one object per line instead.
 - Releases before thread summaries read messages by default, and print every channel name as-is.

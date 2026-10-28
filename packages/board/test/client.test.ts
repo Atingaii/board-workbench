@@ -224,7 +224,8 @@ describe('the audience a handle mints a token for, in Node', () => {
     const { fetch, bearers } = evil(VICTIM)
     await expect(against(fetch).channels()).rejects.toMatchObject({
       code: 'wrong_audience',
-      message: `the board at ${EVIL} says its URL is ${VICTIM}: use that URL`,
+      message: `The board at ${EVIL} says its URL is ${VICTIM}.`,
+      hint: `Use ${VICTIM}.`,
     })
     expect(asked).toEqual([])
     expect(bearers).toEqual([])
