@@ -50,6 +50,19 @@ describe('vercel()', () => {
     })
   }, 30_000)
 
+  it("names a person by their Vercel username and name, and an agent by its profile under them, as the API does", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { id } = await julian.post('dev', { text: 'hi' })
+    await julian.as('claude').reply(id, { text: 'hello' })
+    const { message, replies } = await julian.thread(id)
+    expect(message.author).toMatchObject({ kind: 'person', handle: 'julian', name: 'Julián Benegas' })
+    expect(replies[0]!.author).toMatchObject({ kind: 'agent', handle: 'julian/claude', name: 'claude' })
+    // Someone who first writes after the names were read is named too.
+    await handleOn(api, 'user:u_ada').reply(id, { text: 'me too' })
+    expect((await julian.thread(id)).replies[1]!.author).toMatchObject({ handle: 'ada', name: 'Ada Lovelace' })
+  })
+
   it('writes as the project a deployment is, per environment, and as an agent with its profile', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')

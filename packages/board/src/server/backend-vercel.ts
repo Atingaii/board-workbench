@@ -372,6 +372,34 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return out
   }
 
+  /** Who's written here, by actor ID, as the API names them: messages carry only the actor. */
+  let actorNames: Promise<Map<string, ApiActorView>> | null = null
+  /** Actors the API's list didn't have when it was read again for them: it isn't read again for them. */
+  const unlisted = new Set<string>()
+  const readNames = async (who: Who) =>
+    new Map((await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')).map((view) => [view.id, view] as const))
+
+  /**
+   * An actor as board shows them: a person by their Vercel username and name, and an agent acting
+   * for a person by its profile under them, as the API names them; anyone else (a project, an app,
+   * an agent of one), or someone the API doesn't list, by their principal. Someone who wrote since the list was read reads it again,
+   * once for them.
+   */
+  async function nameOf(who: Who, actor: ApiActor): Promise<ActorView & { id: string }> {
+    actorNames ??= readNames(who).catch(() => new Map())
+    let found = (await actorNames).get(actor.id)
+    if (!found && !unlisted.has(actor.id)) {
+      unlisted.add(actor.id)
+      actorNames = readNames(who).catch(() => new Map())
+      found = (await actorNames).get(actor.id)
+      if (found) unlisted.delete(actor.id)
+    }
+    const kind = found && apiKind(found.kind)
+    // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
+    if (!found || !(kind === 'person' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor)
+    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null }
+  }
+
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
     const root = message.sequence === 1
     return {
@@ -395,7 +423,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       attachments: [],
       links: [],
       version: message.version,
-      author: actorView(message.createdBy),
+      author: await nameOf(who, message.createdBy),
     }
   }
 
@@ -611,7 +639,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       default:
         return null
     }
-    return { cursor, type, createdAt: iso(change.createdAt), payload, message, actor: actorView(change.actor) } as BoardEventView
+    return { cursor, type, createdAt: iso(change.createdAt), payload, message, actor: await nameOf(who, change.actor) } as BoardEventView
   }
 
   /**
