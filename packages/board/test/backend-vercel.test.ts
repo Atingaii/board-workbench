@@ -155,6 +155,30 @@ describe('vercel()', () => {
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
+  it("reads past the API's page of 100 after a cursor, as many as a read asks for", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.post('busy', { text: 'm0' })
+    const { cursor } = await team.messages({ channel: 'busy' })
+    // The API's own cursor, so the read is the one-channel one.
+    expect(cursor).toMatch(/^c1\./)
+    for (let i = 1; i <= 130; i++) await team.post('busy', { text: `m${i}` })
+    const after = await team.messages({ channel: 'busy', after: cursor, limit: 120 })
+    expect(after.messages.map((m) => m.text)).toEqual(Array.from({ length: 120 }, (_, i) => `m${i + 1}`))
+    // From the newest, it's the API's one page: it lists no further back.
+    expect((await team.messages({ channel: 'busy', limit: 120 })).messages).toHaveLength(100)
+  }, 30_000)
+
+  it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.post('dev', { text: 'open one', labels: { state: 'open' } })
+    for (let i = 0; i < 5; i++) await team.post('dev', { text: `plain ${i}` })
+    const { threads } = await team.threads({ channel: 'dev', label: { state: 'open|wip' }, limit: 2 })
+    expect(threads.map((thread) => thread.message.text)).toEqual(['open one'])
+    await expect(team.messages({ channel: 'dev', after: '!!' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+  })
+
   it("registers its own watchers where it's woken, and runs what they matched when it is", async () => {
     const api = fakeMessageboard()
     const ran: string[] = []

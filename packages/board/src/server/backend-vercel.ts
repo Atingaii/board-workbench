@@ -415,7 +415,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const kept = positions.get(cursor)
     if (kept) return kept
     const found = CURSOR.exec(cursor)
-    if (!found) throw new HttpError(400, 'invalid_request', `after: ${cursor} isn't a cursor here or a message's ID`)
+    if (!found) throw new HttpError(400, 'invalid_cursor', `after: ${cursor} isn't a cursor here or a message's ID`)
     return { t: parseInt(found[1]!, 36), feeds: {} }
   }
   /** A time a read goes on from: a cursor's, or a message's own. */
@@ -462,10 +462,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /**
    * A channel's threads, as far as a read needs: the API lists them most recently active first, so
-   * it stops at the `limit` newest, or at the first not active since `after`. One it lists by a
-   * label comes oldest first, so it reads every page.
+   * it stops at the first not active since `after`, or at the `limit` newest when it's given one
+   * (not when the read filters what's listed). One it lists by a label comes oldest first, so it
+   * reads every page.
    */
-  async function latestThreads(who: Who, channel: ApiChannel, label: string | undefined, page: { after?: number; limit: number }, signal: AbortSignal): Promise<ApiThread[]> {
+  async function latestThreads(who: Who, channel: ApiChannel, label: string | undefined, page: { after?: number; limit?: number }, signal: AbortSignal): Promise<ApiThread[]> {
     const path = await onBoard(who, '/threads')
     const out: ApiThread[] = []
     let cursor: string | undefined
@@ -474,7 +475,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       out.push(...found.threads)
       cursor = found.cursor ?? undefined
       const last = out.at(-1)
-      if (label === undefined && (page.after !== undefined ? last !== undefined && last.lastActivityAt <= page.after : out.length >= page.limit)) break
+      if (label === undefined && (page.after !== undefined ? last !== undefined && last.lastActivityAt <= page.after : page.limit !== undefined && out.length >= page.limit)) break
     } while (cursor)
     return out
   }
@@ -653,7 +654,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    */
   async function channelMessages(who: Who, channel: ApiChannel, query: Filters & { after?: string; limit?: number }, signal: AbortSignal) {
     const path = await onBoard(who, '/messages')
-    const limit = Math.min(query.limit ?? 50, PAGE_MAX)
+    const limit = query.limit ?? 50
     const thread = threadReader(who, signal)
     const narrowed = filtered(query)
     const me = narrowed ? await actorOf(who) : null
@@ -662,13 +663,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const kept: ApiMessage[] = []
     if (query.after === undefined) {
       // Without a cursor, the newest: a filtered read looks among the channel's latest page.
-      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(narrowed ? PAGE_MAX : limit) }, signal })
+      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(narrowed ? PAGE_MAX : Math.min(limit, PAGE_MAX)) }, signal })
       for (const message of page.messages) if (await keep(message)) kept.push(message)
       return { messages: kept.slice(-limit), cursor: page.cursor }
     }
     let cursor = query.after
     for (let pages = 0; pages < SCAN_PAGES && kept.length < limit; pages++) {
-      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, after: cursor, limit: String(limit - kept.length) }, signal })
+      const page = await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, after: cursor, limit: String(Math.min(limit - kept.length, PAGE_MAX)) }, signal })
       cursor = page.cursor
       for (const message of page.messages) if (await keep(message)) kept.push(message)
       if (page.messages.length === 0) break
@@ -1004,7 +1005,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const feeds = await heads(who, listed)
       const label = indexed(query)
       const found = (
-        await Promise.all(listed.map(async (channel) => (await latestThreads(who, channel, label, { ...(after !== undefined ? { after } : {}), limit }, signal)).map((thread) => ({ thread, channel, at: thread.lastActivityAt }))))
+        await Promise.all(listed.map(async (channel) => (await latestThreads(who, channel, label, { ...(after !== undefined ? { after } : {}), ...(query.label?.length ? {} : { limit }) }, signal)).map((thread) => ({ thread, channel, at: thread.lastActivityAt }))))
       ).flat()
       const rooted = found.filter(({ thread }) => (query.label ?? []).every(([key, values]) => thread.labels !== undefined && Object.hasOwn(thread.labels, key) && (values === null || values.includes(thread.labels[key]!))))
       const newest = found.reduce((max, { at }) => Math.max(max, at), 0)
