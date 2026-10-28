@@ -498,6 +498,7 @@ function failureOf(error: unknown): Failure {
       case 'invalid_duration':
         return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'wrong_audience':
+      case 'redirected':
         return own('usage', 'wrong_url')
       case 'ambiguous_agent':
         return own('usage', 'ambiguous_agent', [

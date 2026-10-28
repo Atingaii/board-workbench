@@ -407,6 +407,20 @@ class Wall extends Error {
 }
 
 /**
+ * A wall reached after a redirect to another origin, which none of a request's credentials follow,
+ * by design: no bypass or token gets through it from here, so none is looked for.
+ */
+class Moved extends Error {
+  readonly origin: string
+  readonly status: number
+  constructor(origin: string, status: number) {
+    super('moved')
+    this.origin = origin
+    this.status = status
+  }
+}
+
+/**
  * This deployment's Vercel OIDC token, with `url` as its audience: what a hosted client sends a
  * board, for Deployment Protection's Trusted Sources. Its `cause` says why it couldn't.
  */
@@ -435,7 +449,19 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
   let looked: Promise<{ secret: string; created: boolean }> | undefined
   // On Vercel, a rejected VERCEL_AUTOMATION_BYPASS_SECRET isn't sent again: OIDC follows.
   let envRejected = false
-  return async (input, init = {}) => {
+  // A board that moved to another origin says where, instead of that its bypass didn't get through.
+  return (input, init) =>
+    attempt(input, init).catch((error: unknown) => {
+      if (!(error instanceof Moved)) throw error
+      const there = shown(`${error.origin}${new URL(url).pathname}`, URL_SHAPE)
+      throw new BoardError(
+        'redirected',
+        `${url} redirects to ${there ? new URL(there).origin : 'another origin'}, and its credentials don't follow it there, so Deployment Protection turns it away.`,
+        error.status,
+        { hint: there ? `Use ${there}.` : 'Use the URL it redirects to.' },
+      )
+    })
+  async function attempt(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
     init = { ...init, headers }
     // An explicit bypass secret still wins: it's what `vercel env pull` setups used before
@@ -516,15 +542,19 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
   const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
   let headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
   if (bypass) headers.set('x-vercel-protection-bypass', bypass)
+  // The last origin it was redirected to, once it left its own: a wall there is one no credential crosses.
+  let moved: string | null = null
+  const wall = (status: number) => (moved ? new Moved(moved, status) : new Wall(status))
   for (let hops = 0; ; hops++) {
     const response = await doFetch(hops === 0 ? input : target, { ...init, headers, redirect: 'manual' })
     const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null
     if (location) {
       const next = new URL(location, target)
-      if (next.pathname.startsWith('/sso-api')) throw new Wall(response.status)
+      if (next.pathname.startsWith('/sso-api')) throw wall(response.status)
       if (method === 'GET' || method === 'HEAD') {
         if (hops >= 20) throw new BoardError('too_many_redirects', `${target} redirected more than 20 times.`, response.status)
         if (next.origin !== new URL(target).origin) {
+          moved = next.origin
           headers = new Headers(headers)
           headers.delete('authorization')
           headers.delete('x-vercel-trusted-oidc-idp-token')
@@ -536,9 +566,9 @@ async function through(doFetch: typeof fetch, input: RequestInfo | URL, init: Re
     }
     const { status } = response
     const page = /^text\/html\b/i.test(response.headers.get('content-type') ?? '') && !response.headers.has('content-disposition')
-    if (page && ((status >= 200 && status < 300) || status === 401 || status === 403)) throw new Wall(status)
+    if (page && ((status >= 200 && status < 300) || status === 401 || status === 403)) throw wall(status)
     // The board's own 401 has no `x-vercel-error`: Vercel sets it only on errors it answers itself.
-    if (status === 401 && response.headers.has('x-vercel-error')) throw new Wall(status)
+    if (status === 401 && response.headers.has('x-vercel-error')) throw wall(status)
     return response
   }
 }
