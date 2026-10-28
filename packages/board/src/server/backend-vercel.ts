@@ -372,6 +372,48 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return out
   }
 
+  /** Who's written here, by actor ID, as the API names them: messages carry only the actor. */
+  let actorNames: { at: number; views: Promise<Map<string, ApiActorView>> } | null = null
+  /** How long names are kept before they're read again: someone renamed shows by their new name after this. */
+  const NAMES_FRESH_MS = 5 * 60_000
+  /** Actors a list read again for them didn't have: it isn't read again for them. */
+  const unlisted = new Set<string>()
+  /** Reads the list, kept as the current one; a read that fails isn't kept, so the next name tries again. */
+  const readNames = (who: Who) => {
+    const views = (async () =>
+      new Map((await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')).map((view) => [view.id, view] as const)))()
+    const read = { at: Date.now(), views }
+    actorNames = read
+    views.catch(() => {
+      if (actorNames === read) actorNames = null
+    })
+    return read
+  }
+  /** The actor in a read of the list, or undefined when it doesn't have them or failed. */
+  const inList = (read: { views: Promise<Map<string, ApiActorView>> }, id: string) => read.views.then((views) => views.get(id), () => undefined)
+
+  /**
+   * An actor as board shows them: a person by their Vercel username and name, and an agent acting
+   * for a person by its profile under them, as the API names them; anyone else (a project, an app,
+   * an agent of one), or someone the API doesn't list, by their principal. The list is read again
+   * every few minutes, and at once for someone who wrote since it was.
+   */
+  async function nameOf(who: Who, actor: ApiActor): Promise<ActorView & { id: string }> {
+    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? readNames(who) : actorNames
+    let found = await inList(current, actor.id)
+    if (!found && !unlisted.has(actor.id)) {
+      // Someone new since this list: one read again covers everyone it's missing, even several at once.
+      const again = actorNames && actorNames !== current ? actorNames : readNames(who)
+      found = await inList(again, actor.id)
+      // Only a read that worked and still doesn't have them settles it.
+      if (!found && (await again.views.then(() => true, () => false))) unlisted.add(actor.id)
+    }
+    const kind = found && apiKind(found.kind)
+    // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
+    if (!found || !(kind === 'person' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor)
+    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null }
+  }
+
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
     const root = message.sequence === 1
     return {
@@ -395,7 +437,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       attachments: [],
       links: [],
       version: message.version,
-      author: actorView(message.createdBy),
+      author: await nameOf(who, message.createdBy),
     }
   }
 
@@ -611,7 +653,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       default:
         return null
     }
-    return { cursor, type, createdAt: iso(change.createdAt), payload, message, actor: actorView(change.actor) } as BoardEventView
+    return { cursor, type, createdAt: iso(change.createdAt), payload, message, actor: await nameOf(who, change.actor) } as BoardEventView
   }
 
   /**

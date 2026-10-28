@@ -36,7 +36,7 @@ type Thread = {
   messages: Message[]
 }
 type Change = Record<string, unknown> & { createdAt: number; messageId?: string }
-type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app'; handle: string; lastSeenAt: number }
+type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app'; handle: string; name?: string; lastSeenAt: number }
 
 const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
@@ -52,7 +52,14 @@ class Refused extends Error {
   }
 }
 
-export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null } = {}) {
+/** Vercel accounts the fake knows, by user ID: how the API names a person (their username, then their name). */
+const ACCOUNTS: Record<string, { username: string; name: string }> = {
+  u_jb: { username: 'julian', name: 'Julián Benegas' },
+  u_ada: { username: 'ada', name: 'Ada Lovelace' },
+}
+
+export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }> } = {}) {
+  const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
   const slug = options.slug ?? 'test'
   let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
@@ -92,12 +99,14 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     }
   }
 
-  /** How the API shows an actor: its handle is the principal's name, and an agent's adds its profile. */
+  /** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
   function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
     const p = actor.principal
-    const base = p.type === 'user' ? p.userId : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
-    if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}` }
-    return { id: actor.id, kind: p.type === 'user' ? 'person' : p.type === 'app' ? 'app' : 'deployment', handle: base }
+    const account = p.type === 'user' ? accounts[p.userId] : undefined
+    const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
+    if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
+    if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
+    return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
   }
   const seen = (actor: Actor) => actors.set(actor.id, { ...viewOf(actor), lastSeenAt: now() })
 
