@@ -1,5 +1,11 @@
 # vboard
 
+## 0.20.1
+
+### Patch Changes
+
+- 3d18ed4: `commandWord()` reads a bare `--mentions` the way the CLI does, as taking no value, so `vb(board, ['--mentions', 'tail', 'dev'], { refuse: ['tail'] })` is refused instead of running `tail`.
+
 ## 0.20.0
 
 ### Minor Changes
