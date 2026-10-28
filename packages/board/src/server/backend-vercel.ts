@@ -2,13 +2,15 @@ import type { Method, Protocol } from '../api/protocol.ts'
 import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView, ThreadSummaryView } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
-import type { Author, Labels } from '../contract/schemas.ts'
+import { RemoteWatcherId, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import type { Access, Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { forbidden, HttpError, notFound } from './errors.ts'
 import { METHODS } from './routing.ts'
+import { compileWatcher } from './watch-spec.ts'
+import { canonicalWatchers, type WatcherSpec } from './watchers-hash.ts'
 
 // The `/v1/messageboard` API's shapes, as this backend reads them. `@api/messageboard-types` is
 // private to Vercel's monorepo, so these are written out: conformance catches drift.
@@ -60,6 +62,18 @@ type ApiChange = {
   currentMessage?: ApiMessage
 }
 type ApiMe = { teamId: string; actor: ApiActor; view?: ApiActorView; project?: { id: string; environment: string } }
+/** Which messages a watcher sees, in the API's terms: a tail is translated into one. */
+type ApiWatcherFilter = {
+  channelIds?: string[]
+  channelTree?: string
+  threadId?: string
+  authors?: string[]
+  text?: string
+  labels?: { key: string; values?: string[] }[]
+}
+type ApiWatcherSpec = { filter: ApiWatcherFilter; when: 'matches' | 'enters' }
+type ApiRegistration = { owner: string; url: string | null; watch: Record<string, ApiWatcherSpec>; hash: string }
+type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
 export type VercelOptions = {
   /** The team whose board it is (`team_…`). In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
@@ -89,6 +103,10 @@ export type VercelEnvironment = {
 type Who = { profile: { name: string; avatar?: string } | null; session: string | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
+/** How long a wake-up runs this board's matches before the rest wait for its next one, as http()'s does. */
+const DRAIN_MS = 4 * 60_000
+/** A board that can't be woken pulls on its own, each pull held open this long for a match. */
+const POLL_WAIT_S = 25
 const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
 const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
@@ -730,6 +748,189 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
+  /** A watcher's tail registers with the API as its own: an API watcher, so a match is the API's to make. */
+  const tagOf = async (watch: Record<string, WatcherSpec>) => (await sha256(canonicalWatchers(watch))).slice(0, 32)
+
+  /** Who `--by` names, as the API's authors: an actor, a principal, or everyone here with that handle or profile, as of now. */
+  async function authorsOf(who: Who, by: string): Promise<string[]> {
+    if (by === 'me') return [await actorOf(who)]
+    if (by.startsWith('vercel:')) return [by]
+    const listed = await all<ApiActorView>(who, await onBoard(who, '/actors'), 'actors')
+    const named = listed.filter((actor) => actor.handle === by || actor.id.endsWith(`+${by.toLowerCase()}`)).map((actor) => actor.id)
+    if (named.length === 0) throw new HttpError(400, 'bad_watcher', `--by ${by}: nobody here goes by that yet: name them by their actor ID`)
+    return named
+  }
+
+  /**
+   * A tail as the filter the API matches. The API reads no tails: channels, people, and threads are
+   * looked up here, now, and what it can't match (mentions, other sources) is refused rather than
+   * left to match nothing.
+   */
+  async function filterOf(who: Who, id: string, spec: { tail: string; when?: 'matches' | 'enters' | undefined }): Promise<ApiWatcherSpec> {
+    const bad = (message: string) => new HttpError(400, 'bad_watcher', `watch ${id}: ${message}`)
+    if (!RemoteWatcherId.safeParse(id).success) throw bad('ids start with a letter and use up to 32 letters, numbers, and hyphens')
+    let filters
+    try {
+      ;({ filters } = compileWatcher(id, spec))
+    } catch (error) {
+      throw new HttpError(400, 'bad_watcher', (error as Error).message)
+    }
+    if (filters.mentions !== undefined) throw bad("Vercel's boards can't match mentions yet")
+    if (filters.from !== undefined && filters.from !== 'board') throw bad(`nothing comes from ${filters.from} here: every message is written on the board`)
+    const filter: ApiWatcherFilter = {}
+    if (filters.channel !== undefined) {
+      if (filters.channel.endsWith('/')) filter.channelTree = filters.channel.slice(0, -1)
+      else {
+        const found = await channelNamed(who, filters.channel)
+        // A channel that isn't there yet is watched by its name, and so are any made under it.
+        if (found) filter.channelIds = [found.id]
+        else filter.channelTree = filters.channel
+      }
+    }
+    if (filters.re !== undefined) {
+      const at = locate(filters.re)
+      if (!at) throw bad(`--re ${filters.re} names no message here`)
+      filter.threadId = at.threadId
+    }
+    if (filters.by !== undefined) filter.authors = await authorsOf(who, filters.by)
+    if (filters.text !== undefined) filter.text = filters.text
+    if (filters.label?.length) filter.labels = filters.label.map(([key, values]) => (values === null ? { key } : { key, values: [...values] }))
+    return { filter, when: spec.when ?? 'matches' }
+  }
+
+  /** A filter shown as a tail again, for listing: what it matches, if not always as it was written. */
+  async function tailOf(who: Who, { filter }: ApiWatcherSpec): Promise<string> {
+    const parts: string[] = []
+    if (filter.channelIds?.[0]) parts.push((await channelById(who, filter.channelIds[0])).name)
+    else if (filter.channelTree !== undefined) parts.push(`${filter.channelTree}/`)
+    if (filter.threadId !== undefined) parts.push(`--re ${idAt(filter.threadId, 1)}`)
+    if (filter.authors?.[0]) parts.push(`--by ${filter.authors[0]}`)
+    if (filter.text !== undefined) parts.push(`--text ${JSON.stringify(filter.text)}`)
+    for (const { key, values } of filter.labels ?? []) parts.push(`--label ${values ? `${key}=${values.join('|')}` : key}`)
+    return parts.join(' ')
+  }
+
+  async function registerAs(who: Who, url: string | null, watch: Record<string, { tail: string; when?: 'matches' | 'enters' | undefined }>) {
+    const specs: Record<string, WatcherSpec> = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when ?? 'matches' }]))
+    const filters = Object.fromEntries(await Promise.all(Object.entries(specs).map(async ([id, spec]) => [id, await filterOf(who, id, spec)] as const)))
+    // vboard's own hash of the tails, which every wake-up carries back, so a board can tell its registration is stale.
+    const made = await api<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), { body: { url, watch: filters, tag: await tagOf(specs) } })
+    return { owner: made.owner, url: made.url, watch: specs, sync: [], hash: made.hash }
+  }
+
+  /** A match as vboard hands it out: its event as `vb tail --json` prints it, with its message as it is now. */
+  async function matchOf(who: Who, match: ApiMatch, me: string) {
+    const found = await messageById(who, match.event.messageId).catch((error: unknown) => {
+      if (error instanceof HttpError && error.status === 404) return null
+      throw error
+    })
+    const channel = found && (await channelById(who, found.thread.channelId))
+    const event = found && channel && (await eventOf(who, match.event, channel.name, match.id, {}, me, found))
+    if (!event?.message) return null
+    return { id: match.id, watcher: match.watcher, thread: event.message.thread, lease: match.lease, attempt: match.attempt, event }
+  }
+
+  async function pullAs(who: Who, query: { limit?: number | undefined; wait?: number | undefined }, signal?: AbortSignal) {
+    const path = await onBoard(who, '/watchers/matches')
+    const { matches } = await api<{ matches: ApiMatch[] }>(who, 'GET', path, {
+      query: { limit: query.limit?.toString(), wait: query.wait?.toString() },
+      ...(signal ? { signal } : {}),
+    })
+    const me = await actorOf(who)
+    const shown = await Promise.all(matches.map((match) => matchOf(who, match, me)))
+    // A match whose message is gone, or that's about no message, has nothing to run: it's dropped.
+    await Promise.all(matches.map((match, i) => (shown[i] ? null : ackAs(who, match.id, { lease: match.lease, skip: true }).catch(() => {}))))
+    return shown.filter((match) => match !== null)
+  }
+
+  async function ackAs(who: Who, id: string, body: { lease: string; error?: string | undefined; skip?: boolean | undefined }) {
+    await api(who, 'POST', await onBoard(who, `/watchers/matches/${encodeURIComponent(id)}/ack`), {
+      body: { lease: body.lease, ...(body.error !== undefined ? { error: body.error } : {}), ...(body.skip ? { skip: true } : {}) },
+    })
+  }
+
+  /**
+   * The API keeps one registration per principal, and this board reaches it as its own deployment:
+   * one a caller registered through it would replace the deployment's, and every other caller's.
+   */
+  function ownWatchers(caller: Caller, what: string) {
+    if ('identity' in caller) throw forbidden(`this board registers watchers as its own deployment, so it can't ${what} for you: run them in its config, or register with Vercel's API as yourself`)
+  }
+
+  /** This deployment's own: what its config's watchers run as. */
+  const deployment: Who = { profile: null, session: null }
+  /** This board's config's watchers, which run here when the API wakes it. */
+  let tails: Record<string, WatcherSpec> = {}
+  let started: Promise<void> | null = null
+  const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
+
+  /** Pulls and runs this board's matches until none are left, or this run's time is up: a thread's one at a time. */
+  async function drain(): Promise<number> {
+    let ran = 0
+    const until = Date.now() + DRAIN_MS
+    while (Date.now() < until) {
+      const matches = await pullAs(deployment, { limit: 10 })
+      if (matches.length === 0) break
+      await Promise.all(matches.map(runOne))
+      ran += matches.length
+    }
+    return ran
+  }
+
+  async function runOne(match: { id: string; watcher: string; lease: string; attempt: number; event: BoardEventView }) {
+    let outcome: { error?: string } = {}
+    try {
+      await bound().run(match.watcher, match.event, { trigger: `watch:${match.watcher}:${match.id}`, attempt: match.attempt + 1 })
+    } catch (error) {
+      console.error(`[board] watcher ${match.watcher} failed:`, error)
+      outcome = { error: (error instanceof Error ? error.message : String(error)).slice(0, 500) || 'unknown error' }
+    }
+    // A lease that ran out was pulled again: that pull's ack is the one that counts.
+    await ackAs(deployment, match.id, { lease: match.lease, ...outcome }).catch((error) => console.error(`[board] couldn't ack a match:`, error))
+  }
+
+  /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
+  function poll() {
+    void (async () => {
+      for (let pause = 1000; ; ) {
+        try {
+          const matches = await pullAs(deployment, { limit: 10, wait: POLL_WAIT_S })
+          await Promise.all(matches.map(runOne))
+          pause = 1000
+        } catch (error) {
+          console.error("[board] couldn't pull matches from Vercel's API:", error)
+          await new Promise((resolve) => setTimeout(resolve, pause))
+          pause = Math.min(pause * 2, 60_000)
+        }
+      }
+    })()
+  }
+
+  /**
+   * On first use, a board with watchers registers them where it's woken. One on Vercel learns its URL
+   * from a request, so it waits for one; one that can't be woken pulls on its own.
+   */
+  function start(): Promise<void> {
+    if (started) return started
+    if (Object.keys(tails).length === 0) return Promise.resolve()
+    const here = wakeable(bound().url())
+    if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
+    started = registerAs(deployment, here, tails).then(
+      () => {},
+      (error: unknown) => {
+        started = null
+        console.error("[board] couldn't register this board's watchers with Vercel's API:", error)
+      },
+    )
+    if (!here) poll()
+    return started
+  }
+
+  const bound = () => {
+    if (!binding) throw new Error('vercel: used before board() bound it')
+    return binding
+  }
+
   const unsupported = Object.fromEntries(
     METHODS.map((method) => [
       method,
@@ -981,19 +1182,76 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async readSource(_caller, { key }) {
       throw notFound(`this board doesn't run sync entry ${key}`, 'not_synced_here')
     },
+    async watchers(caller) {
+      ownWatchers(caller, 'list watchers')
+      const who = whoOf(caller)
+      const { watchers } = await api<{ watchers: ApiRegistration[] }>(who, 'GET', await onBoard(who, '/watchers'))
+      return {
+        watchers: await Promise.all(
+          watchers.map(async (found) => ({
+            owner: found.owner,
+            url: found.url,
+            watch: Object.fromEntries(await Promise.all(Object.entries(found.watch).map(async ([id, spec]) => [id, { tail: await tailOf(who, spec), when: spec.when }] as const))),
+            sync: [],
+            hash: found.hash,
+          })),
+        ),
+      }
+    },
+    async register(caller, body) {
+      ownWatchers(caller, 'register watchers')
+      if ((body.sync?.length ?? 0) > 0) throw notSupported('sync')
+      if (typeof body.path === 'string') throw new HttpError(501, 'no_wake_by_path', "Vercel's boards wake a url, not a path, for now")
+      return registerAs(whoOf(caller), body.url ?? null, body.watch)
+    },
+    async matches(caller, query, signal) {
+      ownWatchers(caller, 'pull matches')
+      return { matches: await pullAs(whoOf(caller), query, signal) }
+    },
+    async ack(caller, { id, ...body }) {
+      ownWatchers(caller, 'ack matches')
+      await ackAs(whoOf(caller), id, body)
+      return { ok: true }
+    },
   }
 
+  // Any use of the board is when its watchers can register: its URL is known from a request by then.
+  const starting = Object.fromEntries(
+    Object.entries(methods).map(([name, method]) => [
+      name,
+      (...args: unknown[]) => {
+        if (binding) void start()
+        return (method as (...input: unknown[]) => unknown)(...args)
+      },
+    ]),
+  ) as unknown as ProtocolMethods
+
   const backend = {
-    ...methods,
-    routes: [],
+    ...starting,
+    routes: [
+      {
+        // Nothing in a wake-up is trusted: it only says to pull, and what's pulled comes with this deployment's own credentials.
+        method: 'POST' as const,
+        path: '/wake',
+        async handle(request: Request) {
+          if (request.headers.get('x-board-watchers') !== (await tagOf(tails))) {
+            started = null
+            await start()
+          }
+          return Response.json({ ran: await drain() })
+        },
+      },
+    ],
     // The board is Vercel's: a board here serves requests only with an `access` of its own.
     keeps: false,
     bind(next: BoardBinding) {
       if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
       const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
       if (kinds.includes('sync')) throw new Error("vercel: Vercel's boards don't run sync yet: leave `sync` out")
-      if (kinds.includes('tail')) throw new Error("vercel: Vercel's boards don't wake watchers yet: leave `watch` out")
       for (const id of Object.keys(next.subscriptions)) own.add(id)
+      tails = Object.fromEntries(
+        Object.entries(next.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),
+      )
       binding = next
     },
   }

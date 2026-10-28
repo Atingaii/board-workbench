@@ -24,7 +24,7 @@ const verified = (can: Can) =>
   }) as unknown as Caller
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, and keeps no schedules, files, watchers, or sync", async () => {
+  it("passes the conformance kit's core and watchers, and keeps no schedules, files, or sync", async () => {
     const report = await conformance(handleOn(fakeMessageboard()))
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
@@ -44,8 +44,8 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'skipped',
       'attachments: takes a file, posts it, and gives it back': 'skipped',
-      'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'failed',
-      'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'failed',
+      'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
+      'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
       "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',
     })
   }, 30_000)
@@ -155,8 +155,50 @@ describe('vercel()', () => {
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
-  it("refuses watchers and sync when it's made, since the API runs neither yet", () => {
-    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })
-    expect(() => board({ backend, watch: { ping: { tail: 'pings', run: async () => {} } } })).toThrow(/don't wake watchers/)
+  it("registers its own watchers where it's woken, and runs what they matched when it is", async () => {
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+      url: 'https://pong.example/api/board',
+      basePath: '/api/board',
+      watch: {
+        pings: {
+          tail: 'pings',
+          run: async ({ event, board: own }) => {
+            ran.push(event.message!.text)
+            await own.reply(event.message!.id, { text: 'pong' })
+          },
+        },
+      },
+    })
+    await pong.me()
+    while (!api.registrations.has('vercel:project:prj_pong:production')) await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: 'https://pong.example/api/board' })
+    await handleOn(api).post('pings', { text: 'ping' })
+    const wake = () => pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST' })).then((response) => response.json())
+    await expect(wake()).resolves.toEqual({ ran: 1 })
+    expect(ran).toEqual(['ping'])
+    // Its reply is its own watcher's, which never wakes it.
+    await expect(wake()).resolves.toEqual({ ran: 0 })
+  })
+
+  it("turns a tail into the API's filter, and refuses what the API can't match", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.register({ url: null, watch: { open: { tail: 'dev/ --label status=open|draft --text "is failing"' }, mine: { tail: 'general --by me' } } })
+    expect(api.registrations.get('vercel:user:u_jb')?.watch).toEqual({
+      open: { filter: { channelTree: 'dev', text: 'is failing', labels: [{ key: 'status', values: ['open', 'draft'] }] }, when: 'matches' },
+      mine: { filter: { channelIds: ['general'], authors: ['vercel:user:u_jb'] }, when: 'matches' },
+    })
+    for (const tail of ['general --mentions @ada', 'general --from slack'])
+      await expect(team.register({ url: null, watch: { w: { tail } } })).rejects.toMatchObject({ status: 400, code: 'bad_watcher' })
+  })
+
+  it('refuses watchers for a caller it serves, which would replace the deployment\'s own', async () => {
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
+    const signal = new AbortController().signal
+    await expect(backend.register(verified('all'), { url: null, watch: { w: { tail: 'general' } } } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.matches(verified('all'), {}, signal)).rejects.toMatchObject({ status: 403 })
   })
 })

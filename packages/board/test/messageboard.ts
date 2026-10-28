@@ -61,6 +61,12 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
   const feeds = new Map<string, Change[]>()
   const actors = new Map<string, ActorView>()
   const requests: string[] = []
+  type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
+  type Registration = { owner: string; url: string | null; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; hash: string }
+  type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
+  /** By principal, as the API keeps them: one each. */
+  const registrations = new Map<string, Registration>()
+  const queued = new Map<string, Match[]>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
 
@@ -135,9 +141,37 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
   function emit(channelId: string, change: Record<string, unknown>, actor: Actor) {
     const feed = feeds.get(channelId) ?? []
     feeds.set(channelId, feed)
-    feed.push({ id: `evt_${randomUUID()}`, channelId, actor, createdAt: now(), shard: 0, sequence: feed.length + 1, ...change })
+    const made = { id: `evt_${randomUUID()}`, channelId, actor, createdAt: now(), shard: 0, sequence: feed.length + 1, ...change } as Change
+    feed.push(made)
     seen(actor)
+    match(made)
     return feed.length
+  }
+
+  /** What subscriber-messageboard-changes does with each event: matched against every watcher on the board. */
+  function match(change: Change) {
+    const messageId = (change as { messageId?: string }).messageId
+    const message = messageId ? messageNamed(messageId) : undefined
+    if (!message || !String(change.type).startsWith('message.')) return
+    const thread = threads.get(message.threadId)!
+    const channel = channels.find((c) => c.id === thread.channelId)!
+    const rootLabels = thread.messages[0]?.labels ?? {}
+    const hasLabel = (labels: Record<string, string>, { key, values }: { key: string; values?: string[] }) =>
+      Object.hasOwn(labels, key) && (values === undefined || values.includes(labels[key]!))
+    const sees = (filter: Filter) =>
+      (filter.channelIds === undefined && filter.channelTree === undefined ? true : (filter.channelIds?.includes(channel.id) ?? false) ||
+        (filter.channelTree !== undefined && (channel.name === filter.channelTree || channel.name.startsWith(`${filter.channelTree}/`)))) &&
+      (filter.threadId === undefined || filter.threadId === message.threadId) &&
+      (filter.authors === undefined || filter.authors.includes(message.createdBy.id) || filter.authors.includes(principalId(message.createdBy.principal))) &&
+      (filter.text === undefined || message.text.toLowerCase().includes(filter.text.toLowerCase())) &&
+      (filter.labels ?? []).every((label) => hasLabel(message.labels, label) || hasLabel(rootLabels, label))
+    for (const registration of registrations.values())
+      for (const [watcher, spec] of Object.entries(registration.watch)) {
+        if ((change.actor as Actor).id === `${registration.owner}+${watcher.toLowerCase()}` || !sees(spec.filter)) continue
+        const lane = queued.get(registration.owner) ?? []
+        queued.set(registration.owner, lane)
+        lane.push({ id: `mat_${randomUUID()}`, watcher, threadId: message.threadId, change, attempts: 0 })
+      }
   }
 
   const messageNamed = (id: string) => {
@@ -161,7 +195,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     return channel
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string }) {
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string> }) {
     if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
     if (body.replyTo !== undefined && (body.replyTo < 1 || body.replyTo > thread.messageCount)) throw new Refused(400, 'invalid_reply')
     const sequence = thread.messageCount + 1
@@ -177,7 +211,8 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
       createdBy: actor,
       changes: 0,
       reactions: new Map(),
-      labels: {},
+      // A post's labels commit with it, so its event's message already has them.
+      labels: { ...body.labels },
       feedSequence: 0,
     }
     thread.messages.push(message)
@@ -206,6 +241,61 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     return { items: items.slice(from, from + size), cursor: next }
   }
 
+  async function watchers(method: string, rest: string, actor: Actor, parsed: Record<string, any>, url: URL): Promise<unknown> {
+    const owner = principalId(actor.principal)
+    const view = (r: Registration) => ({ owner: r.owner, url: r.url, watch: r.watch, hash: r.hash })
+    if (method === 'GET' && rest === '/watchers') {
+      const found = registrations.get(owner)
+      return { watchers: found ? [view(found)] : [] }
+    }
+    if (method === 'PUT' && rest === '/watchers') {
+      const body = parsed as { url?: string | null; watch: Registration['watch']; tag?: string }
+      for (const [id, spec] of Object.entries(body.watch))
+        if (spec.when === 'enters' && Object.keys(spec.filter).length === 0) throw new Refused(400, 'bad_watcher', `watch ${id}: \`when: enters\` needs a filter to enter`)
+      const made = { owner, url: body.url ?? null, watch: body.watch, hash: body.tag ?? randomUUID().replaceAll('-', '') }
+      registrations.set(owner, made)
+      return view(made)
+    }
+    if (!registrations.has(owner)) throw new Refused(404, 'no_registration')
+    const lane = queued.get(owner) ?? []
+    if (method === 'GET' && rest === '/watchers/matches') {
+      const until = Date.now() + Number(url.searchParams.get('wait') ?? 0) * 1000
+      const limit = Number(url.searchParams.get('limit') ?? 10)
+      for (;;) {
+        const held = new Set(lane.filter((m) => m.lease && m.leaseUntil! > Date.now()).map((m) => `${m.watcher}|${m.threadId}`))
+        const heads = new Map<string, Match>()
+        for (const m of lane) if (!heads.has(`${m.watcher}|${m.threadId}`)) heads.set(`${m.watcher}|${m.threadId}`, m)
+        const free = [...heads.entries()].filter(([key]) => !held.has(key)).map(([, m]) => m).slice(0, limit)
+        if (free.length > 0 || Date.now() >= until) {
+          for (const m of free) {
+            if (m.lease) m.attempts++
+            m.lease = randomUUID()
+            m.leaseUntil = Date.now() + 5 * 60_000
+          }
+          const shown = free.map((m) => {
+            const message = messageNamed((m.change as { messageId: string }).messageId)
+            return { id: m.id, watcher: m.watcher, threadId: m.threadId, lease: m.lease, attempt: m.attempts, event: { ...m.change, ...(message ? { currentMessage: show(message) } : {}) } }
+          })
+          return { matches: shown }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }
+    const acking = /^\/watchers\/matches\/([^/]+)\/ack$/.exec(rest)
+    if (method === 'POST' && acking) {
+      const body = parsed as { lease: string; error?: string; skip?: boolean }
+      const at = lane.findIndex((m) => m.id === decodeURIComponent(acking[1]!))
+      if (at === -1) throw new Refused(404, 'no_match')
+      if (lane[at]!.lease !== body.lease) throw new Refused(409, 'stale_lease')
+      if (body.error !== undefined && !body.skip) {
+        lane[at]!.attempts++
+        delete lane[at]!.lease
+      } else lane.splice(at, 1)
+      return { ok: true }
+    }
+    throw new Refused(404, 'not_found')
+  }
+
   async function route(request: Request): Promise<unknown> {
     const url = new URL(request.url)
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
@@ -214,7 +304,8 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
     const method = request.method
     requests.push(`${method} ${path}`)
     const body = method === 'GET' ? {} : ((await request.json()) as Record<string, any>)
-    if (method !== 'GET' && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    // Registering and acking watchers take no operation ID: each is idempotent as it is.
+    if (method !== 'GET' && !/\/watchers(\/|$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(actor) }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
     if (method === 'POST' && path === '/boards/default') {
@@ -259,8 +350,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
       threads.set(thread.id, thread)
-      const message = post(actor, thread, body as { text: string; clientId?: string })
-      if (body.labels) Object.assign(message.labels, body.labels)
+      const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string> })
       return { thread: showThread(thread), message: show(message) }
     }
     if ((found = /^\/messages\/([^/]+)$/.exec(rest)) && method === 'GET') {
@@ -276,6 +366,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
       if (!again) throw new Refused(404, 'post_not_found')
       return again
     }
+    if (rest === '/watchers' || rest.startsWith('/watchers/')) return watchers(method, rest, actor, body, url)
     if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
     if (method === 'GET' && rest === '/messages') {
       const channelId = url.searchParams.get('channelId') ?? ''
@@ -390,6 +481,8 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
   return {
     /** Every request it answered, as `METHOD /path`. */
     requests,
+    /** The watchers each principal registered, as the API keeps them. */
+    registrations,
     /** The API, as `fetch` reaches it. */
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
