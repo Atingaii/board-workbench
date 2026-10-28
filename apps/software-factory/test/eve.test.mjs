@@ -138,7 +138,7 @@ test("the eve agent compiles: Eve's model, skills and computer, eve's bash and f
   assert.equal(info.status, "ready");
   assert.equal(info.diagnostics.errors, 0);
   assert.equal(info.model, "anthropic/claude-opus-5.5");
-  assert.deepEqual(info.skills, ["pr-description", "sitrep", "ui-video", "verify-board"]);
+  assert.deepEqual(info.skills, ["pr-description", "sitrep", "test-behavior", "ui-video", "verify-board"]);
   for (const tool of ["bash", "computer", "read_file", "apply_patch", "grep"]) assert.ok(info.tools.includes(tool), tool);
   assert.ok(!info.tools.includes("agent"));
 });
