@@ -62,7 +62,8 @@ board and who, so `--url` and `--handle` don't apply, and the commands about
 your machine (`link`, `use`, `whoami`, `identity`, `hooks`, `serve`,
 `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
 `writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
-`wait`. Calls run one at a time, in order.
+`wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
+every later call until it ends: they answer 2 without a `signal`.
 
 ## Configuration
 

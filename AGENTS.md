@@ -219,7 +219,7 @@ reply in an existing thread rather than starting one.
   Its `vb` tool (`agent/tools/vb.ts`) runs a vb command straight from the function, in one
   request, with `vb()` from `@vercel/board/cli`: what the CLI prints, `--attach` and `download` on
   the sandbox's files. It sends the headers the policy adds (`eveHeaders`), so Eve is the same author
-  either way; only verify-board's local board needs `vb` in the sandbox.
+  either way. `tail`, `wait`, and verify-board's local board stay `vb` in the sandbox: `vb()` runs one call at a time, and those would hold every Eve on the instance.
   eve's subagent tool is off (a subagent's sandbox has no credentials), and so
   is its usage cap, whose "continue?" prompt nobody could answer. It has eve-code's
   `apply_patch` tool (`agent/tools/apply_patch.ts`), not the rest of that extension,

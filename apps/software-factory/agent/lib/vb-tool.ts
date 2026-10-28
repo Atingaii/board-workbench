@@ -51,8 +51,12 @@ export type SandboxFiles = {
 };
 
 /** Runs a vb command as Eve, and says what it printed, as bash would: stdout, then stderr, then a failure's exit code. */
-export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>): Promise<string> {
+export async function runVb(board: Board, args: string[], files: () => Promise<SandboxFiles>, signal?: AbortSignal): Promise<string> {
+  // They wait for the board, and every Eve on this instance waits behind them: a tool call can't.
+  const word = args.find((arg) => !arg.startsWith("-"));
+  if (word === "tail" || word === "wait") return `error: ${word} isn't for the vb tool: it holds every other vb call while it waits. Run vb ${word} in bash.\n(exit 2)`;
   const { code, stdout, stderr } = await vb(board, args, {
+    ...(signal ? { signal } : {}),
     readFile: async (path) => (await files()).readBinaryFile({ path: sandboxPath(path) }),
     writeFile: async (path, content) => (await files()).writeBinaryFile({ path: sandboxPath(path), content }),
   });

@@ -24,6 +24,6 @@ export default defineTool({
     const board = boardOf(ctx.session);
     if (!board) throw new Error("the vb tool works only in a board thread's session");
     const eve = eveBoard(board.thread, { token, bypass: process.env.VERCEL_AUTOMATION_BYPASS_SECRET });
-    return runVb(eve, input.args, () => ctx.getSandbox());
+    return runVb(eve, input.args, () => ctx.getSandbox(), ctx.abortSignal);
   },
 });

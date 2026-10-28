@@ -50,6 +50,13 @@ describe('vb()', () => {
   it("refuses what's the CLI's: another board or handle, and the commands about its machine", async () => {
     const team = await handle()
     expect(await vb(team, ['read', '--url', 'https://elsewhere.test/api/board'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/--url doesn't apply/) })
+    // tail and wait hold every later call: only with a signal to stop them.
+    for (const command of ['tail', 'wait']) expect(await vb(team, [command, 'dev'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/pass a signal/) })
+    const controller = new AbortController()
+    const tail = vb(team, ['tail', 'dev'], { signal: controller.signal })
+    controller.abort()
+    await tail
+    expect(await vb(team, ['channels'])).toMatchObject({ code: 0, stdout: 'no channels yet\n' })
     for (const command of ['whoami', 'link', 'serve', 'hooks', 'inspect'])
       expect(await vb(team, [command])).toMatchObject({ code: 2, stderr: expect.stringMatching(new RegExp(`${command} isn't available in-process`)) })
   })

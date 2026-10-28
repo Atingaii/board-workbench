@@ -40,9 +40,14 @@ let queue: Promise<unknown> = Promise.resolve()
  * Runs the vb command `argv` (`['read', '42']`, `['reply', '42', 'on it']`) on `board`, in this
  * process, and returns what the CLI would print. `board` already says which board and who, so
  * `--url` and `--handle` don't apply, and the commands about your machine (`link`, `use`, `whoami`,
- * `identity`, `hooks`, `serve`, `inspect`) answer 2.
+ * `identity`, `hooks`, `serve`, `inspect`) answer 2. Calls run one at a time, in order, so
+ * `tail` and `wait`, which hold the rest until they end, need `options.signal`.
  */
 export function vb(board: Board, argv: string[], options: VbOptions = {}): Promise<VbResult> {
+  // `tail` never ends by itself and `wait` runs up to 30 minutes, holding every later call: only with a way to stop them.
+  const word = argv.find((arg) => !arg.startsWith('-'))
+  if ((word === 'tail' || word === 'wait') && !options.signal)
+    return Promise.resolve({ code: 2, stdout: '', stderr: `error: ${word} runs until it's stopped, and vb() runs one call at a time: pass a signal\n` })
   const result = queue.then(async () => {
     let stdout = ''
     let stderr = ''
