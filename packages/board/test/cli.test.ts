@@ -510,6 +510,19 @@ describe('cli', () => {
     }
   })
 
+  it("says what a 404 that isn't an old board's says, as Vercel's API does for a team without the board", async () => {
+    const off = await serve(async () => Response.json({ error: { code: 'not_found', message: 'Messageboard is not enabled for this team.' } }, { status: 404 }))
+    try {
+      expect(await vb(['read'], { BOARD_URL: `${off.origin}/api/board` })).toEqual({
+        code: 1,
+        stdout: '',
+        stderr: "error: Can't read the board.\n  Messageboard is not enabled for this team.\n",
+      })
+    } finally {
+      await off.close()
+    }
+  })
+
   it('checks that the board speaks the protocol, a group at a time', async () => {
     // The whole protocol, schedules included, so a board with a scheduler.
     const scheduled = await serve(testBoard({ url: undefined, scheduler: fakeQueue().scheduler }).fetch)

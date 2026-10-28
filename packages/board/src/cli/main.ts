@@ -846,8 +846,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const query = { ...filters(target), ...(flags.limit ? { limit: Number(flags.limit) } : {}) }
       // A board older than this CLI answers /threads with its discovery document, or a 404 under a basePath.
       const old = outdated("This board can't list threads.")
+      // Only a board's own "no route" is one without the route: any other 404 says what it is.
       const page = await board.threads(query).catch((error: unknown) => {
-        throw error instanceof BoardError && error.status === 404 ? old : error
+        throw error instanceof BoardError && error.status === 404 && /^no route: /.test(error.message) ? old : error
       })
       if (!Array.isArray((page as { threads?: unknown }).threads)) throw old
       // Nothing in a channel that doesn't exist is a typo, not an empty channel.
