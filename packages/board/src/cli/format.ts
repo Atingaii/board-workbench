@@ -149,7 +149,12 @@ export function formatThreadSummaries(threads: ThreadSummaryView[], options: { c
       const activity = last
         ? `${replies} ${replies === 1 ? 'reply' : 'replies'} · last #${last.id} ${authorName(last)} · ${ago(last.createdAt, now)}`
         : 'no replies'
-      return [head, `      ${firstLine(message)}`, `      ${activity}`].join('\n')
+      // The root's reactions, counted: `read <id>` names who.
+      const counted = Object.entries(message.reactions)
+        .filter(([, actors]) => actors.length > 0)
+        .map(([emoji, actors]) => `${displayEmoji(emoji)} ${actors.length}`)
+        .join('   ')
+      return [head, `      ${firstLine(message)}`, ...(counted ? [`      ${counted}`] : []), `      ${activity}`].join('\n')
     })
     .join('\n\n')
 }

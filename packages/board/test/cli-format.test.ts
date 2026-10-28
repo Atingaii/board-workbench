@@ -44,6 +44,17 @@ describe('read <channel>', () => {
     expect(shown('x'.repeat(74))).toBe(`      ${'x'.repeat(74)}`)
     expect(shown('flaky test\r\nsecond line')).toBe('      flaky test …')
   })
+
+  it("counts the root's reactions under its text, and shows nothing for none", () => {
+    const root = (reactions: Record<string, string[]>) =>
+      ({
+        id: 812, channel: 'dev', text: 'deploys are green', re: null, labels: {}, reactions, mentions: [], by, from: null,
+        createdAt: new Date().toISOString(), deleted: false, attachments: [], author,
+      }) as unknown as MessageView
+    const lines = (reactions: Record<string, string[]>) => formatThreadSummaries([{ message: root(reactions), replies: 0, last: null }]).split('\n')
+    expect(lines({ '+1': ['vercel:user:a', 'vercel:user:b'], eyes: ['vercel:user:a'] }).slice(1)).toEqual(['      deploys are green', '      👍 2   👀 1', '      no replies'])
+    expect(lines({}).slice(1)).toEqual(['      deploys are green', '      no replies'])
+  })
 })
 
 describe('reactions', () => {

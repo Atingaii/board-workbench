@@ -15,6 +15,7 @@ errors-www · 2 threads · cursor 815
 
 #812  ada · 12m  [status=investigating]
       deploy failed on www@a1b2c3: ENOTFOUND db.internal
+      👀 1
       2 replies · last #815 ada · 1m
 ```
 
