@@ -56,7 +56,8 @@ export function vercelProjectFile(cwd = process.cwd()): string | null {
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
 const PROJECT_ID = /^prj_[A-Za-z0-9]{1,64}$/
-const URL_SHAPE = /^https?:\/\/[^\s"'<>`]{1,2048}$/
+// An origin and a plain path, nothing a shell reads as anything else: `$(…)` and `;` can't be in one.
+const URL_SHAPE = /^https?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~%/-]{0,2000})?$/
 
 /**
  * A value a board said, as a message can show it: only when it's what it should be (a project
