@@ -78,15 +78,19 @@ error: You're not logged in to Vercel.
 ```
 
 ```text
-error: Your Vercel login can't see the project www.example.com belongs to.
+error: Your Vercel login can't access the board's project.
+  Your Vercel login can't see the project www.example.com belongs to.
 
-  Log in as someone on the project's team (vercel login), or ask for access to it.
+  Log in as someone on its project's team:
+    vercel login
+  Or ask for access to it.
 ```
 
 When the board's host is another project's deployment, it gets no token:
 
 ```text
-error: The board at https://www.example.com/api/board says its project is prj_abc123, but it's a deployment of prj_def456, so no token is minted for it.
+error: The board's host is another project's deployment, so no token is minted for it.
+  The board at https://www.example.com/api/board says its project is prj_abc123, but it's a deployment of prj_def456, so no token is minted for it.
 ```
 
 ## How the board verifies
