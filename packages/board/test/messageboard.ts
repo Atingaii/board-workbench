@@ -58,7 +58,8 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 
-export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null } = {}) {
+export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }> } = {}) {
+  const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
   const slug = options.slug ?? 'test'
   let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
@@ -102,7 +103,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   /** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
   function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
     const p = actor.principal
-    const account = p.type === 'user' ? ACCOUNTS[p.userId] : undefined
+    const account = p.type === 'user' ? accounts[p.userId] : undefined
     const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
     if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
     if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }

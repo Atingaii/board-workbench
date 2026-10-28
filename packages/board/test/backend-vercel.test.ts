@@ -63,6 +63,24 @@ describe('vercel()', () => {
     expect((await julian.thread(id)).replies[1]!.author).toMatchObject({ handle: 'ada', name: 'Ada Lovelace' })
   })
 
+  it('shows a renamed person by their new name once they write again and a few minutes pass', async () => {
+    const accounts = { u_jb: { username: 'julian', name: 'Julián Benegas' } }
+    const api = fakeMessageboard({ accounts })
+    const julian = handleOn(api)
+    const { id } = await julian.post('dev', { text: 'hi' })
+    expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'julian' })
+    // The API records the new name when they next write.
+    accounts.u_jb = { username: 'jules', name: 'Jules Benegas' }
+    await julian.reply(id, { text: 'renamed' })
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      clock.mockReturnValue(Date.now() + 6 * 60_000)
+      expect((await julian.thread(id)).message.author).toMatchObject({ handle: 'jules', name: 'Jules Benegas' })
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it('writes as the project a deployment is, per environment, and as an agent with its profile', async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')

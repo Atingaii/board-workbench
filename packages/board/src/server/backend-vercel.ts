@@ -373,7 +373,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** Who's written here, by actor ID, as the API names them: messages carry only the actor. */
-  let actorNames: Promise<Map<string, ApiActorView>> | null = null
+  let actorNames: { at: number; views: Promise<Map<string, ApiActorView>> } | null = null
+  /** How long names are kept before they're read again: someone renamed shows by their new name after this. */
+  const NAMES_FRESH_MS = 5 * 60_000
   /** Actors the API's list didn't have when it was read again for them: it isn't read again for them. */
   const unlisted = new Set<string>()
   const readNames = async (who: Who) =>
@@ -382,16 +384,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /**
    * An actor as board shows them: a person by their Vercel username and name, and an agent acting
    * for a person by its profile under them, as the API names them; anyone else (a project, an app,
-   * an agent of one), or someone the API doesn't list, by their principal. Someone who wrote since the list was read reads it again,
-   * once for them.
+   * an agent of one), or someone the API doesn't list, by their principal. The list is read again
+   * every few minutes, and at once for someone who wrote since it was.
    */
   async function nameOf(who: Who, actor: ApiActor): Promise<ActorView & { id: string }> {
-    actorNames ??= readNames(who).catch(() => new Map())
-    let found = (await actorNames).get(actor.id)
+    const read = () => (actorNames = { at: Date.now(), views: readNames(who).catch(() => new Map()) })
+    const current = !actorNames || Date.now() - actorNames.at > NAMES_FRESH_MS ? read() : actorNames
+    let found = (await current.views).get(actor.id)
     if (!found && !unlisted.has(actor.id)) {
       unlisted.add(actor.id)
-      actorNames = readNames(who).catch(() => new Map())
-      found = (await actorNames).get(actor.id)
+      found = (await read().views).get(actor.id)
       if (found) unlisted.delete(actor.id)
     }
     const kind = found && apiKind(found.kind)
