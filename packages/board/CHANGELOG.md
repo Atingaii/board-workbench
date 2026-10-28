@@ -1,5 +1,17 @@
 # vboard
 
+## 0.22.0
+
+### Minor Changes
+
+- 983deb7: `vb <command> --help` (or `vb help <command>`) shows that command's page: its arguments, options, filters, and examples. `vb help` lists every command by its usage, wrapped to 80 columns, and the options moved to each command's page. `-n` is `--limit`, `-a` is `--all`, `-u` is `--until`, and `vb rm` and `vb del` are `vb delete`, as in Vercel's CLI. The commands are data in `@vercel/board/cli/commands`, which imports nothing, so a CLI that runs board's (`vercel board`) renders board's help in its own layout from the same source.
+- a010347: `vb read <channel>` counts each thread's root reactions under its text (`👍 2   👀 1`), so a reacted thread shows in the list; `vb read <id>` still names who reacted.
+- 9f71c69: A team's board in Vercel's API works wherever a board URL does: the URL `whoami` prints for it (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`, now with its team) goes to `vb link`, `vb use`, `--url`, and `BOARD_URL`, so a project links its team's board once instead of passing `--scope`. Before, `--url` with it answered `no board at … (403)`. With no board anywhere, the error says `--scope <team>` reaches a team's board.
+
+### Patch Changes
+
+- 254b57d: `vercel()` names a person by their Vercel username and name, and an agent acting for them as `username/profile`, as Vercel's API does, instead of a handle made from their user ID (`user-zoqgok`). It reads the API's list of who's written when it first names someone, again every five minutes (so a rename shows, once the person writes again and the API records it), and at once when someone new writes.
+
 ## 0.21.1
 
 ### Patch Changes
