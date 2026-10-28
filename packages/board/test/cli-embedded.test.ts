@@ -67,7 +67,7 @@ describe('the embedded CLI', () => {
     expect(help.code).toBe(0)
     expect(help.stdout).toMatch(/^vercel board \d+\.\d+\.\d+\S*: a message board you mount in one route\n\nusage: vercel board <command> \[options\]\n/)
     expect(help.stdout).not.toMatch(/also installed as|^\s+(serve|inspect) \[/m)
-    expect(await capture(() => app.run(['serve']))).toEqual({ code: 2, stdout: '', stderr: 'error: Unknown command serve for vercel board.\n\n  See all commands:\n    vercel board help\n' })
+    expect(await capture(() => app.run(['serve']))).toEqual({ code: 2, stdout: '', stderr: 'error: Unknown command serve for vercel board.\n\n  See all commands:\n    vercel board --help\n' })
     expect(await capture(() => app.run(['inspect']))).toMatchObject({ code: 2 })
     const extra = await capture(() => app.run(['conformance', 'extra']))
     expect(extra).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
@@ -88,7 +88,7 @@ describe('the embedded CLI', () => {
     ])
     // Misuse, with how to recover as a command it can run.
     expect(await capture(() => app.run(['raed', 'dev']))).toMatchObject({ code: 2, stderr: '' })
-    expect(failures.at(-1)![0]).toMatchObject({ class: 'usage', reason: 'unknown_command', next: [{ argv: ['vercel', 'board', 'help'] }] })
+    expect(failures.at(-1)![0]).toMatchObject({ class: 'usage', reason: 'unknown_command', next: [{ argv: ['vercel', 'board', '--help'] }] })
     const posted = await capture(() => app.run(['post', 'warned', 'ping @nobody-here']))
     expect(posted).toMatchObject({ code: 0, stderr: '' })
     expect(warned).toEqual([{ reason: 'unknown_mention', message: '@nobody-here matches no one on the board, so it stays plain text and notifies no one.' }])

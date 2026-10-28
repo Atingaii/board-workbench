@@ -1129,7 +1129,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const guess = closest(command, names)
       throw usage(`Unknown command ${command} for ${named()}.${guess ? ` Did you mean ${guess}?` : ''}`, {
         reason: 'unknown_command',
-        next: [{ instruction: 'See all commands', argv: [...cli(), 'help'] }],
+        next: [{ instruction: 'See all commands', argv: [...cli(), '--help'] }],
       })
     }
   }

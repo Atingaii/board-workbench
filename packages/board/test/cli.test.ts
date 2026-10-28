@@ -542,7 +542,7 @@ describe('cli', () => {
     // Misuse names its command's help.
     const typo = await vb(['raed', 'dev', '--json'])
     expect(typo).toMatchObject({ code: 2, stdout: '' })
-    expect(failure(typo)).toMatchObject({ reason: 'unknown_command', message: 'Unknown command raed for vb. Did you mean read?', next: [{ argv: ['vb', 'help'] }] })
+    expect(failure(typo)).toMatchObject({ reason: 'unknown_command', message: 'Unknown command raed for vb. Did you mean read?', next: [{ argv: ['vb', '--help'] }] })
     expect((await vb(['react', '1', 'not an emoji'])).code).toBe(2)
     expect((await vb(['typing'])).code).toBe(2)
     expect((await vb(['frobnicate'])).code).toBe(2)

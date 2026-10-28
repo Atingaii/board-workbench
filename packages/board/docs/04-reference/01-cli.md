@@ -222,14 +222,14 @@ $ vb raed dev
 error: Unknown command raed for vb. Did you mean read?
 
   See all commands:
-    vb help
+    vb --help
 ```
 
 With `--json`, stdout stays empty and stderr gets one line, the Vercel CLI's
 error document:
 
 ```json
-{"status":"error","reason":"unknown_command","message":"Unknown command raed for vb. Did you mean read?","next":[{"command":"vb help","argv":["vb","help"],"when":"See all commands"}]}
+{"status":"error","reason":"unknown_command","message":"Unknown command raed for vb. Did you mean read?","next":[{"command":"vb --help","argv":["vb","--help"],"when":"See all commands"}]}
 ```
 
 - **`reason` is what a program branches on:** `missing_scope`,
