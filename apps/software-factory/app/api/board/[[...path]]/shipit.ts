@@ -53,6 +53,7 @@ export function shipit(options: GitHubOptions & { tellEve: typeof tellEve }): Wa
           message: [
             `${requester} (${event.payload.by.actor}) reacted with ${emoji} to request a merge of ${root.labels.pr} in board thread #${thread}.`,
             `The factory couldn't merge it: ${reason}`,
+          ...(root.re !== null ? [`They reacted on the PR's line in board thread #${root.re}, and #${thread} isn't on Slack: answer them in #${root.re}.`] : []),
             `Read the thread and inspect the PR's current state, checks, and reviews. Carry out the requested merge: resolve the blockers you can, mark a draft ready if needed, and merge when GitHub's requirements allow. Ping the appropriate reviewer or owner in the thread when needed, and explain what is still blocking it. The merge request remains active; don't require another ${emoji} reaction.`,
           ].join("\n"),
         });

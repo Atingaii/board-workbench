@@ -138,6 +138,7 @@ test(":security: on a factory PR's line in its source thread reviews that PR, an
   assert.equal(h.notifications[0].thread, "59");
   assert.ok(h.notifications[0].message.includes("in board thread #59."));
   assert.ok(h.notifications[0].message.includes("vb react 3000 secure"));
+  assert.ok(h.notifications[0].message.includes("post your replies in #2036."));
 });
 
 test(":security: on an ordinary reply does nothing", async () => {

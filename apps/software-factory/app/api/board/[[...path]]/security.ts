@@ -49,6 +49,7 @@ export function security(options: { tellEve: typeof tellEve }): Watcher {
           `   Exit 1 (findings): reply with a short line per finding (file, issue, severity), attach ${dir}/deepsec.md, and don't react :secure:.`,
           `   Any other exit is a failed run: 2 (deepsec needs input), 3 (it hit its cost cap), 124 (the timeout), or anything else. Say why, from ${dir}/deepsec.log, and don't react :secure:.`,
           `5. Back in your clone, git worktree remove --force ${dir}.`,
+          ...(root.re !== null ? [`They reacted on the PR's line in board thread #${root.re}, and #${thread} isn't on Slack: post your replies in #${root.re}.`] : []),
           "Mention the requester in your reply. Don't change the PR's code for this unless someone asks.",
         ].join("\n"),
       });

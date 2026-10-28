@@ -6,7 +6,7 @@ import { sourceOfPr } from "./inthread.ts";
 type GitHubEvent = { kind: string; thread: string; subthread: string | null; type: string; labels?: Record<string, string>; raw?: unknown };
 type Board = {
   messages(query: { channel: string; label: Record<string, string>; limit: number }): Promise<{ messages: unknown[] }>;
-  thread(id: string): Promise<{ message: { re: string | null; channel: string; noSync: boolean; deleted: boolean } }>;
+  thread(id: string): Promise<{ message: { re: string | null; channel: string; noSync: boolean; deleted: boolean; labels: Record<string, string> } }>;
 };
 
 /**
@@ -38,7 +38,7 @@ export async function unseenPr(event: GitHubEvent, board: Board, channel: string
  * The thread a new factory PR's root lives in (`source=<thread>`): its `board/<thread>` branch's
  * thread, when that's a live root in `channel` that syncs (every one does to Slack, `devMirror`).
  * Null for a PR that already has a root, which stays where it is, and for a source that's
- * missing, deleted, elsewhere, or kept off Slack: that PR keeps a Slack thread of its own.
+ * missing, deleted, elsewhere, kept off Slack, or a factory PR's own root: that PR keeps a Slack thread of its own.
  */
 export async function sourceThread(event: GitHubEvent, board: Board, channel: string): Promise<string | null> {
   if (event.kind !== "lifecycle") return null;
@@ -55,7 +55,9 @@ export async function sourceThread(event: GitHubEvent, board: Board, channel: st
       throw error;
     },
   );
-  return root && root.re === null && root.channel === channel && !root.noSync && !root.deleted ? source : null;
+  // A PR root that itself lives in another thread isn't on Slack either.
+  const shown = root && root.re === null && root.channel === channel && !root.noSync && !root.deleted && !root.labels.source;
+  return shown ? source : null;
 }
 
 // Going out, a function gets a delivery it never calls: nothing written on the board or in Slack reaches GitHub.

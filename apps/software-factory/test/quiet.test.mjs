@@ -62,7 +62,7 @@ const withThreads = (threads, prs = []) => ({
   thread: async (id) => {
     if (threads[id] instanceof Error) throw threads[id];
     if (!threads[id]) throw Object.assign(new Error("not found"), { status: 404 });
-    return { message: { re: null, channel: "dev", noSync: false, deleted: false, ...threads[id] } };
+    return { message: { re: null, channel: "dev", noSync: false, deleted: false, labels: {}, ...threads[id] } };
   },
 });
 
@@ -72,9 +72,9 @@ test("a new factory PR lives in its source thread when that thread is a live dev
 });
 
 test("a factory PR keeps its own Slack thread when its source can't show it, or it already has a root", async () => {
-  const threads = { 1: { noSync: true }, 2: { deleted: true }, 3: { channel: "factory/x" }, 4: { re: "9" }, 5: {} };
+  const threads = { 1: { noSync: true }, 2: { deleted: true }, 3: { channel: "factory/x" }, 4: { re: "9" }, 5: {}, 6: { labels: { pr: "vercel-labs/board#70", source: "5" } } };
   const board = withThreads(threads);
-  for (const ref of ["board/1", "board/2", "board/3", "board/4", "board/404"]) assert.equal(await sourceThread(opened(ref), board, "dev"), null, ref);
+  for (const ref of ["board/1", "board/2", "board/3", "board/4", "board/6", "board/404"]) assert.equal(await sourceThread(opened(ref), board, "dev"), null, ref);
   assert.equal(await sourceThread(opened("board/5", "someone/fork"), board, "dev"), null);
   assert.equal(await sourceThread(opened("jb/branch"), board, "dev"), null);
   assert.equal(await sourceThread(comment("github:vercel-labs/board:77"), board, "dev"), null);

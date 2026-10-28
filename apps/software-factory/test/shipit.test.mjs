@@ -234,4 +234,8 @@ test("shipit on a factory PR's line in its source thread merges that PR, and a f
   await failed.run(card());
   assert.equal(failed.notifications[0].thread, "59");
   assert.match(failed.notifications[0].message, /in board thread #59\./);
+  assert.match(failed.notifications[0].message, /answer them in #2036\./);
+  const onRoot = harness([{ body: { merged: false, state: "closed" } }]);
+  await onRoot.run();
+  assert.doesNotMatch(onRoot.notifications[0].message, /answer them in/);
 });
