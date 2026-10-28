@@ -13,7 +13,7 @@ useBoard()
 const OLD_THREADS = /^error: This board can't list threads\. It's older than this CLI\.\n/
 
 /** A failure's JSON document: the one line `--json` leaves on stderr. */
-const failure = (result: { stderr: string }) => JSON.parse(result.stderr) as { status: string; reason: string; message: string; next?: { command: string; argv: string[] }[] }
+const failure = (result: { stderr: string }) => JSON.parse(result.stderr) as { status: string; reason: string; message: string; next?: { command: string; argv: string[] }[]; hint?: string }
 
 describe('cli', () => {
   it('says how to point it at a board when nothing does, and that link and use are gone', async () => {
@@ -133,6 +133,25 @@ describe('cli', () => {
       }
     }
   }, 30_000)
+
+  it('says a board that redirects to another origin moved there, instead of looking for its bypass', async () => {
+    const wall = await serve(async () => new Response(null, { status: 302, headers: { location: 'https://vercel.com/sso-api?url=x' } }))
+    // vboard.dev answers with www.vboard.dev: none of a request's credentials follow it there.
+    const apex = await serve(async (request) => new Response(null, { status: 308, headers: { location: `${wall.origin}${new URL(request.url).pathname}` } }))
+    try {
+      const at = `${apex.origin}/api/board`
+      // No Vercel login to look a bypass up with: had it looked, it would say that instead.
+      const json = await vb(['whoami', '--json'], { PATH: '', XDG_DATA_HOME: await tmp('board-data-'), BOARD_URL: at })
+      expect(json).toMatchObject({ code: 2, stdout: '' })
+      expect(failure(json)).toMatchObject({
+        reason: 'wrong_url',
+        message: `${at} redirects to ${wall.origin}, and its credentials don't follow it there, so Deployment Protection turns it away.`,
+        hint: `Use ${wall.origin}/api/board.`,
+      })
+    } finally {
+      await Promise.all([apex.close(), wall.close()])
+    }
+  }, 20_000)
 
   it("doesn't wait on a signed-out `vercel` CLI's login flow", async () => {
     const wall = await serve(async () => new Response(null, { status: 302, headers: { location: 'https://vercel.com/sso-api?url=x' } }))

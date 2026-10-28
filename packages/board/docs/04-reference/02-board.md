@@ -555,6 +555,7 @@ fails with the status its URL answered, or 502.
 | `ambiguous_agent` | the environment shows several coding agents at once: `as(null)` acts as yourself |
 | `invalid_duration` | a `timeout` the handle can't read |
 | `too_many_redirects` | the board's URL redirects more than 20 times |
+| `redirected` | the board's URL redirects to another origin, where none of its credentials follow, and Deployment Protection there turns it away: use the URL it redirects to |
 
 An answer that isn't the board's JSON error becomes `remote_error`, with
 status 502. The board's own codes are in the [HTTP API](./03-http.md#errors).
