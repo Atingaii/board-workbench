@@ -143,19 +143,26 @@ export function registrant(options: RegistrantOptions) {
   }
 
   let started: Promise<void> | null = null
+  let failedAt = 0
   /**
    * On first use, a board with watchers or sync registers them if it knows its URL. One on Vercel
    * learns its mount path from a request (a `POST /watchers`, a webhook, or a wake-up); one that
    * can't be woken registers without one and pulls instead. Resolves once the first try is done.
+   * One that fails tries again on a later use, at most every `REGISTER_EVERY_MS`: nothing would
+   * wake a board the other doesn't know.
    */
   function start(): Promise<void> {
     if (started) return started
-    if (!options.hasWork()) return Promise.resolve()
+    if (!options.hasWork() || Date.now() - failedAt < REGISTER_EVERY_MS) return Promise.resolve()
     const here = wakeable(bound().url())
     if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
     started = register(here).then(
       () => {},
-      (error: unknown) => console.error(`[board] couldn't register with ${options.remote}:`, describe(error)),
+      (error: unknown) => {
+        started = null
+        failedAt = Date.now()
+        console.error(`[board] couldn't register with ${options.remote}:`, describe(error))
+      },
     )
     if (!here) poll()
     return started

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
@@ -181,6 +181,63 @@ describe('vercel()', () => {
     expect(ran).toEqual(['ping'])
     // Its reply is its own watcher's, which never wakes it.
     await expect(wake()).resolves.toEqual({ ran: 0 })
+    // A wake-up carries back the hash it registered with: with the current one, nothing registers again.
+    const registered = () => api.requests.filter((request) => request.startsWith('PUT ') && request.endsWith('/watchers')).length
+    const before = registered()
+    const { hash } = api.registrations.get('vercel:project:prj_pong:production')!
+    await pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST', headers: { 'x-board-watchers': hash } }))
+    expect(registered()).toBe(before)
+  })
+
+  it("passes the conformance kit's watchers as a project too, registering a path on its own project", async () => {
+    const report = await conformance(handleOn(fakeMessageboard(), 'project:prj_pong:production'))
+    expect(report.checks.filter((check) => check.group === 'watchers').map((check) => check.status)).toEqual(['passed', 'passed'])
+  }, 30_000)
+
+  it('registers a path on its own project on Vercel, which the API wakes through its Deployment Protection', async () => {
+    for (const [name, value] of Object.entries({ VERCEL: '1', VERCEL_ENV: 'production', VERCEL_TARGET_ENV: '', VERCEL_GIT_COMMIT_REF: '' })) vi.stubEnv(name, value)
+    try {
+      const api = fakeMessageboard()
+      const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+      board({ backend, url: 'https://pong.vercel.app/api/board', watch: { ping: { tail: 'pings', run: async () => {} } } })
+      expect(await backend.registerWatchers()).toMatchObject({ url: null, path: '/api/board' })
+      expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: null, path: '/api/board' })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('registers again on a later use when its first registration fails', async () => {
+    const api = fakeMessageboard()
+    let failing = true
+    const flaky: typeof fetch = async (input, init) => {
+      if (failing && init?.method === 'PUT') {
+        failing = false
+        return Response.json({ error: { code: 'unavailable', message: 'try again' } }, { status: 503 })
+      }
+      return as(api, 'project:prj_pong:production')(input, init)
+    }
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: flaky }),
+      url: 'https://pong.example/api/board',
+      watch: { pings: { tail: 'pings', run: async () => {} } },
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      await pong.me()
+      await vi.waitFor(() => expect(failing).toBe(false))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(api.registrations.size).toBe(0)
+      // Not on every request while it's failing: once the wait between tries is over.
+      const at = Date.now()
+      clock.mockReturnValue(at + 11_000)
+      await pong.me()
+      await vi.waitFor(() => expect(api.registrations.get('vercel:project:prj_pong:production')).toMatchObject({ url: 'https://pong.example/api/board' }))
+    } finally {
+      clock.mockRestore()
+      errors.mockRestore()
+    }
   })
 
   it("turns a tail into the API's filter, and refuses what the API can't match", async () => {

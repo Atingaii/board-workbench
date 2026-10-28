@@ -1,5 +1,5 @@
 import type { Method, Protocol } from '../api/protocol.ts'
-import type { ActorView, BoardEventView, ChannelView, Discovery, Me, MessageView, ThreadSummaryView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ThreadSummaryView } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { RemoteWatcherId, type Author, type Labels } from '../contract/schemas.ts'
@@ -7,7 +7,8 @@ import { VERSION } from '../version.ts'
 import type { Access, Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
-import { forbidden, HttpError, notFound } from './errors.ts'
+import { forbidden, HttpError, json, notFound } from './errors.ts'
+import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
 import { canonicalWatchers, type WatcherSpec } from './watchers-hash.ts'
@@ -72,7 +73,7 @@ type ApiWatcherFilter = {
   labels?: { key: string; values?: string[] }[]
 }
 type ApiWatcherSpec = { filter: ApiWatcherFilter; when: 'matches' | 'enters' }
-type ApiRegistration = { owner: string; url: string | null; watch: Record<string, ApiWatcherSpec>; hash: string }
+type ApiRegistration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, ApiWatcherSpec>; hash: string }
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
 export type VercelOptions = {
@@ -103,10 +104,6 @@ export type VercelEnvironment = {
 type Who = { profile: { name: string; avatar?: string } | null; session: string | null }
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
-/** How long a wake-up runs this board's matches before the rest wait for its next one, as http()'s does. */
-const DRAIN_MS = 4 * 60_000
-/** A board that can't be woken pulls on its own, each pull held open this long for a match. */
-const POLL_WAIT_S = 25
 const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
 const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
@@ -810,12 +807,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return parts.join(' ')
   }
 
-  async function registerAs(who: Who, url: string | null, watch: Record<string, { tail: string; when?: 'matches' | 'enters' | undefined }>) {
+  /** Where a registration is woken, as board shows it: its URL, or a path on its project (and a preview's branch). */
+  const whereOf = (found: ApiRegistration) =>
+    found.path ? { url: null, path: found.path, ...(found.branch ? { branch: found.branch } : {}) } : { url: found.url }
+
+  async function registerAs(who: Who, where: WakeAt, watch: Record<string, { tail: string; when?: 'matches' | 'enters' | undefined }>): Promise<RegistrationView> {
     const specs: Record<string, WatcherSpec> = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when ?? 'matches' }]))
     const filters = Object.fromEntries(await Promise.all(Object.entries(specs).map(async ([id, spec]) => [id, await filterOf(who, id, spec)] as const)))
     // vboard's own hash of the tails, which every wake-up carries back, so a board can tell its registration is stale.
-    const made = await api<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), { body: { url, watch: filters, tag: await tagOf(specs) } })
-    return { owner: made.owner, url: made.url, watch: specs, sync: [], hash: made.hash }
+    const made = await api<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), { body: { ...where, watch: filters, tag: await tagOf(specs) } })
+    return { owner: made.owner, ...whereOf(made), watch: specs, sync: [], hash: made.hash }
   }
 
   /** A match as vboard hands it out: its event as `vb tail --json` prints it, with its message as it is now. */
@@ -830,7 +831,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return { id: match.id, watcher: match.watcher, thread: event.message.thread, lease: match.lease, attempt: match.attempt, event }
   }
 
-  async function pullAs(who: Who, query: { limit?: number | undefined; wait?: number | undefined }, signal?: AbortSignal) {
+  async function pullAs(who: Who, query: { limit?: number | undefined; wait?: number | undefined }, signal?: AbortSignal | undefined) {
     const path = await onBoard(who, '/watchers/matches')
     const { matches } = await api<{ matches: ApiMatch[] }>(who, 'GET', path, {
       query: { limit: query.limit?.toString(), wait: query.wait?.toString() },
@@ -861,75 +862,31 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   const deployment: Who = { profile: null, session: null }
   /** This board's config's watchers, which run here when the API wakes it. */
   let tails: Record<string, WatcherSpec> = {}
-  let started: Promise<void> | null = null
-  const wakeable = (here: string | null) => (here?.startsWith('https://') ? here : null)
-
-  /** Pulls and runs this board's matches until none are left, or this run's time is up: a thread's one at a time. */
-  async function drain(): Promise<number> {
-    let ran = 0
-    const until = Date.now() + DRAIN_MS
-    while (Date.now() < until) {
-      const matches = await pullAs(deployment, { limit: 10 })
-      if (matches.length === 0) break
-      await Promise.all(matches.map(runOne))
-      ran += matches.length
-    }
-    return ran
-  }
-
-  async function runOne(match: { id: string; watcher: string; lease: string; attempt: number; event: BoardEventView }) {
-    let outcome: { error?: string } = {}
-    try {
-      await bound().run(match.watcher, match.event, { trigger: `watch:${match.watcher}:${match.id}`, attempt: match.attempt + 1 })
-    } catch (error) {
-      console.error(`[board] watcher ${match.watcher} failed:`, error)
-      outcome = { error: (error instanceof Error ? error.message : String(error)).slice(0, 500) || 'unknown error' }
-    }
-    // A lease that ran out was pulled again: that pull's ack is the one that counts.
-    await ackAs(deployment, match.id, { lease: match.lease, ...outcome }).catch((error) => console.error(`[board] couldn't ack a match:`, error))
-  }
-
-  /** For a board that can't be woken: pulls on its own, each pull held open until something matches. */
-  function poll() {
-    void (async () => {
-      for (let pause = 1000; ; ) {
-        try {
-          const matches = await pullAs(deployment, { limit: 10, wait: POLL_WAIT_S })
-          await Promise.all(matches.map(runOne))
-          pause = 1000
-        } catch (error) {
-          console.error("[board] couldn't pull matches from Vercel's API:", error)
-          await new Promise((resolve) => setTimeout(resolve, pause))
-          pause = Math.min(pause * 2, 60_000)
-        }
-      }
-    })()
-  }
-
-  /**
-   * On first use, a board with watchers registers them where it's woken. One on Vercel learns its URL
-   * from a request, so it waits for one; one that can't be woken pulls on its own.
-   */
-  function start(): Promise<void> {
-    if (started) return started
-    if (Object.keys(tails).length === 0) return Promise.resolve()
-    const here = wakeable(bound().url())
-    if (!here && typeof process !== 'undefined' && process.env.VERCEL === '1') return Promise.resolve()
-    started = registerAs(deployment, here, tails).then(
-      () => {},
-      (error: unknown) => {
-        started = null
-        console.error("[board] couldn't register this board's watchers with Vercel's API:", error)
-      },
-    )
-    if (!here) poll()
-    return started
-  }
 
   const bound = () => {
     if (!binding) throw new Error('vercel: used before board() bound it')
     return binding
   }
+
+  // Its watchers run as a board on http()'s do: registered with the API, woken when one matches, and
+  // pulling on their own where nothing can wake them.
+  const runner = registrant({
+    remote: "Vercel's API",
+    registry: {
+      register: (where) => registerAs(deployment, where, tails),
+      matches: ({ signal, ...query }) => pullAs(deployment, query, signal),
+      ack: (id, body) => ackAs(deployment, id, body),
+    },
+    // The API wakes a path on this project, through its Deployment Protection, wherever this board has one.
+    wakeAt: async (here) => wakePath(here) ?? { url: here },
+    binding: bound,
+    hash: () => tagOf(tails),
+    hasWork: () => Object.keys(tails).length > 0,
+    rethrow: (error) => {
+      throw error
+    },
+    registerFor: async (caller, request) => json(await methods.register(caller, RegisterBody.parse(await request.json()), request.signal)),
+  })
 
   const unsupported = Object.fromEntries(
     METHODS.map((method) => [
@@ -953,6 +910,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         team_id: await teamId(),
         project_id: null,
         sync: [],
+        // The API finds a project's deployment for a path, and wakes it through its Deployment Protection.
+        wake_by_path: true,
       } satisfies Discovery
     },
     async me(caller) {
@@ -1190,7 +1149,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         watchers: await Promise.all(
           watchers.map(async (found) => ({
             owner: found.owner,
-            url: found.url,
+            ...whereOf(found),
             watch: Object.fromEntries(await Promise.all(Object.entries(found.watch).map(async ([id, spec]) => [id, { tail: await tailOf(who, spec), when: spec.when }] as const))),
             sync: [],
             hash: found.hash,
@@ -1201,8 +1160,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async register(caller, body) {
       ownWatchers(caller, 'register watchers')
       if ((body.sync?.length ?? 0) > 0) throw notSupported('sync')
-      if (typeof body.path === 'string') throw new HttpError(501, 'no_wake_by_path', "Vercel's boards wake a url, not a path, for now")
-      return registerAs(whoOf(caller), body.url ?? null, body.watch)
+      return registerAs(whoOf(caller), typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }, body.watch)
     },
     async matches(caller, query, signal) {
       ownWatchers(caller, 'pull matches')
@@ -1220,7 +1178,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     Object.entries(methods).map(([name, method]) => [
       name,
       (...args: unknown[]) => {
-        if (binding) void start()
+        if (binding) void runner.start()
         return (method as (...input: unknown[]) => unknown)(...args)
       },
     ]),
@@ -1228,20 +1186,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   const backend = {
     ...starting,
-    routes: [
-      {
-        // Nothing in a wake-up is trusted: it only says to pull, and what's pulled comes with this deployment's own credentials.
-        method: 'POST' as const,
-        path: '/wake',
-        async handle(request: Request) {
-          if (request.headers.get('x-board-watchers') !== (await tagOf(tails))) {
-            started = null
-            await start()
-          }
-          return Response.json({ ran: await drain() })
-        },
-      },
-    ],
+    // Its own routes are wake-ups and registering: who may do what on the board is Vercel's API's to say.
+    routes: runner.routes,
     // The board is Vercel's: a board here serves requests only with an `access` of its own.
     keeps: false,
     bind(next: BoardBinding) {
@@ -1254,6 +1200,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       )
       binding = next
     },
+    /** Registers this board's watchers with Vercel's API now, as `POST /watchers` does. */
+    registerWatchers: runner.registerNow,
+    /** Stops pulling, for a board that pulls on its own. */
+    close: runner.close,
   }
   return backend satisfies Backend
 }

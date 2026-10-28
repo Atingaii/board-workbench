@@ -62,7 +62,7 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
   const actors = new Map<string, ActorView>()
   const requests: string[] = []
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
-  type Registration = { owner: string; url: string | null; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; hash: string }
+  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
@@ -243,16 +243,27 @@ export function fakeMessageboard(options: { teamId?: string; boardId?: string | 
 
   async function watchers(method: string, rest: string, actor: Actor, parsed: Record<string, any>, url: URL): Promise<unknown> {
     const owner = principalId(actor.principal)
-    const view = (r: Registration) => ({ owner: r.owner, url: r.url, watch: r.watch, hash: r.hash })
+    const view = (r: Registration) => ({ owner: r.owner, url: r.url, ...(r.path ? { path: r.path, ...(r.branch ? { branch: r.branch } : {}) } : {}), watch: r.watch, hash: r.hash })
     if (method === 'GET' && rest === '/watchers') {
       const found = registrations.get(owner)
       return { watchers: found ? [view(found)] : [] }
     }
     if (method === 'PUT' && rest === '/watchers') {
-      const body = parsed as { url?: string | null; watch: Registration['watch']; tag?: string }
+      const body = parsed as { url?: string | null; path?: string; branch?: string; watch: Registration['watch']; tag?: string }
+      // A URL, or a path on the caller's own project (a preview's with its branch), as api-messageboard checks one.
+      if (body.url !== undefined && body.path !== undefined) throw new Refused(400, 'bad_request', 'A url or a path, not both.')
+      if (body.branch !== undefined && body.path === undefined) throw new Refused(400, 'bad_request', 'A branch goes with a path.')
+      const principal = actor.principal
+      if (body.path !== undefined) {
+        if (principal.type !== 'project') throw new Refused(403, 'not_a_project')
+        if (principal.environment !== 'production' && principal.environment !== 'preview') throw new Refused(400, 'invalid_environment')
+        if ((principal.environment === 'preview') !== (body.branch !== undefined)) throw new Refused(400, 'invalid_branch')
+        if (typeof body.path !== 'string' || !body.path.startsWith('/') || body.path.startsWith('//')) throw new Refused(400, 'invalid_path')
+      }
       for (const [id, spec] of Object.entries(body.watch))
         if (spec.when === 'enters' && Object.keys(spec.filter).length === 0) throw new Refused(400, 'bad_watcher', `watch ${id}: \`when: enters\` needs a filter to enter`)
-      const made = { owner, url: body.url ?? null, watch: body.watch, hash: body.tag ?? randomUUID().replaceAll('-', '') }
+      const where = body.path !== undefined ? { url: null, path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }
+      const made: Registration = { owner, ...where, watch: body.watch, hash: body.tag ?? randomUUID().replaceAll('-', '') }
       registrations.set(owner, made)
       return view(made)
     }
