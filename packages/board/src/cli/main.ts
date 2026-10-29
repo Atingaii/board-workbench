@@ -514,6 +514,8 @@ function failureOf(error: unknown): Failure {
         ])
       case 'too_large':
         return { ...own('limit', 'payload_too_large'), message: `Can't ${doing()}. ${sentence(message)}` }
+      case 'no_team':
+        return { ...own('platform', 'api_error'), message: "Couldn't tell which team's board to use.", details: [message] }
       case 'upload_failed':
         return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
       case 'port_taken':

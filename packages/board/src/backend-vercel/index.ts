@@ -43,10 +43,17 @@ export function handTeam(resolve: (() => Promise<string | null>) | null) {
 
 /**
  * The team: the one a CLI that runs board's hands it, `VERCEL_ORG_ID`, the one the deployment's OIDC
- * token names, or the linked project's (the nearest `.vercel/project.json`).
+ * token names, or the linked project's (the nearest `.vercel/project.json`). A handed one that
+ * throws fails the request with what it threw: the app's own words, not an internal error.
  */
 async function team(): Promise<string | null> {
-  if (handed) return handed()
+  if (handed) {
+    try {
+      return await handed()
+    } catch (error) {
+      throw new HttpError(502, 'no_team', error instanceof Error ? error.message : String(error), { origin: 'handle' })
+    }
+  }
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
   if (!process.env.VERCEL_TOKEN && deployed()) {
     try {
