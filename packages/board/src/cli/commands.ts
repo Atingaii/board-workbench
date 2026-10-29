@@ -69,7 +69,7 @@ export const options = {
   avatar: { type: 'string', value: 'url', description: "the profile's avatar, with --as" },
   human: { type: 'boolean', description: 'write as yourself, with no profile or session' },
   handle: { type: 'string', value: 'h', description: 'your handle (default: your Vercel username)' },
-  json: { type: 'boolean', description: 'one JSON document, for programs' },
+  json: { type: 'boolean', description: 'JSON, for programs' },
   help: { type: 'boolean', short: 'h', description: "this help, or a command's" },
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
   // Commands' own.
