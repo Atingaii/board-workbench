@@ -32,6 +32,8 @@ function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null)
   const woken: string[] = []
   /** Each wake-up's headers, as the board sent them. */
   const wakes: Record<string, string>[] = []
+  /** The status v0's board answered each wake-up with. */
+  const answered: number[] = []
   let down = false
   let project: ReturnType<typeof v0Board>
   const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -51,7 +53,10 @@ function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null)
         woken.push(url)
         wakes.push(init.headers)
         if (down) return Promise.resolve(new Response('deploying', { status: 503 }))
-        return route(url, { method: 'POST', headers: init.headers, body: init.body })
+        return route(url, { method: 'POST', headers: init.headers, body: init.body }).then((response) => {
+          answered.push(response.status)
+          return response
+        })
       },
     },
   })
@@ -66,6 +71,7 @@ function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null)
     queue,
     woken,
     wakes,
+    answered,
     get project() {
       return project
     },
@@ -190,6 +196,23 @@ describe('watchers on http()', () => {
       expect(body.watchers[0].watch).toEqual({ fix: { tail: 'feedback --label kind=bug', when: 'matches' } })
     })
   })
+
+  it('answers a wake-up after 2 seconds while a slow watcher runs, and runs it to the end', async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const fix = recorder('feedback', () => held)
+    const t = team({ fix: fix.watcher })
+    await t.project.registerWatchers()
+    const julian = await julianOn(t.remote.fetch)
+    await julian('POST', '/messages', { channel: 'feedback', text: 'slow report' })
+    await vi.waitFor(() => expect(t.answered).toEqual([202]), { timeout: 4000 })
+    expect(fix.seen).toHaveLength(1)
+    const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
+    const acked = async () => (await queue.history()).filter((event: { type: string }) => event.type === 'watch.acked')
+    await expect(acked()).resolves.toHaveLength(0)
+    release()
+    await vi.waitFor(async () => expect(await acked()).toHaveLength(1))
+  }, 10_000)
 
   it('ignores what a forged wake-up says: it only pulls its own', async () => {
     const t = team({ fix: recorder('feedback').watcher })

@@ -1,11 +1,14 @@
 import type { MatchView, RegistrationView } from '../api/routes.ts'
 import type { BackendRoute, BoardBinding, Caller } from './backend.ts'
 import { json } from './errors.ts'
+import { waitUntil } from './wait-until.ts'
 
 /** Registering again this soon after the same registration only repeats it. */
 const REGISTER_EVERY_MS = 10_000
 /** How long one wake-up runs matches before it leaves the rest to the next. */
 const DRAIN_MS = 4 * 60_000
+/** How long a wake-up waits for what it pulled to run before it answers: under the 3 seconds Vercel's API gives it. */
+const WAKE_ANSWER_MS = 2000
 /** A pull with nothing to hand out holds this long, when the board pulls on its own. */
 const POLL_WAIT_S = 25
 
@@ -171,12 +174,26 @@ export function registrant(options: RegistrantOptions) {
   const routes: BackendRoute[] = [
     {
       // Nothing in a wake-up is trusted: it only says to pull, and what's pulled comes with this board's own credentials.
+      // A drain runs as long as the watchers do, and whoever woke it gives up within seconds: past a short wait, it answers
+      // 202 and keeps running. Until then the waker holds its next wake-up, so a burst still wakes it once.
       method: 'POST',
       path: '/wake',
       async handle(request) {
         started ??= Promise.resolve()
-        if (request.headers.get('x-board-watchers') !== (await options.hash())) await register(wakeable(bound().url())).catch(rethrow)
-        return json({ ran: await drain().catch(rethrow) })
+        const stale = request.headers.get('x-board-watchers') !== (await options.hash())
+        const running = (async () => {
+          if (stale) await register(wakeable(bound().url()))
+          return drain()
+        })()
+        waitUntil(running.catch((error: unknown) => console.error(`[board] couldn't run what woke it:`, describe(error))))
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const waited = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), WAKE_ANSWER_MS)))
+        try {
+          const ran = await Promise.race([running.catch(rethrow), waited])
+          return ran === null ? new Response(null, { status: 202 }) : json({ ran })
+        } finally {
+          clearTimeout(timer)
+        }
       },
     },
     {

@@ -404,7 +404,7 @@ The board that keeps the log matches the tails; the board on `http()` runs
 | Route, on the board on `http()` | What |
 | --- | --- |
 | `POST /watchers` | Registers its own watchers with the other board, now. No body, no token |
-| `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left |
+| `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left. It answers `{ ran }` when that's done, or 202 after 2 seconds while it keeps going |
 
 - **Registrations** live in `board-registry`, session `registry`, one per
   principal with its token facts, so its access is worked out again at each
