@@ -1056,7 +1056,9 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   `attachments`, and a download answer 501 `no_files`, and the rest of the
   board works (see [Backends](#backends)). On `vercel()`, files live in
   Vercel's private messageboard storage: the API signs a URL for each upload
-  and each read, and no credentials go with the bytes. Uploading, and posting
+  and each read, and no credentials go with the bytes. For now a download
+  streams through the deployment, which fetches the file on that URL and
+  serves it like any other board's, up to 25 MB. Uploading, and posting
   or replying with files, is the deployment's own to do, since its callers all
   act as its project there (403 for a caller's); a caller reads a file only
   through a message it can read that isn't deleted. It takes no direct
