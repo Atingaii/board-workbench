@@ -334,7 +334,7 @@ describe('the embedded CLI', () => {
   })
 
   it('never brings the inspector, serve, or A2 into an app that bundles it', async () => {
-    const embedded = await bundled("import { createApp, type Failure } from '../src/cli/embedded.ts'\nawait createApp({ appName: 'vercel board' }).run(process.argv.slice(2))")
+    const embedded = await bundled("import { createApp } from '../src/cli/embedded.ts'\nawait createApp({ appName: 'vercel board' }).run(process.argv.slice(2))")
     for (const [what, marker] of Object.entries(MARKERS)) expect(embedded.includes(marker), `${what} in the embedded CLI`).toBe(false)
     // The standalone CLI has all three, so the markers find what they look for.
     const standalone = await bundled("import '../src/cli/bin.ts'")
