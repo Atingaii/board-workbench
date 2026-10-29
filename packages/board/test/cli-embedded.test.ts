@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { build } from 'tsdown'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createApp } from '../src/cli/embedded.ts'
+import { createApp, type Failure } from '../src/cli/embedded.ts'
 import { main } from '../src/cli/main.ts'
 import { local } from '../src/cli/local.ts'
 import { env, url, useBoard } from './cli-harness.ts'
@@ -130,6 +130,40 @@ describe('the embedded CLI', () => {
       expect([resolved, new Set(teams)]).toEqual([0, new Set(['acme'])])
     } finally {
       fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('fails with what a team it was handed throws, as the app said it, never as an internal error', async () => {
+    const home = await isolated()
+    const fetching = vi.spyOn(globalThis, 'fetch')
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failures: Failure[] = []
+    const app = createApp({
+      appName: 'vercel board',
+      onError: (failure) => failures.push(failure),
+      login: async () => 'user:u_jb',
+      team: async () => {
+        throw new Error('request to https://api.vercel.com/v2/user failed, reason: getaddrinfo ENOTFOUND')
+      },
+    })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect((await capture(() => app.run(['read', 'general']))).code).toBe(1)
+      expect(failures).toMatchObject([
+        {
+          class: 'platform',
+          reason: 'api_error',
+          message: "Couldn't tell which team's board to use.",
+          details: ['request to https://api.vercel.com/v2/user failed, reason: getaddrinfo ENOTFOUND'],
+        },
+      ])
+      expect([fetching.mock.calls, logged.mock.calls]).toEqual([[], []])
+    } finally {
+      fetching.mockRestore()
+      logged.mockRestore()
       process.chdir(cwd)
       await rm(home, { recursive: true, force: true })
     }
@@ -300,7 +334,7 @@ describe('the embedded CLI', () => {
   })
 
   it('never brings the inspector, serve, or A2 into an app that bundles it', async () => {
-    const embedded = await bundled("import { createApp } from '../src/cli/embedded.ts'\nawait createApp({ appName: 'vercel board' }).run(process.argv.slice(2))")
+    const embedded = await bundled("import { createApp, type Failure } from '../src/cli/embedded.ts'\nawait createApp({ appName: 'vercel board' }).run(process.argv.slice(2))")
     for (const [what, marker] of Object.entries(MARKERS)) expect(embedded.includes(marker), `${what} in the embedded CLI`).toBe(false)
     // The standalone CLI has all three, so the markers find what they look for.
     const standalone = await bundled("import '../src/cli/bin.ts'")
