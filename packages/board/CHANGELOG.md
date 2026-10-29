@@ -1,5 +1,12 @@
 # vboard
 
+## 0.26.1
+
+### Patch Changes
+
+- 25d6462: A `team` that `createApp` was handed and that throws (the API unreachable, or a login it won't take) fails the request as `api_error`, "Couldn't tell which team's board to use.", with what it threw as the details. Before, board logged it as `[board]` and said `internal error`.
+- f105515: A board on `http()` answers a wake-up once what it pulled has run, or after 2 seconds while its watchers keep running. Vercel's API gives a wake-up 3 seconds, so a board with a slow watcher no longer has its wake-ups counted as failed and sent again.
+
 ## 0.26.0
 
 ### Minor Changes
