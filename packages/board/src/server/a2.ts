@@ -102,7 +102,7 @@ function scheduleAt(value: string): number {
 /** A signal that never aborts, for what the board does by itself. */
 const NEVER = new AbortController().signal
 
-/** A wake-up only has to arrive: the board it wakes runs what it pulls before it answers. */
+/** A wake-up only has to arrive: the board it wakes answers once what it pulls has run, or after 2 seconds while it keeps going. */
 const WAKE_TIMEOUT_MS = 5000
 
 /**
@@ -375,7 +375,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       const response = await post(`${registration.url}/wake`, {
         headers: { 'content-type': 'application/json', 'x-board-watchers': registration.hash },
         body: '{}',
-        // Its board runs what it pulls before it answers; the wake-up only has to arrive.
+        // Its board answers once what it pulls has run, or a little before this runs out: the wake-up only has to arrive.
         signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
       })
       return response.ok ? { reached: true } : { reached: false, why: String(response.status) }

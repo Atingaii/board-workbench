@@ -209,8 +209,10 @@ export const GET = team.fetch, POST = team.fetch
   from.
 - **A match wakes it with nothing in the wake-up:** a `POST <url>/wake` with
   no event. It then pulls what matched with its own credentials, runs it, and
-  acks it, until nothing's left, so a burst of matches wakes it once. A
-  forged wake-up costs it one pull that finds nothing.
+  acks it, until nothing's left, so a burst of matches wakes it once. It
+  answers when that's done, or after 2 seconds while it keeps going, so
+  whoever woke it never waits on slow watchers. A forged wake-up costs it one
+  pull that finds nothing.
 - **A wake-up that doesn't get there is tried again** a minute or so on. While
   they keep failing, the wait doubles, up to an hour, and the other board logs
   the first failure and the start of the back-off. It starts over when this
