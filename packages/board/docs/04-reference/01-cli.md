@@ -49,6 +49,7 @@ const code = await createApp({
   onWarning: (warning) => console.error(warning.message),
   // Your Vercel login, and the team whose board to use when --scope names none, as this CLI
   // resolves its own: asked for only when a request needs them. Help, a typo, or misuse never asks.
+  // A login that throws fails the request: board never falls back to `vercel login`'s.
   login: async () => process.env.VERCEL_AUTH_TOKEN!,
   team: async () => process.env.VERCEL_ORG_ID ?? null,
 }).run(process.argv.slice(3))
