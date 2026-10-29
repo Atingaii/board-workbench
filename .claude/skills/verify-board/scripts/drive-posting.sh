@@ -21,9 +21,9 @@ sh "echo 'a reply from stdin' | vb reply $root -" >/dev/null || fail "reply from
 sh "printf 'notes\n' > notes.txt && vb reply $root 'with a file' --attach notes.txt" >/dev/null || fail "reply with --attach"
 vb edit "$reply" "a reply in the thread, edited" >/dev/null || fail "edit"
 
-once=$(vb post dev "posted once" --id verify-once) || fail "post --id"
-again=$(vb post dev "posted once" --id verify-once) || fail "post --id again"
-[[ $once == "$again" ]] || fail "--id posted twice: $once then $again"
+once=$(vb post dev "posted once" --idempotency-key verify-once) || fail "post --idempotency-key"
+again=$(vb post dev "posted once" --idempotency-key verify-once) || fail "post --idempotency-key again"
+[[ $once == "$again" ]] || fail "--idempotency-key posted twice: $once then $again"
 
 gone=$(vb post dev "posted to delete") || fail "post to delete"
 vb delete "$gone" >/dev/null || fail "delete"

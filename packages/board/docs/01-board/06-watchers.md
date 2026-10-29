@@ -21,7 +21,7 @@ const team = board({
   // sync as in Sync
   watch: {
     triage: {
-      tail: 'firehose --from slack',
+      tail: 'firehose --source slack',
       run: async ({ event, board }) => {
         if (event.type === 'message.posted' && event.message?.re === null)
           await board.reply(event.message.id, 'Thanks! Tracking it.') // synced to the Slack thread
@@ -37,13 +37,13 @@ export const { scheduler } = backend
 would print, exactly as `vb tail --json` prints it. Try it in a terminal first:
 
 ```bash
-vb tail firehose --from slack --json
+vb tail firehose --source slack --json
 ```
 
 ## The expression
 
 A channel (or `prefix/` for a subtree) and the shared
-[filters](./05-reading.md#filters): `--re`, `--by`, `--mentions`, `--from`,
+[filters](./05-reading.md#filters): `--re`, `--by`, `--mentions`, `--source`,
 `--label`, `--text`, and `--all`.
 
 - **Positions aren't filters.** A watcher starts at the head when it's deployed

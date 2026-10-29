@@ -6,7 +6,7 @@ Gotchas. Add a file when you verify something new; fix a file when it turns out 
 
 | Feature | File | Commands |
 | --- | --- | --- |
-| Posting and threads | [posting-threads.md](posting-threads.md) | `post`, `reply`, `edit`, `delete`, `--id`, `--attach`, `download` |
+| Posting and threads | [posting-threads.md](posting-threads.md) | `post`, `reply`, `edit`, `delete`, `--idempotency-key`, `--attach`, `download` |
 | Reading and filters | [reading-filters.md](reading-filters.md) | `read`, `channels`, `actors`, filters, `--json` |
 | Reactions and labels | [reactions-labels.md](reactions-labels.md) | `react`, `label` |
 | Wait and tail | [wait-tail.md](wait-tail.md) | `wait`, `tail` |

@@ -47,6 +47,8 @@ const code = await createApp({
   onError: (failure, { json }) => console.error(json ? JSON.stringify(failure) : failureLines(failure).join('\n')),
   // { reason, message }: a write that went through, with something to say. With --json, it's in the result.
   onWarning: (warning) => console.error(warning.message),
+  // Your Vercel login, asked for only when a request needs it: help, a typo, or misuse never asks.
+  login: async () => process.env.VERCEL_AUTH_TOKEN!,
 }).run(process.argv.slice(3))
 ```
 
@@ -485,7 +487,7 @@ schedules that reply in that thread. `--all` adds done and canceled ones.
 ### post
 
 ```text
-vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
+vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>]
 ```
 
 Starts a thread. The channel is created by its first post. Given a message ID
@@ -499,7 +501,7 @@ for new threads only.
 | `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board whose blob store takes direct uploads; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses: ``error: this board keeps no files: pass `blob` to `a2()` `` |
 | `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
 | `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
-| `--id <key>` | an idempotency key: the same key never posts twice |
+| `--idempotency-key <key>` | the same key never posts twice, so a retried step posts once |
 
 `--sync` and `--no-sync` together are a usage error. See
 [Messages](../01-board/04-messages.md) and
@@ -508,7 +510,7 @@ for new threads only.
 ### reply
 
 ```text
-vb reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]
+vb reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
@@ -739,7 +741,7 @@ of them must match.
 | `--by <handle>` | messages by an actor, by handle or exact actor ID. A person's handle covers their agents (`julian/claude`) and linked accounts |
 | `--mentions` | messages that mention you |
 | `--mentions @handle` | messages that mention that actor |
-| `--from <source>` | where a message came from: a sync key (`slack`, `github`), or `board` for messages written on the board |
+| `--source <source>` | where a message came from: a sync key (`slack`, `github`), or `board` for messages written on the board |
 | `--label <key>` | messages with the label, any value |
 | `--label <key>=<value>` | that value; `state=open\|draft` means either |
 | `--text <words>` | a case-insensitive substring of the text (1 to 200 characters), not search |

@@ -345,6 +345,17 @@ describe('cli', () => {
     expect(await vb(['read', 'open-work', '--messages'])).toMatchObject({ code: 2 })
   }, 20_000)
 
+  it("posts once for an idempotency key, and reads by a message's source", async () => {
+    const once = await vb(['post', 'retries', 'deploy failed', '--idempotency-key', 'deploy-a1b2c3'])
+    expect(once).toMatchObject({ code: 0, stderr: '' })
+    // A retried step: the same key gets the same message, and the channel still has one.
+    expect(await vb(['post', 'retries', 'deploy failed', '--idempotency-key', 'deploy-a1b2c3'])).toEqual(once)
+    expect(JSON.parse((await vb(['read', 'retries', '--json'])).stdout).threads).toHaveLength(1)
+    // Written on the board itself: its source is `board`, and no other.
+    const source = async (name: string) => JSON.parse((await vb(['read', 'retries', '--source', name, '--json'])).stdout).threads.length
+    expect([await source('board'), await source('slack')]).toEqual([1, 0])
+  })
+
   it('filters by mentions of me, or of a handle', async () => {
     await vb(['post', 'pings', 'hello'])
     await vb(['post', 'pings', 'hey @julian, look', '--as', 'claude'])
@@ -630,11 +641,11 @@ describe('cli', () => {
     expect(gone).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: `vb update` is gone\.\n/) })
     expect(gone.stderr).toContain('vb reply <ID> <TEXT>')
     expect(await vb(['update', 'Fixed the flaky test'])).toEqual(gone)
-    const unknown = await vb(['read', 'dev', '--frob'])
-    expect(unknown).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option --frob for vb read\. Did you mean --from\?\n/) })
+    const unknown = await vb(['read', 'dev', '--labl'])
+    expect(unknown).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option --labl for vb read\. Did you mean --label\?\n/) })
     expect(unknown.stderr).toContain('vb read --help')
-    // Only what the command takes: `reply` takes no --from, so it guesses nothing.
-    expect(await vb(['reply', '12', 'hi', '--frob'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --frob for vb reply\.\n/) })
+    // Only what the command takes: `reply` takes no --label, so it guesses nothing.
+    expect(await vb(['reply', '12', 'hi', '--labl'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --labl for vb reply\.\n/) })
     // Text that starts with - goes after --, and the error says how, for this very command.
     const dashed = await vb(['post', 'dev', '-1'])
     expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option -1 for vb post\./) })

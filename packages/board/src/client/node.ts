@@ -121,34 +121,52 @@ const expiry = (token: string): number => {
 type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
 
 /**
- * Where `audience`'s token is cached: one per board, and with a login the Vercel CLI hands over
- * (`VERCEL_AUTH_TOKEN`), one per login too, since it can be someone else's than `vercel login`'s.
+ * Where `audience`'s token is cached: one per board, and with a login a CLI hands over, one per
+ * login too, since it can be someone else's than `vercel login`'s.
  */
-const cacheFile = (audience: string) => {
-  const login = process.env.VERCEL_AUTH_TOKEN
+const cacheFile = (audience: string, login: string | null) => {
   const key = login ? `${audience}\n${login}` : audience
   return join(configDir(), 'tokens', `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 }
 
-async function readCache(audience: string): Promise<Cached | null> {
+async function readCache(audience: string, login: string | null): Promise<Cached | null> {
   try {
-    const cached = JSON.parse(await readFile(cacheFile(audience), 'utf8')) as Cached
+    const cached = JSON.parse(await readFile(cacheFile(audience, login), 'utf8')) as Cached
     return cached.expiresAt - 5 * 60_000 > Date.now() ? cached : null
   } catch {
     return null
   }
 }
 
-async function writeCache(audience: string, cached: Cached) {
+async function writeCache(audience: string, login: string | null, cached: Cached) {
   await mkdir(join(configDir(), 'tokens'), { recursive: true, mode: 0o700 })
-  await writeFile(cacheFile(audience), JSON.stringify(cached), { mode: 0o600 })
+  await writeFile(cacheFile(audience, login), JSON.stringify(cached), { mode: 0o600 })
 }
 
+/** The login a CLI that runs board's hands it to ask for (`vercel board`'s), while one does. */
+let handed: (() => Promise<string>) | null = null
+
 /**
- * Your Vercel login: what the Vercel CLI hands a CLI it runs, as `vercel board` (`VERCEL_AUTH_TOKEN`,
- * from its `--token` or its own login), or else what `vercel login` saved.
+ * Hands board a login to ask for when a request needs one, as `vercel board` does with its own:
+ * nothing asks for it before then, so help, a typo, or misuse never refreshes or prompts. Null
+ * takes it back.
  */
-export const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken())
+export function handLogin(login: (() => Promise<string>) | null) {
+  handed = login
+}
+
+/** Whether the login is one a CLI handed over (`createApp`'s `login`, or `VERCEL_AUTH_TOKEN`). */
+export const loginHanded = () => handed !== null || !!process.env.VERCEL_AUTH_TOKEN
+
+/**
+ * Your Vercel login: what the CLI that runs board's hands it, as `vercel board` does (its `login`,
+ * or `VERCEL_AUTH_TOKEN` from its `--token`), or else what `vercel login` saved.
+ */
+export const vercelLogin = () =>
+  handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
+
+/** A handed login's token, which its board tokens are cached by: null for `vercel login`'s own. */
+const handedToken = async () => (loginHanded() ? await vercelLogin().catch(() => null) : null)
 
 /**
  * A person's token: their Vercel CLI login mints a development token for the
@@ -156,14 +174,15 @@ export const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolv
  * board's URL. Cached on disk for its 12-hour life.
  */
 async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
-  const cached = await readCache(audience)
+  const login = await handedToken()
+  const cached = await readCache(audience, login)
   // Tokens cached before names and avatars were kept get them once.
   if (cached && cached.name === undefined) {
     const user = await vercelLogin()
       .then(vercelUser)
       .catch(() => null)
     const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
-    await writeCache(audience, filled).catch(() => {})
+    await writeCache(audience, login, filled).catch(() => {})
     return filled
   }
   if (cached) return cached
@@ -198,7 +217,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   const token = await exchangeVercelOidcToken({ token: development, audience })
   const user = authToken ? await vercelUser(authToken) : null
   const fresh: Cached = { token, expiresAt: expiry(token), handle: user?.handle ?? null, name: user?.name ?? null, avatar: user?.avatar ?? null }
-  await writeCache(audience, fresh).catch(() => {})
+  await writeCache(audience, login, fresh).catch(() => {})
   return fresh
 }
 

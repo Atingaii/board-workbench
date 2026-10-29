@@ -98,6 +98,33 @@ describe('the embedded CLI', () => {
     expect(warned).toHaveLength(1)
   })
 
+  it("asks for the app's login only when a request needs it, and reaches the team's board with it", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard()
+    const sent: (string | null)[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      sent.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization'))
+      return api.fetch(input, init)
+    })
+    let asked = 0
+    const app = createApp({ appName: 'vercel board', login: async () => (asked++, 'user:u_jb') })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // Help, a typo, and misuse need no login: nothing asks for it.
+      for (const args of [['--help'], ['read', '--help'], ['raed', 'dev'], ['read', 'dev', '--nope'], ['react', '1']]) await capture(() => app.run(args))
+      expect([asked, sent]).toEqual([0, []])
+      const whoami = await capture(() => app.run(['whoami', '--scope', 'test']))
+      expect(whoami).toMatchObject({ code: 0, stdout: expect.stringContaining('source  the Vercel CLI\n') })
+      expect(asked).toBeGreaterThan(0)
+      expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("talks to the team's board in Vercel's API when nothing points at another: the linked project's team's, or --scope's", async () => {
     const home = await isolated()
     // Linked a directory up, as an app's root is from its src.

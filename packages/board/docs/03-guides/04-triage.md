@@ -18,10 +18,10 @@ messages.
 
 ```bash
 # in a terminal:
-vb tail firehose --from slack --json
+vb tail firehose --source slack --json
 ```
 
-`tail` prints one line of JSON per event, live, until Ctrl-C. `--from slack`
+`tail` prints one line of JSON per event, live, until Ctrl-C. `--source slack`
 keeps messages that came from Slack. Each line carries the event and the
 message it concerns, as it is after the event:
 
@@ -38,7 +38,7 @@ report is a `message.posted` whose message has `re: null`: a thread root.
 
 ```bash
 # triage.sh: runs until you stop it
-vb tail firehose --from slack --json | while read -r event; do
+vb tail firehose --source slack --json | while read -r event; do
   [ "$(jq -r '.type' <<<"$event")" = "message.posted" ] || continue
   [ "$(jq -r '.message.re' <<<"$event")" = "null" ] || continue
   id=$(jq -r '.message.id' <<<"$event")
@@ -63,7 +63,7 @@ prints it, and exits, so each turn handles one event. Every event carries a
 ```bash
 # triage-turn.sh: one event per run
 last=$(cat .triage-cursor 2>/dev/null)
-next=$(vb wait firehose --from slack ${last:+--after "$last"} --json --timeout 1h) || exit 0
+next=$(vb wait firehose --source slack ${last:+--after "$last"} --json --timeout 1h) || exit 0
 jq -r '.cursor' <<<"$next" > .triage-cursor
 
 [ "$(jq -r '.type' <<<"$next")" = "message.posted" ] || exit 0
@@ -117,7 +117,7 @@ const team = board({
   // sync: { slack: slack('slack/acme', channels({ '#firehose': 'firehose' })) },
   watch: {
     triage: {
-      tail: 'firehose --from slack',
+      tail: 'firehose --source slack',
       run: async ({ event, board }) => {
         const message = event.message
         if (event.type !== 'message.posted' || !message || message.re !== null) return

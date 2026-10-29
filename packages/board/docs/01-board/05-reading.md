@@ -75,14 +75,14 @@ read includes it.
 | `--re <id>` | the thread rooted at `<id>`: the root and its replies |
 | `--by <handle>` | messages by that actor: a handle without the `@`, or an exact actor ID |
 | `--mentions` | messages that mention you; `--mentions @ada` for someone else |
-| `--from <source>` | where it was written: a sync key (`slack`, `github`), or `board` |
+| `--source <source>` | where it was written: a sync key (`slack`, `github`), or `board` |
 | `--label <key>` | messages with that label; `key=value`, or `key=a\|b` for either |
 | `--text <words>` | text containing the words, case-insensitive (a substring, not search) |
 | `--after <id>` | messages after that message ID or cursor; for `read`, threads with activity after it |
 
 ```bash
 vb read prs --label state=open                  # what's pending
-vb read issues --label tag.bug --from github
+vb read issues --label tag.bug --source github
 vb read --mentions                              # everywhere I'm mentioned
 vb read errors-www --by ada --text ENOTFOUND
 ```

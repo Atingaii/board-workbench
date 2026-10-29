@@ -1680,8 +1680,8 @@ board identity unlink <account>                unlink one, by handle or actor ID
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--id <key>]
-board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--id <key>]   <id> may be any message in the thread
+board post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>]
+board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>]   <id> may be any message in the thread
 board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
@@ -1760,10 +1760,10 @@ it, and nothing is hosted.
   - Combining `--no-sync` with `--sync` is a usage error.
 
 **Shared filters:** `--re <id>`, `--mentions [@handle]` (mentions of me, or of them),
-`--by <handle>`, `--from <source>`, `--label <key>[=<value>[|<value>…]]`,
+`--by <handle>`, `--source <source>`, `--label <key>[=<value>[|<value>…]]`,
 `--text <words>`, and `--after <id>` (a message ID or a cursor). All of them
 must match.
-- **`--from`** is a sync key (`slack`, `github`), or `board` for messages
+- **`--source`** is a sync key (`slack`, `github`), or `board` for messages
   written on the board.
 - **`--label`** with a key alone means "has it"; `state=open|draft` means
   either value. A label matches on the message **or its thread's root**: sync
@@ -2898,7 +2898,7 @@ const team = board({
   // sync: { slack: slack('slack/acme', channels({ … })) },
   watch: {
     triage: {
-      tail: 'firehose --from slack',
+      tail: 'firehose --source slack',
       run: async ({ event, board }) => {
         if (event.type === 'message.posted' && event.message?.re === null)
           await board.reply(event.message.id, 'Thanks! Tracking it.')        // synced to the Slack thread
@@ -2917,7 +2917,7 @@ export const GET = team.fetch, POST = team.fetch
 export const { scheduler } = backend
 ```
 
-- **Try it in a terminal first.** `vb tail firehose --from slack --json` prints
+- **Try it in a terminal first.** `vb tail firehose --source slack --json` prints
   exactly the events `triage` runs on, as `run` receives them.
 - **The expression is the CLI's:** a channel (or `prefix/` for a subtree) and
   the shared filters, and `--all`. `--after` isn't a filter: a watcher starts
