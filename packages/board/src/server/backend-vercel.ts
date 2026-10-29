@@ -1111,10 +1111,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // The API sees this project, which uploaded every file here: a caller reads one only through a message it can.
       if (access) {
         if (!found.attachment.messageId) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
-        await readableMessage(who, access, found.attachment.messageId, signal).catch((error: unknown) => {
+        const { message } = await readableMessage(who, access, found.attachment.messageId, signal).catch((error: unknown) => {
           if (error instanceof HttpError && error.status === 404) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
           throw error
         })
+        // The API reads a deleted message as its tombstone, and still hands this project, its uploader, the file.
+        if (message.deletedAt !== undefined) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
       }
       const response = await filesFetch(found.url, { redirect: 'error', ...(signal ? { signal } : {}) })
       if (!response.ok || !response.body) throw new HttpError(502, 'download_failed', `Vercel's storage answered ${response.status}`)

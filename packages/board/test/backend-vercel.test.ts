@@ -178,6 +178,23 @@ describe('vercel()', () => {
     expect(await ids(verified('all'))).toContain('vercel:user:u_ops')
   })
 
+  it("gives a verified caller a file only through a message it reads, and none once that message is deleted", async () => {
+    const api = fakeMessageboard()
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
+    const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
+    const ada = verified({ 'dev/': ['read'] })
+    const signal = new AbortController().signal
+    const upload = async () => (await backend.upload(project, { data: new TextEncoder().encode('log'), name: 'a.log', type: 'text/plain' }, signal)).attachment
+    const unposted = await upload()
+    await expect(backend.attachment(ada, { id: unposted.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
+    const file = await upload()
+    const { message } = await backend.post(project, { channel: 'dev', text: '', attachments: [file.id] } as never, signal)
+    await expect(backend.attachment(ada, { id: file.id }, signal)).resolves.toMatchObject({ attachment: { id: file.id } })
+    await backend.delete(project, { id: message.id }, signal)
+    await expect(backend.attachment(project, { id: file.id }, signal)).resolves.toMatchObject({ attachment: { id: file.id } })
+    await expect(backend.attachment(ada, { id: file.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
+  })
+
   it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
