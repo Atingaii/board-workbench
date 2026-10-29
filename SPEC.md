@@ -1056,11 +1056,12 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   `attachments`, and a download answer 501 `no_files`, and the rest of the
   board works (see [Backends](#backends)). On `vercel()`, files live in
   Vercel's private messageboard storage: the API signs a URL for each upload
-  and each read, so the bytes never pass through the board, and no credentials
-  go with them. Uploading is the deployment's own to do, since its callers all
-  act as its project there; a caller reads a file only through a message it
-  can read. It takes no direct uploads yet (501 `no_direct_uploads`), and its
-  attachment IDs are `att_` and a UUID.
+  and each read, and no credentials go with the bytes. Uploading, and posting
+  or replying with files, is the deployment's own to do, since its callers all
+  act as its project there (403 for a caller's); a caller reads a file only
+  through a message it can read that isn't deleted. It takes no direct
+  uploads yet (501 `no_direct_uploads`), and its attachment IDs are `att_`
+  and a UUID.
 - **Reading one takes a token,** like every read. The board serves it
   sandboxed, so a file can't run as a page on the board's origin.
 - **Deleting a message hides its attachments, but doesn't revoke them.** The

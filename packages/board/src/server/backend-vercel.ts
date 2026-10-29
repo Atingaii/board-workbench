@@ -1104,10 +1104,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async attachment(caller, { id }, signal) {
       const who = whoOf(caller)
       const access = accessOf(caller)
-      const found = await api<{ attachment: ApiAttachment; url: string }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`), {
-        query: { redirect: 'false' },
-        ...(signal ? { signal } : {}),
-      })
+      const found = await api<{ attachment: ApiAttachment; url: string }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`), signal ? { signal } : {})
       // The API sees this project, which uploaded every file here: a caller reads one only through a message it can.
       if (access) {
         if (!found.attachment.messageId) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
@@ -1127,6 +1124,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
       const access = accessOf(caller)
+      // Only this deployment's own code uploads, as the project: any file a caller here names would be the project's.
+      if (access && input.attachments?.length) throw forbidden("this board's callers act as its project on Vercel's board, which can't tell them apart: only the project's own code posts files there")
       const labeled = Object.keys(input.labels ?? {}).length > 0
       const clientId = input.id !== undefined ? await postId(caller, input.id) : undefined
       let made: { thread: ApiThread; message: ApiMessage }
