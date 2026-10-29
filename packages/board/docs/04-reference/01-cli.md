@@ -47,8 +47,10 @@ const code = await createApp({
   onError: (failure, { json }) => console.error(json ? JSON.stringify(failure) : failureLines(failure).join('\n')),
   // { reason, message }: a write that went through, with something to say. With --json, it's in the result.
   onWarning: (warning) => console.error(warning.message),
-  // Your Vercel login, asked for only when a request needs it: help, a typo, or misuse never asks.
+  // Your Vercel login, and the team whose board to use when --scope names none, as this CLI
+  // resolves its own: asked for only when a request needs them. Help, a typo, or misuse never asks.
   login: async () => process.env.VERCEL_AUTH_TOKEN!,
+  team: async () => process.env.VERCEL_ORG_ID ?? null,
 }).run(process.argv.slice(3))
 ```
 

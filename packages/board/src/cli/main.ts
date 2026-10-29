@@ -7,7 +7,7 @@ import { withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
 import { boardUrl, connect, handLogin, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
-import { credentialSource, vercel } from '../backend-vercel/index.ts'
+import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
@@ -161,6 +161,11 @@ export type App = {
   onWarning?: (warning: Warning) => void
   /** Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's asked. */
   login?: () => Promise<string>
+  /**
+   * The team whose board to use when `--scope` names none, as the app resolves its own (its link,
+   * its saved team), asked for only when a request needs it. Null is your login's default team.
+   */
+  team?: () => Promise<string | null>
 }
 
 type Flags = ReturnType<typeof parseAll>['values']
@@ -1195,12 +1200,14 @@ const context = (): CommandContext => ({
  * stopped.
  */
 export async function main(argv: string[], options: App): Promise<number> {
-  // The app's login is the run's, and only the run's.
+  // The app's login and team are the run's, and only the run's.
   handLogin(options.login ?? null)
+  handTeam(options.team ?? null)
   try {
     return await runOnce(argv, options)
   } finally {
     handLogin(null)
+    handTeam(null)
   }
 }
 

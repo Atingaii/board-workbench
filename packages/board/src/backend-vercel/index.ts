@@ -30,8 +30,23 @@ export function credentialSource(): string {
   return loginHanded() ? 'the Vercel CLI' : 'vercel login'
 }
 
-/** The team: `VERCEL_ORG_ID`, the one the deployment's OIDC token names, or the linked project's (the nearest `.vercel/project.json`). */
+/** The team a CLI that runs board's resolves itself (`vercel board`'s), while one does. */
+let handed: (() => Promise<string | null>) | null = null
+
+/**
+ * Hands board the team to use when nothing names one (`--scope` still wins), resolved as the app
+ * resolves its own and asked for only when a request needs it. Null takes it back.
+ */
+export function handTeam(resolve: (() => Promise<string | null>) | null) {
+  handed = resolve
+}
+
+/**
+ * The team: the one a CLI that runs board's hands it, `VERCEL_ORG_ID`, the one the deployment's OIDC
+ * token names, or the linked project's (the nearest `.vercel/project.json`).
+ */
 async function team(): Promise<string | null> {
+  if (handed) return handed()
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
   if (!process.env.VERCEL_TOKEN && deployed()) {
     try {

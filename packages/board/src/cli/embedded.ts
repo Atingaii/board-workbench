@@ -18,19 +18,21 @@ export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
  *
  * A failure goes to `onError`, with whether the run asked for `--json`, to show as the app shows
  * its own, and a warning to `onWarning` (with `--json`, it's in the result). Without them, the CLI
- * prints its own on stderr. `login` is the app's Vercel login, which board asks for only when a
- * request needs it, so help, a typo, or misuse never refreshes it.
+ * prints its own on stderr. `login` is the app's Vercel login and `team` the team it resolves
+ * (`--scope` still wins): board asks for each only when a request needs it, so help, a typo, or
+ * misuse never refreshes a login or looks a team up.
  */
 export function createApp(options: {
   appName: string
   onError?: (failure: Failure, mode: { json: boolean }) => void
   onWarning?: (warning: Warning) => void
   login?: () => Promise<string>
+  team?: () => Promise<string | null>
 }): { run(args: string[]): Promise<number> } {
-  const { appName, onError, onWarning, login } = options
+  const { appName, onError, onWarning, login, team } = options
   return {
     run: (args) =>
-      main(args, { name: appName, commands: {}, teamBoard: true, ...(onError ? { onError } : {}), ...(onWarning ? { onWarning } : {}), ...(login ? { login } : {}) }),
+      main(args, { name: appName, commands: {}, teamBoard: true, ...(onError ? { onError } : {}), ...(onWarning ? { onWarning } : {}), ...(login ? { login } : {}), ...(team ? { team } : {}) }),
   }
 }
 
