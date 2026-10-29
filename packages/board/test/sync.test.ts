@@ -97,7 +97,7 @@ describe('sync', () => {
     const { board, s, webhook } = setup({
       watch: {
         triage: {
-          tail: 'firehose --from slack',
+          tail: 'firehose --source slack',
           run: async ({ event, board }) => {
             if (event.type === 'message.posted' && event.message!.re === null)
               await board.reply(event.message!.id, 'Thanks! Tracking it.')

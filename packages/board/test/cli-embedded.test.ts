@@ -98,6 +98,43 @@ describe('the embedded CLI', () => {
     expect(warned).toHaveLength(1)
   })
 
+  it("asks for the app's login and team only when a request needs them, and reaches that team's board with them", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme' })
+    const sent: (string | null)[] = []
+    const teams: (string | null)[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      sent.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization'))
+      const { searchParams } = new URL(String(input instanceof Request ? input.url : input))
+      teams.push(searchParams.get('teamId') ?? searchParams.get('slug'))
+      return api.fetch(input, init)
+    })
+    let asked = 0
+    let resolved = 0
+    const app = createApp({ appName: 'vercel board', login: async () => (asked++, 'user:u_jb'), team: async () => (resolved++, 'team_test') })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // Help, a typo, and misuse need no login: nothing asks for it.
+      for (const args of [['--help'], ['read', '--help'], ['raed', 'dev'], ['read', 'dev', '--nope'], ['react', '1']]) await capture(() => app.run(args))
+      expect([asked, resolved, sent]).toEqual([0, 0, []])
+      // The team the app resolved, and its login.
+      const whoami = await capture(() => app.run(['whoami']))
+      expect(whoami).toMatchObject({ code: 0, stdout: expect.stringContaining('source  the Vercel CLI\n') })
+      expect([asked > 0, resolved > 0]).toEqual([true, true])
+      expect(new Set(sent)).toEqual(new Set(['Bearer user:u_jb']))
+      expect(new Set(teams)).toEqual(new Set(['team_test']))
+      // --scope still names the team itself.
+      ;[resolved, teams.length] = [0, 0]
+      expect((await capture(() => app.run(['read', 'general', '--scope', 'acme']))).code).toBe(0)
+      expect([resolved, new Set(teams)]).toEqual([0, new Set(['acme'])])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("talks to the team's board in Vercel's API when nothing points at another: the linked project's team's, or --scope's", async () => {
     const home = await isolated()
     // Linked a directory up, as an app's root is from its src.

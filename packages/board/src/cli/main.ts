@@ -5,9 +5,9 @@ import { parseArgs } from 'node:util'
 import type { MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { boardUrl, connect, vercelProjectFile } from '../client/node.ts'
+import { boardUrl, connect, handLogin, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
-import { credentialSource, vercel } from '../backend-vercel/index.ts'
+import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
@@ -159,6 +159,13 @@ export type App = {
   onError?: (failure: Failure, mode: { json: boolean }) => void
   /** Shows a warning, outside `--json` (where it's in the result's `warnings`); without it, the CLI prints `warning: …`. */
   onWarning?: (warning: Warning) => void
+  /** Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's asked. */
+  login?: () => Promise<string>
+  /**
+   * The team whose board to use when `--scope` names none, as the app resolves its own (its link,
+   * its saved team), asked for only when a request needs it. Null is your login's default team.
+   */
+  team?: () => Promise<string | null>
 }
 
 type Flags = ReturnType<typeof parseAll>['values']
@@ -353,7 +360,7 @@ function filters(channel?: string): Filters & { after?: string } {
     ...(flags.by ? { by: flags.by.replace(/^@/, '') } : {}),
     ...(flags.mentions ? { mentions: flags.mentions.replace(/^@/, '') } : {}),
     ...(flags.label?.length ? { label: flags.label } : {}),
-    ...(flags.from ? { from: flags.from } : {}),
+    ...(flags.source ? { from: flags.source } : {}),
     ...(flags.text ? { text: flags.text } : {}),
     ...(flags.after !== undefined ? { after: flags.after.replace(/^#/, '') } : {}),
   }
@@ -890,7 +897,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         text: content,
         ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
-        ...(flags.id ? { id: flags.id } : {}),
+        ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
       }
       const message = re === undefined
@@ -909,7 +916,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const message = await board.reply(id, {
         text: content,
         ...(files.length ? { attachments: files } : {}),
-        ...(flags.id ? { id: flags.id } : {}),
+        ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
       })
       warnUnknownMentions(message.unknownMentions)
@@ -1193,6 +1200,18 @@ const context = (): CommandContext => ({
  * stopped.
  */
 export async function main(argv: string[], options: App): Promise<number> {
+  // The app's login and team are the run's, and only the run's.
+  handLogin(options.login ?? null)
+  handTeam(options.team ?? null)
+  try {
+    return await runOnce(argv, options)
+  } finally {
+    handLogin(null)
+    handTeam(null)
+  }
+}
+
+async function runOnce(argv: string[], options: App): Promise<number> {
   app = options
   typed = argv
   flags = {} as Flags

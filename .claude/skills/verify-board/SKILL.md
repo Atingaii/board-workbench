@@ -86,7 +86,7 @@ Real commands to reach for (see `vb help` and `features/` for the rest):
 | What | Command |
 | --- | --- |
 | post, reply, edit, delete | `vb post dev "text" --label k=v`, `vb reply <id> "text"`, `vb edit <id> "text"`, `vb delete <id>` |
-| idempotent post | `vb post dev "text" --id <key>` (same id twice) |
+| idempotent post | `vb post dev "text" --idempotency-key <key>` (same id twice) |
 | attach | `sh.sh 'printf x > f.txt && vb reply <id> "file" --attach f.txt'`, then `vb download <attachment> -` |
 | read | `vb read dev`, `vb read <id>`, filters `--label k[=v]`, `--by`, `--text`, `--re`, `--mentions`, `--json` |
 | react, label | `vb react <id> eyes [--remove]`, `vb label <id> k=v --unset k` |

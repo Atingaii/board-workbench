@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +19,7 @@ vi.mock('@vercel/oidc', async (original) => ({
 const { board } = await import('../src/server/index.ts')
 const { http } = await import('../src/backend-http/index.ts')
 const { BOARD_URL, personToken, testBoard } = await import('./harness.ts')
+const { handLogin } = await import('../src/client/node.ts')
 
 const EVIL = 'https://evil.example/api/board'
 const LOCAL = 'http://localhost:3000/api/board'
@@ -66,6 +68,7 @@ describe("a person's token from `vercel login`", () => {
     exchange.mockReset().mockImplementation(async ({ audience }) => personToken('u_julian', audience))
   })
   afterEach(async () => {
+    handLogin(null)
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
     await rm(config, { recursive: true, force: true })
@@ -85,6 +88,15 @@ describe("a person's token from `vercel login`", () => {
   }
   /** A handle on the board at `url`, reaching it the way `vb` does. */
   const client = (url: string) => board({ backend: http(url) })
+
+  /** A signed-in `vercel` on PATH that answers anything and logs each call to the file it returns. */
+  async function vercelOnPath() {
+    const bin = await mkdtemp(join(tmpdir(), 'board-bin-'))
+    const log = join(bin, 'calls')
+    await writeFile(join(bin, 'vercel'), `#!/bin/sh\necho "$*" >> ${log}\necho '{"token":"development-token","projectId":"prj_board","ownerId":"team_test"}'\n`, { mode: 0o755 })
+    vi.stubEnv('PATH', bin)
+    return { log, done: () => rm(bin, { recursive: true, force: true }) }
+  }
 
   it("is minted for the project Vercel says the board's host is a deployment of", async () => {
     const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
@@ -135,6 +147,60 @@ describe("a person's token from `vercel login`", () => {
     expect(api.calls).toEqual(['POST /v1/projects/prj_board/token?source=board&teamId=team_test', 'GET /v2/user'])
     expect(exchange).toHaveBeenCalledWith({ token: 'development-token-for-prj_board', audience: LOCAL })
     expect(bearers).toHaveLength(1)
+  })
+
+  it("fails when a login a CLI hands it fails, never acting as `vercel login`'s account", async () => {
+    handLogin(async () => {
+      throw new Error('refresh failed')
+    })
+    // `vercel login`'s token for this board, fresh, and its `vercel` on PATH.
+    const tokens = join(config, 'board', 'tokens')
+    await mkdir(tokens, { recursive: true })
+    await writeFile(
+      join(tokens, `${createHash('sha256').update(BOARD_URL).digest('hex').slice(0, 32)}.json`),
+      JSON.stringify({ token: 'someone-elses', expiresAt: Date.now() + 12 * 3600_000, handle: 'ada', name: 'Ada', avatar: null }),
+    )
+    const cli = await vercelOnPath()
+    const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
+    const board = testBoard()
+    try {
+      const bearers = network(api, (request) => board.fetch(request))
+      await expect(client(BOARD_URL).channels()).rejects.toMatchObject({ code: 'not_logged_in', hint: 'Run vercel login.' })
+      expect([bearers, api.calls, exchange.mock.calls]).toEqual([[], [], []])
+      await expect(readFile(cli.log, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await cli.done()
+    }
+  })
+
+  it("mints with a handed login only, not the `vercel` on PATH when Vercel won't mint", async () => {
+    handLogin(async () => 'vercel-cli-token')
+    const cli = await vercelOnPath()
+    const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
+    const down = { calls: api.calls, handle: (request: Request) => (request.method === 'POST' ? new Response('', { status: 502 }) : api.handle(request)) }
+    const board = testBoard()
+    try {
+      const bearers = network(down, (request) => board.fetch(request))
+      await expect(client(BOARD_URL).channels()).rejects.toThrow('502')
+      expect([bearers, exchange.mock.calls]).toEqual([[], []])
+      await expect(readFile(cli.log, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await cli.done()
+    }
+  })
+
+  it('drops cached tokens a day old when it caches one, as a rotating login leaves one per access token', async () => {
+    const tokens = join(config, 'board', 'tokens')
+    await mkdir(tokens, { recursive: true })
+    for (const name of ['dead.json', 'alive.json']) await writeFile(join(tokens, name), '{}')
+    const twoDays = new Date(Date.now() - 48 * 3600_000)
+    await utimes(join(tokens, 'dead.json'), twoDays, twoDays)
+    const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
+    const board = testBoard()
+    network(api, (request) => board.fetch(request))
+    expect(await client(BOARD_URL).channels()).toEqual([])
+    const left = await readdir(tokens)
+    expect([left.includes('dead.json'), left.includes('alive.json'), left.length]).toEqual([false, true, 2])
   })
 
   it('looks the host up with the Vercel CLI when the login is in the keychain, before it mints', async () => {

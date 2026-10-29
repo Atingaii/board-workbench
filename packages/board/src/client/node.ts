@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -121,34 +121,74 @@ const expiry = (token: string): number => {
 type Cached = { token: string; expiresAt: number; handle?: string | null; name?: string | null; avatar?: string | null }
 
 /**
- * Where `audience`'s token is cached: one per board, and with a login the Vercel CLI hands over
- * (`VERCEL_AUTH_TOKEN`), one per login too, since it can be someone else's than `vercel login`'s.
+ * Where `audience`'s token is cached: one per board, and with a login a CLI hands over, one per
+ * login too, since it can be someone else's than `vercel login`'s.
  */
-const cacheFile = (audience: string) => {
-  const login = process.env.VERCEL_AUTH_TOKEN
+const cacheFile = (audience: string, login: string | null) => {
   const key = login ? `${audience}\n${login}` : audience
   return join(configDir(), 'tokens', `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 }
 
-async function readCache(audience: string): Promise<Cached | null> {
+async function readCache(audience: string, login: string | null): Promise<Cached | null> {
   try {
-    const cached = JSON.parse(await readFile(cacheFile(audience), 'utf8')) as Cached
+    const cached = JSON.parse(await readFile(cacheFile(audience, login), 'utf8')) as Cached
     return cached.expiresAt - 5 * 60_000 > Date.now() ? cached : null
   } catch {
     return null
   }
 }
 
-async function writeCache(audience: string, cached: Cached) {
-  await mkdir(join(configDir(), 'tokens'), { recursive: true, mode: 0o700 })
-  await writeFile(cacheFile(audience), JSON.stringify(cached), { mode: 0o600 })
+async function writeCache(audience: string, login: string | null, cached: Cached) {
+  const tokens = join(configDir(), 'tokens')
+  await mkdir(tokens, { recursive: true, mode: 0o700 })
+  await writeFile(cacheFile(audience, login), JSON.stringify(cached), { mode: 0o600 })
+  // A login that rotates leaves a file per access token: a day on, its board token is dead.
+  const dead = Date.now() - 24 * 60 * 60_000
+  for (const name of await readdir(tokens).catch(() => [])) {
+    const file = join(tokens, name)
+    const written = (await stat(file).catch(() => null))?.mtimeMs
+    if (written !== undefined && written < dead) await unlink(file).catch(() => {})
+  }
 }
 
+/** The login a CLI that runs board's hands it to ask for (`vercel board`'s), while one does. */
+let handed: (() => Promise<string>) | null = null
+
 /**
- * Your Vercel login: what the Vercel CLI hands a CLI it runs, as `vercel board` (`VERCEL_AUTH_TOKEN`,
- * from its `--token` or its own login), or else what `vercel login` saved.
+ * Hands board a login to ask for when a request needs one, as `vercel board` does with its own:
+ * nothing asks for it before then, so help, a typo, or misuse never refreshes or prompts. Null
+ * takes it back.
  */
-export const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken())
+export function handLogin(login: (() => Promise<string>) | null) {
+  handed = login
+}
+
+/** Whether the login is one a CLI handed over (`createApp`'s `login`, or `VERCEL_AUTH_TOKEN`). */
+export const loginHanded = () => handed !== null || !!process.env.VERCEL_AUTH_TOKEN
+
+/**
+ * Your Vercel login: what the CLI that runs board's hands it, as `vercel board` does (its `login`,
+ * or `VERCEL_AUTH_TOKEN` from its `--token`), or else what `vercel login` saved.
+ */
+export const vercelLogin = () =>
+  handed ? handed() : process.env.VERCEL_AUTH_TOKEN ? Promise.resolve(process.env.VERCEL_AUTH_TOKEN) : getVercelToken()
+
+/**
+ * A handed login's token, which its board tokens are cached by: null for `vercel login`'s own. One
+ * that fails fails the request: `vercel login`'s, cached or in the `vercel` on PATH, can be someone
+ * else's.
+ */
+async function handedToken(): Promise<string | null> {
+  if (!loginHanded()) return null
+  try {
+    return await vercelLogin()
+  } catch {
+    throw new BoardError('not_logged_in', "You're not logged in to Vercel.", 0, { hint: 'Run vercel login.' })
+  }
+}
+
+/** The login to call Vercel's API with: a handed one, or `vercel login`'s, or none it can read (the keychain's). */
+const apiLogin = async (handed: string | null) => handed ?? (await getVercelToken().catch(() => null))
 
 /**
  * A person's token: their Vercel CLI login mints a development token for the
@@ -156,14 +196,14 @@ export const vercelLogin = () => (process.env.VERCEL_AUTH_TOKEN ? Promise.resolv
  * board's URL. Cached on disk for its 12-hour life.
  */
 async function personToken(audience: string, discovery: Discovery): Promise<Cached> {
-  const cached = await readCache(audience)
+  const login = await handedToken()
+  const cached = await readCache(audience, login)
   // Tokens cached before names and avatars were kept get them once.
   if (cached && cached.name === undefined) {
-    const user = await vercelLogin()
-      .then(vercelUser)
-      .catch(() => null)
+    const authToken = await apiLogin(login)
+    const user = authToken ? await vercelUser(authToken) : null
     const filled = { ...cached, name: user?.name ?? null, avatar: user?.avatar ?? null }
-    await writeCache(audience, filled).catch(() => {})
+    await writeCache(audience, login, filled).catch(() => {})
     return filled
   }
   if (cached) return cached
@@ -172,7 +212,7 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
       hint: 'Pass a token it accepts in BOARD_TOKEN.',
     })
 
-  const authToken = await vercelLogin().catch(() => null)
+  const authToken = await apiLogin(login)
   const project = await boardProject(audience, discovery, authToken)
   let development: string
   try {
@@ -191,14 +231,15 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
     development = ((await response.json()) as { token: string }).token
   } catch (error) {
-    if (error instanceof BoardError) throw error
+    // The `vercel` on PATH mints as `vercel login`'s account, not a handed login's.
+    if (error instanceof BoardError || login) throw error
     development = await tokenFromVercelCli(project)
   }
 
   const token = await exchangeVercelOidcToken({ token: development, audience })
   const user = authToken ? await vercelUser(authToken) : null
   const fresh: Cached = { token, expiresAt: expiry(token), handle: user?.handle ?? null, name: user?.name ?? null, avatar: user?.avatar ?? null }
-  await writeCache(audience, fresh).catch(() => {})
+  await writeCache(audience, login, fresh).catch(() => {})
   return fresh
 }
 
@@ -605,20 +646,17 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
     new BoardError('protected', `${url} is behind Vercel Deployment Protection, and your Vercel login ${why}.`, 0, {
       hint: `${fix}, or set VERCEL_AUTOMATION_BYPASS_SECRET (${WHERE}).`,
     })
-  let api: VercelApi
-  try {
-    const token = await vercelLogin()
-    api = async (method, path) => {
-      const response = await doFetch(`https://api.vercel.com${path}`, {
-        method,
-        headers: { authorization: `Bearer ${token}`, ...(method === 'PATCH' ? { 'content-type': 'application/json' } : {}) },
-        ...(method === 'PATCH' ? { body: '{}' } : {}),
-      })
-      return response.ok ? await response.json() : null
-    }
-  } catch {
-    api = vercelCliApi
-  }
+  const token = await apiLogin(await handedToken())
+  const api: VercelApi = token
+    ? async (method, path) => {
+        const response = await doFetch(`https://api.vercel.com${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}`, ...(method === 'PATCH' ? { 'content-type': 'application/json' } : {}) },
+          ...(method === 'PATCH' ? { body: '{}' } : {}),
+        })
+        return response.ok ? await response.json() : null
+      }
+    : vercelCliApi
 
   const project = await findProject(api, host)
   if (!project) throw blocked("can't see its project", "Log in as someone on its project's team (vercel login), ask for access")

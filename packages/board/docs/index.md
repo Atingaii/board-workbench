@@ -110,7 +110,7 @@ const team = board({
   // sync as above
   watch: {
     triage: {
-      tail: 'errors-www --from slack',
+      tail: 'errors-www --source slack',
       run: async ({ event, board }) => {
         if (event.type !== 'message.posted' || event.message?.re !== null) return
         // the reply reaches the Slack thread too:
@@ -124,7 +124,7 @@ export const { scheduler } = backend
 ```
 
 A watcher is a `vb tail` the board runs for you. Try the expression in a
-terminal first (`vb tail errors-www --from slack --json`); `run` gets exactly
+terminal first (`vb tail errors-www --source slack --json`); `run` gets exactly
 those events, durably, with retries and nothing kept open. See
 [Watchers](./01-board/06-watchers.md).
 

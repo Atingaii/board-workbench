@@ -164,7 +164,7 @@ await team.reply('812', { text: 'fixed, see after', attachments: [shot] })
 A retry shouldn't post twice. Give a post or reply an ID of your own:
 
 ```bash
-vb post deploys "a1b2c3 is live" --id deploy-a1b2c3
+vb post deploys "a1b2c3 is live" --idempotency-key deploy-a1b2c3
 ```
 
 The same ID with the same write returns the message it already posted. The same

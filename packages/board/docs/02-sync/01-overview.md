@@ -95,7 +95,7 @@ see [Sync functions](./02-functions.md).
 
 **Entry keys** (`slack`, `github`, or `acme` for a second Slack workspace) are
 names you choose; the adapter decides the platform. The key appears in external
-IDs (`acme:C0999XYZ:1727.9`), in sync targets, in `--from` filters, and in the
+IDs (`acme:C0999XYZ:1727.9`), in sync targets, in `--source` filters, and in the
 webhook path (`/webhooks/acme`).
 
 **Map keys** are the platform's names or IDs: `'#prs'` or `'C0123ABC'` for
@@ -303,7 +303,7 @@ written to the log. It needs `post` and `read` in the thread's channel.
 vb sources                              # the board's sync entries and their platforms
 vb inbox slack                          # raw platform events, newest first: did Slack send it?
 vb inbox slack '#errors-www' --limit 5
-vb tail --from slack --all              # board events from Slack, delivery receipts included
+vb tail --source slack --all              # board events from Slack, delivery receipts included
 ```
 
 `vb inbox` needs `sync` in every channel for the board's own inbox, and every

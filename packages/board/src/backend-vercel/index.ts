@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
-import { environmentProfile, vercelLogin, vercelProjectFile } from '../client/node.ts'
+import { environmentProfile, loginHanded, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
 
@@ -12,7 +12,7 @@ const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_T
 
 /**
  * A token Vercel's API takes: `VERCEL_TOKEN`, this deployment's OIDC token, or your Vercel login,
- * the one the Vercel CLI hands a CLI it runs (`VERCEL_AUTH_TOKEN`) or your `vercel login`.
+ * the one the CLI that runs board's hands it (`vercel board`'s) or your `vercel login`.
  */
 async function token(): Promise<string> {
   if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN
@@ -27,11 +27,26 @@ async function token(): Promise<string> {
 export function credentialSource(): string {
   if (process.env.VERCEL_TOKEN) return 'VERCEL_TOKEN'
   if (deployed()) return 'Vercel OIDC'
-  return process.env.VERCEL_AUTH_TOKEN ? 'the Vercel CLI' : 'vercel login'
+  return loginHanded() ? 'the Vercel CLI' : 'vercel login'
 }
 
-/** The team: `VERCEL_ORG_ID`, the one the deployment's OIDC token names, or the linked project's (the nearest `.vercel/project.json`). */
+/** The team a CLI that runs board's resolves itself (`vercel board`'s), while one does. */
+let handed: (() => Promise<string | null>) | null = null
+
+/**
+ * Hands board the team to use when nothing names one (`--scope` still wins), resolved as the app
+ * resolves its own and asked for only when a request needs it. Null takes it back.
+ */
+export function handTeam(resolve: (() => Promise<string | null>) | null) {
+  handed = resolve
+}
+
+/**
+ * The team: the one a CLI that runs board's hands it, `VERCEL_ORG_ID`, the one the deployment's OIDC
+ * token names, or the linked project's (the nearest `.vercel/project.json`).
+ */
 async function team(): Promise<string | null> {
+  if (handed) return handed()
   if (process.env.VERCEL_ORG_ID) return process.env.VERCEL_ORG_ID
   if (!process.env.VERCEL_TOKEN && deployed()) {
     try {

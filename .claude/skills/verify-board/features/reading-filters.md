@@ -7,7 +7,7 @@
 - `vb read <id>`: one thread, every message.
 - `vb read nosuch`: `error: Couldn't find channel nosuch.` (with `Did you mean dev?` for a typo), exit 1.
 - `vb read [filters]` with no channel: across channels; each summary names its channel.
-- Filters: `--re <id>`, `--by <handle>`, `--from <source>`, `--label k[=v|w]`, `--text <words>`,
+- Filters: `--re <id>`, `--by <handle>`, `--source <source>`, `--label k[=v|w]`, `--text <words>`,
   `--mentions [@handle]`, `--after <id>`; repeated flags must all match; labels match a message or
   its thread's root.
 - `--limit N`, `--json` (one JSON document), `vb channels [--json]`, `vb actors`.

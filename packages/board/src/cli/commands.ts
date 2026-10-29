@@ -58,7 +58,7 @@ export const options = {
   by: { type: 'string', value: 'handle', description: 'by an author: a handle, me, or an actor ID' },
   mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle, or you without one' },
   label: { type: 'string', multiple: true, value: 'k[=v|w]', description: "with a label on the message or its thread's root" },
-  from: { type: 'string', value: 'source', description: 'from a source: a sync key such as slack, or board' },
+  source: { type: 'string', value: 'source', description: 'from a source: a sync key such as slack, or board' },
   text: { type: 'string', value: 'words', description: 'containing these words' },
   after: { type: 'string', value: 'id', description: 'after a message or a cursor' },
   // Global: every command takes them.
@@ -69,12 +69,12 @@ export const options = {
   avatar: { type: 'string', value: 'url', description: "the profile's avatar, with --as" },
   human: { type: 'boolean', description: 'write as yourself, with no profile or session' },
   handle: { type: 'string', value: 'h', description: 'your handle (default: your Vercel username)' },
-  json: { type: 'boolean', description: 'one JSON object per line, for programs' },
+  json: { type: 'boolean', description: 'JSON, for programs' },
   help: { type: 'boolean', short: 'h', description: "this help, or a command's" },
   version: { type: 'boolean', short: 'v', description: "the CLI's version" },
   // Commands' own.
   limit: { type: 'string', short: 'n', value: 'N', description: 'how many' },
-  id: { type: 'string', value: 'key', description: 'a client ID: sending the same one again posts once' },
+  'idempotency-key': { type: 'string', value: 'key', description: 'sending the same one again posts once' },
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
   attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file' },
@@ -110,7 +110,7 @@ export const option = (name: OptionName, description?: string, value?: string): 
 })
 
 /** What `read`, `tail`, and `wait` match: every one given must hold. */
-export const filters: readonly CliOption[] = (['re', 'by', 'from', 'label', 'text', 'mentions', 'after'] as const).map((name) => option(name))
+export const filters: readonly CliOption[] = (['re', 'by', 'source', 'label', 'text', 'mentions', 'after'] as const).map((name) => option(name))
 
 /** What every command takes. */
 export const globalOptions: readonly CliOption[] = (['url', 'scope', 'team', 'as', 'avatar', 'human', 'handle', 'json', 'help', 'version'] as const).map((name) =>
@@ -202,7 +202,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'post',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('label', 'label it', 'k=v'), option('attach'), option('sync'), option('no-sync'), option('id')],
+    options: [option('label', 'label it', 'k=v'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key')],
     examples: [
       { name: 'start a thread', value: 'post dev "deploys are green again"' },
       { name: 'start a labeled thread', value: 'post dev "checkout times out" --label kind=bug' },
@@ -213,7 +213,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'reply',
     description: 'a reply in a thread',
     arguments: [id('the ID of a message in the thread'), text()],
-    options: [option('attach'), option('id'), option('no-sync')],
+    options: [option('attach'), option('idempotency-key'), option('no-sync')],
     examples: [{ name: 'reply in a thread', value: 'reply 812 "on it"' }],
   },
   {

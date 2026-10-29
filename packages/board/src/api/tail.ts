@@ -3,7 +3,7 @@ import { options } from '../cli/commands.ts'
 import { Filters } from './routes.ts'
 
 /** The filter flags `read`, `tail`, and `wait` share, and that a watcher's `tail` accepts. */
-export const FILTER_FLAGS = { re: options.re, by: options.by, mentions: options.mentions, label: options.label, from: options.from, text: options.text }
+export const FILTER_FLAGS = { re: options.re, by: options.by, mentions: options.mentions, label: options.label, source: options.source, text: options.text }
 
 /** `--mentions` alone means mentions of me; `--mentions @ada`, mentions of ada. */
 export function withMentions(args: readonly string[]): string[] {
@@ -45,7 +45,7 @@ export function words(expression: string): string[] {
 /** A watcher's tail takes the filters and `--all`, which shows receipts as it does in `vb tail`. */
 const TAIL_FLAGS = { ...FILTER_FLAGS, all: { type: 'boolean' } } as const
 
-type TailValues = { re?: string; by?: string; mentions?: string; label?: string[]; from?: string; text?: string; all?: boolean }
+type TailValues = { re?: string; by?: string; mentions?: string; label?: string[]; source?: string; text?: string; all?: boolean }
 
 /**
  * Parses filter flags as the CLI's parser does (Node's `parseArgs`, strict), written out so a tail
@@ -104,7 +104,7 @@ export function parseWatchTail(expression: string): { filters: z.output<typeof F
     ...(values.by ? { by: values.by.replace(/^@/, '') } : {}),
     ...(values.mentions ? { mentions: values.mentions.replace(/^@/, '') } : {}),
     ...(values.label?.length ? { label: values.label } : {}),
-    ...(values.from ? { from: values.from } : {}),
+    ...(values.source ? { from: values.source } : {}),
     ...(values.text ? { text: values.text } : {}),
   })
   if (!parsed.success) {
