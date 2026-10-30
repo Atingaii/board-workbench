@@ -35,10 +35,10 @@ export async function unseenPr(event: GitHubEvent, board: Board, channel: string
 }
 
 /**
- * The thread a new factory PR's root lives in (`source=<thread>`): its `board/<thread>` branch's
- * thread, when that's a live root in `channel` that syncs (every one does to Slack, `devMirror`).
- * Null for a PR that already has a root, which stays where it is, and for a source that's
- * missing, deleted, elsewhere, kept off Slack, or a factory PR's own root: that PR keeps a Slack thread of its own.
+ * The thread a new factory PR was built for (`source=<thread>`), which gets the PR's line: its
+ * `board/<thread>` branch's thread, when that's a live root in `channel` that syncs to Slack.
+ * Null for a PR that already has a root, and for a source that's missing, deleted, elsewhere,
+ * kept off Slack, or a factory PR's own root.
  */
 export async function sourceThread(event: GitHubEvent, board: Board, channel: string): Promise<string | null> {
   if (event.kind !== "lifecycle") return null;
@@ -55,7 +55,7 @@ export async function sourceThread(event: GitHubEvent, board: Board, channel: st
       throw error;
     },
   );
-  // A PR root that itself lives in another thread isn't on Slack either.
+  // A PR root built for another thread doesn't get lines of its own.
   const shown = root && root.re === null && root.channel === channel && !root.noSync && !root.deleted && !root.labels.source;
   return shown ? source : null;
 }
@@ -72,7 +72,7 @@ type IssuesSync = { direction: "in"; import(channel: string): Promise<unknown> }
  * in Slack and on the board, so a conversation about a PR doesn't end up as comments on it.
  * Inline review threads and "closed by …" replies stay out of Slack; comments on a PR the board
  * has no thread for stay on GitHub. A factory PR's root (its branch is `board/<thread>`) is labeled
- * `source=<thread>`, so it lives in that thread instead of Slack's channel (`inthread.ts`).
+ * `source=<thread>`, so that thread gets the PR's line too (`inthread.ts`).
  */
 export async function pulls(sync: PullsSync): Promise<void> {
   if (sync.direction === "out") return;

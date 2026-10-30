@@ -186,12 +186,11 @@ thread rather than starting one.
   instead of throwing: a watcher that throws gets 5 tries in about 15 seconds,
   then board drops that event without a word. The next reply tries again. No
   watcher's own reply wakes Eve or triage (`byWatcher`).
-- `crosspost` (`crosspost.ts`) links a factory PR's Slack thread and the Slack
-  thread it was built for, both ways, once the PR's root lands in Slack (its tail
-  has `--all`, for the delivery receipt that says where): the PR thread gets `:crosspost: From
-  <who>'s Slack thread`, the source thread gets `:crosspost: #N <title>`. Slack
-  shows them without a label, and they don't wake Eve or triage. Neither reaches
-  GitHub, since PR threads are inbound only.
+- A factory PR (its branch is `board/<thread>`) starts its own Slack thread
+  like any PR, and its review happens there. `in-thread` (`inthread.ts`) also
+  posts the PR's one line in the thread it was built for, labeled with the PR so
+  :shipit: and :security: on it act on that PR, and keeps it in step with the
+  PR's state and title. Those lines don't wake Eve or triage.
 - In Slack a PR root is one line (`render.ts`): its state's emoji (`:pr:`,
   `:pr-draft:`, `:pr-merged:`, `:pr-closed:`) and a link titled with the PR.
   The board edits it when its `state` label changes.
