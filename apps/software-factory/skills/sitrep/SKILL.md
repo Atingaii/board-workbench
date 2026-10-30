@@ -102,7 +102,8 @@ sections, in this order, leaving out any that would be empty:
 5. **Left behind**: stale PRs and threads you're proposing to close or hand
    off this time, each with that proposal. PRs untouched for days share one
    "Stale since …" line. Once a proposal has been made and nobody answered,
-   carry it out (close what you said you'd close) instead of asking again.
+   carry it out at the time it named (close what you said you'd close), as
+   long as that recap tagged the owner and said when, instead of asking again.
 6. **Threads without a PR**: work threads only, never conversations or
    experiments.
 7. **Unchanged**: one line of linked numbers for the open PRs that didn't
