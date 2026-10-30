@@ -1,11 +1,16 @@
-# The software factory's Pi pushes its work to board/<board thread> as the Vercel GitHub App, through
-# Sandbox git credentials, which give it git but not GitHub's API. Each push opens the branch's pull
-# request here, as github-actions[bot], titled and described by the branch's first commit.
+# A fallback for the software factory's Eve, which pushes its work to board/<board thread> and opens
+# the branch's pull request itself with gh. If a push still has no open PR two minutes later, this
+# opens one as github-actions[bot], titled and described by the branch's first commit. Checking
+# right away raced Eve's own gh pr create, and both opened one (#371 and #372 for board/3121).
 name: pi-pr
 
 on:
   push:
     branches: ["board/**"]
+
+# One run per branch at a time: two pushes in a row shouldn't both see no PR and both open one.
+concurrency:
+  group: pi-pr-${{ github.ref }}
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ github.ref_name }}
         run: |
+          sleep 120
           open=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[].url')
           if [ -n "$open" ]; then echo "already open: $open"; exit 0; fi
           gh pr create --head "$BRANCH" --base main --fill-first

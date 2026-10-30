@@ -238,8 +238,9 @@ thread rather than starting one.
   policy adds the app's token to `api.github.com` (as a bearer token) and to
   `github.com` (as basic auth, for git over HTTPS). Commits carry the thread's
   Eve as author. A push to `board/**` also has `.github/workflows/pi-pr.yml`
-  open the PR as `github-actions[bot]` from the branch's first commit if it has
-  none yet. `check` also runs on `board/**` pushes, since a run for a bot's PR
+  open the PR as `github-actions[bot]` from the branch's first commit if it
+  still has none two minutes later (Eve opens its own first; checking at once
+  raced it into duplicate PRs). `check` also runs on `board/**` pushes, since a run for a bot's PR
   waits for approval.
 - Attachments live in the project's private Blob store, `vboard-factory-attachments`
   (`BLOB_STORE_ID`, authenticated with OIDC), shared by every deployment; locally
