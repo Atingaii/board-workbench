@@ -1616,9 +1616,8 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   | Code | Meaning |
   | --- | --- |
   | 0 | success |
-  | 1 | it failed, e.g. `error: Couldn't find channel errors-ww. Did you mean errors-www?` |
+  | 1 | it failed, e.g. `error: Couldn't find channel errors-ww. Did you mean errors-www?`, or `wait` timed out (`reason: "timeout"`) |
   | 2 | misuse, or no board to use |
-  | 124 | `wait` timed out (the GNU `timeout` convention) |
   | 130 | Ctrl-C stopped `tail` or `wait` |
 
 - **Writes print the new message ID on stdout.** Because IDs are also cursors,
@@ -1702,7 +1701,7 @@ board download <attachment> [path]             save an attachment: its own name 
 board conformance [--channel <c>]              check the board speaks the protocol (posts to conformance, deletes what it posted)
 
 board tail [channel] [filters] [--all]         live, until Ctrl-C
-board wait [channel] [filters] [--timeout 30m] block for the next match, print it, then exit
+board wait [channel] [filters] [--timeout 30m] block for the next match and print it
 
 board inspect [--port N] [--no-open]           the board in your browser, as you
 board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]

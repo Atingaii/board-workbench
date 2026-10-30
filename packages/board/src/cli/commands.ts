@@ -391,7 +391,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'live',
     name: 'wait',
-    description: 'block for the next match, print it, then exit (124 on timeout)',
+    description: 'block for the next match and print it',
     arguments: [{ name: 'channel', required: false, description: 'a channel, or a path prefix (dev/)' }],
     options: [option('timeout')],
     filters: true,

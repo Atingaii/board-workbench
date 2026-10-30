@@ -1196,7 +1196,7 @@ const context = (): CommandContext => ({
 
 /**
  * Runs board's CLI on `argv` (what follows the command name) as `app`, and answers its exit
- * code: 0 success, 1 error, 2 misuse, 124 when `wait` times out, 130 when Ctrl-C stops it. A
+ * code: 0 success, 1 error (a `wait` that timed out included), 2 misuse, 130 when Ctrl-C stops it. A
  * failure goes to `app.onError`, or to stderr: `error: ` and what failed, then how to fix it, or
  * with `--json`, one JSON document. A long-running command (`tail`, `serve`) answers once it's
  * stopped.

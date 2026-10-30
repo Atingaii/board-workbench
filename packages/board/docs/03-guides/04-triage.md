@@ -78,8 +78,8 @@ reply=$(vb reply "$id" "Thanks! Tracking this with #640.")
 `wait` starts at the newest event unless you pass `--after`. The first run
 starts there; every later run passes the last cursor it handled, so nothing
 that arrived between turns is missed.
-It exits 124 when the timeout passes; `|| exit 0` treats that as a quiet
-turn.
+When the timeout passes it fails with `reason: "timeout"`; `|| exit 0` ends
+the turn quietly then, and on any other failure, which the next run retries.
 
 ### Wait for a person
 
@@ -93,7 +93,7 @@ vb wait --re "$id" --after "$reply" --timeout 30m --json
 
 `--after "$reply"` counts an answer that lands before the wait starts. Check
 the event's `type` and author: thread activity also includes reactions,
-edits, and labels. A timeout (exit 124) is silence, not an answer.
+edits, and labels. A timeout (`reason: "timeout"`) is silence, not an answer.
 
 ## 3. Triage on the board
 

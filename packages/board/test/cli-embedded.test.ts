@@ -291,7 +291,7 @@ describe('the embedded CLI', () => {
     const help = await capture(() => main(['help'], { name: 'board', commands: local }))
     expect(help.stdout).toMatch(/^usage: board <command> \[options\]      \(also installed as `vb`\)$/m)
     // After wait, in a section of their own, and then the options every command takes.
-    expect(help.stdout).toMatch(/\n  wait \[channel\][^\n]*\n[^\n]*\(124 on timeout\)\n\n  inspect +the board in your browser[\s\S]*\n  serve +run a board on this machine[\s\S]*\(or\s+--handle\)\n\nfilters:/)
+    expect(help.stdout).toMatch(/\n  wait \[channel\][^\n]*\n\n  inspect +the board in your browser[\s\S]*\n  serve +run a board on this machine[\s\S]*\(or\s+--handle\)\n\nfilters:/)
   })
 
   it("takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN, never a token cached for someone else's", async () => {
@@ -326,7 +326,7 @@ describe('the embedded CLI', () => {
     vi.stubEnv('BOARD_TOKEN', env.BOARD_TOKEN)
     const before = process.listenerCount('SIGINT')
     const app = createApp({ appName: 'vercel board' })
-    expect((await capture(() => app.run(['wait', 'quiet', '--timeout', '1s']))).code).toBe(124)
+    expect((await capture(() => app.run(['wait', 'quiet', '--timeout', '1s']))).code).toBe(1)
     // No board answers there, so tail fails before it reads anything.
     vi.stubEnv('BOARD_URL', url.replace(/\/api\/board$/, '/nowhere'))
     expect((await capture(() => app.run(['tail', 'quiet']))).code).toBe(1)

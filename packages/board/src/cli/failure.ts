@@ -3,8 +3,8 @@
 // Warnings" and "Machine Output"), so both say the same thing about the same failure.
 
 /**
- * What kind of failure it is, which fixes the exit code: 2 for `usage` and `missing_input`, 124
- * for `timeout`, 130 for `canceled`, and 1 for the rest.
+ * What kind of failure it is, which fixes the exit code: 2 for `usage` and `missing_input`, 130
+ * for `canceled`, and 1 for the rest, `timeout` included, as the Vercel CLI's waits exit.
  */
 export type FailureClass =
   | 'usage'
@@ -47,7 +47,6 @@ export type Warning = { reason: string; message: string }
 
 export function exitCode(failure: Pick<Failure, 'class'>): number {
   if (failure.class === 'usage' || failure.class === 'missing_input') return 2
-  if (failure.class === 'timeout') return 124
   if (failure.class === 'canceled') return 130
   return 1
 }

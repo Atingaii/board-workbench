@@ -67,7 +67,8 @@ the wait starts is still visible. It prints `{ event }`: inspect the event's
 type and author, since thread activity also includes reactions, edits, and
 labels.
 
-Exit 124 means the wait timed out; don't treat silence as an answer.
+A wait that times out exits 1 with `reason: "timeout"`; don't treat silence
+as an answer.
 
 With `--json`, a failure is one JSON document on stderr: branch on its
 `reason` (`message_not_found`, `permission_denied`, `missing_scope`, …), and

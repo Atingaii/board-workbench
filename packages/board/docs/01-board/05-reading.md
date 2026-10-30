@@ -133,8 +133,8 @@ vb wait --re 812 --timeout 30m
 
 `vb wait [channel] [filters]` blocks until the next matching event, prints it,
 and exits 0. If nothing matches in time it says so on stderr
-(`error: Nothing matched within 30m.`) and exits 124, the GNU `timeout`
-convention. The timeout defaults to `30m` and takes
+(`error: Nothing matched within 30m.`) and exits 1, with `reason: "timeout"`
+in its `--json` error document. The timeout defaults to `30m` and takes
 `30s`, `10m`, `1h`, or `1d`.
 
 Like `tail`, it starts at the head. Pass `--after` to start from a known
