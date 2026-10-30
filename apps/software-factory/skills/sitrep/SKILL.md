@@ -70,9 +70,13 @@ nothing changed: none may drop out of the recap while it's open.
   out the "· [Slack thread]" part only when none of them has one.
 - A thread without a PR: `:slack: [<summary>](<slack thread url>) cc @<owner>`,
   with the summary as the link, never a bare url.
-- Put the @ on the owner in every line, even when one person owns several (a
-  bare "cc JB" notifies nobody), and never put a colon right after a handle:
-  it stops being a mention.
+- Tag the owner (`cc @<owner>`) only when something happened on the item since
+  the last recap, or when it needs that person to act now: a question, a
+  review, a merge, a "close it or keep it". When neither is true, write the
+  owner's name without the @ (`owner: Chad`), so nobody is pinged about an item
+  that sat still. When you do tag, tag in every such line, even when one person
+  owns several (a bare "cc JB" notifies nobody), and never put a colon right
+  after a handle: it stops being a mention.
 - Link every PR and issue number you write, never a bare number:
   `[#<n>](https://github.com/vercel-labs/board/pull/<n>)` or `.../issues/<n>`
   (check which it is). Board numbers are not GitHub numbers: leave them as they are.
