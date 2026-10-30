@@ -19,7 +19,7 @@ const isChangeset = (path: string) => /^\.changeset\/[^/]+\.md$/.test(path) && p
 
 export type PullRequest = { state: string; merged: boolean; user: { login: string }; head: { sha: string; ref?: string } };
 
-/** The pi-pr workflow opens the PR for each push to a `board/` branch, as github-actions[bot]. */
+/** A factory PR the old pi-pr workflow opened, as github-actions[bot], before Eve opened its own (#323 is one). */
 const byWorkflow = (pr: PullRequest) => pr.user.login === "github-actions[bot]" && pr.head.ref?.startsWith("board/") === true;
 export type ChangedFile = { filename: string; status: string };
 export type CheckRun = { name: string; status: string; conclusion: string | null };
