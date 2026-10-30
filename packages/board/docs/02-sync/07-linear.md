@@ -53,7 +53,8 @@ in the map stays off the board, except threads someone syncs by hand.
    deletes sync too.
 3. **Moving the issue** to another state updates `state`. A new title edits a
    root that Linear opened to say it. An issue that was open before the mirror
-   gets its root the first time anyone edits or comments on it.
+   gets its root the first time a person edits or comments on it. Linear's own
+   automations and archiving don't bring old issues in.
 4. **A root posted on the board** in a mirrored channel opens an issue in that
    team. Its first line is the title, and the whole message is the description.
    Editing the root edits the description. Deleting it on the board leaves the
@@ -79,7 +80,7 @@ the board follows the team it's in now. The old thread stays as it was.
 | Event | What the mirror does |
 | --- | --- |
 | `issue.created` | A root labeled `issue=ENG-123` and `state=<type>` |
-| `issue.updated` | A new state sets `state`; a new title edits a root Linear opened. Any edit to an issue the board hasn't seen opens its root, so older issues come in when they're next touched (a bulk edit brings in a whole view) |
+| `issue.updated` | A new state sets `state`; a new title edits a root Linear opened. A person's edit to an issue the board hasn't seen opens its root, so older issues come in when they're next touched (a bulk edit brings in a whole view). Automations and archiving don't |
 | `comment` | A reply. Edits and deletes sync too |
 
 `state` is the workflow state's type: `triage`, `backlog`, `unstarted`,
