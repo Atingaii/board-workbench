@@ -75,22 +75,19 @@ const bodyOf = (description: string | null | undefined) => description?.trim() |
 
 /**
  * An issue's properties as board labels: `priority=high`, `project=v0-accessibility`, a label per
- * Linear label (`tag.bug`), and its assignee (`assignee.ada`). Only what the payload carries:
- * `owns` is the prefixes it said, so a trimmed payload doesn't unset the rest.
+ * Linear label (`tag.bug`), and its assignee (`assignee.ada`). Only what the payload says: a
+ * property it carries empty is unset, and one it names without its details is left as it was.
+ * `priority` and `project` are single keys, so they're unset by name; `tag.` and `assignee.` are
+ * prefixes the mirror owns, so a key under them that Linear doesn't have goes.
  */
-function propertiesOf(data: IssueData): { labels: Record<string, string>; owns: string[] } {
+function propertiesOf(data: IssueData): { labels: Record<string, string>; unset: string[]; owns: string[] } {
   const labels: Record<string, string> = {}
+  const unset: string[] = []
   const owns: string[] = []
-  if (data.priority !== undefined || data.priorityLabel !== undefined) {
-    owns.push('priority')
-    const priority = data.priority === 0 ? '' : slug(data.priorityLabel ?? '')
-    if (priority) labels.priority = priority
-  }
-  if (data.project !== undefined || data.projectId !== undefined) {
-    owns.push('project')
-    const project = slug(data.project?.name ?? '').slice(0, 256)
-    if (project) labels.project = project
-  }
+  if (data.priority === 0 || data.priorityLabel === 'No priority') unset.push('priority')
+  else if (data.priorityLabel && slug(data.priorityLabel)) labels.priority = slug(data.priorityLabel).slice(0, 256)
+  if (data.project?.name && slug(data.project.name)) labels.project = slug(data.project.name).slice(0, 256)
+  else if (data.project === null || data.projectId === null) unset.push('project')
   if (Array.isArray(data.labels)) {
     owns.push('tag.')
     for (const label of data.labels) {
@@ -98,12 +95,12 @@ function propertiesOf(data: IssueData): { labels: Record<string, string>; owns: 
       if (tag) labels[tag[0]] = tag[1]
     }
   }
-  if (data.assignee !== undefined || data.assigneeId !== undefined) {
+  if (data.assignee) {
     owns.push('assignee.')
-    const tag = data.assignee ? tagOf('assignee', handleOf(data.assignee)) : null
+    const tag = tagOf('assignee', handleOf(data.assignee))
     if (tag) labels[tag[0]] = tag[1]
-  }
-  return { labels, owns }
+  } else if (data.assignee === null || data.assigneeId === null) owns.push('assignee.')
+  return { labels, unset, owns }
 }
 type LinearRaw = { kind?: string; comment?: { url?: string; issueId?: string; parentId?: string; id?: string; body?: string; user?: { avatarUrl?: string } } }
 
@@ -121,6 +118,10 @@ type Issue = {
   state?: Promise<{ name?: string; type?: string } | undefined>
   team?: Promise<{ key?: string } | undefined>
   creator?: Promise<User | undefined>
+  priority?: number; priorityLabel?: string
+  project?: Promise<{ name?: string } | undefined>
+  assignee?: Promise<User | undefined>
+  labels?: () => Promise<{ nodes: { name?: string }[] }>
 }
 type LinearClient = {
   teams(args: { filter: { key: { eq: string } } }): Promise<{ nodes: { id: string; key: string }[] }>
@@ -248,7 +249,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
             url: data.url ?? payload.url ?? null,
             body: bodyOf(data.description),
             labels: { issue: data.identifier, ...(state ? { state } : {}), ...properties.labels },
-            unset: [],
+            unset: properties.unset,
             owns: properties.owns,
             reply: null,
             createRoot: opens,
@@ -296,13 +297,17 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   override async fetchRoot(thread: string) {
     return this.api(async () => {
       const issue = await this.client().issue(parseThread(thread).issue)
-      const [state, creator] = await Promise.all([issue.state, issue.creator])
+      const [state, creator, project, assignee, tags] = await Promise.all([issue.state, issue.creator, issue.project, issue.assignee, issue.labels?.()])
       const found = stateOf(state)
+      const properties = propertiesOf({
+        id: issue.id, identifier: issue.identifier, title: issue.title,
+        priority: issue.priority, priorityLabel: issue.priorityLabel, project, assignee, labels: tags?.nodes,
+      })
       return {
         text: [`${issue.identifier}: ${issue.title}\n${issue.url}`, bodyOf(issue.description)].filter(Boolean).join('\n\n'),
         raw: { issue: { id: issue.id, identifier: issue.identifier, title: issue.title, url: issue.url } },
         author: author(creator, false),
-        labels: { issue: issue.identifier, ...(found ? { state: found } : {}) },
+        labels: { issue: issue.identifier, ...(found ? { state: found } : {}), ...properties.labels },
       }
     })
   }

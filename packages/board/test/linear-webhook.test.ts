@@ -4,6 +4,7 @@ import type { Adapter } from 'chat'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { linear, teams } from '../src/sync/linear.ts'
 import type { ReceivedEvent } from '../src/sync/provider.ts'
+import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 const secret = 'test-secret'
 const BOT = 'bot-user'
@@ -25,11 +26,12 @@ beforeEach(() => {
     if (query.includes('LinearAdapterViewerOrganization')) return answer({ viewer: { id: BOT, displayName: 'board', organization: { id: 'org-1' } } })
     if (/query teams/i.test(query)) return answer({ teams: { nodes: [{ id: 'team-eng', key: 'ENG', name: 'Engineering' }], pageInfo: { hasNextPage: false } } })
     if (/^\s*query issue\(/i.test(query)) {
-      return answer({ issue: { ...issue, team: { id: 'team-eng' }, state: { id: 'state-todo' }, reactions: [], sharedAccess: { isShared: false, sharedWithCount: 0, viewerHasOnlySharedAccess: false, sharedWithUsers: [], disallowedIssueFields: [] } } })
+      return answer({ issue: { ...issue, description: 'Comments and states, both ways.', priority: 2, priorityLabel: 'High', team: { id: 'team-eng' }, state: { id: 'state-todo' }, reactions: [], sharedAccess: { isShared: false, sharedWithCount: 0, viewerHasOnlySharedAccess: false, sharedWithUsers: [], disallowedIssueFields: [] } } })
     }
     if (/^\s*query workflowState\(/i.test(query)) return answer({ workflowState: { id: 'state-todo', name: 'Todo', type: 'unstarted', color: '#ccc', position: 1, team: { id: 'team-eng' } } })
     if (/issueCreate\(/.test(query)) return answer({ issueCreate: { success: true, lastSyncId: 1, issue: { id: OPENED } } })
     if (/issueUpdate\(/.test(query)) return answer({ issueUpdate: { success: true, lastSyncId: 2, issue: { id: OPENED } } })
+    if (/^\s*query issue_labels\(/i.test(query)) return answer({ issue: { labels: { nodes: [{ id: 'label-1', name: 'Bug', color: '#f00' }], pageInfo: { hasNextPage: false } } } })
     throw new Error(`unexpected Linear call: ${query.slice(0, 80)}`)
   })
 })
@@ -139,20 +141,36 @@ it("carries an issue's description, and its priority, project, labels, and assig
   expect(received.map((r) => r.event)).toMatchObject([{
     body: 'Line numbers are not read out.\n\nSteps: open the editor.',
     labels: { issue: 'ENG-12', state: 'started', priority: 'high', project: 'v0-accessibility', 'tag.screen-reader': 'Screen reader', 'assignee.ada': 'ada' },
-    owns: ['priority', 'project', 'tag.', 'assignee.'],
+    unset: [],
+    owns: ['tag.', 'assignee.'],
   }])
-  // Unassigned, with no priority or project: the labels go, since the payload says so.
+  // Unassigned, with no priority or project: their labels go, by name for the single keys.
   const cleared = await send({
     type: 'Issue', action: 'update', url: issue.url, actor: ada, updatedFrom: { assigneeId: 'user-ada' },
     data: { ...data, description: null, priority: 0, priorityLabel: 'No priority', projectId: null, project: null, labels: [], assigneeId: null, assignee: null },
   })
-  const [event] = cleared.received.map((r) => r.event) as { labels: Record<string, string>; owns: string[]; body: string | null }[]
+  const [event] = cleared.received.map((r) => r.event) as { labels: Record<string, string>; unset: string[]; owns: string[]; body: string | null }[]
   expect(event!.labels).toEqual({ issue: 'ENG-12', state: 'started' })
-  expect(event!.owns).toEqual(['priority', 'project', 'tag.', 'assignee.'])
+  expect(event!.unset).toEqual(['priority', 'project'])
+  expect(event!.owns).toEqual(['tag.', 'assignee.'])
   expect(event!.body).toBeNull()
 })
 
-it('redraws the root when the description changes, and owns only the properties a payload carries', async () => {
+it('leaves a property as it was when the payload names it without its details', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, priority: 2, projectId: 'project-1', assigneeId: 'user-ada' }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { priority: 1 }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{ labels: { issue: 'ENG-12', state: 'unstarted' }, unset: [], owns: [] }])
+})
+
+it('names an assignee without a profile link by their name, as Linear sends one', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, assigneeId: 'user-ada', assignee: { id: 'user-ada', name: 'Ada Lovelace', email: 'ada@acme.test' } }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { assigneeId: null }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{ labels: { 'assignee.ada-lovelace': 'Ada Lovelace' }, owns: ['assignee.'] }])
+})
+
+it('marks a description change as a redraw of the root', async () => {
   const { send } = setup()
   const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, description: 'New steps' }
   const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { description: 'Old steps' }, actor: ada })
@@ -232,5 +250,35 @@ it('reaches Linear outside a webhook with a Connect token', async () => {
   await expect(provider.resolveChannel('ENG')).resolves.toBe('ENG')
   await expect(provider.resolveTarget('ENG-12')).resolves.toEqual({ target: `ENG:${ISSUE}`, channel: 'ENG', kind: 'thread' })
   await expect(provider.post('ENG', 'channel', { markdown: 'From Connect' })).resolves.toEqual({ thread: `ENG:${OPENED}`, message: 'issue' })
-  await expect(provider.fetchRoot(`ENG:${ISSUE}`)).resolves.toMatchObject({ text: `ENG-12: Sync Linear to the board\n${issue.url}`, labels: { issue: 'ENG-12', state: 'unstarted' } })
+  await expect(provider.fetchRoot(`ENG:${ISSUE}`)).resolves.toMatchObject({
+    text: `ENG-12: Sync Linear to the board\n${issue.url}\n\nComments and states, both ways.`,
+    labels: { issue: 'ENG-12', state: 'unstarted', priority: 'high', 'tag.bug': 'Bug' },
+  })
+})
+
+it("puts an issue's description on its root, redraws it when the description changes, and keeps its labels in step", async () => {
+  const adapter = createLinearAdapter({ apiKey: 'lin_api_test', webhookSecret: secret, userName: 'board' }) as unknown as Adapter
+  const board = testBoard({ sync: { linear: linear({ adapter }, teams({ ENG: 'dev' })) } })
+  const julian = caller(board.fetch, await personToken())
+  const send = (payload: Record<string, unknown>) => {
+    const body = JSON.stringify({ organizationId: 'org-1', webhookId: 'hook-1', webhookTimestamp: Date.now(), ...payload })
+    return board.fetch(new Request(`${BOARD_URL}/webhooks/linear`, {
+      method: 'POST', body,
+      headers: { 'content-type': 'application/json', 'linear-delivery': `delivery-${Math.random()}`, 'linear-signature': createHmac('sha256', secret).update(body).digest('hex') },
+    }))
+  }
+  const root = async () => ((await julian('GET', '/messages?channel=dev')).body.messages as { id: string; text: string; labels: Record<string, string> }[])[0]
+  const data = {
+    ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, description: 'Old steps',
+    priority: 2, priorityLabel: 'High', projectId: 'project-1', project: { id: 'project-1', name: 'v0 Accessibility' },
+  }
+  await send({ type: 'Issue', action: 'create', url: issue.url, data, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.text).toBe(`ENG-12: Sync Linear to the board\n${issue.url}\n\nOld steps`))
+  const { id } = (await root())!
+  // A label someone set that only starts like a property's stays.
+  await julian('POST', `/messages/${id}/labels`, { set: { 'project-lead': 'ada' } })
+
+  await send({ type: 'Issue', action: 'update', url: issue.url, data: { ...data, description: 'New steps', priority: 0, priorityLabel: 'No priority' }, updatedFrom: { description: 'Old steps', priority: 2 }, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.text).toBe(`ENG-12: Sync Linear to the board\n${issue.url}\n\nNew steps`))
+  await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'unstarted', project: 'v0-accessibility', 'project-lead': 'ada' }))
 })
