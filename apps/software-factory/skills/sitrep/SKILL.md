@@ -41,6 +41,11 @@ board instead: the PR threads (`vb read dev --label pr`, the root labeled
 Then read each open PR's board and Slack threads, and the threads in `dev`
 from the last few days that are still open.
 
+Only work belongs in a sitrep: PRs, bugs, agreed features, and questions
+waiting on an answer. Leave out threads that are just a conversation, an
+experiment, a brainstorm, or banter, even when they're recent and nobody
+closed them.
+
 ## 3. Move each one forward
 
 This is most of the job. For each PR and thread:
@@ -60,23 +65,28 @@ merge" or "Left behind", and say so in one line.
 
 ## 4. Write the recap
 
-List every open PR of vercel-labs/board, drafts and RFCs included, even when
-nothing changed: none may drop out of the recap while it's open.
+Keep it short: people read it on Slack. Only what moved since the last recap,
+or what needs someone now, gets a line of its own. Every other open PR of
+vercel-labs/board, drafts and RFCs included, goes in the one **Unchanged**
+line as linked numbers, so none drops out while it's open, but none takes
+up a line either.
 
-- A PR: `:pr: [#<n> <title>](<pr url>) · [Slack thread](<slack thread url>) cc @<owner> — <status>`.
+- A PR: `:pr: [#<n> <title>](<pr url>) · [Slack thread](<slack thread url>) <cc @owner, or owner name> — <status>`.
   Take the Slack link from the "From …'s Slack thread" line at the top of the
   PR body, or else from the board threads of the PR and of any issue it links:
   when one of them has replies synced from Slack, link that Slack thread. Leave
   out the "· [Slack thread]" part only when none of them has one.
-- A thread without a PR: `:slack: [<summary>](<slack thread url>) cc @<owner>`,
+- A thread without a PR: `:slack: [<summary>](<slack thread url>) <cc @owner, or owner name>`,
   with the summary as the link, never a bare url.
 - Tag the owner (`cc @<owner>`) only when something happened on the item since
-  the last recap, or when it needs that person to act now: a question, a
-  review, a merge, a "close it or keep it". When neither is true, write the
-  owner's name without the @ (`owner: Chad`), so nobody is pinged about an item
-  that sat still. When you do tag, tag in every such line, even when one person
-  owns several (a bare "cc JB" notifies nobody), and never put a colon right
-  after a handle: it stops being a mention.
+  the last recap, or when it newly needs that person to act: a question,
+  review, merge or "close it or keep it" the last recap didn't already put to
+  them, or one you're about to act on ("I'll close it tonight"). An ask that's
+  still waiting from an earlier recap isn't new: name the owner without the @
+  (`owner Chad`), so nobody is pinged about an item that sat still. When you
+  do tag, tag in every such line, even when one person owns several (a bare
+  "cc JB" notifies nobody), and never put a colon right after a handle: it
+  stops being a mention.
 - Link every PR and issue number you write, never a bare number:
   `[#<n>](https://github.com/vercel-labs/board/pull/<n>)` or `.../issues/<n>`
   (check which it is). Board numbers are not GitHub numbers: leave them as they are.
@@ -89,10 +99,15 @@ sections, in this order, leaving out any that would be empty:
 2. **Needs your call**: a person has to decide something. Put the question in the item.
 3. **Waiting on review**
 4. **Drafts and RFCs**
-5. **Left behind**: stale PRs and threads, each with your proposal. PRs
-   untouched for days can share one "Stale since …" line.
-6. **Threads without a PR**
-7. **Merged and closed since the last recap**: plain lists of linked numbers.
+5. **Left behind**: stale PRs and threads you're proposing to close or hand
+   off this time, each with that proposal. PRs untouched for days share one
+   "Stale since …" line. Once a proposal has been made and nobody answered,
+   carry it out (close what you said you'd close) instead of asking again.
+6. **Threads without a PR**: work threads only, never conversations or
+   experiments.
+7. **Unchanged**: one line of linked numbers for the open PRs that didn't
+   move and need nothing new from anyone.
+8. **Merged and closed since the last recap**: plain lists of linked numbers.
    Look them up, since you weren't there:
    `gh pr list --repo vercel-labs/board --state merged --search "merged:>=<last recap's time>"`,
    and `--state closed --search "is:unmerged closed:>=<…>"` for the closed ones
