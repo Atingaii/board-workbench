@@ -127,6 +127,38 @@ it('opens a thread on any edit to an issue the board has not seen, like a bulk e
   expect(removed.received).toEqual([])
 })
 
+it("carries an issue's description, and its priority, project, labels, and assignee as labels", async () => {
+  const { send } = setup()
+  const data = {
+    ...issue, team: { key: 'ENG' }, state: { name: 'In Review', type: 'started' },
+    description: '  Line numbers are not read out.\n\nSteps: open the editor.  ',
+    priority: 2, priorityLabel: 'High', projectId: 'project-1', project: { id: 'project-1', name: 'v0 Accessibility' },
+    labels: [{ id: 'label-1', name: 'Screen reader' }], assigneeId: 'user-ada', assignee: ada,
+  }
+  const { received } = await send({ type: 'Issue', action: 'create', url: issue.url, data, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{
+    body: 'Line numbers are not read out.\n\nSteps: open the editor.',
+    labels: { issue: 'ENG-12', state: 'started', priority: 'high', project: 'v0-accessibility', 'tag.screen-reader': 'Screen reader', 'assignee.ada': 'ada' },
+    owns: ['priority', 'project', 'tag.', 'assignee.'],
+  }])
+  // Unassigned, with no priority or project: the labels go, since the payload says so.
+  const cleared = await send({
+    type: 'Issue', action: 'update', url: issue.url, actor: ada, updatedFrom: { assigneeId: 'user-ada' },
+    data: { ...data, description: null, priority: 0, priorityLabel: 'No priority', projectId: null, project: null, labels: [], assigneeId: null, assignee: null },
+  })
+  const [event] = cleared.received.map((r) => r.event) as { labels: Record<string, string>; owns: string[]; body: string | null }[]
+  expect(event!.labels).toEqual({ issue: 'ENG-12', state: 'started' })
+  expect(event!.owns).toEqual(['priority', 'project', 'tag.', 'assignee.'])
+  expect(event!.body).toBeNull()
+})
+
+it('redraws the root when the description changes, and owns only the properties a payload carries', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, description: 'New steps' }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { description: 'Old steps' }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{ retitled: true, body: 'New steps', owns: [] }])
+})
+
 it('never opens a second root for an issue the board opened', async () => {
   const { send } = setup()
   const data = { ...issue, id: OPENED, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, creatorId: BOT }

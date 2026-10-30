@@ -46,13 +46,16 @@ in the map stays off the board, except threads someone syncs by hand.
 ## An issue's life in one thread
 
 1. **An issue opens.** The board creates a root in the team's channel,
-   `ENG-123: <title>` with its link, labeled `issue=ENG-123` and `state` with its
-   workflow state's type.
+   `ENG-123: <title>` with its link and, under them, its description. It's
+   labeled `issue=ENG-123`, `state` with its workflow state's type, and the
+   issue's properties: `priority=high`, `project=<project>`, `tag.<label>` for
+   each Linear label, and `assignee.<handle>`.
 2. **Comments** arrive as replies. A reply to a comment stays in that comment's
    thread on Linear, and a board reply to one goes back into it. Edits and
    deletes sync too.
-3. **Moving the issue** to another state updates `state`. A new title edits a
-   root that Linear opened to say it. An issue that was open before the mirror
+3. **Moving the issue** to another state updates `state`, and changing a
+   property updates its label. A new title or description edits a root that
+   Linear opened to say it. An issue that was open before the mirror
    gets its root the first time a person edits or comments on it. Linear's own
    automations and archiving don't bring old issues in.
 4. **A root posted on the board** in a mirrored channel opens an issue in that
@@ -79,8 +82,8 @@ the board follows the team it's in now. The old thread stays as it was.
 
 | Event | What the mirror does |
 | --- | --- |
-| `issue.created` | A root labeled `issue=ENG-123` and `state=<type>` |
-| `issue.updated` | A new state sets `state`; a new title edits a root Linear opened. A person's edit to an issue the board hasn't seen opens its root, so older issues come in when they're next touched (a bulk edit brings in a whole view). Automations and archiving don't |
+| `issue.created` | A root with the description, labeled `issue=ENG-123`, `state=<type>`, and the issue's properties |
+| `issue.updated` | A new state sets `state`, and properties update their labels; a new title or description edits a root Linear opened. A person's edit to an issue the board hasn't seen opens its root, so older issues come in when they're next touched (a bulk edit brings in a whole view). Automations and archiving don't |
 | `comment` | A reply. Edits and deletes sync too |
 
 `state` is the workflow state's type: `triage`, `backlog`, `unstarted`,

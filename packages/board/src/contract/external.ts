@@ -130,6 +130,8 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     type: z.string(),
     title: z.string(),
     url: z.string().nullable(),
+    /** What the PR or issue says, under its title and link on a root it opens or retitles. */
+    body: z.string().nullable().optional(),
     labels: z.record(z.string(), z.string()),
     unset: z.array(z.string()),
     /** Key prefixes the platform owns on the root, e.g. `tag.`: keys under them that aren't in `labels` are unset. */
@@ -138,7 +140,7 @@ export const ExternalEvent = z.discriminatedUnion('kind', [
     reply: z.string().nullable(),
     /** Create the root if the board hasn't seen this thread. */
     createRoot: z.boolean(),
-    /** The thread's title changed on the platform: a root that came from it says the new one. */
+    /** The thread's title or body changed on the platform: a root that came from it says the new one. */
     retitled: z.boolean().optional(),
     author: ExternalAuthor,
   }),

@@ -752,7 +752,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         if (rootId !== undefined) {
           const root = await messageOf(rootId)
           const createdHere = root?.origin?.message === `lifecycle:${meta.id}`
-          const draft = createdHere ? rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw }) : null
+          const draft = createdHere ? rootDraft({ text: lifecycleText(event), labels: event.labels, author: event.author, raw }) : null
           const desired = labels(draft?.labels ?? event.labels)
           const owned = (key: string) => event.owns?.some((prefix) => key.startsWith(prefix)) ?? false
           const set = Object.fromEntries(Object.entries(desired).filter(([key, value]) => root?.labels[key] !== value))
@@ -761,7 +761,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           // A root this PR or issue made says its new title, as one it made now would, with the labels it has:
           // a root another thread made, which this one joined, keeps its own.
           if (event.retitled && root && !root.deleted && root.from === key && root.origin?.thread === event.thread) {
-            const text = clampText(overrides.text ?? rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: root.labels, author: event.author, raw }).text)
+            const text = clampText(overrides.text ?? rootDraft({ text: lifecycleText(event), labels: root.labels, author: event.author, raw }).text)
             if (root.text !== text)
               await screened(await call('syncImport', { op: 'edit', author: event.author, from: key, origin: { thread: root.origin.thread, message: root.origin.message }, text }))
           }
@@ -769,7 +769,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           return { root: rootId, message: createdHere ? rootId : null }
         }
         if (!event.createRoot) return { root: null, message: null }
-        const draft = rootDraft({ text: event.url ? `${event.title}\n${event.url}` : event.title, labels: event.labels, author: event.author, raw })
+        const draft = rootDraft({ text: lifecycleText(event), labels: event.labels, author: event.author, raw })
         const root = await post({
           author: event.author, channel, text: clampText(event.reply ? draft.text : overrides.text ?? draft.text), labels: labels(draft.labels),
           origin: { channel: event.channel, thread: event.thread, subthread: null, message: `lifecycle:${meta.id}`, context: null },
@@ -1380,3 +1380,9 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
 }
 
 export type SyncEngine = ReturnType<typeof createSyncEngine>
+
+/** A lifecycle root's text: the title, its link, and what the PR or issue says. */
+function lifecycleText(event: { title: string; url: string | null; body?: string | null }): string {
+  const head = event.url ? `${event.title}\n${event.url}` : event.title
+  return event.body ? `${head}\n\n${event.body}` : head
+}

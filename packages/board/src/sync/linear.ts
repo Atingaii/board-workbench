@@ -8,6 +8,7 @@ import { UnreadableError, type ProviderDelivery, type ProviderPost, type Receive
 import { createLinearAdapter } from '@chat-adapter/linear'
 import { connectLinearAdapter } from '@vercel/connect/chat'
 import { channels, type SyncFn, type SyncUnit } from './fn.ts'
+import { slug, tagOf } from './tags.ts'
 
 export const LinearEvent = eventSchema('linear', 'comment')
 export type LinearEvent = z.infer<typeof LinearEvent>
@@ -56,13 +57,53 @@ const teamOf = (identifierOrUrl: string | undefined | null) => /(?:^|\/issue\/)(
 type CommentData = { id: string; body?: string; issueId?: string; parentId?: string | null; user?: User; issue?: { id?: string; identifier?: string } }
 type CommentPayload = { type: 'Comment'; action: string; url?: string; data: CommentData; organizationId: string }
 type IssueData = {
-  id: string; identifier: string; title: string; url?: string
+  id: string; identifier: string; title: string; url?: string; description?: string | null
   team?: { key?: string }; state?: { name?: string; type?: string }
   creatorId?: string | null; archivedAt?: string | null
+  priority?: number; priorityLabel?: string
+  assigneeId?: string | null; assignee?: User | null
+  labels?: { name?: string }[]
+  projectId?: string | null; project?: { name?: string } | null
 }
 type IssuePayload = {
   type: 'Issue'; action: string; url?: string; data: IssueData
-  updatedFrom?: { stateId?: unknown; title?: unknown }; actor?: User; webhookId?: string; webhookTimestamp?: number
+  updatedFrom?: { stateId?: unknown; title?: unknown; description?: unknown }; actor?: User; webhookId?: string; webhookTimestamp?: number
+}
+
+/** An issue's description, or null when it has none. */
+const bodyOf = (description: string | null | undefined) => description?.trim() || null
+
+/**
+ * An issue's properties as board labels: `priority=high`, `project=v0-accessibility`, a label per
+ * Linear label (`tag.bug`), and its assignee (`assignee.ada`). Only what the payload carries:
+ * `owns` is the prefixes it said, so a trimmed payload doesn't unset the rest.
+ */
+function propertiesOf(data: IssueData): { labels: Record<string, string>; owns: string[] } {
+  const labels: Record<string, string> = {}
+  const owns: string[] = []
+  if (data.priority !== undefined || data.priorityLabel !== undefined) {
+    owns.push('priority')
+    const priority = data.priority === 0 ? '' : slug(data.priorityLabel ?? '')
+    if (priority) labels.priority = priority
+  }
+  if (data.project !== undefined || data.projectId !== undefined) {
+    owns.push('project')
+    const project = slug(data.project?.name ?? '').slice(0, 256)
+    if (project) labels.project = project
+  }
+  if (Array.isArray(data.labels)) {
+    owns.push('tag.')
+    for (const label of data.labels) {
+      const tag = tagOf('tag', label.name)
+      if (tag) labels[tag[0]] = tag[1]
+    }
+  }
+  if (data.assignee !== undefined || data.assigneeId !== undefined) {
+    owns.push('assignee.')
+    const tag = data.assignee ? tagOf('assignee', handleOf(data.assignee)) : null
+    if (tag) labels[tag[0]] = tag[1]
+  }
+  return { labels, owns }
 }
 type LinearRaw = { kind?: string; comment?: { url?: string; issueId?: string; parentId?: string; id?: string; body?: string; user?: { avatarUrl?: string } } }
 
@@ -76,7 +117,7 @@ type LinearAdapter = Adapter & {
 }
 
 type Issue = {
-  id: string; identifier: string; title: string; url: string
+  id: string; identifier: string; title: string; url: string; description?: string | null
   state?: Promise<{ name?: string; type?: string } | undefined>
   team?: Promise<{ key?: string } | undefined>
   creator?: Promise<User | undefined>
@@ -180,7 +221,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
         const { data } = payload
         const created = payload.action === 'create'
         if (!created && payload.action !== 'update') return []
-        const retitled = payload.action === 'update' && payload.updatedFrom?.title !== undefined
+        const retitled = payload.action === 'update' && (payload.updatedFrom?.title !== undefined || payload.updatedFrom?.description !== undefined)
         const team = data.team?.key ?? teamOf(data.identifier)!
         const state = stateOf(data.state)
         // An issue the board opened: its root is the board's, recorded when the post returns,
@@ -196,6 +237,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
           ? !own
           : !own && (bot === null || data.creatorId !== bot) && payload.actor?.type === 'user' && !data.archivedAt
         const delivery = headers.get('linear-delivery') ?? `${payload.webhookId}:${payload.webhookTimestamp}`
+        const properties = propertiesOf(data)
         return [{
           event: {
             kind: 'lifecycle',
@@ -204,8 +246,10 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
             type: created ? 'issue.created' : 'issue.updated',
             title: `${data.identifier}: ${data.title}`,
             url: data.url ?? payload.url ?? null,
-            labels: { issue: data.identifier, ...(state ? { state } : {}) },
+            body: bodyOf(data.description),
+            labels: { issue: data.identifier, ...(state ? { state } : {}), ...properties.labels },
             unset: [],
+            owns: properties.owns,
             reply: null,
             createRoot: opens,
             ...(retitled ? { retitled: true } : {}),
@@ -255,7 +299,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
       const [state, creator] = await Promise.all([issue.state, issue.creator])
       const found = stateOf(state)
       return {
-        text: `${issue.identifier}: ${issue.title}\n${issue.url}`,
+        text: [`${issue.identifier}: ${issue.title}\n${issue.url}`, bodyOf(issue.description)].filter(Boolean).join('\n\n'),
         raw: { issue: { id: issue.id, identifier: issue.identifier, title: issue.title, url: issue.url } },
         author: author(creator, false),
         labels: { issue: issue.identifier, ...(found ? { state: found } : {}) },
