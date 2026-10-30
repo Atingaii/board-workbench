@@ -44,7 +44,14 @@ beforeEach(() => {
     if (/^\s*query issue_labels\(/i.test(query)) return answer({ issue: { labels: { nodes: [{ id: 'label-1', name: 'Bug', color: '#f00' }], pageInfo: { hasNextPage: false } } } })
     if (/query BoardReadProject/.test(query)) return answer({ projects: { nodes: variables.slugId === 'aa87a7750b04' ? [{ id: 'project-1', name: 'v0 Accessibility', url: 'https://linear.app/acme/project/v0-accessibility-aa87a7750b04' }] : [] } })
     if (/query BoardReadIssues/.test(query)) return answer({ issues: readIssues(variables) })
-    if (/query BoardReadIssue\(/.test(query)) return answer({ issue: variables.id === 'ENG-12' ? { ...readIssue, comments: { nodes: [readComment('c2', 'second', '2026-10-30T11:00:00Z'), readComment('c1', 'first', '2026-10-30T10:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'cursor-c' } } } : null })
+    if (/query BoardReadIssue\(/.test(query)) {
+      if (variables.id !== 'ENG-12') return answer({ issue: null })
+      // Linear's pages come newest first: the board puts them in order.
+      const comments = variables.after
+        ? { nodes: [readComment('c1', 'first', '2026-10-30T10:00:00Z')], pageInfo: { hasNextPage: false, endCursor: null } }
+        : { nodes: [readComment('c3', 'third', '2026-10-30T12:00:00Z'), readComment('c2', 'second', '2026-10-30T11:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'cursor-c' } }
+      return answer({ issue: { ...readIssue, comments } })
+    }
     throw new Error(`unexpected Linear call: ${query.slice(0, 80)}`)
   })
 })
@@ -316,9 +323,13 @@ it("reads a team's issues by its key, and one issue with its comments, oldest fi
   const team = await provider.read('eng', { limit: 200, after: null })
   expect(team).toMatchObject({ channel: 'ENG', thread: null })
   expect(apiCalls().find((call) => /BoardReadIssues/.test(call.query))!.variables).toMatchObject({ filter: { team: { key: { eq: 'ENG' } } }, first: 100 })
-  const one = await provider.read('https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board', { limit: 50, after: null })
-  expect(one).toMatchObject({ channel: 'ENG', thread: 'ENG-12', more: true, next: 'cursor-c' })
+  const one = await provider.read('https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board', { limit: 2, after: null })
+  expect(one).toMatchObject({ channel: 'ENG', thread: 'ENG-12', more: true, next: '2' })
   expect(one.messages.map((message) => [message.id, message.text.split('\n')[0]])).toEqual([['ENG-12', 'ENG-12: Sync Linear to the board'], ['c1', 'first'], ['c2', 'second']])
+  expect(one.messages[0]!.replies).toBe(3)
+  const rest = await provider.read('ENG-12', { limit: 2, after: '2' })
+  expect(rest).toMatchObject({ more: false, next: null })
+  expect(rest.messages.map((message) => message.id)).toEqual(['c3'])
   await expect(provider.read('ENG-99', { limit: 50, after: null })).rejects.toMatchObject({ code: 'channel_not_found' })
   await expect(provider.read('https://linear.app/acme/project/missing-0123456789ab', { limit: 50, after: null })).rejects.toMatchObject({ code: 'channel_not_found' })
   await expect(provider.read('#general', { limit: 50, after: null })).rejects.toMatchObject({ code: 'invalid_target' })

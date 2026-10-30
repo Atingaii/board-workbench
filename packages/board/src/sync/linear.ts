@@ -173,6 +173,7 @@ const ISSUE_FIELDS = `id identifier title description url createdAt priority pri
 // Linear caps a query's complexity, so a page of issues is smaller than the 200 a read can ask for.
 const ISSUES_PER_PAGE = 100
 const DESCRIPTION_IN_LIST = 1500
+const MAX_COMMENTS = 1000
 
 /** What a read names: a project (by its link), a team (by its key), or an issue (by its ID or link). */
 function readTargetOf(target: string): { kind: 'project'; slugId: string } | { kind: 'team'; key: string } | { kind: 'issue'; id: string } {
@@ -333,28 +334,39 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
     const query = <T>(text: string, variables: Record<string, unknown>) =>
       this.api(async () => (await (this.client() as unknown as GraphQL).client.rawRequest<T>(text, variables)).data)
     if (wanted.kind === 'issue') {
-      const data = await query<{ issue: ReadIssue | null }>(
-        `query BoardReadIssue($id: String!, $first: Int!, $after: String) { issue(id: $id) { ${ISSUE_FIELDS}
-          comments(first: $first, after: $after) { nodes { id body createdAt user { name displayName url } } pageInfo { hasNextPage endCursor } } } }`,
-        { id: wanted.id, first: Math.min(limit, ISSUES_PER_PAGE), after },
-      )
-      const issue = data?.issue
-      if (!issue) throw new UnreadableError('channel_not_found', `no Linear issue ${wanted.id}`)
-      const comments = [...issue.comments?.nodes ?? []].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      const page = issue.comments?.pageInfo
+      // Linear pages comments by its own order, so read them all and page oldest first here.
+      let issue: ReadIssue | null = null
+      const comments: ReadComment[] = []
+      let cursor: string | null = null
+      do {
+        const data: { issue: ReadIssue | null } | undefined = await query<{ issue: ReadIssue | null }>(
+          `query BoardReadIssue($id: String!, $first: Int!, $after: String) { issue(id: $id) { ${ISSUE_FIELDS}
+            comments(first: $first, after: $after) { nodes { id body createdAt user { name displayName url } } pageInfo { hasNextPage endCursor } } } }`,
+          { id: wanted.id, first: ISSUES_PER_PAGE, after: cursor },
+        )
+        if (!data?.issue) throw new UnreadableError('channel_not_found', `no Linear issue ${wanted.id}`)
+        issue = data.issue
+        comments.push(...(issue.comments?.nodes ?? []))
+        const page: Page | undefined = issue.comments?.pageInfo
+        cursor = page?.hasNextPage ? page.endCursor ?? null : null
+      } while (cursor !== null && comments.length < MAX_COMMENTS)
+      comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      const from = after === null ? 0 : Math.max(0, Number.parseInt(after, 10) || 0)
+      const shown = comments.slice(from, from + Math.min(limit, ISSUES_PER_PAGE))
+      const to = from + shown.length
       return {
         channel: teamOf(issue.identifier) ?? wanted.id,
         name: null,
         thread: issue.identifier,
         messages: [
-          ...(after ? [] : [{ ...issueMessage(issue, null), replies: comments.length }]),
-          ...comments.map((comment) => ({
+          ...(from === 0 ? [{ ...issueMessage(issue, null), replies: comments.length }] : []),
+          ...shown.map((comment) => ({
             id: comment.id, thread: issue.identifier, author: handleOf(comment.user ?? undefined) ?? 'unknown',
             text: comment.body ?? '', createdAt: comment.createdAt, replies: 0, files: [],
           })),
         ],
-        more: page?.hasNextPage ?? false,
-        next: page?.hasNextPage ? page.endCursor ?? null : null,
+        more: to < comments.length,
+        next: to < comments.length ? String(to) : null,
       }
     }
     let filter: Record<string, unknown>
