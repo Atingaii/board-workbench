@@ -96,7 +96,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   const { shipit } = await import("../app/api/board/[[...path]]/shipit.ts");
   const { security } = await import("../app/api/board/[[...path]]/security.ts");
   const { owner } = await import("../app/api/board/[[...path]]/owner.ts");
-  const { inThread } = await import("../app/api/board/[[...path]]/inthread.ts");
+  const { inThread, devMirror } = await import("../app/api/board/[[...path]]/inthread.ts");
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
   const { channels, slack } = await import("../../../packages/board/src/sync/slack.ts");
   const { github, repos } = await import("../../../packages/board/src/sync/github.ts");
@@ -171,7 +171,7 @@ test("PR-labeled Factory discussions stay off dev automation and external sync",
   assert.equal(githubPlatform.posts.length, 0);
 });
 
-test("a factory PR lives in the thread it was built for: its line there, a PR emoji on the root, no channel post", async () => {
+test("a factory PR starts its own Slack thread, and the thread it was built for gets its line", async () => {
   const { inThread, devMirror } = await import("../app/api/board/[[...path]]/inthread.ts");
   const { renderForSlack } = await import("../app/api/board/[[...path]]/render.ts");
   const { fakePlatform } = await import("../../../packages/board/test/sync-fixtures.ts");
@@ -216,19 +216,18 @@ test("a factory PR lives in the thread it was built for: its line there, a PR em
     return found;
   });
   assert.equal(root.labels.source, source.id);
-  const card = await waitFor(() => slackPlatform.posts.find((post) => post.text.includes("#77")));
+  const card = await waitFor(() => slackPlatform.posts.find((post) => post.text.includes("#77") && post.threadId?.endsWith(slackPlatform.channelPosts[0].id)));
   assert.equal(JSON.parse(card.text).markdown, ":pr: [#77 Post PRs in their thread](https://github.com/vercel-labs/board/pull/77)");
   assert.ok(card.threadId.endsWith(slackPlatform.channelPosts[0].id), "in the source's Slack thread");
-  await waitFor(() => slackPlatform.reactions.some((r) => r.emoji === "pr" && r.added));
-  assert.equal(slackPlatform.channelPosts.length, 1, "the PR starts no thread in the channel");
+  await waitFor(() => slackPlatform.channelPosts.length === 2);
+  assert.match(slackPlatform.channelPosts[1].text, /#77 Post PRs in their thread/, "the PR starts its own thread in the channel");
 
   await pr("closed", { merged: true });
-  await waitFor(() => slackPlatform.reactions.some((r) => r.emoji === "pr-merged" && r.added));
-  assert.ok(slackPlatform.reactions.some((r) => r.emoji === "pr" && !r.added));
   await waitFor(() => slackPlatform.edits.some((edit) => String(edit.text ?? JSON.stringify(edit)).includes(":pr-merged: [#77")));
-  assert.equal(slackPlatform.channelPosts.length, 1);
+  assert.equal(slackPlatform.channelPosts.length, 2);
+  assert.deepEqual(slackPlatform.reactions.filter((r) => r.emoji.startsWith("pr")), [], "no PR emoji on the source root");
 
-  // A source thread kept off Slack can't show its PR, so that PR starts its own thread in the channel.
+  // A source thread kept off Slack gets no line, and its PR still starts its own thread.
   const hidden = (await operator("POST", "/messages", { channel: "dev", text: "Board-only thread", noSync: true })).body.message;
   await board.fetch(new Request(`${URL}/webhooks/github`, {
     method: "POST",
@@ -241,6 +240,6 @@ test("a factory PR lives in the thread it was built for: its line there, a PR em
       },
     }),
   }));
-  await waitFor(() => slackPlatform.channelPosts.length === 2);
-  assert.match(slackPlatform.channelPosts[1].text, /#78 From a board-only thread/);
+  await waitFor(() => slackPlatform.channelPosts.length === 3);
+  assert.match(slackPlatform.channelPosts[2].text, /#78 From a board-only thread/);
 });
