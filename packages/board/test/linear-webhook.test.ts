@@ -112,9 +112,19 @@ it('opens a thread for a new issue and labels its state', async () => {
     author: { isBot: false },
   }])
   const moved = await send({ type: 'Issue', action: 'update', url: issue.url, data: { ...data, state: { name: 'Done', type: 'completed' } }, updatedFrom: { stateId: 'state-todo' }, actor: ada })
-  expect(moved.received.map((r) => r.event)).toMatchObject([{ type: 'issue.updated', labels: { issue: 'ENG-12', state: 'completed' }, createRoot: false }])
-  const other = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { priority: 2 }, actor: ada })
-  expect(other.received).toEqual([])
+  expect(moved.received.map((r) => r.event)).toMatchObject([{ type: 'issue.updated', labels: { issue: 'ENG-12', state: 'completed' }, createRoot: true }])
+})
+
+it('opens a thread on any edit to an issue the board has not seen, like a bulk edit of older issues', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Backlog', type: 'backlog' } }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { priority: 2 }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{
+    kind: 'lifecycle', type: 'issue.updated', channel: 'linear:ENG', thread,
+    title: 'ENG-12: Sync Linear to the board', labels: { issue: 'ENG-12', state: 'backlog' }, createRoot: true,
+  }])
+  const removed = await send({ type: 'Issue', action: 'remove', url: issue.url, data, actor: ada })
+  expect(removed.received).toEqual([])
 })
 
 it('never opens a second root for an issue the board opened', async () => {
