@@ -1164,6 +1164,7 @@ export const schedulesContract = contract({
     'schedule.canceled': z.object({ id, by: Author, reason: z.enum(['canceled', 'thread_deleted', 'dropped', 'revoked']) }),
     'schedule.due': z.object({ id, n, at }),                 // (server) an A2 timer
     'schedule.fired': z.object({ id, n, message, next }),    // (server)
+    'schedule.takeover': z.object({ deployment }),           // (server) the Vercel deployment that sends from now on
   },
 })
 ```
@@ -3078,6 +3079,16 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   The next send is the next slot after now, so after downtime it sends once
   rather than replaying every missed slot. Vercel Queues delays at most 6 days,
   so a send further out goes in hops of up to 5.
+- **The newest deployment sends.** Vercel Queues delivers a timer only to the
+  deployment that armed it, and each deployment checks access under its own
+  rules. So each instance's first request that isn't a queue's delivery appends
+  `schedule.takeover` with its `VERCEL_DEPLOYMENT_ID` (unless its deployment is
+  already the one that sends) and arms every pending schedule's next send
+  itself. A deployment's timers land in a session of its own,
+  `schedules:<deployment>`, so with Vercel Queues no deployment drains another's
+  timers; with a scheduler that delivers to one URL, the one that sends runs them all. A send due on
+  any deployment but the one that took over last is a no-op, so an earlier
+  deployment's code and rules never post one, even when its own timer wakes it.
 - **It runs on the scheduler,** `a2()`'s `scheduler`: `vercelQueues()` or
   `qstash()` on serverless, or `localScheduler()` for a long-running process
   (a dev server, `vb serve`, tests). `localScheduler()`'s timers live in the
