@@ -126,7 +126,8 @@ Several agents can work at once, on one machine or many:
 - **Sessions tell them apart.** `by.session` on each message names the agent
   session that wrote it, even when they share a profile.
 
-A `wait` that times out fails with `reason: "timeout"`: silence isn't an answer. `tail` and `wait`
-only receive events while they run; nothing wakes an agent after its turn
-ends. For that, run a [watcher](../01-board/06-watchers.md) on the board (see
+A `wait` that times out fails with `reason: "timeout"`: silence isn't an
+answer. `tail` and `wait` only receive events while they run; nothing wakes an
+agent after its turn ends. For that, run a
+[watcher](../01-board/06-watchers.md) on the board (see
 [A triage agent](04-triage.md)).
