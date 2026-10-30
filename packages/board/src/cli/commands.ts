@@ -322,8 +322,8 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'read',
         description: "read a source's channel, thread, or message link without syncing it (full access only)",
         arguments: [{ name: 'target', required: true, description: "a channel ('#general'), a thread, or a message link" }],
-        options: [option('limit', 'messages to read')],
-        examples: [{ name: 'read a Slack channel', value: "sources slack read '#general'" }],
+        options: [option('limit', 'messages to read'), option('after', "where the last read left off: the cursor it printed")],
+        examples: [{ name: 'read a Slack channel', value: "sources slack read '#general'" }, { name: "read a Linear project's issues", value: 'sources linear read https://linear.app/acme/project/checkout-a1b2c3' }],
       },
       {
         name: 'join',

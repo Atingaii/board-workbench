@@ -425,7 +425,7 @@ export function createBoardClient(options: ClientOptions) {
      * Reads a platform channel (`#name`, an ID), thread (`C0123:1727000000.123456`),
      * or message permalink on demand, without syncing or storing it. Full access only.
      */
-    readSource: (key: string, target: string, opts: { limit?: number } = {}) =>
+    readSource: (key: string, target: string, opts: { limit?: number; after?: string } = {}) =>
       call<SourceRead>('GET', `/sources/${key}/read${queryString({ target, ...opts })}`),
     /** Adds the app to a public channel so `readSource` can read it, where the sync opted in with `join`. Full access only. */
     joinSource: (key: string, target: string) =>

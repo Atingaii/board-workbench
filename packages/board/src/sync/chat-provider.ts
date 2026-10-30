@@ -38,7 +38,7 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   /** The platform's URL for a message, by its own IDs: `SyncProvider.url`. */
   url?(thread: string, message: string): Promise<string | null>
   /** A channel or thread, read on demand without syncing it. */
-  read?(target: string, options: { limit: number }): Promise<SourceRead>
+  read?(target: string, options: { limit: number; after: string | null }): Promise<SourceRead>
   /** Adds the app to a channel so `read` can read it. */
   join?(target: string): Promise<SourceJoin>
   avatar?(message: ChatMessage): Promise<string | null>
@@ -210,7 +210,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     return this.transport.url ? this.transport.url(thread, message) : super.url(thread, message)
   }
 
-  override async read(target: string, options: { limit: number }): Promise<SourceRead> {
+  override async read(target: string, options: { limit: number; after: string | null }): Promise<SourceRead> {
     return this.transport.read ? this.transport.read(target, options) : super.read(target, options)
   }
   override async join(target: string): Promise<SourceJoin> {

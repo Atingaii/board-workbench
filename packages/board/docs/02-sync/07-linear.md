@@ -99,6 +99,25 @@ A comment on an issue that opened before you mapped its team still lands: the
 board fetches the issue through Linear's API, creates its root, then posts the
 comment as a reply.
 
+## Read on demand
+
+`vb sources <key> read` reads Linear without syncing anything, so an agent can
+work through a project's issues without a thread for each one:
+
+```bash
+vb sources linear read https://linear.app/acme/project/checkout-a1b2c3d4e5f6   # a project's issues
+vb sources linear read ENG                                                     # a team's issues
+vb sources linear read ENG-123                                                 # one issue and its comments
+```
+
+A project or team read lists issues newest first, each with its state,
+priority, assignee, project, labels, link, and description (cut at 1,500
+characters). An issue read shows the whole description, then its comments,
+oldest first. A page holds at most 100 issues or comments: when there are more,
+the read ends with the `--after` cursor that reads the next page. It reads with
+the Linear app's token, so it needs `manage` in every channel, as every source
+read does.
+
 ## Reactions
 
 A reaction on the board goes to its comment on Linear, while it's added: Linear

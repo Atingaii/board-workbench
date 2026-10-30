@@ -99,7 +99,7 @@ export type BoardBinding = {
    * Reads a platform channel or thread with sync entry `key`'s app, which only board() has: what
    * `readSource` answers. 404 `not_synced_here` for an entry it doesn't run.
    */
-  readSource(key: string, target: string, limit: number): Promise<SourceRead>
+  readSource(key: string, target: string, limit: number, after: string | null): Promise<SourceRead>
   /** Adds sync entry `key`'s app to a channel, where it opted in: what `joinSource` answers. 404 `not_synced_here` likewise. */
   joinSource(key: string, target: string): Promise<SourceJoin>
   /**

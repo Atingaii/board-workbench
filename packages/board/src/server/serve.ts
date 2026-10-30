@@ -214,7 +214,7 @@ export type Serve = {
   receive(key: string, item: InboxDelivery, meta: { id: string; attempt: number; signal: AbortSignal }): Promise<void>
   pull(): Promise<number>
   /** What `readSource` reads with: sync entry `key`'s app, a 404 `not_synced_here` for one this board doesn't run. */
-  readSource(key: string, target: string, limit: number): Promise<Protocol['readSource']['output']>
+  readSource(key: string, target: string, limit: number, after: string | null): Promise<Protocol['readSource']['output']>
   /** What `joinSource` joins with: sync entry `key`'s app, a 404 `not_synced_here` for one this board doesn't run. */
   joinSource(key: string, target: string): Promise<Protocol['joinSource']['output']>
   /** What `typing` shows typing with: the platforms this board syncs. */
@@ -868,9 +868,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       await engine.receive(key, item, { id, attempt })
     },
     pull: () => (engine ? engine.pull() : Promise.resolve(0)),
-    async readSource(key, target, limit) {
+    async readSource(key, target, limit, after) {
       if (!engine || !entries[key]) throw notFound(`this board doesn't run sync entry ${key}: read it where its sync runs`, 'not_synced_here')
-      return engine.readSource(key, target, limit)
+      return engine.readSource(key, target, limit, after)
     },
     async joinSource(key, target) {
       if (!engine || !entries[key]) throw notFound(`this board doesn't run sync entry ${key}: join it where its sync runs`, 'not_synced_here')

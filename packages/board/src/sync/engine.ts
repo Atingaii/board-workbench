@@ -1334,10 +1334,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   }
 
   /** A platform channel or thread, read for the caller: nothing is synced, stored, or joined. */
-  async function readSource(key: string, target: string, limit: number) {
+  async function readSource(key: string, target: string, limit: number, after: string | null) {
     const platform = platformOf(key)
     try {
-      return await platform.read(target, { limit })
+      return await platform.read(target, { limit, after })
     } catch (error) {
       if (error instanceof UnreadableError) throw new HttpError(unreadableStatus(error.code), error.code, error.message)
       throw badRequest(`can't read ${target} from ${key}: ${describe(error)}`, 'platform_error')

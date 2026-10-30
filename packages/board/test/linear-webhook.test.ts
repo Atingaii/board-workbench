@@ -15,6 +15,16 @@ const board = { id: BOT, name: 'board', url: 'https://linear.app/acme/profiles/b
 const issue = { id: ISSUE, identifier: 'ENG-12', title: 'Sync Linear to the board', url: 'https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board' }
 const thread = `linear:ENG:${ISSUE}`
 
+const readIssue = {
+  ...issue, description: 'Line numbers are not read out.', createdAt: '2026-10-29T10:00:00Z', priority: 2, priorityLabel: 'High',
+  state: { name: 'In Review' }, assignee: ada, creator: ada, project: { name: 'v0 Accessibility' }, labels: { nodes: [{ name: 'Screen reader' }] },
+}
+const readComment = (id: string, body: string, createdAt: string) => ({ id, body, createdAt, user: ada })
+const readIssues = (variables: Record<string, unknown>) => ({
+  nodes: [{ ...readIssue, comments: { nodes: [{ id: 'c1', createdAt: '2026-10-30T10:00:00Z' }] } }, { ...readIssue, id: 'other', identifier: 'ENG-13', title: 'Unassigned one', description: null, priority: 0, priorityLabel: 'No priority', assignee: null, labels: { nodes: [] }, comments: { nodes: [] } }],
+  pageInfo: variables.after ? { hasNextPage: false, endCursor: null } : { hasNextPage: true, endCursor: 'cursor-2' },
+})
+
 // Linear's GraphQL API, answering by operation: who the app is, its teams, its issues, and what it creates.
 const calls: { query: string; variables: Record<string, unknown> }[] = []
 beforeEach(() => {
@@ -32,6 +42,9 @@ beforeEach(() => {
     if (/issueCreate\(/.test(query)) return answer({ issueCreate: { success: true, lastSyncId: 1, issue: { id: OPENED } } })
     if (/issueUpdate\(/.test(query)) return answer({ issueUpdate: { success: true, lastSyncId: 2, issue: { id: OPENED } } })
     if (/^\s*query issue_labels\(/i.test(query)) return answer({ issue: { labels: { nodes: [{ id: 'label-1', name: 'Bug', color: '#f00' }], pageInfo: { hasNextPage: false } } } })
+    if (/query BoardReadProject/.test(query)) return answer({ projects: { nodes: variables.slugId === 'aa87a7750b04' ? [{ id: 'project-1', name: 'v0 Accessibility', url: 'https://linear.app/acme/project/v0-accessibility-aa87a7750b04' }] : [] } })
+    if (/query BoardReadIssues/.test(query)) return answer({ issues: readIssues(variables) })
+    if (/query BoardReadIssue\(/.test(query)) return answer({ issue: variables.id === 'ENG-12' ? { ...readIssue, comments: { nodes: [readComment('c2', 'second', '2026-10-30T11:00:00Z'), readComment('c1', 'first', '2026-10-30T10:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'cursor-c' } } } : null })
     throw new Error(`unexpected Linear call: ${query.slice(0, 80)}`)
   })
 })
@@ -281,4 +294,32 @@ it("puts an issue's description on its root, redraws it when the description cha
   await send({ type: 'Issue', action: 'update', url: issue.url, data: { ...data, description: 'New steps', priority: 0, priorityLabel: 'No priority' }, updatedFrom: { description: 'Old steps', priority: 2 }, actor: ada })
   await vi.waitFor(async () => expect((await root())?.text).toBe(`ENG-12: Sync Linear to the board\n${issue.url}\n\nNew steps`))
   await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'unstarted', project: 'v0-accessibility', 'project-lead': 'ada' }))
+})
+
+it("reads a project's issues on demand, with their properties and descriptions, a page at a time", async () => {
+  const { provider } = setup()
+  const read = await provider.read('https://linear.app/acme/project/v0-accessibility-aa87a7750b04/issues?layout=list', { limit: 50, after: null })
+  expect(read).toMatchObject({ channel: 'https://linear.app/acme/project/v0-accessibility-aa87a7750b04', name: 'v0 Accessibility', thread: null, more: true, next: 'cursor-2' })
+  expect(read.messages.map((message) => message.text)).toEqual([
+    `ENG-12: Sync Linear to the board\nIn Review · High · assigned to ada · v0 Accessibility · Screen reader\n${issue.url}\n\nLine numbers are not read out.`,
+    `ENG-13: Unassigned one\nIn Review · unassigned · v0 Accessibility\n${issue.url}`,
+  ])
+  expect(read.messages[0]).toMatchObject({ id: 'ENG-12', thread: 'ENG-12', author: 'ada', replies: 1 })
+  const filters = apiCalls().filter((call) => /BoardReadIssues/.test(call.query)).map((call) => call.variables)
+  expect(filters).toEqual([{ filter: { project: { id: { eq: 'project-1' } } }, first: 50, after: null }])
+  const second = await provider.read('https://linear.app/acme/project/v0-accessibility-aa87a7750b04', { limit: 50, after: 'cursor-2' })
+  expect(second).toMatchObject({ more: false, next: null })
+})
+
+it("reads a team's issues by its key, and one issue with its comments, oldest first", async () => {
+  const { provider } = setup()
+  const team = await provider.read('eng', { limit: 200, after: null })
+  expect(team).toMatchObject({ channel: 'ENG', thread: null })
+  expect(apiCalls().find((call) => /BoardReadIssues/.test(call.query))!.variables).toMatchObject({ filter: { team: { key: { eq: 'ENG' } } }, first: 100 })
+  const one = await provider.read('https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board', { limit: 50, after: null })
+  expect(one).toMatchObject({ channel: 'ENG', thread: 'ENG-12', more: true, next: 'cursor-c' })
+  expect(one.messages.map((message) => [message.id, message.text.split('\n')[0]])).toEqual([['ENG-12', 'ENG-12: Sync Linear to the board'], ['c1', 'first'], ['c2', 'second']])
+  await expect(provider.read('ENG-99', { limit: 50, after: null })).rejects.toMatchObject({ code: 'channel_not_found' })
+  await expect(provider.read('https://linear.app/acme/project/missing-0123456789ab', { limit: 50, after: null })).rejects.toMatchObject({ code: 'channel_not_found' })
+  await expect(provider.read('#general', { limit: 50, after: null })).rejects.toMatchObject({ code: 'invalid_target' })
 })

@@ -9,6 +9,7 @@ import { createLinearAdapter } from '@chat-adapter/linear'
 import { connectLinearAdapter } from '@vercel/connect/chat'
 import { channels, type SyncFn, type SyncUnit } from './fn.ts'
 import { slug, tagOf } from './tags.ts'
+import type { SourceMessage, SourceRead } from '../api/routes.ts'
 
 export const LinearEvent = eventSchema('linear', 'comment')
 export type LinearEvent = z.infer<typeof LinearEvent>
@@ -155,6 +156,56 @@ function stateOf(state: { name?: string; type?: string } | undefined) {
   return state?.type ?? state?.name?.toLowerCase() ?? null
 }
 
+type ReadIssue = {
+  id: string; identifier: string; title: string; description?: string | null; url: string; createdAt: string
+  priority?: number; priorityLabel?: string
+  state?: { name?: string } | null; assignee?: User | null; creator?: User | null; project?: { name?: string } | null
+  labels?: { nodes: { name?: string }[] }
+  comments?: { nodes: ReadComment[]; pageInfo?: Page }
+}
+type ReadComment = { id: string; body?: string; createdAt: string; user?: User | null }
+type Page = { hasNextPage: boolean; endCursor?: string | null }
+type GraphQL = { client: { rawRequest<T>(query: string, variables: Record<string, unknown>): Promise<{ data?: T }> } }
+
+const ISSUE_FIELDS = `id identifier title description url createdAt priority priorityLabel
+  state { name } assignee { name displayName url } creator { name displayName url } project { name }
+  labels(first: 10) { nodes { name } }`
+// Linear caps a query's complexity, so a page of issues is smaller than the 200 a read can ask for.
+const ISSUES_PER_PAGE = 100
+const DESCRIPTION_IN_LIST = 1500
+
+/** What a read names: a project (by its link), a team (by its key), or an issue (by its ID or link). */
+function readTargetOf(target: string): { kind: 'project'; slugId: string } | { kind: 'team'; key: string } | { kind: 'issue'; id: string } {
+  const project = /\/project\/(?:[^/?#]*-)?([0-9a-f]{8,})(?:[/?#]|$)/i.exec(target)
+  if (project) return { kind: 'project', slugId: project[1]! }
+  const issue = /(?:^|\/issue\/)([A-Z0-9_]+-\d+)(?:[/?#]|$)/i.exec(target.trim())
+  if (issue) return { kind: 'issue', id: issue[1]!.toUpperCase() }
+  if (/^[A-Z0-9_]+$/i.test(target.trim())) return { kind: 'team', key: target.trim().toUpperCase() }
+  throw new UnreadableError('invalid_target', `can't read ${target} from Linear: name a project by its link, a team by its key (ENG), or an issue (ENG-123)`)
+}
+
+/** An issue as a read shows it: its title, its properties on one line, its link, and what it says. */
+function issueMessage(issue: ReadIssue, descriptionMax: number | null): SourceMessage {
+  const properties = [
+    issue.state?.name,
+    issue.priority ? issue.priorityLabel : undefined,
+    issue.assignee ? `assigned to ${handleOf(issue.assignee)}` : 'unassigned',
+    issue.project?.name,
+    ...(issue.labels?.nodes ?? []).map((label) => label.name),
+  ].filter(Boolean)
+  const description = bodyOf(issue.description)
+  const shown = description && descriptionMax !== null && description.length > descriptionMax ? `${description.slice(0, descriptionMax)}…` : description
+  return {
+    id: issue.identifier,
+    thread: issue.identifier,
+    author: handleOf(issue.creator ?? undefined) ?? 'unknown',
+    text: [`${issue.identifier}: ${issue.title}\n${properties.join(' · ')}\n${issue.url}`, shown].filter(Boolean).join('\n\n'),
+    createdAt: issue.createdAt,
+    replies: issue.comments?.nodes.length ?? 0,
+    files: [],
+  }
+}
+
 export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   private readonly linear: LinearAdapter
   private readonly teamIds = new Map<string, string>()
@@ -271,6 +322,74 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   private async api<T>(fn: () => Promise<T>): Promise<T> {
     await this.ready()
     return this.linear.isConnectMode() ? this.linear.withConnectClient(undefined, fn) : fn()
+  }
+
+  /**
+   * A project's or team's issues, newest first, or one issue and its comments, read on demand:
+   * nothing is synced or stored. `next` pages past a read's `limit`.
+   */
+  override async read(target: string, { limit, after }: { limit: number; after: string | null }): Promise<SourceRead> {
+    const wanted = readTargetOf(target)
+    const query = <T>(text: string, variables: Record<string, unknown>) =>
+      this.api(async () => (await (this.client() as unknown as GraphQL).client.rawRequest<T>(text, variables)).data)
+    if (wanted.kind === 'issue') {
+      const data = await query<{ issue: ReadIssue | null }>(
+        `query BoardReadIssue($id: String!, $first: Int!, $after: String) { issue(id: $id) { ${ISSUE_FIELDS}
+          comments(first: $first, after: $after) { nodes { id body createdAt user { name displayName url } } pageInfo { hasNextPage endCursor } } } }`,
+        { id: wanted.id, first: Math.min(limit, ISSUES_PER_PAGE), after },
+      )
+      const issue = data?.issue
+      if (!issue) throw new UnreadableError('channel_not_found', `no Linear issue ${wanted.id}`)
+      const comments = [...issue.comments?.nodes ?? []].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      const page = issue.comments?.pageInfo
+      return {
+        channel: teamOf(issue.identifier) ?? wanted.id,
+        name: null,
+        thread: issue.identifier,
+        messages: [
+          ...(after ? [] : [{ ...issueMessage(issue, null), replies: comments.length }]),
+          ...comments.map((comment) => ({
+            id: comment.id, thread: issue.identifier, author: handleOf(comment.user ?? undefined) ?? 'unknown',
+            text: comment.body ?? '', createdAt: comment.createdAt, replies: 0, files: [],
+          })),
+        ],
+        more: page?.hasNextPage ?? false,
+        next: page?.hasNextPage ? page.endCursor ?? null : null,
+      }
+    }
+    let filter: Record<string, unknown>
+    let channel: string
+    let name: string | null
+    if (wanted.kind === 'project') {
+      const data = await query<{ projects: { nodes: { id: string; name: string; url: string }[] } }>(
+        'query BoardReadProject($slugId: String!) { projects(filter: { slugId: { eq: $slugId } }, first: 1) { nodes { id name url } } }',
+        { slugId: wanted.slugId },
+      )
+      const project = data?.projects.nodes[0]
+      if (!project) throw new UnreadableError('channel_not_found', `no Linear project ${target}`)
+      filter = { project: { id: { eq: project.id } } }
+      channel = project.url
+      name = project.name
+    } else {
+      await this.team(wanted.key)
+      filter = { team: { key: { eq: wanted.key } } }
+      channel = wanted.key
+      name = null
+    }
+    const data = await query<{ issues: { nodes: ReadIssue[]; pageInfo: Page } }>(
+      `query BoardReadIssues($filter: IssueFilter, $first: Int!, $after: String) {
+        issues(filter: $filter, first: $first, after: $after) { nodes { ${ISSUE_FIELDS} comments(first: 20) { nodes { id createdAt } } } pageInfo { hasNextPage endCursor } } }`,
+      { filter, first: Math.min(limit, ISSUES_PER_PAGE), after },
+    )
+    const issues = data?.issues
+    return {
+      channel,
+      name,
+      thread: null,
+      messages: (issues?.nodes ?? []).map((issue) => issueMessage(issue, DESCRIPTION_IN_LIST)),
+      more: issues?.pageInfo.hasNextPage ?? false,
+      next: issues?.pageInfo.hasNextPage ? issues.pageInfo.endCursor ?? null : null,
+    }
   }
 
   override async resolveChannel(key: string) {
