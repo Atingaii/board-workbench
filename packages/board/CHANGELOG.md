@@ -1,5 +1,11 @@
 # vboard
 
+## 0.27.0
+
+### Minor Changes
+
+- 0965ff9: Breaking for scripts: a `wait` (or `identity link`) that times out exits 1, not 124, as the Vercel CLI's waits do. Tell a timeout from another failure by its `reason`, `timeout`, in the `--json` error document.
+
 ## 0.26.2
 
 ### Patch Changes
