@@ -36,7 +36,7 @@ export const prThreadOf = (message: { id: string; re: string | null; labels: Rec
   !message ? null : message.re === null ? message.id : (message.labels["pr.thread"] ?? null);
 
 /** Whether a board message is a factory PR's root built for another thread (labeled `source`). */
-export const livesInThread = (message: { re: string | null; labels: Record<string, string> }) =>
+export const isFactoryPrRoot = (message: { re: string | null; labels: Record<string, string> }) =>
   message.re === null && !!message.labels.pr && !!message.labels.source;
 
 /** Slack's side of `dev`: every new root starts a thread in the channel, a factory PR's too, so its review happens there. */
@@ -53,7 +53,7 @@ export function inThread(): Watcher {
     tail: "dev --label pr",
     run: async ({ event, board }) => {
       if (!["message.posted", "labels.changed", "message.edited"].includes(event.type)) return;
-      if (!event.message || !livesInThread(event.message)) return;
+      if (!event.message || !isFactoryPrRoot(event.message)) return;
       // The root as it is now, not as it was at this event: a state change or retitle logged before
       // the line's `card` label still reaches the line.
       const root = (await board.thread(event.message.id)).message;

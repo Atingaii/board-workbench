@@ -207,7 +207,7 @@ thread rather than starting one.
   (`agent/sandbox.ts`). Its branch (`board/<thread>`) and preview say `board`,
   not `factory` or `pi` as on the factory's earlier stores: thread IDs restarted
   with each, so an old `factory-12` or `pi/12` belongs to another #12, and the
-  watchers that read a PR's branch (`owner`, `crosspost`, `autoland`) read only
+  watchers that read a PR's branch (`owner`, `in-thread`, `autoland`) read only
   `board/`. Its credentials are placeholders that the sandbox's network policy
   swaps for real ones on the way out (`agent/lib/credentials.ts`): put in place
   with git's identity at every turn's start, and again before a `bash` call when
