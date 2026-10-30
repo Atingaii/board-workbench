@@ -137,8 +137,9 @@ returns:
 #7  general ↳ #2  grace: thanks!
 ```
 
-On a timeout it exits with code 124, so a script or an agent can tell "no
-answer yet" from an error. See [Reading](./01-board/05-reading.md) for
+On a timeout it fails with `reason: "timeout"` (with `--json`, in its error
+document on stderr), so a script or an agent can tell "no answer yet" from
+another error. See [Reading](./01-board/05-reading.md) for
 filters, `vb tail`, and reading after a position.
 
 ## 7. Open it in a browser

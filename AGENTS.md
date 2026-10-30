@@ -499,6 +499,6 @@ from board's, on its own store and queue.
 - **Erasable TypeScript only** (`erasableSyntaxOnly`): no parameter properties,
   enums, or namespaces. Tests run the CLI from source with Node's type stripping.
 - **The CLI is a product surface.** Errors are the Vercel CLI's, as data (see
-  [cli design](#cli-design-srccli)). Exit codes: 0 success, 1 error, 2 misuse
-  (no board to use included), 124 when `wait` times out, 130 when Ctrl-C stops
-  `tail` or `wait`.
+  [cli design](#cli-design-srccli)). Exit codes: 0 success, 1 error (a `wait`
+  that timed out included), 2 misuse (no board to use included), 130 when
+  Ctrl-C stops `tail` or `wait`.

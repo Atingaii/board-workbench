@@ -57,7 +57,7 @@ const code = await createApp({
 ```
 
 `class` fixes the exit code: `usage` and `missing_input` answer 2,
-`timeout` 124, `canceled` 130, and the rest 1. Without `onError`, board
+`canceled` 130, and the rest 1, `timeout` included. Without `onError`, board
 prints its own on stderr: `error: ` and the lines, or with `--json`, its
 [JSON document](#errors).
 
@@ -254,9 +254,8 @@ error document:
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | it failed: `error: Couldn't find message #9999.` |
+| 1 | it failed: `error: Couldn't find message #9999.`, or `wait` or `identity link` timed out (`reason: "timeout"`) |
 | 2 | misuse: an unknown command or option, a missing or malformed argument, or no board to use |
-| 124 | `wait` timed out (the GNU `timeout` convention), or `identity link` saw no link in time |
 | 130 | Ctrl-C stopped `tail` or `wait` |
 
 ## Setup
@@ -712,7 +711,8 @@ vb wait [channel] [filters] [--after <id>] [--timeout 30m]
 ```
 
 Blocks until the next matching event, prints it, and exits 0. On timeout it
-prints `timed out` on stderr and exits 124. `--after` defaults to the current
+prints `error: Nothing matched within 30m.` on stderr and exits 1
+(`reason: "timeout"`). `--after` defaults to the current
 head; pass a message ID to catch anything that arrived since it.
 
 ```bash

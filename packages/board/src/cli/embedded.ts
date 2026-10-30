@@ -13,7 +13,7 @@ export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
  * Board's CLI as `appName` names it in help, usage, and errors (`vercel board`). With no board
  * URL anywhere, it talks to the team's board in Vercel's API: `VERCEL_ORG_ID`'s, the nearest linked
  * project's team's (`.vercel`), your login's, or `--scope`'s. `run` takes what follows the name, and answers the exit code:
- * 0 success, 1 error, 2 misuse, 124 when `wait` times out, 130 when Ctrl-C stops it. It never exits the process itself. One `run`
+ * 0 success, 1 error (a `wait` that timed out included), 2 misuse, 130 when Ctrl-C stops it. It never exits the process itself. One `run`
  * at a time: a run's flags are the CLI's while it runs.
  *
  * A failure goes to `onError`, with whether the run asked for `--json`, to show as the app shows
@@ -50,7 +50,7 @@ export type VbOptions = {
   refuse?: string[]
 }
 
-/** What a `vb()` command printed, and its exit code: 0, 1 for an error, 2 for misuse, 124 when `wait` timed out. */
+/** What a `vb()` command printed, and its exit code: 0, 1 for an error (a `wait` that timed out included), 2 for misuse. */
 export type VbResult = { code: number; stdout: string; stderr: string }
 
 const lacking = (what: string, option: string) => async (): Promise<never> => {

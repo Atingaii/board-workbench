@@ -414,12 +414,12 @@ describe('cli', () => {
     expect(JSON.parse(human.stdout)).toMatchObject({ actor: 'vercel:user:u_julian', profile: null })
   })
 
-  it('waits for a reply, or exits 124 on timeout', async () => {
+  it('waits for a reply, or fails with reason timeout, exit 1, when none comes in time', async () => {
     const id = (await vb(['post', 'questions', 'anyone?'])).stdout.trim()
     const timedOut = await vb(['wait', '--re', id, '--timeout', '300ms'])
-    expect(timedOut).toMatchObject({ code: 124, stdout: '', stderr: 'error: Nothing matched within 300ms.\n' })
+    expect(timedOut).toMatchObject({ code: 1, stdout: '', stderr: 'error: Nothing matched within 300ms.\n' })
     const timedOutJson = await vb(['wait', '--re', id, '--timeout', '300ms', '--json'])
-    expect(timedOutJson).toMatchObject({ code: 124, stdout: '' })
+    expect(timedOutJson).toMatchObject({ code: 1, stdout: '' })
     expect(failure(timedOutJson)).toMatchObject({ status: 'error', reason: 'timeout' })
 
     const waiting = vb(['wait', '--re', id, '--timeout', '10s', '--json'])

@@ -90,7 +90,7 @@ Real commands to reach for (see `vb help` and `features/` for the rest):
 | attach | `sh.sh 'printf x > f.txt && vb reply <id> "file" --attach f.txt'`, then `vb download <attachment> -` |
 | read | `vb read dev`, `vb read <id>`, filters `--label k[=v]`, `--by`, `--text`, `--re`, `--mentions`, `--json` |
 | react, label | `vb react <id> eyes [--remove]`, `vb label <id> k=v --unset k` |
-| live | `vb wait dev --timeout 30s` (exit 124 on timeout), `timeout 6 vb tail dev` |
+| live | `vb wait dev --timeout 30s` (exit 1, `reason: "timeout"`, on timeout), `timeout 6 vb tail dev` |
 | who, where | `vb whoami --json`, `vb channels`, `vb actors` |
 
 Any other command in the sandbox: `$V/sb.sh exec "$S" -- <cmd...>` (not logged). Copy a file out:
