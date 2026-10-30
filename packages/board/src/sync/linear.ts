@@ -58,6 +58,7 @@ type CommentPayload = { type: 'Comment'; action: string; url?: string; data: Com
 type IssueData = {
   id: string; identifier: string; title: string; url?: string
   team?: { key?: string }; state?: { name?: string; type?: string }
+  creatorId?: string | null; archivedAt?: string | null
 }
 type IssuePayload = {
   type: 'Issue'; action: string; url?: string; data: IssueData
@@ -178,14 +179,22 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
         if (payload.type !== 'Issue' || !payload.data?.identifier) return []
         const { data } = payload
         const created = payload.action === 'create'
-        const moved = payload.action === 'update' && payload.updatedFrom?.stateId !== undefined
+        if (!created && payload.action !== 'update') return []
         const retitled = payload.action === 'update' && payload.updatedFrom?.title !== undefined
-        if (!created && !moved && !retitled) return []
         const team = data.team?.key ?? teamOf(data.identifier)!
         const state = stateOf(data.state)
         // An issue the board opened: its root is the board's, recorded when the post returns,
         // so this event only labels it, and never opens a second root for the same issue.
-        const own = payload.actor?.id !== undefined && payload.actor.id === adapter.defaultBotUserId
+        const bot = adapter.defaultBotUserId
+        const own = payload.actor?.id !== undefined && payload.actor.id === bot
+        // An edit opens the thread of an issue the board hasn't seen, so issues that predate the
+        // mirror, or moved into a mirrored team, come in when someone next touches them. Not an
+        // issue the board created (its root is recorded when the post returns, and an edit in
+        // that window would open a second one), and not Linear's own automations or an archive,
+        // which sweep through old issues in bulk.
+        const opens = created
+          ? !own
+          : !own && (bot === null || data.creatorId !== bot) && payload.actor?.type === 'user' && !data.archivedAt
         const delivery = headers.get('linear-delivery') ?? `${payload.webhookId}:${payload.webhookTimestamp}`
         return [{
           event: {
@@ -195,10 +204,10 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
             type: created ? 'issue.created' : 'issue.updated',
             title: `${data.identifier}: ${data.title}`,
             url: data.url ?? payload.url ?? null,
-            labels: { issue: data.identifier, ...(state && (created || moved) ? { state } : {}) },
+            labels: { issue: data.identifier, ...(state ? { state } : {}) },
             unset: [],
             reply: null,
-            createRoot: created && !own,
+            createRoot: opens,
             ...(retitled ? { retitled: true } : {}),
             author: author(payload.actor, own),
           },
