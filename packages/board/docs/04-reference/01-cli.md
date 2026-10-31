@@ -53,6 +53,9 @@ const code = await createApp({
   // that throws fails it too, with what it threw as the failure's details.
   login: async () => process.env.VERCEL_AUTH_TOKEN!,
   team: async () => process.env.VERCEL_ORG_ID ?? null,
+  // How requests to Vercel's API go with that login: the app's own fetch, which adds the login's
+  // credentials (a DPoP proof is signed for each request). Without it, the login goes as a Bearer token.
+  fetch: (input, init) => fetch(input, { ...init, headers: { ...init?.headers, authorization: `Bearer ${process.env.VERCEL_AUTH_TOKEN}` } }),
 }).run(process.argv.slice(3))
 ```
 

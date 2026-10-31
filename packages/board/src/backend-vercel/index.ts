@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'
 import { decodeJwt } from 'jose'
-import { environmentProfile, loginHanded, vercelLogin, vercelProjectFile } from '../client/node.ts'
+import { asYou, environmentProfile, loginHanded, vercelLogin, vercelProjectFile } from '../client/node.ts'
 import { createVercel, type VercelBackend, type VercelEnvironment, type VercelOptions } from '../server/backend-vercel.ts'
 import { HttpError } from '../server/errors.ts'
 
@@ -72,8 +72,12 @@ async function team(): Promise<string | null> {
 
 const environment: VercelEnvironment = {
   fetch: () => async (input, init = {}) => {
+    const credential = await token()
+    // Your login goes through the fetch the CLI that runs board's hands it, which adds its own credentials.
+    if (!process.env.VERCEL_TOKEN && !deployed())
+      return asYou(input instanceof Request ? input.url : input, init, credential, (url, sent) => globalThis.fetch(url, sent))
     const headers = new Headers(init.headers)
-    headers.set('authorization', `Bearer ${await token()}`)
+    headers.set('authorization', `Bearer ${credential}`)
     return globalThis.fetch(input, { ...init, headers })
   },
   team,
