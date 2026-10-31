@@ -17,7 +17,7 @@ vi.mock('@vercel/oidc', async (original) => ({
 
 const { board } = await import('../src/server/index.ts')
 const { http } = await import('../src/backend-http/index.ts')
-const { connect } = await import('../src/client/node.ts')
+const { connect, handFetch, handLogin } = await import('../src/client/node.ts')
 /** A handle on the board at `url`, over http(), reaching it the way `vb` does, over the network `fetch` is. */
 const handle = ({ url, ...options }: { url: string } & NonNullable<Parameters<typeof connect>[1]>) =>
   board({ backend: http(url, { fetch: connect(url, options).fetch }) })
@@ -305,6 +305,32 @@ describe('a board behind Vercel Deployment Protection, without VERCEL_AUTOMATION
     expect((await again.discovery()).url).toBe(BOARD_URL)
     expect(api).toEqual([])
     expect(sent).toEqual([SECRET])
+  })
+
+  it("reads the bypass through the app's fetch with a handed login, which adds the login's credentials, never its own", async () => {
+    const { fetch, api, sent } = protectedBoard({ bypass: { [SECRET]: { scope: 'automation-bypass' } } })
+    // A login no request takes as a Bearer token, as a DPoP one: only the app can sign with it.
+    handLogin(async () => 'key-bound-token')
+    const signed: string[] = []
+    const unsigned = vi.fn()
+    handFetch(async (input, init) => {
+      const request = new Request(input, init)
+      if (request.headers.has('authorization')) unsigned(request.url)
+      signed.push(`${request.method} ${new URL(request.url).pathname}`)
+      request.headers.set('authorization', 'Bearer vercel-cli-token')
+      return fetch(request)
+    })
+    try {
+      const client = handle({ url: BOARD_URL, token: await personToken(), handle: 'jb', fetch })
+      expect((await client.discovery()).url).toBe(BOARD_URL)
+      expect(signed).toContain('GET /v9/projects/prj_board')
+      expect(api).toContain('GET /v9/projects/prj_board?teamId=team_board')
+      expect(unsigned).not.toHaveBeenCalled()
+      expect(sent.slice(1).every((header) => header === SECRET)).toBe(true)
+    } finally {
+      handLogin(null)
+      handFetch(null)
+    }
   })
 
   it('creates the automation bypass when the project has none, and says so', async () => {

@@ -135,6 +135,38 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("sends its requests to Vercel's API through the app's fetch, which adds the login's credentials, never its own", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard({ slug: 'acme' })
+    // The app's fetch, as `vercel board` signs a DPoP login's request: credentials of its own, for this method and URL.
+    const signed: string[] = []
+    const unsigned = vi.fn()
+    const app = createApp({
+      appName: 'vercel board',
+      login: async () => 'user:u_jb',
+      team: async () => 'team_test',
+      fetch: async (input, init = {}) => {
+        const url = String(input instanceof Request ? input.url : input)
+        if (new Headers(init.headers).has('authorization')) unsigned(url)
+        signed.push(`${init.method ?? 'GET'} ${new URL(url).pathname}`)
+        return api.fetch(url, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), authorization: 'Bearer user:u_jb' } })
+      },
+    })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sent around the app'))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect((await capture(() => app.run(['post', 'general', 'hello']))).code).toBe(0)
+      expect(await capture(() => app.run(['read', 'general']))).toMatchObject({ code: 0, stdout: expect.stringContaining('hello') })
+      expect(signed).toEqual(expect.arrayContaining([expect.stringMatching(/^POST \/v1\/messageboard\//), expect.stringMatching(/^GET \/v1\/messageboard\//)]))
+      expect([unsigned.mock.calls, fetching.mock.calls]).toEqual([[], []])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('fails with what a team it was handed throws, as the app said it, never as an internal error', async () => {
     const home = await isolated()
     const fetching = vi.spyOn(globalThis, 'fetch')

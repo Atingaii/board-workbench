@@ -20,7 +20,8 @@ export type { Failure, FailureClass, Recovery, Warning } from './failure.ts'
  * its own, and a warning to `onWarning` (with `--json`, it's in the result). Without them, the CLI
  * prints its own on stderr. `login` is the app's Vercel login and `team` the team it resolves
  * (`--scope` still wins): board asks for each only when a request needs it, so help, a typo, or
- * misuse never refreshes a login or looks a team up.
+ * misuse never refreshes a login or looks a team up. With `fetch`, board's requests to Vercel's API
+ * with that login go through the app's own, which adds its credentials (a DPoP proof, say).
  */
 export function createApp(options: {
   appName: string
@@ -28,11 +29,12 @@ export function createApp(options: {
   onWarning?: (warning: Warning) => void
   login?: () => Promise<string>
   team?: () => Promise<string | null>
+  fetch?: typeof globalThis.fetch
 }): { run(args: string[]): Promise<number> } {
-  const { appName, onError, onWarning, login, team } = options
+  const { appName, onError, onWarning, login, team, fetch } = options
   return {
     run: (args) =>
-      main(args, { name: appName, commands: {}, teamBoard: true, ...(onError ? { onError } : {}), ...(onWarning ? { onWarning } : {}), ...(login ? { login } : {}), ...(team ? { team } : {}) }),
+      main(args, { name: appName, commands: {}, teamBoard: true, ...(onError ? { onError } : {}), ...(onWarning ? { onWarning } : {}), ...(login ? { login } : {}), ...(team ? { team } : {}), ...(fetch ? { fetch } : {}) }),
   }
 }
 

@@ -163,6 +163,31 @@ export function handLogin(login: (() => Promise<string>) | null) {
   handed = login
 }
 
+/** The fetch a CLI that runs board's hands it for Vercel's API (`vercel board`'s), while one does. */
+let handedFetch: typeof fetch | null = null
+
+/**
+ * Hands board the fetch that sends its requests to Vercel's API with the login it's handed, adding
+ * that login's credentials itself, as `vercel board` does: a DPoP login's proof is signed for each
+ * request's method and URL, so a token alone can't make one. Null takes it back.
+ */
+export function handFetch(send: typeof fetch | null) {
+  handedFetch = send
+}
+
+/**
+ * A request to Vercel's API as you: through the fetch the CLI that runs board's hands it with its
+ * login, which adds its credentials, or with `login` as a Bearer token, through `send`.
+ */
+export function asYou(input: RequestInfo | URL, init: RequestInit, login: string, send: typeof fetch = fetch): Promise<Response> {
+  if (handedFetch && loginHanded()) return handedFetch(input, init)
+  // In `init`, where the redirect guard looks for it to drop it across origins, with a `Request`'s own.
+  const headers = new Headers(input instanceof Request ? input.headers : undefined)
+  new Headers(init.headers).forEach((value, name) => headers.set(name, value))
+  headers.set('authorization', `Bearer ${login}`)
+  return send(input, { ...init, headers })
+}
+
 /** Whether the login is one a CLI handed over (`createApp`'s `login`, or `VERCEL_AUTH_TOKEN`). */
 export const loginHanded = () => handed !== null || !!process.env.VERCEL_AUTH_TOKEN
 
@@ -217,9 +242,10 @@ async function personToken(audience: string, discovery: Discovery): Promise<Cach
   let development: string
   try {
     if (!authToken) throw new Error('no Vercel CLI credentials file')
-    const response = await fetch(
+    const response = await asYou(
       `https://api.vercel.com/v1/projects/${project.id}/token?source=board${project.team ? `&teamId=${project.team}` : ''}`,
-      { method: 'POST', headers: { authorization: `Bearer ${authToken}` } },
+      { method: 'POST' },
+      authToken,
     )
     if (response.status === 403 || response.status === 404)
       throw new BoardError(
@@ -256,7 +282,7 @@ async function boardProject(url: string, discovery: Discovery, authToken: string
   if (LOOPBACK.has(hostname)) return { id: discovery.project_id!, team: discovery.team_id }
   const api: VercelApi = authToken
     ? async (method, path) => {
-        const response = await fetch(`https://api.vercel.com${path}`, { method, headers: { authorization: `Bearer ${authToken}` } })
+        const response = await asYou(`https://api.vercel.com${path}`, { method }, authToken)
         return response.ok ? await response.json() : null
       }
     : vercelCliApi
@@ -289,9 +315,7 @@ async function tokenFromVercelCli(project: { id: string; team: string | null }):
 /** Your Vercel username, display name, and avatar (Vercel serves avatars publicly). */
 async function vercelUser(authToken: string): Promise<{ handle: string | null; name: string | null; avatar: string | null } | null> {
   try {
-    const response = await fetch('https://api.vercel.com/v2/user', {
-      headers: { authorization: `Bearer ${authToken}` },
-    })
+    const response = await asYou('https://api.vercel.com/v2/user', {}, authToken)
     if (!response.ok) return null
     const { user } = (await response.json()) as { user?: { username?: string; name?: string | null; avatar?: string | null } }
     return {
@@ -649,11 +673,12 @@ async function projectBypass(url: string, host: string, doFetch: typeof fetch): 
   const token = await apiLogin(await handedToken())
   const api: VercelApi = token
     ? async (method, path) => {
-        const response = await doFetch(`https://api.vercel.com${path}`, {
-          method,
-          headers: { authorization: `Bearer ${token}`, ...(method === 'PATCH' ? { 'content-type': 'application/json' } : {}) },
-          ...(method === 'PATCH' ? { body: '{}' } : {}),
-        })
+        const response = await asYou(
+          `https://api.vercel.com${path}`,
+          { method, ...(method === 'PATCH' ? { headers: { 'content-type': 'application/json' }, body: '{}' } : {}) },
+          token,
+          doFetch,
+        )
         return response.ok ? await response.json() : null
       }
     : vercelCliApi

@@ -19,7 +19,7 @@ vi.mock('@vercel/oidc', async (original) => ({
 const { board } = await import('../src/server/index.ts')
 const { http } = await import('../src/backend-http/index.ts')
 const { BOARD_URL, personToken, testBoard } = await import('./harness.ts')
-const { handLogin } = await import('../src/client/node.ts')
+const { handFetch, handLogin } = await import('../src/client/node.ts')
 
 const EVIL = 'https://evil.example/api/board'
 const LOCAL = 'http://localhost:3000/api/board'
@@ -69,6 +69,7 @@ describe("a person's token from `vercel login`", () => {
   })
   afterEach(async () => {
     handLogin(null)
+    handFetch(null)
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
     await rm(config, { recursive: true, force: true })
@@ -187,6 +188,29 @@ describe("a person's token from `vercel login`", () => {
     } finally {
       await cli.done()
     }
+  })
+
+  it("mints with a handed login through the app's fetch, which adds the login's credentials, never its own", async () => {
+    handLogin(async () => 'vercel-cli-token')
+    const api = vercel({ 'board.test': { projectId: 'prj_board', ownerId: 'team_test' } })
+    // The app's fetch, as `vercel board` signs a DPoP login's request, for this method and URL.
+    const unsigned = vi.fn()
+    handFetch(async (input, init = {}) => {
+      const request = new Request(input, init)
+      if (request.headers.has('authorization')) unsigned(request.url)
+      request.headers.set('authorization', 'Bearer vercel-cli-token')
+      return api.handle(request)
+    })
+    const board = testBoard()
+    const bearers = network({ calls: [], handle: () => Response.json({ error: { code: 'unsigned' } }, { status: 401 }) }, (request) => board.fetch(request))
+    expect(await client(BOARD_URL).channels()).toEqual([])
+    expect(api.calls).toEqual([
+      'GET /v13/deployments/board.test',
+      'POST /v1/projects/prj_board/token?source=board&teamId=team_test',
+      'GET /v2/user',
+    ])
+    expect(unsigned).not.toHaveBeenCalled()
+    expect(bearers).toEqual([`Bearer ${await exchange.mock.results[0]!.value}`])
   })
 
   it('drops cached tokens a day old when it caches one, as a rotating login leaves one per access token', async () => {

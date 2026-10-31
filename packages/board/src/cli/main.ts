@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util'
 import type { MessageView } from '../api/routes.ts'
 import { withMentions } from '../api/tail.ts'
 import { BoardError, type Filters, type ProfileOption } from '../client/client.ts'
-import { boardUrl, connect, handLogin, vercelProjectFile } from '../client/node.ts'
+import { boardUrl, connect, handFetch, handLogin, vercelProjectFile } from '../client/node.ts'
 import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
@@ -161,6 +161,11 @@ export type App = {
   onWarning?: (warning: Warning) => void
   /** Your Vercel login, asked for only when a request needs it: the app's own, refreshed when it's asked. */
   login?: () => Promise<string>
+  /**
+   * How board's requests to Vercel's API go with that login: the app's own fetch, which adds the
+   * login's credentials (a DPoP proof, say). Without it, board sends the login as a Bearer token.
+   */
+  fetch?: typeof fetch
   /**
    * The team whose board to use when `--scope` names none, as the app resolves its own (its link,
    * its saved team), asked for only when a request needs it. Null is your login's default team.
@@ -1205,11 +1210,13 @@ export async function main(argv: string[], options: App): Promise<number> {
   // The app's login and team are the run's, and only the run's.
   handLogin(options.login ?? null)
   handTeam(options.team ?? null)
+  handFetch(options.fetch ?? null)
   try {
     return await runOnce(argv, options)
   } finally {
     handLogin(null)
     handTeam(null)
+    handFetch(null)
   }
 }
 
