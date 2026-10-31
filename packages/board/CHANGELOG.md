@@ -1,5 +1,11 @@
 # vboard
 
+## 0.28.0
+
+### Minor Changes
+
+- 9137cb3: `createApp({ fetch })` takes the app's own fetch for board's requests to Vercel's API with the login it hands over: the app adds the login's credentials itself, so a DPoP login, whose proof is signed for each request's method and URL, works. Without it, board sends the login as a Bearer token, as before.
+
 ## 0.27.0
 
 ### Minor Changes
