@@ -75,7 +75,7 @@ const environment: VercelEnvironment = {
     const credential = await token()
     // Your login goes through the fetch the CLI that runs board's hands it, which adds its own credentials.
     if (!process.env.VERCEL_TOKEN && !deployed())
-      return asYou(input instanceof Request ? input.url : input, init, credential, (url, sent) => globalThis.fetch(url, sent))
+      return asYou(input, init, credential)
     const headers = new Headers(init.headers)
     headers.set('authorization', `Bearer ${credential}`)
     return globalThis.fetch(input, { ...init, headers })

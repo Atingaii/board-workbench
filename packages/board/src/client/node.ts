@@ -179,9 +179,11 @@ export function handFetch(send: typeof fetch | null) {
  * A request to Vercel's API as you: through the fetch the CLI that runs board's hands it with its
  * login, which adds its credentials, or with `login` as a Bearer token, through `send`.
  */
-export function asYou(input: string | URL, init: RequestInit, login: string, send: typeof fetch = fetch): Promise<Response> {
+export function asYou(input: RequestInfo | URL, init: RequestInit, login: string, send: typeof fetch = fetch): Promise<Response> {
   if (handedFetch && loginHanded()) return handedFetch(input, init)
-  const headers = new Headers(init.headers)
+  // In `init`, where the redirect guard looks for it to drop it across origins, with a `Request`'s own.
+  const headers = new Headers(input instanceof Request ? input.headers : undefined)
+  new Headers(init.headers).forEach((value, name) => headers.set(name, value))
   headers.set('authorization', `Bearer ${login}`)
   return send(input, { ...init, headers })
 }

@@ -54,8 +54,8 @@ const code = await createApp({
   login: async () => process.env.VERCEL_AUTH_TOKEN!,
   team: async () => process.env.VERCEL_ORG_ID ?? null,
   // How requests to Vercel's API go with that login: the app's own fetch, which adds the login's
-  // credentials (a DPoP proof is signed for each request). Without it, the login goes as a Bearer token.
-  fetch: (input, init) => fetch(input, { ...init, headers: { ...init?.headers, authorization: `Bearer ${process.env.VERCEL_AUTH_TOKEN}` } }),
+  // credentials. Without it, the login goes as a Bearer token, which a DPoP login can't use.
+  // fetch: (input, init) => yourSignedFetch(input, init), // a DPoP proof for each request
 }).run(process.argv.slice(3))
 ```
 
