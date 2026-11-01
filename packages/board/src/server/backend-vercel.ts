@@ -2,11 +2,12 @@ import type { Method, Protocol } from '../api/protocol.ts'
 import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ThreadSummaryView } from '../api/routes.ts'
 import type { ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
-import { RemoteWatcherId, type Author, type Labels } from '../contract/schemas.ts'
+import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import type { Access, Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
+import { fileName, mediaType } from './blob.ts'
 import { forbidden, HttpError, json, notFound } from './errors.ts'
 import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
@@ -46,7 +47,10 @@ type ApiMessage = {
   /** Up to 20 actor IDs an emoji, earliest first. */
   reactors?: Record<string, string[]>
   labels?: Labels
+  attachments?: Attachment[]
 }
+/** A file on the board: `messageId` once a post carries it. */
+type ApiAttachment = Attachment & { boardId: string; sha256: string; state: 'pending' | 'ready'; messageId?: string }
 type ApiActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app'; handle: string; name?: string; avatar?: string }
 type ApiChange = {
   type: string
@@ -88,6 +92,8 @@ export type VercelOptions = {
    * a deployment's OIDC token, or your `vercel login`. Elsewhere, pass one that sends them.
    */
   fetch?: typeof fetch
+  /** How files reach Vercel's storage, on URLs the API signs: `fetch` by default, never with credentials. */
+  files?: typeof fetch
 }
 
 /** What finds the API's credentials and the team, in the Node build. A browser has none. */
@@ -122,9 +128,12 @@ const UNKEPT: Partial<Record<Method, [code: string, message: string]>> = {
   schedule: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
   schedules: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
   cancelSchedule: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
-  upload: ['no_files', "Vercel's boards keep no files yet"],
-  attachment: ['no_files', "Vercel's boards keep no files yet"],
+  uploadStart: ['no_direct_uploads', "Vercel's boards take files up to 4 MB in one upload for now"],
+  uploadFinish: ['no_direct_uploads', "Vercel's boards take files up to 4 MB in one upload for now"],
 }
+
+/** A file as the board names it. */
+const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
 
@@ -200,6 +209,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   if (!/^https:\/\/[^/]+$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) throw new Error(`vercel: ${origin} isn't Vercel's API: pass an https origin`)
   if (!options.fetch && !environment) throw new Error("vercel: pass a fetch that sends credentials: outside Node there's no environment to find them in")
   const doFetch: typeof fetch = options.fetch ?? environment!.fetch()
+  const filesFetch: typeof fetch = options.files ?? fetch
   let binding: BoardBinding | null = null
   /** This board's own code's names, which a caller here never takes as its profile. */
   const own = new Set<string>()
@@ -434,7 +444,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       editedAt: message.editedAt === undefined ? null : iso(message.editedAt),
       deleted: message.deletedAt !== undefined,
       undelivered: {},
-      attachments: [],
+      attachments: message.attachments ?? [],
       links: [],
       version: message.version,
       author: await nameOf(who, message.createdBy),
@@ -624,7 +634,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     switch (change.type) {
       case 'message.posted':
         type = 'message.posted'
-        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: false, mentions: [], by, origin: null, from: null, attachments: [], links: [] }
+        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: false, mentions: [], by, origin: null, from: null, attachments: message.attachments, links: [] }
         break
       case 'message.edited':
         type = 'message.edited'
@@ -1072,12 +1082,50 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         cursor: cursorOf({ t: Math.max(root.createdAt, ...replies.map((reply) => reply.createdAt)), feeds: {} }),
       }
     },
+    async upload(caller, { data, name, type }) {
+      // Callers here all act as this project, so a file would be any of theirs to read and post.
+      checkCaller('upload', caller)
+      if (data.byteLength === 0) throw new HttpError(400, 'bad_request', 'the file is empty')
+      // This deployment's own code (sync's imports among it) holds the bytes already, with no request to fit under.
+      if (data.byteLength > IMPORT_BYTES_MAX) throw new HttpError(413, 'too_large', `attachments are at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB`)
+      const who = whoOf(caller)
+      // A copy on its own ArrayBuffer, which digest and fetch take.
+      const bytes = new Uint8Array(data)
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+      const started = await api<{ attachment: ApiAttachment; upload: { url: string; method: 'PUT'; headers: Record<string, string> } }>(who, 'POST', await onBoard(who, '/attachments'), {
+        body: { operationId: operationId(), name: fileName(name), type: mediaType(type), size: data.byteLength, sha256: btoa(String.fromCharCode(...digest)) },
+      })
+      // A presigned URL: plain fetch, so this deployment's credentials never reach the bucket.
+      const put = await filesFetch(started.upload.url, { method: started.upload.method, headers: started.upload.headers, body: bytes, redirect: 'error' })
+      if (!put.ok) throw new HttpError(502, 'upload_failed', `the upload to Vercel's storage answered ${put.status}`)
+      const { attachment } = await api<{ attachment: ApiAttachment }>(who, 'POST', await onBoard(who, `/attachments/${encodeURIComponent(started.attachment.id)}/complete`))
+      return { attachment: fileOf(attachment) }
+    },
+    async attachment(caller, { id }, signal) {
+      const who = whoOf(caller)
+      const access = accessOf(caller)
+      const found = await api<{ attachment: ApiAttachment; url: string }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`), signal ? { signal } : {})
+      // The API sees this project, which uploaded every file here: a caller reads one only through a message it can.
+      if (access) {
+        if (!found.attachment.messageId) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
+        const { message } = await readableMessage(who, access, found.attachment.messageId, signal).catch((error: unknown) => {
+          if (error instanceof HttpError && error.status === 404) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
+          throw error
+        })
+        // The API reads a deleted message as its tombstone, and still hands this project, its uploader, the file.
+        if (message.deletedAt !== undefined) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
+      }
+      const response = await filesFetch(found.url, { redirect: 'error', ...(signal ? { signal } : {}) })
+      if (!response.ok || !response.body) throw new HttpError(502, 'download_failed', `Vercel's storage answered ${response.status}`)
+      return { attachment: fileOf(found.attachment), data: response.body }
+    },
     async post(caller, input, signal) {
       checkCaller('post', caller)
-      if (input.attachments?.length) throw new HttpError(501, 'no_files', "Vercel's boards keep no files yet")
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
       const access = accessOf(caller)
+      // Only this deployment's own code uploads, as the project: any file a caller here names would be the project's.
+      if (access && input.attachments?.length) throw forbidden("this board's callers act as its project on Vercel's board, which can't tell them apart: only the project's own code posts files there")
       const labeled = Object.keys(input.labels ?? {}).length > 0
       const clientId = input.id !== undefined ? await postId(caller, input.id) : undefined
       let made: { thread: ApiThread; message: ApiMessage }
@@ -1086,7 +1134,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (labeled) need(access, 'label', input.channel)
         const channel = await channelToPost(who, input.channel)
         made = await api(who, 'POST', await onBoard(who, '/threads'), {
-          body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}) },
+          body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}) },
           signal,
         })
       } else {
@@ -1094,7 +1142,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         need(access, 'post', channel.name)
         if (labeled) need(access, 'label', channel.name)
         made = await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
-          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}) },
+          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}) },
           signal,
         })
         // The API labels a new thread as it starts, and a reply after.

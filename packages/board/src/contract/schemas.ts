@@ -93,7 +93,8 @@ export const Author = z.object({
 })
 
 /** 128 random bits, base64url: an attachment is named by an ID nobody can guess. */
-export const AttachmentId = z.string().regex(/^[A-Za-z0-9_-]{22}$/, 'invalid attachment id')
+/** 128 random bits, base64url, as A2 makes them; or `att_` and a UUID, as Vercel's board does. */
+export const AttachmentId = z.string().regex(/^(?:[A-Za-z0-9_-]{22}|att_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/, 'invalid attachment id')
 
 /** A file on a message. The board records `type` and `size` from what it stored, never from the request. */
 export const Attachment = z.object({
