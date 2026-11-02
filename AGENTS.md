@@ -153,11 +153,9 @@ thread rather than starting one.
   `taskMessage` puts in Eve's first message), or labels the
   thread `reproduced=no` and says why. It builds clear features the same way
   (asking first when they're not), and answers questions in the thread.
-  `review-pi` hands each new `dev --label pr` thread to Eve to review the PR (Eve wears `:looking-bunny:` on the PR root while it reviews), and tells it when
-  someone other than a bot replies. A draft waits until it's ready (`review.ts`): Eve
-  reviews it once, when its root's `state` turns from `draft` to `open`, and until then
-  only a reply that names Eve (`eve`, `@eve`, the old `pi`, or the thread's Eve), or a reminder Eve
-  scheduled, wakes it. Eve hears every reply in its threads but stays quiet when one is
+  `review-pi` hands each new `dev --label pr` thread to Eve to review the PR, drafts
+  included (Eve wears `:looking-bunny:` on the PR root while it reviews), and tells it when
+  someone other than a bot replies. Eve hears every reply in its threads but stays quiet when one is
   addressed to someone else, and keeps board replies to a few lines; a review's detail
   goes in a GitHub review on the code. Review is its initial task; people can redirect
   Eve in the thread to fix, push, approve, mark ready, merge, or close the PR.
