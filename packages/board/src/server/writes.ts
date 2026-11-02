@@ -221,7 +221,8 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   if (replayed) return replayed
   if (input.after !== undefined) {
     const named = await ctx.reads.message(input.after)
-    if (named?.thread !== thread) throw badRequest(named ? `after: #${input.after} isn't in #${re}'s thread` : `after names no message in #${re}'s thread`, 'invalid_after')
+    // The same words for a message elsewhere and none: which one it is is a read's to tell.
+    if (named?.thread !== thread) throw badRequest(`after names no message in #${re}'s thread`, 'invalid_after')
   }
   return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id, sent })
 }
