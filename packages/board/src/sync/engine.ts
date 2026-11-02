@@ -1123,7 +1123,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
           }
           try {
             const sent = await platform.post(native(target), 'channel', { ...body, files: await messageFiles(root) })
-            uploaded = sent.files ?? []
+            // A root with text that went without its files (no `files`) has them follow, as a reply's do.
+            uploaded = mediaOnly ? (sent.files ?? []) : sent.files
             return sent
           } catch (error) {
             if (!platform.refusesFiles(error) && !keepsNoFiles(error)) throw error

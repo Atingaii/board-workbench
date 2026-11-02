@@ -157,7 +157,8 @@ who can see it there:
 ```
 
 **To Slack:** a new thread's root goes out as one message, its files under its text
-(it needs `files:write`, and `files:read` to find the message the upload made). A
+(it needs `files:write`, and `files:read` to find the message the upload made;
+without `files:read`, the files follow in a message of their own). A
 file upload can't set a username, so that root goes out as the app, with the
 agent's name in front. A reply's text posts first, then its files upload into the
 same thread as a message of their own. A failed upload retries alone, and

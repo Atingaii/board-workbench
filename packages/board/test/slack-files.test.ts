@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createSlackAdapter } from '@chat-adapter/slack'
-import { slack, slackFileName } from '../src/sync/slack.ts'
+import { slack, slackFileName, type SlackClient } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 
 /**
@@ -60,7 +60,7 @@ describe('files to Slack', () => {
 })
 
 describe('a new thread with files, to Slack', () => {
-  function slackUploading(sharedAfter: number) {
+  function slackUploading(sharedAfter: number, scopes = ['files:write', 'files:read'], info?: () => Promise<unknown>) {
     const adapter = createSlackAdapter({ signingSecret: 'secret', botToken: 'xoxb-test' })
     const internals = adapter as unknown as { initialize(chat: unknown): Promise<void>; chat: unknown }
     internals.initialize = async function (chat) {
@@ -82,10 +82,11 @@ describe('a new thread with files, to Slack', () => {
           return { files: [{ files: args.file_uploads.map((f) => ({ id: `F_${f.filename}` })) }] }
         },
         // Slack shares the upload a moment after it answers.
-        info: async () => (++looks > sharedAfter ? { file: { shares: { public: { C1: [{ ts: '1700000000.000400' }] } } } } : { file: {} }),
+        info: info ?? (async () => (++looks > sharedAfter ? { file: { shares: { public: { C1: [{ ts: '1700000000.000400' }] } } } } : { file: {} })),
       },
+      auth: { test: async () => ({ response_metadata: { scopes } }) },
     }
-    const provider = slack({ adapter, client: async () => client }, channels({}))
+    const provider = slack({ adapter, client: async () => client as SlackClient }, channels({}))
     return { provider, uploads, viaAdapter, looks: () => looks }
   }
 
@@ -115,5 +116,25 @@ describe('a new thread with files, to Slack', () => {
     await provider.post('C1', 'channel', { markdown: '', files })
     expect(uploads).toEqual([])
     expect(viaAdapter).toHaveLength(2)
+  })
+
+  it("posts the text alone, its files left to follow, where the app can't read files to find the upload", async () => {
+    const { provider, uploads, viaAdapter } = slackUploading(0, ['files:write'])
+    const sent = await provider.post('C1', 'channel', { markdown: 'shipped', files: [{ data: new Uint8Array([1]), filename: 'a.png', mimeType: 'image/png' }] })
+    expect(uploads).toEqual([])
+    expect(viaAdapter).toEqual([{ markdown: 'shipped' }])
+    expect(sent).not.toHaveProperty('files')
+  })
+
+  it('never reads a failure after the upload as Slack refusing files, which would post the text twice', async () => {
+    const refused = Object.assign(new Error('missing_scope'), { data: { error: 'missing_scope' } })
+    const { provider, uploads } = slackUploading(0, ['files:write', 'files:read'], async () => {
+      throw refused
+    })
+    const error = await provider.post('C1', 'channel', { markdown: 'shipped', files: [{ data: new Uint8Array([1]), filename: 'a.png', mimeType: 'image/png' }] }).catch((e: unknown) => e)
+    expect(uploads).toHaveLength(1)
+    expect(String(error)).toMatch(/couldn't find the message uploading F_a.png made in C1/)
+    expect(provider.refusesFiles(error)).toBe(false)
+    expect(provider.refusesFiles(refused)).toBe(true)
   })
 })

@@ -320,7 +320,9 @@ describe('sync', () => {
       },
       info: async () => ({ file: { shares: { public: { C1: [{ ts: '1800.1' }] } } } }),
     }
-    const { board, s } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files } })
+    const { board, s } = setup({
+      slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files, auth: { test: async () => ({ response_metadata: { scopes: ['files:write', 'files:read'] } }) } },
+    })
     // What the real adapter has, that the fake one lacks.
     Object.assign(s.adapter, {
       decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
@@ -355,6 +357,26 @@ describe('sync', () => {
     expect(s.channelPosts[0]!.text).toContain('📎 after.mp4')
     expect(uploads).toHaveLength(1)
     warn.mockRestore()
+  })
+
+  it("posts a root's text, then its files under it, where the Slack client can't upload them together", async () => {
+    const { board, s } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files: { delete: async () => ({}) } } })
+    const token = await personToken()
+    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const response = await board.fetch(
+      new Request(`${BOARD_URL}/attachments`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'image/png', 'x-board-filename': 'after.png' },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+    )
+    const { attachment } = (await response.json()) as { attachment: { id: string } }
+    await julian('POST', '/messages', { channel: 'firehose', text: 'shipped the fix', attachments: [attachment.id] })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.channelPosts).toHaveLength(1)
+    expect(JSON.parse(s.channelPosts[0]!.text)).toEqual({ markdown: expect.stringContaining('shipped the fix') })
+    expect(s.posts[0]!.threadId).toBe(`slack:C1:${s.channelPosts[0]!.id}`)
+    expect(JSON.parse(s.posts[0]!.text)).toMatchObject({ markdown: '', files: [{ filename: 'after.png' }] })
   })
 
   it('brings files posted in Slack onto the board, fetched through the adapter', async () => {
