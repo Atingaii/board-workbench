@@ -1144,7 +1144,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
         const after = input.after === undefined ? undefined : locate(input.after)
         if (after !== undefined && after?.threadId !== thread.id) throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
-        made = await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
+        made = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
           body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}) },
           signal,
         }).catch((error: unknown) => {
