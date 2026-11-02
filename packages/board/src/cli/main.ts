@@ -312,11 +312,11 @@ const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test
 /** A message's ID as it's passed back: bare when it's a number, `#<id>` when it could be a channel's name. */
 const messageRef = (id: string) => (/^\d+$/.test(id) ? id : `#${id}`)
 
-function labelPairs(values: string[] | undefined): Record<string, string> {
+function labelPairs(values: string[] | undefined, wrong = "Labels look like key=value, and {value} isn't one."): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
     const at = value.indexOf('=')
-    if (at <= 0) throw usage(`Labels look like key=value, and ${value} isn't one.`)
+    if (at <= 0) throw usage(wrong.replace('{value}', value))
     pairs[value.slice(0, at)] = value.slice(at + 1)
   }
   return pairs
@@ -1052,7 +1052,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const unset = flags.unset ?? []
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw usage('Missing the labels: k=v to set one, --unset k to remove one.', { reason: 'missing_arguments' })
-      await client().label(id, { set, unset })
+      // What the labels must be now: --if k=v has the value, --if-unset k has none.
+      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.")
+      for (const key of flags['if-unset'] ?? []) {
+        if (Object.hasOwn(expected, key)) throw usage(`Can't use --if ${key}=… with --if-unset ${key}.`)
+        expected[key] = null
+      }
+      await client().label(id, { set, unset, ...(Object.keys(expected).length ? { if: expected } : {}) })
       printDone(id, 'labeled')
       return 0
     }

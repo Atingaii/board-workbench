@@ -31,6 +31,7 @@ describe('vercel()', () => {
       'core: says in its discovery where it is': 'passed',
       'core: posts a message, and reads it back by its ID': 'passed',
       "core: puts a reply in its root's thread": 'passed',
+      'core: labels a message only while its labels are as the write says, one of any that race': 'passed',
       "core: replies after a message only while it's the thread's newest, one of any that race": 'passed',
       'core: posts once for a client ID, however many times it is sent': 'passed',
       'core: raises the version with each edit, reaction, and label': 'passed',

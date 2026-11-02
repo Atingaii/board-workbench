@@ -8,6 +8,7 @@ import {
   Emoji,
   LabelKey,
   Labels,
+  LabelValue,
   MESSAGE_TEXT_MAX,
   MessageText,
   platformAvatar,
@@ -402,8 +403,22 @@ export const DeleteBody = z.object({}).optional()
 /** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
+/** At most this many labels in a label write's `if`. */
+export const LABEL_CONDITIONS_MAX = 16
+
 export const LabelBody = z
-  .object({ set: Labels.optional(), unset: z.array(LabelKey).optional() })
+  .object({
+    set: Labels.optional(),
+    unset: z.array(LabelKey).optional(),
+    /**
+     * What the message's labels must be now: a key's value, or null for one that mustn't be set.
+     * If one isn't, nothing changes, and the board answers 409 `label_conflict`.
+     */
+    if: z
+      .record(LabelKey, LabelValue.nullable())
+      .refine((expected) => Object.keys(expected).length <= LABEL_CONDITIONS_MAX, `at most ${LABEL_CONDITIONS_MAX} labels`)
+      .optional(),
+  })
   .refine((body) => body.set !== undefined || body.unset !== undefined, {
     message: 'nothing to change: pass `set` or `unset`',
   })

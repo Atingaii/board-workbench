@@ -194,6 +194,31 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'labels a message only while its labels are as the write says, one of any that race',
+    run: async (ctx) => {
+      // A message of its own, so the other checks' labels stay as they are.
+      const message = await post(ctx, 'conformance: a message to claim')
+      const labels = async () => (await ctx.board.thread(message.id)).message.labels
+      // Three claim it at once, where no one has: one lands.
+      const racing = await Promise.allSettled([1, 2, 3].map((n) => ctx.board.label(message.id, { set: { owner: `agent-${n}` }, if: { owner: null } })))
+      const landed = racing.flatMap((result, n) => (result.status === 'fulfilled' ? [`agent-${n + 1}`] : []))
+      same(landed.length, 1, 'the claims that landed of three racing where no one had one')
+      for (const result of racing) {
+        if (result.status === 'fulfilled') continue
+        const error = result.reason as unknown
+        check(error instanceof BoardError && error.status === 409 && error.code === 'label_conflict', `a claim that lost the race should be 409 label_conflict, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+      }
+      same((await labels()).owner, landed[0], 'the owner, after the race')
+      // From a value it doesn't have, nothing changes.
+      await rejects(ctx.board.label(message.id, { set: { owner: 'someone' }, if: { owner: 'no-one' } }), 409, 'label_conflict', "a label write from a value the label doesn't have")
+      same((await labels()).owner, landed[0], 'the owner, after a write from the wrong value')
+      // From the one it has, it lands.
+      await ctx.board.label(message.id, { unset: ['owner'], if: { owner: landed[0]! } })
+      same((await labels()).owner, undefined, 'the owner, released from the value it had')
+    },
+  },
+  {
+    group: 'core',
     name: "matches a label on the message or its thread's root",
     run: async (ctx) => {
       const { reply } = needRoot(ctx)

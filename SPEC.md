@@ -1194,6 +1194,11 @@ export const schedulesContract = contract({
   index is the log's last (A2's conditional append), so anything that lands in
   between, a reply in the thread or not, makes it look again. On `vercel()` the
   API checks the thread's newest sequence in the post's own transaction.
+- **A label write can be conditional.** `if` maps keys to the value each must
+  have now, or `null` for none, or nothing changes and it's 409
+  `label_conflict`, saying what the label is: two agents can't both claim a
+  thread with `owner=`. It's checked as a reply's `after` is, in one write. No
+  claim expires: a stuck one is in plain view, and anyone who labels clears it.
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
     The same `id` from another author, or on a different write, answers 409
@@ -1704,7 +1709,7 @@ board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board edit <id> "<text>"
 board delete <id>
 board react <id> <emoji> [--remove]
-board label <id> k=v... [--unset k]...
+board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
 board sync <id> <target>                       attach the thread to an external target, backfilling it in order
 board typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
                                                 Slack shows the status, if given, instead of "Typing…"

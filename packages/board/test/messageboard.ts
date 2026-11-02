@@ -524,6 +524,11 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         const set = (body.set ?? {}) as Record<string, string>
         const unset = (body.unset ?? []) as string[]
         if (unset.some((key) => Object.hasOwn(set, key))) throw new Refused(400, 'invalid_label')
+        // What the labels must be now, checked with the change: a value, or null for none.
+        for (const [key, want] of Object.entries((body.if ?? {}) as Record<string, string | null>).sort(([a], [b]) => (a < b ? -1 : 1))) {
+          const now = Object.hasOwn(message.labels, key) ? message.labels[key] : undefined
+          if (now !== (want ?? undefined)) throw new Refused(409, 'label_conflict', now === undefined ? `${key} isn't set` : `${key} is ${now}`)
+        }
         const changes: Record<string, { from?: string; to?: string }> = {}
         for (const key of unset)
           if (Object.hasOwn(message.labels, key)) {
