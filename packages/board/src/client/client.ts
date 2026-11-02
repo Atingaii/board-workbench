@@ -354,7 +354,7 @@ export function createBoardClient(options: ClientOptions) {
      * what `can` says (read, post, react, and label everywhere when left out). Setting the same
      * issuer and claims again changes its `can`: `created` says which. Needs manage in every channel.
      */
-    grant: (input: GrantInput) => call<{ grant: GrantView; created: boolean }>('POST', '/grants', { body: input }),
+    createGrant: (input: GrantInput) => call<{ grant: GrantView; created: boolean }>('POST', '/grants', { body: input }),
     /** The board's grants. Needs manage in every channel. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
@@ -364,7 +364,7 @@ export function createBoardClient(options: ClientOptions) {
      * given: for a widget, a sandbox, a script. `secret` shows only here. It lives 30 days, or
      * `expires`, at most 90.
      */
-    token: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input }),
+    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input }),
     /** Your live tokens, or everyone's with manage in every channel. Never their secrets. */
     tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
     /** It and every token minted with it stop. `revoked` is false when it was already revoked. */

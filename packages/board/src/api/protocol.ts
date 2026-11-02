@@ -93,13 +93,13 @@ export type Protocol = {
   /** The board's grants: needs `manage` in every channel. 501 `no_grants` where the board keeps none. */
   grants: { input: Nothing; output: { grants: GrantView[] } }
   /** Sets a grant, or the `can` of the one with its issuer and claims: `created` is false for that. */
-  grant: { input: Input<typeof GrantBody>; output: { grant: GrantView; created: boolean } }
+  createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView; created: boolean } }
   /** `revoked` is false when it was already gone. */
   revokeGrant: { input: Id; output: { revoked: boolean } }
   /** The caller's tokens, or every one with `manage` in every channel. 501 `no_tokens` where the board issues none. */
   tokens: { input: Nothing; output: { tokens: TokenView[] } }
   /** A token acting as the caller, narrowed: the only time its secret shows. */
-  token: { input: Input<typeof TokenBody>; output: { token: TokenView; secret: string } }
+  createToken: { input: Input<typeof TokenBody>; output: { token: TokenView; secret: string } }
   /** It and every token minted with it stop. `revoked` is false when it was already gone. */
   revokeToken: { input: Id; output: { revoked: boolean } }
   upload: { input: { data: Uint8Array; name: string | null; type: string | null }; output: { attachment: Attachment } }

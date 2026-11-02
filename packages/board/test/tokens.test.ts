@@ -138,7 +138,7 @@ describe('tokens', () => {
 
   it("acts as the board's own code when its handle mints it, narrowed, with the profile it pins", async () => {
     const { board, as } = await setUp()
-    const { secret } = await board.token({ name: 'eve-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur', session: 'thread-1956' })
+    const { secret } = await board.createToken({ name: 'eve-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur', session: 'thread-1956' })
     const eve = as(secret)
     expect((await eve('GET', '/me')).body).toMatchObject({ principal: 'board:client', actor: 'board:client+clever-lemur', session: 'thread-1956', can: { 'dev/': ['read', 'post'] } })
     const posted = await eve('POST', '/messages', { channel: 'dev', text: 'on it' })

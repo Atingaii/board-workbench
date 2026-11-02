@@ -820,11 +820,11 @@ export const routes = {
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
   /** Grants need manage in every channel. Setting one with the same issuer and claims changes its `can`. */
   grants: { method: 'GET', path: '/grants' },
-  grant: { method: 'POST', path: '/grants', body: GrantBody },
+  createGrant: { method: 'POST', path: '/grants', body: GrantBody },
   revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
   /** Your tokens, or every one with manage in every channel. A token acts as whoever minted it. */
   tokens: { method: 'GET', path: '/tokens' },
-  token: { method: 'POST', path: '/tokens', body: TokenBody },
+  createToken: { method: 'POST', path: '/tokens', body: TokenBody },
   revokeToken: { method: 'POST', path: '/tokens/:id/revoke' },
   /** The caller's own post with the client ID it gave: what `POST /messages` answered, for telling a retry before posting. */
   posted: { method: 'GET', path: '/posts/:id' },

@@ -101,10 +101,10 @@ const WALK: Record<RouteName, Walk> = {
   ],
   // Who the board trusts is its bookkeeping: manage in every channel.
   grants: () => [{ method: 'GET', path: '/grants', status: 403 }],
-  grant: () => [{ method: 'POST', path: '/grants', body: { issuer: 'github', claims: { repository: 'acme/web' }, can: 'all' }, status: 403 }],
+  createGrant: () => [{ method: 'POST', path: '/grants', body: { issuer: 'github', claims: { repository: 'acme/web' }, can: 'all' }, status: 403 }],
   revokeGrant: () => [{ method: 'POST', path: '/grants/g1/revoke', status: 403 }],
   // Anyone mints a token, which acts as them: it can't do more than they can.
-  token: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],
+  createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],
   tokens: () => [{ method: 'GET', path: '/tokens', status: 200, check: (body) => expect(body.tokens.map((token: any) => token.name)).not.toContain('keeper') }],
   revokeToken: () => [{ method: 'POST', path: '/tokens/t999999/revoke', status: 404 }],
   attachment: ({ secret }) => [{ method: 'GET', path: `/attachments/${secret.file}`, status: 404 }],

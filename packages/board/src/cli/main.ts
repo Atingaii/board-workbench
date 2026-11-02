@@ -462,13 +462,11 @@ function doing(): string {
     case 'schedules':
     case 'channels':
     case 'actors':
-    case 'grants':
-    case 'tokens':
       return `list ${command}`
     case 'grant':
-      return a === 'revoke' ? `revoke grant ${b}` : `grant ${a ?? 'an issuer'}`
+      return a === 'list' ? 'list grants' : a === 'revoke' ? `revoke grant ${b}` : `grant ${b ?? 'an issuer'}`
     case 'token':
-      return a === 'revoke' ? `revoke token ${b}` : `mint token ${a ?? ''}`.trimEnd()
+      return a === 'list' ? 'list tokens' : a === 'revoke' ? `revoke token ${b}` : `mint token ${b ?? ''}`.trimEnd()
     case 'sources':
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
     case 'identity':
@@ -1022,60 +1020,64 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'grant': {
-      if (args[0] === 'revoke' && args.length === 2) {
-        const id = trustId('grant', args[1])
+      const [verb, ...rest] = args
+      if (verb === 'list') {
+        if (rest.length > 0) throw usage(`grant list takes no arguments: ${rest[0]} is one too many.`)
+        const list = await client().grants()
+        if (flags.json) return result({ grants: list }), 0
+        out(list.length === 0 ? 'no grants' : formatGrants(list))
+        return 0
+      }
+      if (verb === 'revoke') {
+        const id = trustId('grant', rest[0])
         const { revoked } = await client().revokeGrant(id)
         if (flags.json) result({ grant: id, outcome: revoked ? 'revoked' : 'unchanged' })
         else out(revoked ? `revoked ${id}` : `${id} is already gone`)
         return 0
       }
-      const [issuer, extra] = args
+      if (verb !== 'create') throw usage(`grant takes create, list, or revoke${verb === undefined ? '' : `, and ${verb} isn't one`}.`, { reason: verb === undefined ? 'missing_arguments' : 'invalid_arguments' })
+      const [issuer, extra] = rest
       if (!issuer) throw usage('Missing the issuer to grant: vercel, github, or an https URL.', { reason: 'missing_arguments' })
-      if (extra !== undefined) throw usage(`grant takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
+      if (extra !== undefined) throw usage(`grant create takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
       const claims = claimPairs(flags.claim)
       if (Object.keys(claims).length === 0)
         throw usage(`Missing the claims ${issuer}'s tokens must carry: pass --claim name=value.`, { reason: 'missing_arguments' })
-      const { grant, created } = await client().grant({ issuer, claims, ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}) })
+      const { grant, created } = await client().createGrant({ issuer, claims, ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}) })
       if (flags.json) result({ grant, outcome: created ? 'granted' : 'updated' })
       else out(`${created ? 'granted' : 'updated'} ${grant.id}`)
       return 0
     }
 
-    case 'grants': {
-      const list = await client().grants()
-      if (flags.json) return result({ grants: list }), 0
-      out(list.length === 0 ? 'no grants' : formatGrants(list))
-      return 0
-    }
-
     case 'token': {
-      if (args[0] === 'revoke' && args.length === 2) {
-        const id = trustId('token', args[1])
+      const [verb, ...rest] = args
+      if (verb === 'list') {
+        if (rest.length > 0) throw usage(`token list takes no arguments: ${rest[0]} is one too many.`)
+        const list = await client().tokens()
+        if (flags.json) return result({ tokens: list }), 0
+        out(list.length === 0 ? 'no tokens' : formatTokens(list))
+        return 0
+      }
+      if (verb === 'revoke') {
+        const id = trustId('token', rest[0])
         const { revoked } = await client().revokeToken(id)
         if (flags.json) result({ token: id, outcome: revoked ? 'revoked' : 'unchanged' })
         else out(revoked ? `revoked ${id}` : `${id} is already revoked`)
         return 0
       }
-      const [name, extra] = args
+      if (verb !== 'create') throw usage(`token takes create, list, or revoke${verb === undefined ? '' : `, and ${verb} isn't one`}.`, { reason: verb === undefined ? 'missing_arguments' : 'invalid_arguments' })
+      const [name, extra] = rest
       if (!name) throw usage('Missing a name for the token, like feedback-widget.', { reason: 'missing_arguments' })
-      if (extra !== undefined) throw usage(`token takes one name: ${extra} is one too many.`)
-      const { token, secret } = await client().token({
+      if (extra !== undefined) throw usage(`token create takes one name: ${extra} is one too many.`)
+      const { token, secret } = await client().createToken({
         name,
         ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}),
         ...(flags.profile !== undefined ? { profile: flags.profile } : {}),
         ...(flags.session !== undefined ? { session: flags.session } : {}),
         ...(flags.expires !== undefined ? { expires: flags.expires } : {}),
       })
-      // The secret alone, so it pipes: BOARD_TOKEN=$(vb token widget --can feedback/=post).
+      // The secret alone, so it pipes: BOARD_TOKEN=$(vb token create widget --can feedback/=post).
       if (flags.json) result({ token, secret })
       else out(secret)
-      return 0
-    }
-
-    case 'tokens': {
-      const list = await client().tokens()
-      if (flags.json) return result({ tokens: list }), 0
-      out(list.length === 0 ? 'no tokens' : formatTokens(list))
       return 0
     }
 

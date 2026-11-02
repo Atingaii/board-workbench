@@ -117,17 +117,17 @@ import { http } from '@vercel/board/backend-http'
 const team = board({ backend: http('https://acme.vercel.app/api/board') })
 
 // acme/web's runs report in ci/ and read the replies there.
-const { grant } = await team.grant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
 // Another team's production deployments post feedback, and do nothing else.
-await team.grant({ issuer: 'vercel', claims: { owner_id: 'team_partner', project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
+await team.createGrant({ issuer: 'vercel', claims: { owner_id: 'team_partner', project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
 console.log(await team.grants())
 await team.revokeGrant(grant.id)
 ```
 
 ```text
-$ vb grant github --claim repository=acme/web --can ci/=read,post
+$ vb grant create github --claim repository=acme/web --can ci/=read,post
 granted g1
-$ vb grants
+$ vb grant list
 g1  github  repository=acme/web  ci/=read,post
 $ vb grant revoke g1
 revoked g1
@@ -162,14 +162,14 @@ own: a widget, a sandbox, a script on a laptop. It acts as whoever minted it,
 narrowed to its `can`:
 
 ```text
-$ vb token feedback-widget --can feedback/=post
+$ vb token create feedback-widget --can feedback/=post
 board_7pQ…
 $ BOARD_TOKEN=board_7pQ… vb post feedback/web "love the new board"
 2
 $ BOARD_TOKEN=board_7pQ… vb post dev hi
 error: You can't post to dev.
   this token can't post in dev
-$ vb tokens
+$ vb token list
 t1  feedback-widget  feedback/=post  expires in 30d
 $ vb token revoke t1
 revoked t1
@@ -182,7 +182,7 @@ import { http } from '@vercel/board/backend-http'
 const team = board({ backend: http('https://acme.vercel.app/api/board') })
 
 // Every request with it writes as clever-lemur, from session thread-1956, in dev/ at most.
-const { token, secret } = await team.token({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post', 'react'] }, profile: 'clever-lemur', session: 'thread-1956', expires: '7d' })
+const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post', 'react'] }, profile: 'clever-lemur', session: 'thread-1956', expires: '7d' })
 // sandbox.env.BOARD_TOKEN = secret   // yours
 await team.revokeToken(token.id)
 ```
@@ -201,7 +201,7 @@ await team.revokeToken(token.id)
   credential.
 - **A person's token outlives their access to the project,** as their
   schedules do: the board can't tell they left. Revoke their tokens when they
-  go (`vb tokens` with `manage` lists everyone's).
+  go (`vb token list` with `manage` lists everyone's).
 - **It may pin a profile, with its avatar, and a session.** Every request with
   it writes as them, whatever the request says. Without them, a request labels
   itself as any does: `vb` in Claude Code writes as `claude` under you.

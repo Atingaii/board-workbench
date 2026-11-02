@@ -97,9 +97,9 @@ const needRoot = (ctx: Context) => {
 const grantFor = (ctx: Context) => ({ issuer: 'vercel', claims: { environment: 'preview', project_id: `prj_conformance${ctx.labels.conformance}` } })
 
 /** Sets the check's grant, or says why it can't: changing who the board trusts takes `manage` in every channel. */
-async function firstGrant(ctx: Context): Promise<Awaited<ReturnType<Board['grant']>> | { skip: string }> {
+async function firstGrant(ctx: Context): Promise<Awaited<ReturnType<Board['createGrant']>> | { skip: string }> {
   try {
-    return await ctx.board.grant(grantFor(ctx))
+    return await ctx.board.createGrant(grantFor(ctx))
   } catch (error) {
     if (error instanceof BoardError && error.status === 403) return { skip: "this token can't change the board's grants" }
     throw error
@@ -393,7 +393,7 @@ const CHECKS: Check[] = [
         same(first.grant.claims.project_id, asked.claims.project_id, "the grant's project_id")
         check(first.grant.can['*']?.includes('post'), `a grant with no can should let them post everywhere, got ${show(first.grant.can)}`)
         same(first.grant.by, ctx.me.actor, "the grant's by")
-        const again = await ctx.board.grant(asked)
+        const again = await ctx.board.createGrant(asked)
         same(again.created, false, 'the same issuer and claims again: created')
         same(again.grant.id, first.grant.id, 'the same issuer and claims again: its id')
         same((await ctx.board.grants()).filter((grant) => grant.id === first.grant.id).length, 1, 'grants listing it')
@@ -414,7 +414,7 @@ const CHECKS: Check[] = [
       if ('skip' in first) return first.skip
       const { grant } = first
       try {
-        const narrowed = await ctx.board.grant({ ...grantFor(ctx), can: { [ctx.channel]: ['post'] } })
+        const narrowed = await ctx.board.createGrant({ ...grantFor(ctx), can: { [ctx.channel]: ['post'] } })
         same(narrowed.created, false, 'setting its can: created')
         same(narrowed.grant.id, grant.id, 'setting its can: its id')
         same(show(narrowed.grant.can), show({ [ctx.channel]: ['post'] }), "the grant's can")
@@ -428,7 +428,7 @@ const CHECKS: Check[] = [
     name: 'mints a token, shows its secret only then, lists it, and revokes it',
     run: async (ctx) => {
       const name = `conformance-${ctx.labels.conformance}`
-      const { token, secret } = await ctx.board.token({ name, can: { [ctx.channel]: ['read'] }, expires: '1h' })
+      const { token, secret } = await ctx.board.createToken({ name, can: { [ctx.channel]: ['read'] }, expires: '1h' })
       try {
         isRef(token.id, "a token's id")
         check(typeof secret === 'string' && secret.length >= 32, `a token's secret should be a string of at least 32 characters, got ${typeof secret}`)

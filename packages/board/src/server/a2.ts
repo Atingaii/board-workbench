@@ -633,10 +633,10 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
     },
     grants: async (caller) => access.grants(await identityOf(caller)),
-    grant: async (caller, body) => access.grant(await identityOf(caller), body),
+    createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
     revokeGrant: async (caller, input) => access.revokeGrant(await identityOf(caller), input),
     tokens: async (caller) => access.tokens(await identityOf(caller)),
-    token: async (caller, body) => access.token(await identityOf(caller), body),
+    createToken: async (caller, body) => access.createToken(await identityOf(caller), body),
     revokeToken: async (caller, input) => access.revokeToken(await identityOf(caller), input),
     async upload(caller, { data, name, type }) {
       const { principal } = (await identityOf(caller))

@@ -645,13 +645,13 @@ describe('vercel()', () => {
   it("keeps a Vercel grant as the project grant the API keeps: one per project, every environment at once", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)
-    const { grant, created } = await jb.grant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: ['production', 'preview'] } })
+    const { grant, created } = await jb.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: ['production', 'preview'] } })
     expect({ grant, created }).toMatchObject({ created: true, grant: { id: 'prj_front', issuer: 'vercel', claims: { project_id: 'prj_front', environment: ['preview', 'production'] } } })
     expect(api.requests).toContain('PUT /boards/brd_test/projects/prj_front')
     // Another environment alone would replace the grant there, not add one: it says so instead.
-    await expect(jb.grant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' } })).rejects.toMatchObject({ status: 409, code: 'grant_conflict' })
-    await expect(jb.grant({ issuer: 'github', claims: { repository: 'acme/web' } })).rejects.toMatchObject({ status: 501 })
-    await expect(jb.grant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production', project: 'front' } })).rejects.toMatchObject({ status: 400, code: 'invalid_grant' })
+    await expect(jb.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' } })).rejects.toMatchObject({ status: 409, code: 'grant_conflict' })
+    await expect(jb.createGrant({ issuer: 'github', claims: { repository: 'acme/web' } })).rejects.toMatchObject({ status: 501 })
+    await expect(jb.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production', project: 'front' } })).rejects.toMatchObject({ status: 400, code: 'invalid_grant' })
     expect(await jb.revokeGrant('prj_front')).toEqual({ revoked: true })
     expect(await jb.grants()).toEqual([])
   })
@@ -660,7 +660,7 @@ describe('vercel()', () => {
     // A person's credentials, which Vercel's API lets change grants: only the board's own code may use them for it.
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })
     const signal = new AbortController().signal
-    await expect(backend.grant(verified('all'), { issuer: 'vercel', claims: { project_id: 'prj_x', environment: 'production' } }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.token(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 501, code: 'no_tokens' })
+    await expect(backend.createGrant(verified('all'), { issuer: 'vercel', claims: { project_id: 'prj_x', environment: 'production' } }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 501, code: 'no_tokens' })
   })
 })

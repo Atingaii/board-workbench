@@ -126,9 +126,9 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return PostBody.parse(await body())
     case 'schedule':
       return ScheduleBody.parse(await body())
-    case 'grant':
+    case 'createGrant':
       return GrantBody.parse(await body())
-    case 'token':
+    case 'createToken':
       return TokenBody.parse(await body())
     case 'register':
       return RegisterBody.parse(await body())
@@ -656,7 +656,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       case 'syncImport':
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
       case 'grants':
-      case 'grant':
+      case 'createGrant':
       case 'revokeGrant':
         // A board whose `access` is one function decides alone: a grant it kept would never apply.
         if (backend.keeps && !policy.takesGrants) throw new HttpError(501, 'no_grants', "this board's access is one function, which decides alone: it keeps no grants")

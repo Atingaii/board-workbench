@@ -1026,7 +1026,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
-        if (method === 'token' || method === 'tokens' || method === 'revokeToken') throw new HttpError(501, 'no_tokens', "Vercel's boards don't issue tokens yet")
+        if (method === 'createToken' || method === 'tokens' || method === 'revokeToken') throw new HttpError(501, 'no_tokens', "Vercel's boards don't issue tokens yet")
         throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
       },
     ]),
@@ -1326,8 +1326,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       checkCaller('grants', caller)
       return { grants: (await projectsOf(whoOf(caller), signal)).map(grantOf) }
     },
-    async grant(caller, input, signal) {
-      checkCaller('grant', caller)
+    async createGrant(caller, input, signal) {
+      checkCaller('createGrant', caller)
       if (input.issuer !== 'vercel') throw notSupported(`grants for ${input.issuer}`)
       const { claims } = checkGrant(input as GrantSpec, [])
       const extra = Object.keys(claims).filter((name) => !['project_id', 'environment', 'owner_id'].includes(name))

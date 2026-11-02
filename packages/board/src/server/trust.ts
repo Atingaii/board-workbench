@@ -174,7 +174,7 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       needsManage(identity, 'list grants')
       return { grants: Object.values((await read()).grants).sort((a, b) => a.id - b.id).map(grantView) }
     },
-    async grant(identity: Identity, body: Protocol['grant']['input']): Promise<Protocol['grant']['output']> {
+    async createGrant(identity: Identity, body: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
       needsManage(identity, 'set grants')
       const before = await read()
       const checked = checkGrant(body as GrantSpec, [...options.issuers(), ...grantIssuers(Object.values(before.grants))])
@@ -198,7 +198,7 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       const rows = Object.values(state.tokens).filter((row) => liveIn(state, row.id) && (all || row.minter.id === identity.principal.id))
       return { tokens: rows.sort((a, b) => a.id - b.id).map(tokenView) }
     },
-    async token(identity: Identity, body: Protocol['token']['input']): Promise<Protocol['token']['output']> {
+    async createToken(identity: Identity, body: Protocol['createToken']['input']): Promise<Protocol['createToken']['output']> {
       const { principal, author, actor } = identity
       const state = await read()
       const now = Date.now()

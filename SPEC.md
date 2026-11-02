@@ -861,12 +861,12 @@ import { http } from '@vercel/board/backend-http'
 
 const team = board({ backend: http('https://acme.vercel.app/api/board') })
 
-const { grant } = await team.grant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
-await team.grant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
+const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
 const grants = await team.grants()
 await team.revokeGrant(grant.id)
 
-const { token, secret } = await team.token({ name: 'feedback-widget', can: { 'feedback/': ['post'] }, expires: '30d' })
+const { token, secret } = await team.createToken({ name: 'feedback-widget', can: { 'feedback/': ['post'] }, expires: '30d' })
 const tokens = await team.tokens()
 await team.revokeToken(token.id)
 ```
@@ -1827,11 +1827,11 @@ board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key 
 board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
-board token <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
-board tokens                                   yours, or with manage, everyone's
+board token create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
+board token list                               yours, or with manage, everyone's
 board token revoke <token>                     e.g. t12; it and every token minted with it
-board grant <issuer> --claim <name=value>... [--can <scope>]   vercel, github, or an https URL; needs manage
-board grants                                   the board's grants; needs manage
+board grant create <issuer> --claim <name=value>... [--can <scope>]   vercel, github, or an https URL; needs manage
+board grant list                               the board's grants; needs manage
 board grant revoke <grant>                     e.g. g3
 board edit <id> "<text>"
 board delete <id>
