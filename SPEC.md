@@ -948,9 +948,10 @@ await team.revokeToken(token.id)
   cache. A schedule made with one, and a registration, keep its ID, and stop
   with it: a schedule is canceled `revoked`.
 
-**On each backend:** `a2()` keeps grants and tokens in session `access`,
-apart from the board log, as it keeps identity codes, and a grant's or
-token's ID is the index of the event that made it (`g3`, `t12`). `http()`
+**On each backend:** `a2()` keeps grants and tokens on its log, in a session
+of their own, `access`, beside `board`, as it keeps schedules and identity
+codes, so none reaches the message tables, `/events`, watchers, or sync. A
+grant's or token's ID is the index of the event that made it (`g3`, `t12`). `http()`
 forwards them to the board it uses: they're that board's, and its callers
 can't create them there (403), since they'd act as its project. `vercel()`
 forwards them to Vercel's API as the protocol has them
