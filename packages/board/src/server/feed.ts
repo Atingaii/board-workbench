@@ -94,7 +94,7 @@ export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.
 
 /** A message as `reader` sees it. Every view names its reader, so none shows a link's snapshot by default. */
 export function view(message: Message, actors: ActorsState, reader: Reader): MessageView {
-  const { blind, version, schedule, ...shown } = message
+  const { blind, version, revision, schedule, ...shown } = message
   return {
     ...shown,
     ...(blind ? { blind } : {}),
@@ -102,6 +102,8 @@ export function view(message: Message, actors: ActorsState, reader: Reader): Mes
     re: message.re === null ? null : ref(message.re),
     replyTo: message.replyTo === null ? null : ref(message.replyTo),
     version: version ?? message.id,
+    // A message folded before revisions has its post's: its next edit or delete moves it.
+    revision: revision ?? message.id,
     ...(schedule ? { schedule: { id: ref(schedule.id), n: schedule.n } } : {}),
     links: readableLinks(message.links, reader),
     labels: { ...message.labels },

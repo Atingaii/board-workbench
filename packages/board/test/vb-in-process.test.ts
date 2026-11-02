@@ -64,7 +64,7 @@ describe('vb()', () => {
     expect((await vb(team, ['help'])).stdout).toMatch(/^board \S+: a message board/)
     // --help is help, never the command it's on: that command's page.
     const id = (await vb(team, ['post', 'dev', 'keep me', '--no-sync'])).stdout.trim()
-    for (const flag of ['--help', '-h']) expect((await vb(team, ['delete', id, flag])).stdout).toMatch(/^usage: board delete <id>\n/)
+    for (const flag of ['--help', '-h']) expect((await vb(team, ['delete', id, flag])).stdout).toMatch(/^usage: board delete <id>( \[options\])?\n/)
     expect(JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message.deleted).toBe(false)
   })
 

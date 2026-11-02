@@ -104,8 +104,8 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/messages/:id` | The thread around any message: `{ message, replies, cursor, schedules }`, where `message` is the root |
 | GET | `/posts/:id` | Your post with client ID `id`, as `POST /messages` answered it: `{ message }`, or 404 `post_not_found`. Someone else's is as good as missing |
 | POST | `/messages` | Post or reply. Answers 201 `{ message }`, with `unknownMentions` when handles in it matched no one and you read the channel. See [Posting](#posting) |
-| POST | `/messages/:id/edit` | `{ text }`. Answers `{ ok: true }`, with `unknownMentions` like a post |
-| POST | `/messages/:id/delete` | `{}`. Answers `{ ok: true }` |
+| POST | `/messages/:id/edit` | `{ text, revision? }`. Answers `{ ok: true }`, with `unknownMentions` like a post. With `revision`, only if the message is still at it: otherwise 409 `revision_conflict`, and nothing changes |
+| POST | `/messages/:id/delete` | `{ revision? }`. Answers `{ ok: true }`. With `revision`, as an edit |
 | POST | `/messages/:id/reactions` | `{ emoji, remove? }`. `emoji` is a short name: `eyes`, `thumbs_up` |
 | POST | `/messages/:id/labels` | `{ set?, unset? }`, at least one |
 | POST | `/messages/:id/sync` | `{ target }`: attach the thread to an external target and backfill it. Answers `{ target, attached }` |
@@ -211,7 +211,10 @@ them or order by them. Each backend picks its own, and a board on `a2()` uses
 400 `invalid_cursor`.
 
 Every message also has `version`, a number that grows with each change to it:
-of two views of one message, the one with the higher `version` is newer.
+of two views of one message, the one with the higher `version` is newer. Its
+`revision` is a number that changes with each edit and delete, and only then:
+what an edit or a delete passes as `revision` to change it only if no one has
+since. Pass it back as you got it.
 
 ### Posting
 
@@ -471,6 +474,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
 | 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
+| 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |

@@ -1,5 +1,6 @@
 import {
   AckBody,
+  DeleteBody,
   EditBody,
   EventsQuery,
   IdentityUnlinkBody,
@@ -96,7 +97,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'message':
     case 'posted':
     case 'synced':
-    case 'delete':
     case 'cancelSchedule':
     case 'attachment':
     case 'uploadFinish':
@@ -124,6 +124,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return RegisterBody.parse(await body())
     case 'edit':
       return { id, ...EditBody.parse(await body()) }
+    case 'delete':
+      return { id, ...DeleteBody.parse(await body()) }
     case 'react':
       return { id, ...ReactBody.parse(await body()) }
     case 'label':
@@ -630,10 +632,10 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return post(caller, input as Protocol['post']['input'], signal)
       case 'edit': {
         // Its emails resolve once the caller may post where the message is, and read it.
-        const { id, text } = input as Protocol['edit']['input']
+        const edit = input as Protocol['edit']['input']
         const send = (body: Protocol['edit']['input']) => screenEdit(caller, body, signal, (patched) => backend.edit(caller, patched, signal))
-        if (!engine || !mentionsEmails(text) || !(await mayPost(caller, { re: id }, signal))) return send({ id, text })
-        return send({ id, text: await withEmails(text) })
+        if (!engine || !mentionsEmails(edit.text) || !(await mayPost(caller, { re: edit.id }, signal))) return send(edit)
+        return send({ ...edit, text: await withEmails(edit.text) })
       }
       case 'syncImport':
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)

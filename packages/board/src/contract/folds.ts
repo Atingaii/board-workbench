@@ -45,6 +45,8 @@ export type Message = {
   blind?: true
   /** The index of the last event that changed it. Folds from before it existed leave it out. */
   version?: number
+  /** The index of its post, or of its last edit or delete. Folds from before it existed leave it out. */
+  revision?: number
 }
 
 export type MessagesState = {
@@ -63,6 +65,8 @@ export function foldMessages(
   // Each change to a message is its newest version, so of two views of it, the later is newer.
   const changed = foldMessage(state, event)
   if (changed) changed.version = event.index
+  // Only what an edit's `revision` checks: its text, and whether it's there.
+  if (changed && (event.type === 'message.posted' || event.type === 'message.edited' || event.type === 'message.deleted')) changed.revision = event.index
   return state
 }
 

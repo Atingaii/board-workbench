@@ -9,6 +9,7 @@ function message(id: number, overrides: Partial<MessageView> = {}): MessageView 
   return {
     id: String(id),
     version: id,
+    revision: id,
     channel: 'ops',
     text: `message ${id}`,
     re: null,

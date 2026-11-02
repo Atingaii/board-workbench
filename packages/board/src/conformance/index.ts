@@ -194,6 +194,37 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: 'edits and deletes a message only at the revision it was read at, which only edits and deletes change',
+    run: async (ctx) => {
+      // A message of its own, so the other checks' text stays as it is.
+      const message = await post(ctx, 'conformance: a message to edit')
+      const read = async () => (await ctx.board.thread(message.id)).message
+      const first = (await read()).revision
+      check(typeof first === 'number', `a message's revision should be a number, got ${show(first)}`)
+      await ctx.board.react(message.id, 'eyes')
+      await ctx.board.label(message.id, { set: { state: 'open' } })
+      same((await read()).revision, first, 'the revision after a reaction and a label')
+      await ctx.board.edit(message.id, 'conformance: edited', { revision: first })
+      const second = (await read()).revision
+      check(second !== first, `an edit should change the revision from ${first}`)
+      await rejects(ctx.board.edit(message.id, 'conformance: stale', { revision: first }), 409, 'revision_conflict', 'an edit at a revision an edit came after')
+      await rejects(ctx.board.delete(message.id, { revision: first }), 409, 'revision_conflict', 'a delete at a revision an edit came after')
+      const after = await read()
+      check(after.text === 'conformance: edited' && !after.deleted, `refused writes should leave it as it was, got ${show({ text: after.text, deleted: after.deleted })}`)
+      // Racing at the same revision, one lands and the rest are refused.
+      const racing = await Promise.allSettled([1, 2, 3].map((n) => ctx.board.edit(message.id, `conformance: racing ${n}`, { revision: second })))
+      same(racing.filter((result) => result.status === 'fulfilled').length, 1, 'the edits that landed of three racing at the same revision')
+      for (const result of racing) {
+        if (result.status === 'fulfilled') continue
+        const error = result.reason as unknown
+        check(error instanceof BoardError && error.status === 409 && error.code === 'revision_conflict', `an edit that lost the race should be 409 revision_conflict, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+      }
+      await ctx.board.delete(message.id, { revision: (await read()).revision })
+      check((await read()).deleted, 'a delete at the revision it has should delete it')
+    },
+  },
+  {
+    group: 'core',
     name: "matches a label on the message or its thread's root",
     run: async (ctx) => {
       const { reply } = needRoot(ctx)

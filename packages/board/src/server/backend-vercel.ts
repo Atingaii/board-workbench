@@ -39,6 +39,8 @@ type ApiMessage = {
   replyTo?: number
   text: string
   version: number
+  /** Counts its edits and its delete, as an edit's or a delete's `revision` checks. */
+  revision: number
   createdAt: number
   createdBy: ApiActor
   editedAt?: number
@@ -447,6 +449,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       attachments: message.attachments ?? [],
       links: [],
       version: message.version,
+      revision: message.revision,
       author: await nameOf(who, message.createdBy),
     }
   }
@@ -1173,20 +1176,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (access && !access.readable(channel.name)) throw notFound(`no post of yours has id ${id}`, 'post_not_found')
       return { message: await view(who, found.message, channel.name) }
     },
-    async edit(caller, { id, text }, signal) {
+    async edit(caller, { id, text, revision }, signal) {
       checkCaller('edit', caller)
       const who = whoOf(caller)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
-      await api(who, 'PATCH', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}`), { body: { operationId: operationId(), text }, signal })
+      await api(who, 'PATCH', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}`), { body: { operationId: operationId(), text, ...(revision !== undefined ? { revision } : {}) }, signal })
       return { ok: true }
     },
-    async delete(caller, { id }, signal) {
+    async delete(caller, { id, revision }, signal) {
       checkCaller('delete', caller)
       const who = whoOf(caller)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
-      await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/delete`), { body: { operationId: operationId() }, signal })
+      await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/delete`), { body: { operationId: operationId(), ...(revision !== undefined ? { revision } : {}) }, signal })
       return { ok: true }
     },
     async react(caller, { id, emoji, remove }, signal) {

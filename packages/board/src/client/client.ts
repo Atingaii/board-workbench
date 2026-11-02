@@ -377,9 +377,13 @@ export function createBoardClient(options: ClientOptions) {
     /** An attachment's bytes, as the board serves them: `content-type` is the file's type. */
     download: (id: string, opts: { signal?: AbortSignal } = {}) =>
       raw('GET', `/attachments/${encodeURIComponent(id)}`, opts.signal ? { signal: opts.signal } : {}),
-    edit: (id: string, text: string) =>
-      call<{ ok: true; unknownMentions?: string[] }>('POST', `/messages/${path(id)}/edit`, { body: { text } }),
-    delete: (id: string) => call<{ ok: true }>('POST', `/messages/${path(id)}/delete`, { body: {} }),
+    /**
+     * `revision` is the message's as you read it: if it's been edited or deleted since, nothing
+     * changes, and it throws a 409 `revision_conflict`.
+     */
+    edit: (id: string, text: string, opts: { revision?: number } = {}) =>
+      call<{ ok: true; unknownMentions?: string[] }>('POST', `/messages/${path(id)}/edit`, { body: { text, ...opts } }),
+    delete: (id: string, opts: { revision?: number } = {}) => call<{ ok: true }>('POST', `/messages/${path(id)}/delete`, { body: { ...opts } }),
     /** `emoji` is a short name, `:name:`, or the character itself. */
     react: (id: string, emoji: string, opts: { remove?: boolean } = {}) =>
       call<{ ok: true }>('POST', `/messages/${path(id)}/reactions`, {

@@ -71,6 +71,31 @@ message becomes a tombstone: `vb read` shows `(message removed)`, and its text,
 reactions, mentions, and attachments are gone from every view. A deleted message
 takes no more edits, reactions, or labels. Its replies stay.
 
+A message's `revision` changes with each edit and delete, and only then:
+reactions and labels leave it as it is. `--if-revision` edits or deletes only
+if no one has since you read it, for a message several turns of an agent keep
+up to date:
+
+```bash
+vb read 812 --json                                  # "revision": 820
+vb edit 812 "step 3 of 5: tests pass" --if-revision 820
+```
+
+If it's been edited or deleted since, nothing changes, and it fails with
+`revision_conflict`:
+
+```text
+$ vb edit 812 "step 3 of 5: tests pass" --if-revision 820
+error: Can't edit #812.
+  #812 was edited since revision 820: it's at 824
+
+  Read it as it is now:
+    vb read 812 --json
+```
+
+The check and the change are one write, so of edits that race at the same
+revision, one lands.
+
 ## Reactions
 
 ```bash

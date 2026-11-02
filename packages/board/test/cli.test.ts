@@ -255,6 +255,23 @@ describe('cli', () => {
     expect(await vb(['post', 'deploys', 'hello', '--after', root])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --after on a new thread\./) })
   })
 
+  it('edits and deletes --if-revision only while no one has changed the message since', async () => {
+    const id = (await vb(['post', 'deploys', 'step 1 of 5'])).stdout.trim()
+    const read = async () => JSON.parse((await vb(['read', id, '--json'])).stdout).message as { text: string; deleted: boolean; revision: number }
+    const first = String((await read()).revision)
+    expect(await vb(['edit', id, 'step 2 of 5', '--if-revision', first])).toMatchObject({ code: 0, stderr: '' })
+    const second = String((await read()).revision)
+    // Someone read it before that edit.
+    const stale = await vb(['edit', id, 'step 2 of 5, again', '--if-revision', first])
+    expect(stale).toMatchObject({ code: 1, stdout: '' })
+    expect(stale.stderr).toBe(`error: Can't edit #${id}.\n  #${id} was edited since revision ${first}: it's at ${second}\n\n  Read it as it is now:\n    vb read ${id} --json\n`)
+    expect(failure(await vb(['delete', id, '--if-revision', first, '--json']))).toMatchObject({ reason: 'revision_conflict' })
+    expect(await read()).toMatchObject({ text: 'step 2 of 5', deleted: false })
+    expect(await vb(['delete', id, '--if-revision', second])).toMatchObject({ code: 0, stderr: '' })
+    expect((await read()).deleted).toBe(true)
+    expect(await vb(['edit', id, 'x', '--if-revision', 'latest'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --if-revision takes the message's revision, a number, and latest isn't one\./) })
+  })
+
   it('posts, replies, reacts, labels, and reads a thread', async () => {
     const posted = await vb(['post', 'errors-www', 'deploy failed on a1b2c3', '--label', 'status=open'])
     expect(posted).toMatchObject({ code: 0, stderr: '' })

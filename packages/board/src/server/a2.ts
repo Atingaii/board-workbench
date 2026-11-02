@@ -581,16 +581,16 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     async post(caller, parsed) {
       return postNow(caller, await identityOf(caller), parsed)
     },
-    async edit(caller, { id, text }) {
+    async edit(caller, { id, text, revision }) {
       const identity = await identityOf(caller)
       const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
-      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text })
+      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, revision })
       return { ok: true as const, ...(unknownMentions ? { unknownMentions } : {}) }
     },
-    async delete(caller, { id }) {
+    async delete(caller, { id, revision }) {
       const identity = (await identityOf(caller))
       const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'delete')
-      await writeDelete(writes, { identity, authorized })
+      await writeDelete(writes, { identity, authorized, revision })
       return { ok: true }
     },
     async react(caller, { id, emoji, remove }) {

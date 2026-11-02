@@ -312,6 +312,14 @@ const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test
 /** A message's ID as it's passed back: bare when it's a number, `#<id>` when it could be a channel's name. */
 const messageRef = (id: string) => (/^\d+$/.test(id) ? id : `#${id}`)
 
+/** `--if-revision N`, as an edit or a delete takes it. */
+function ifRevision(): { revision?: number } {
+  const given = flags['if-revision']
+  if (given === undefined) return {}
+  if (!/^[1-9]\d{0,15}$/.test(given)) throw usage(`--if-revision takes the message's revision, a number, and ${given} isn't one.`)
+  return { revision: Number(given) }
+}
+
 function labelPairs(values: string[] | undefined): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
@@ -553,9 +561,13 @@ function failureOf(error: unknown): Failure {
     // A reply's --after: what's newer is in its thread, after the message it named.
     const { args } = current
     const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
+    // An edit's or a delete's --if-revision: the message as it is now has the revision to pass.
+    const changed = code === 'revision_conflict' && flags['if-revision'] !== undefined && args[0] !== undefined
     return theirs('conflict', specific('conflict'), `Can't ${doing()}.`, newer
       ? [{ instruction: `Read what came after ${ref(flags.after)}`, argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--after', flags.after!.replace(/^#/, '')] }]
-      : [])
+      : changed
+        ? [{ instruction: 'Read it as it is now', argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--json'] }]
+        : [])
   }
   if (status === 413) return theirs('limit', 'payload_too_large', `Can't ${doing()}. It's too large for the board.`)
   if (status === 429) return theirs('rate_limit', 'rate_limited', 'Too many requests to the board. Try again in a minute.')
@@ -1019,7 +1031,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'edit': {
       const id = messageId(args[0])
-      const { unknownMentions } = await client().edit(id, await text(args[1]))
+      const { unknownMentions } = await client().edit(id, await text(args[1]), ifRevision())
       warnUnknownMentions(unknownMentions)
       printDone(id, 'edited')
       return 0
@@ -1027,7 +1039,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'delete': {
       const id = messageId(args[0])
-      await client().delete(id)
+      await client().delete(id, ifRevision())
       printDone(id, 'deleted')
       return 0
     }
