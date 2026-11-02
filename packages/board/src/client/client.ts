@@ -349,7 +349,9 @@ export function createBoardClient(options: ClientOptions) {
       const size = input.data instanceof Blob ? input.data.size : input.data.byteLength
       if (size > ATTACHMENT_BYTES_MAX) {
         if (size > DIRECT_UPLOAD_BYTES_MAX) throw new BoardError('too_large', `Attachments are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB.`, 413)
-        const ticket = await call<{ id: string; url: string; headers: Record<string, string> }>('POST', '/attachments/uploads', { body: { name: input.name, type, size } }).catch((error: unknown) => {
+        const bytes = input.data instanceof Blob ? await input.data.arrayBuffer() : input.data
+        const sha256 = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))))
+        const ticket = await call<{ id: string; url: string; headers: Record<string, string> }>('POST', '/attachments/uploads', { body: { name: input.name, type, size, sha256 } }).catch((error: unknown) => {
           // A board from before direct uploads has no such route.
           if (error instanceof BoardError && error.status === 404 && error.code === 'not_found')
             throw new BoardError('too_large', `This board takes files of at most ${ATTACHMENT_BYTES_MAX / 1024 / 1024} MB.`, 413)

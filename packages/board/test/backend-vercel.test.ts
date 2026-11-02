@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
+import { createBoardClient } from '../src/client/client.ts'
+import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
@@ -21,12 +23,12 @@ const FACTORY = { id: 'vercel:project:prj_pong:production', kind: 'deployment', 
 /**
  * A vercel() board that serves its callers over HTTP, as the factory's does, with `middleware`:
  * `factory` is the project itself (its deployment's token), `ada` anyone else. `via` is a handle on
- * it as one of them.
+ * it as one of them, and `client` a client as one of them that reaches Vercel's storage itself.
  */
 function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middleware[]) {
   const callers = { factory: FACTORY, ada: ADA }
   const pong = board({
-    backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+    backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
     url: 'https://pong.example/api/board',
     authenticate: async (request) => callers[request.headers.get('authorization')?.replace(/^Bearer /, '') as keyof typeof callers] ?? null,
     access: [() => 'all'],
@@ -42,7 +44,9 @@ function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middlewar
         },
       }),
     }).as(null)
-  return { pong, via }
+  const client = (name: keyof typeof callers) =>
+    createBoardClient({ url: 'https://pong.example/api/board', token: name, fetch: ((input, init) => pong.fetch(new Request(input, init))) as typeof fetch, storeFetch: api.files })
+  return { pong, via, client }
 }
 
 /** A caller board() verified, with `can`: what a board with an `access` passes its backend. Ada by default. */
@@ -240,6 +244,32 @@ describe('vercel()', () => {
     await expect(backend.post(ada, { re: root.id, text: '', attachments: [file.id] } as never, signal)).rejects.toMatchObject({ status: 403 })
     await expect(backend.attachment(ada, { id: file.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
     await expect(backend.post(project, { re: root.id, text: '', attachments: [file.id] } as never, signal)).resolves.toMatchObject({ message: { attachments: [{ id: file.id }] } })
+  })
+
+  it('lets a caller that is the project upload files, past a request straight to storage, and post them, and refuses anyone else', async () => {
+    const api = fakeMessageboard()
+    const { client } = gateway(api, [])
+    const factory = client('factory')
+    const log = await factory.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })
+    // Bigger than a request takes: the client sends it to Vercel's storage on the URL the API signs.
+    const video = new Uint8Array(ATTACHMENT_BYTES_MAX + 1).fill(7)
+    const after = await factory.upload({ data: video, name: 'after.mp4', type: 'video/mp4' })
+    expect(api.requests.filter((r) => r.endsWith('/complete'))).toHaveLength(2)
+    const posted = await factory.post('dev', { text: 'before and after', attachments: [log.id, after.id] })
+    expect(posted.attachments.map((file) => file.id)).toEqual([log.id, after.id])
+    expect(Buffer.from(await (await factory.download(after.id)).arrayBuffer()).equals(Buffer.from(video))).toBe(true)
+    // Anyone else would be uploading and posting the project's files.
+    const ada = client('ada')
+    await expect(ada.upload({ data: new TextEncoder().encode('log'), name: 'b.log' })).rejects.toMatchObject({ status: 403 })
+    await expect(ada.upload({ data: video, name: 'big.mp4', type: 'video/mp4' })).rejects.toMatchObject({ status: 403 })
+    const unposted = await factory.upload({ data: new TextEncoder().encode('mine'), name: 'c.log' })
+    await expect(ada.post('dev', { text: 'not mine', attachments: [unposted.id] })).rejects.toMatchObject({ status: 403 })
+  })
+
+  it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for", async () => {
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
+    const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
+    await expect(backend.uploadStart(project, { name: 'big.mp4', type: 'video/mp4', size: 5 * 1024 * 1024 }, new AbortController().signal)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
   })
 
   it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {

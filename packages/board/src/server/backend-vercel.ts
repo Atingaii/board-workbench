@@ -144,11 +144,6 @@ const WAIT_MAX_S = 25
 /** Pages a filtered read of one channel scans for matches before it answers with what it found. */
 const SCAN_PAGES = 10
 
-/** What the API keeps none of: a check that gets one of these is told it isn't kept here. */
-const UNKEPT: Partial<Record<Method, [code: string, message: string]>> = {
-  uploadStart: ['no_direct_uploads', "Vercel's boards take files up to 4 MB in one upload for now"],
-  uploadFinish: ['no_direct_uploads', "Vercel's boards take files up to 4 MB in one upload for now"],
-}
 
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
@@ -836,9 +831,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * a caller that is the project (its own deployment's token) changes what it wrote, as on any
    * board, and anyone else would be changing what the project wrote for others.
    */
-  async function checkOwner(method: Method, caller: Caller, who: Who): Promise<void> {
+  async function checkOwner(what: string, caller: Caller, who: Who): Promise<void> {
     if ('identity' in caller && caller.identity.principal.id !== principalId((await self(who)).actor.principal))
-      throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${method} there`)
+      throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${what} there`)
+  }
+
+  /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a2(). */
+  async function checkUploader(caller: Caller, who: Who): Promise<void> {
+    await checkOwner('upload', caller, who)
+    const access = accessOf(caller)
+    if (access && !access.anywhere('post') && !access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
   }
 
   const meOf = (identity: Identity): Me => {
@@ -1004,8 +1006,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
-        const unkept = UNKEPT[method]
-        if (unkept) throw new HttpError(501, unkept[0], unkept[1])
         throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
       },
     ]),
@@ -1141,12 +1141,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
     },
     async upload(caller, { data, name, type }) {
-      // Callers here all act as this project, so a file would be any of theirs to read and post.
-      checkCaller('upload', caller)
+      const who = whoOf(caller)
+      await checkUploader(caller, who)
       if (data.byteLength === 0) throw new HttpError(400, 'bad_request', 'the file is empty')
       // This deployment's own code (sync's imports among it) holds the bytes already, with no request to fit under.
       if (data.byteLength > IMPORT_BYTES_MAX) throw new HttpError(413, 'too_large', `attachments are at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB`)
-      const who = whoOf(caller)
       // A copy on its own ArrayBuffer, which digest and fetch take.
       const bytes = new Uint8Array(data)
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
@@ -1157,6 +1156,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const put = await filesFetch(started.upload.url, { method: started.upload.method, headers: started.upload.headers, body: bytes, redirect: 'error' })
       if (!put.ok) throw new HttpError(502, 'upload_failed', `the upload to Vercel's storage answered ${put.status}`)
       const { attachment } = await api<{ attachment: ApiAttachment }>(who, 'POST', await onBoard(who, `/attachments/${encodeURIComponent(started.attachment.id)}/complete`))
+      return { attachment: fileOf(attachment) }
+    },
+    // A file bigger than a request goes straight to Vercel's storage, on the URL the API signs for its size, type, and digest.
+    async uploadStart(caller, { name, type, size, sha256 }) {
+      const who = whoOf(caller)
+      await checkUploader(caller, who)
+      if (sha256 === undefined) throw new HttpError(400, 'invalid_request', "Vercel's API signs a direct upload for its bytes' SHA-256: send `sha256`, as board's client does")
+      const started = await api<{ attachment: ApiAttachment; upload: { url: string; headers: Record<string, string>; expiresAt: number } }>(who, 'POST', await onBoard(who, '/attachments'), {
+        body: { operationId: operationId(), name: fileName(name ?? null), type: mediaType(type ?? null), size, sha256 },
+      })
+      return { id: started.attachment.id, url: started.upload.url, headers: started.upload.headers, expiresAt: iso(started.upload.expiresAt) }
+    },
+    async uploadFinish(caller, { id }) {
+      const who = whoOf(caller)
+      await checkUploader(caller, who)
+      const { attachment } = await api<{ attachment: ApiAttachment }>(who, 'POST', await onBoard(who, `/attachments/${encodeURIComponent(id)}/complete`))
       return { attachment: fileOf(attachment) }
     },
     async attachment(caller, { id }, signal) {
@@ -1182,8 +1197,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
       const access = accessOf(caller)
-      // Only this deployment's own code uploads, as the project: any file a caller here names would be the project's.
-      if (access && input.attachments?.length) throw forbidden("this board's callers act as its project on Vercel's board, which can't tell them apart: only the project's own code posts files there")
+      // Every file here is the project's, which uploaded them all: only the project itself posts them.
+      if (input.attachments?.length) await checkOwner('post files', caller, who)
       const labeled = Object.keys(input.labels ?? {}).length > 0
       const clientId = input.id !== undefined ? await postId(caller, input.id) : undefined
       let made: { thread: ApiThread; message: ApiMessage }
