@@ -78,6 +78,8 @@ const bodyOf = (description: string | null | undefined) => description?.trim() |
  * An issue's properties as board labels: `priority=high`, `project=v0-accessibility`, a label per
  * Linear label (`tag.bug`), and its assignee (`assignee.ada`). Only what the payload says: a
  * property it carries empty is unset, and one it names without its details is left as it was.
+ * Linear leaves an empty assignee or project out of the payload rather than sending `null`, so
+ * either one missing, with no ID either, is empty.
  * `priority` and `project` are single keys, so they're unset by name; `tag.` and `assignee.` are
  * prefixes the mirror owns, so a key under them that Linear doesn't have goes.
  */
@@ -88,7 +90,7 @@ function propertiesOf(data: IssueData): { labels: Record<string, string>; unset:
   if (data.priority === 0 || data.priorityLabel === 'No priority') unset.push('priority')
   else if (data.priorityLabel && slug(data.priorityLabel)) labels.priority = slug(data.priorityLabel).slice(0, 256)
   if (data.project?.name && slug(data.project.name)) labels.project = slug(data.project.name).slice(0, 256)
-  else if (data.project === null || data.projectId === null) unset.push('project')
+  else if (!data.project && !data.projectId) unset.push('project')
   if (Array.isArray(data.labels)) {
     owns.push('tag.')
     for (const label of data.labels) {
@@ -100,7 +102,7 @@ function propertiesOf(data: IssueData): { labels: Record<string, string>; unset:
     owns.push('assignee.')
     const tag = tagOf('assignee', handleOf(data.assignee))
     if (tag) labels[tag[0]] = tag[1]
-  } else if (data.assignee === null || data.assigneeId === null) owns.push('assignee.')
+  } else if (!data.assigneeId) owns.push('assignee.')
   return { labels, unset, owns }
 }
 type LinearRaw = { kind?: string; comment?: { url?: string; issueId?: string; parentId?: string; id?: string; body?: string; user?: { avatarUrl?: string } } }
