@@ -116,7 +116,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/attachments/:id` | The file |
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
-| POST | `/schedules/:id/cancel` | Cancel one (`12` or `s12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
+| POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `a2()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
 | POST | `/watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
 | GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |

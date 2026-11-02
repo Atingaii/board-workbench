@@ -361,12 +361,13 @@ The backend picks them; the protocol only says their shape:
   `cursor`, and every event view carries its own `cursor` (SSE's `id:`).
 - **Every message view has `version`,** a number that grows with each change to
   the message: of two views of one message, the higher `version` is newer.
-- **On `a2()` they're decimal log indexes.** A message's ID is the index of
-  its `message.posted` event (`"812"`), and a schedule's the index of its
-  `schedule.created` event in session `schedules`. A cursor is the index a read
-  reflects, or an event's own, and a version is the index of the last event
-  that changed the message. The log and the tables keep numbers; only views are
-  strings. The CLI shows them as `#812` and `s12`.
+- **On `a2()` they're log indexes.** A message's ID is the index of its
+  `message.posted` event, in decimal (`"812"`), and a schedule's the index of
+  its `schedule.created` event in session `schedules`, after an `s` (`"s12"`),
+  so it reads apart from a message's. A cursor is the index a read reflects, or
+  an event's own, and a version is the index of the last event that changed the
+  message. The log and the tables keep numbers; only views are strings. The CLI
+  shows a message's as `#812`, and a schedule's as the board gave it.
 
 ### The protocol and conformance
 
