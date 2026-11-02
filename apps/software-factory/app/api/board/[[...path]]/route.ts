@@ -16,7 +16,6 @@ import { devMirror, inThread } from "./inthread";
 import { guard } from "./guard";
 import { renderForSlack } from "./render";
 import { issues, pulls } from "./quiet";
-import { asksEve, isDraft, reviewStarts } from "./review";
 import { CONNECTOR, REPO } from "./github";
 import { vercelTrustedSources } from "./trusted-sources";
 
@@ -144,11 +143,9 @@ const factory = board({
         }
       },
     },
-    // Eve reviews PRs once they're ready: a PR opened ready when its thread opens in `dev`, a
-    // draft when it's marked ready (its root relabeled state=open). Eve hears when anyone but a
-    // bot (Vercel's deploy comments, CI) replies there, except that in a draft only a reply
-    // asking Eve itself, or a reminder Eve scheduled, wakes it. Only PR threads: `--label pr` matches a reply by its root's
-    // labels too.
+    // Eve reviews each PR, drafts included, when its thread opens in `dev`, and hears when anyone
+    // but a bot (Vercel's deploy comments, CI) replies there. Only PR threads: `--label pr`
+    // matches a reply by its root's labels too.
     "review-pi": {
       tail: "dev --label pr",
       run: async ({ event, board }) => {
@@ -156,7 +153,7 @@ const factory = board({
         if (!message) {
           return;
         }
-        if (reviewStarts(event)) {
+        if (event.type === "message.posted" && message.re === null) {
           await tellEve({
             board,
             task: "review",
@@ -169,11 +166,7 @@ const factory = board({
           message.re !== null &&
           (scheduled(message) || !byEve(message.re, message.by)) &&
           !message.author?.handle.endsWith("[bot]") &&
-          !byWatcher(message.by) &&
-          // In a draft, a reminder Eve scheduled for itself still reaches it.
-          ((scheduled(message) && byEve(message.re, message.by)) ||
-            asksEve(message.re, message.text) ||
-            !isDraft((await board.thread(message.re)).message.labels))
+          !byWatcher(message.by)
         ) {
           await tellEve({
             board,

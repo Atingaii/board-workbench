@@ -356,12 +356,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * retry of one that landed stands, whatever the middleware would say now; one that wouldn't land
    * goes as it came, for the backend to say why.
    */
-  async function screenPost(
-    caller: Caller,
-    input: Protocol['post']['input'],
-    signal: AbortSignal,
-    send: (input: Protocol['post']['input']) => Promise<Protocol['post']['output']>,
-  ): Promise<Protocol['post']['output']> {
+  async function screenPost<T>(caller: Caller, input: Protocol['post']['input'], signal: AbortSignal, send: (input: Protocol['post']['input']) => Promise<T>): Promise<T> {
     const source = sourceOf(caller)
     if (middleware.length === 0 || source === null) return send(input)
     if (input.id !== undefined && (await found(() => backend.posted(caller, { id: input.id! }, signal)))) return send(input)
@@ -382,6 +377,18 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     const { actor } = await whoIs(caller, signal)
     return screen({ kind: 'post', channel, re, text: input.text, labels: input.labels ?? {}, attachments }, actor, source, (write) =>
       send({ ...input, text: write.text, labels: write.labels }),
+    )
+  }
+
+  /**
+   * A schedule, on a backend whose sends post elsewhere: its message through the middleware once,
+   * as the caller's post of it, since its text and labels never change and no send comes back here.
+   */
+  function screenSchedule(caller: Caller, input: Protocol['schedule']['input'], signal: AbortSignal): Promise<Protocol['schedule']['output']> {
+    const { channel, re, text, labels, noSync, attachments } = input
+    const message = { ...(channel !== undefined ? { channel } : {}), ...(re !== undefined ? { re } : {}), text, ...(labels ? { labels } : {}), ...(noSync !== undefined ? { noSync } : {}), ...(attachments ? { attachments } : {}) }
+    return screenPost(caller, message as Protocol['post']['input'], signal, (screened) =>
+      backend.schedule(caller, { ...input, text: screened.text, ...(screened.labels ? { labels: screened.labels } : {}) }, signal),
     )
   }
 
@@ -640,10 +647,11 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
+        const schedule = (made: Protocol['schedule']['input']) => (backend.sendsSchedulesHere === false ? screenSchedule(caller, made, signal) : backend.schedule(caller, made, signal))
         const allowed = engine && mentionsEmails(body.text) ? await mayPost(caller, body, signal) : null
-        if (!allowed) return backend.schedule(caller, body, signal)
+        if (!allowed) return schedule(body)
         const text = await withEmails(body.text)
-        const answer = await backend.schedule(caller, { ...body, text }, signal)
+        const answer = await schedule({ ...body, text })
         // As for a post: one that can't read where it lands gets back what it sent.
         const { access } = allowed
         return text !== body.text && access !== null && !access.readable(answer.schedule.channel) ? { ...answer, schedule: { ...answer.schedule, text: body.text } } : answer

@@ -21,7 +21,8 @@ import type { AccessSummary } from '../server/access.ts'
 
 /**
  * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
- * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals.
+ * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals,
+ * and `s12` for a schedule.
  */
 export const Ref = z.string().min(1).max(128)
 const id = Ref

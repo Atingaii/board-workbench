@@ -19,7 +19,7 @@ import { badRequest, HttpError, notFound } from './errors.ts'
 import { authorizePost, deploymentIdentity, type Identity, type WriteContext } from './writes.ts'
 import type { WriteOrigin } from './origin.ts'
 import { DroppedError } from './middleware.ts'
-import { indexOf, ref } from './feed.ts'
+import { indexOf, ref, scheduleRef } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
@@ -149,7 +149,7 @@ export const createdBy = (schedule: Schedule, principal: Pick<Granted, 'id' | 'a
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
   return {
-    id: ref(schedule.id),
+    id: scheduleRef(schedule.id),
     channel: schedule.channel,
     re: schedule.re === null ? null : ref(schedule.re),
     text: schedule.text,

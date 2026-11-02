@@ -25,6 +25,26 @@ type Message = {
   /** Its post's place in its channel's feed, which a channel cursor counts. */
   feedSequence: number
   attachments?: { id: string; name: string; type: string; size: number }[]
+  schedule?: { id: string; n: number }
+}
+type Schedule = {
+  id: string
+  channelId: string
+  threadId?: string
+  text: string
+  labels?: Record<string, string>
+  firstAt: number
+  every?: number
+  until?: number
+  times?: number
+  sent: number
+  nextAt: number | null
+  lastMessageId?: string
+  state: 'pending' | 'done' | 'canceled'
+  canceled?: { by?: Actor; at: number; reason: 'canceled' | 'revoked' | 'disabled' }
+  createdAt: number
+  createdBy: Actor
+  revision: number
 }
 type Attachment = { id: string; boardId: string; name: string; type: string; size: number; sha256: string; state: 'pending' | 'ready'; messageId?: string; createdAt: number; createdBy: Actor }
 type Thread = {
@@ -81,6 +101,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
+  const schedules = new Map<string, Schedule>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
 
@@ -144,6 +165,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     ...(m.reactions.size ? { reactors: Object.fromEntries([...m.reactions].map(([emoji, by]) => [emoji, [...by.keys()].slice(0, 20)])) } : {}),
     ...(Object.keys(m.labels).length ? { labels: { ...m.labels } } : {}),
     ...(m.attachments?.length ? { attachments: m.attachments } : {}),
+    ...(m.schedule ? { schedule: m.schedule } : {}),
   })
   const showThread = (t: Thread) => {
     const { messages, ...rest } = t
@@ -212,7 +234,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return channel
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number }) {
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number }) {
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
@@ -243,6 +265,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       labels: { ...body.labels },
       feedSequence: 0,
       ...(files.length ? { attachments: files.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
+      ...(body.schedule ? { schedule: body.schedule } : {}),
     }
     for (const file of files) file.messageId = message.id
     thread.messages.push(message)
@@ -337,6 +360,100 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     throw new Refused(404, 'not_found')
   }
 
+  const showSchedule = (s: Schedule) => ({ ...s, ...(s.labels ? { labels: { ...s.labels } } : {}) })
+
+  /** Times are whole milliseconds, a year out at most, and a repeat is at least a minute apart, with one stop. */
+  function schedule(actor: Actor, body: Record<string, any>): Schedule {
+    const invalid = () => new Refused(400, 'invalid_schedule')
+    if (actor.principal.type === 'app') throw new Refused(403, 'principal_cannot_schedule')
+    if ((body.channelId === undefined) === (body.threadId === undefined)) throw invalid()
+    if (body.labels !== undefined && body.threadId !== undefined) throw invalid()
+    if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 10_000) throw new Refused(400, 'invalid_message')
+    const at = Date.now()
+    const time = (value: unknown) => Number.isInteger(value) && (value as number) > 0 && (value as number) <= at + 365 * 86_400_000
+    if (!time(body.firstAt) || body.firstAt < at - 60_000) throw invalid()
+    if (body.every !== undefined && (!Number.isInteger(body.every) || body.every < 60_000)) throw invalid()
+    if (body.until !== undefined && !time(body.until)) throw invalid()
+    if (body.times !== undefined && (!Number.isInteger(body.times) || body.times < 1)) throw invalid()
+    const stops = [body.until, body.times].filter((stop) => stop !== undefined).length
+    if (stops > 1 || (stops > 0 && body.every === undefined)) throw invalid()
+    const channelId = body.threadId !== undefined ? threadAt(body.threadId).channelId : channelAt(body.channelId).id
+    const made: Schedule = {
+      id: `sch_${randomUUID()}`,
+      channelId,
+      ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
+      text: body.text,
+      ...(body.labels ? { labels: { ...body.labels } } : {}),
+      firstAt: body.firstAt,
+      ...(body.every !== undefined ? { every: body.every } : {}),
+      ...(body.until !== undefined ? { until: body.until } : {}),
+      ...(body.times !== undefined ? { times: body.times } : {}),
+      sent: 0,
+      nextAt: Math.max(body.firstAt, at),
+      state: 'pending',
+      createdAt: now(),
+      createdBy: actor,
+      revision: 1,
+    }
+    schedules.set(made.id, made)
+    seen(actor)
+    return made
+  }
+
+  /** A schedule's next send, as the API posts it when it's due: as its creator, marked as the schedule's. */
+  function send(id: string) {
+    const due = schedules.get(id)
+    if (!due || due.state !== 'pending') throw new Error(`schedule ${id} has nothing due`)
+    const n = due.sent
+    const body = { text: due.text, schedule: { id, n } }
+    let message: Message
+    if (due.threadId !== undefined) message = post(due.createdBy, threadAt(due.threadId), body)
+    else {
+      const createdAt = now()
+      const thread: Thread = { id: `thr_${randomUUID()}`, channelId: due.channelId, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: due.createdBy, messages: [] }
+      threads.set(thread.id, thread)
+      message = post(due.createdBy, thread, { ...body, ...(due.labels ? { labels: due.labels } : {}) })
+    }
+    due.sent = n + 1
+    due.lastMessageId = message.id
+    due.revision++
+    const next = due.every === undefined ? null : due.firstAt + due.every * due.sent
+    const over = next === null || (due.times !== undefined && due.sent >= due.times) || (due.until !== undefined && next > due.until)
+    due.nextAt = over ? null : next
+    if (over) due.state = 'done'
+    return message.id
+  }
+
+  function schedulesRoute(method: string, rest: string, actor: Actor, body: Record<string, any>, url: URL): unknown {
+    let found: RegExpExecArray | null
+    if (method === 'POST' && rest === '/schedules') return { schedule: showSchedule(schedule(actor, body)) }
+    if (method === 'GET' && rest === '/schedules') {
+      const query = (name: string) => url.searchParams.get(name) ?? undefined
+      const state = query('state')
+      const createdBy = query('createdBy')
+      const listed = [...schedules.values()].sort((a, b) => a.createdAt - b.createdAt)
+      // Filters apply within each page, so a page can come back short with a cursor to the rest.
+      const { items, cursor } = page(listed, url.searchParams.get('cursor'), 2)
+      const kept = items.filter(
+        (s) =>
+          (state === undefined || s.state === state) &&
+          (query('channelId') === undefined || s.channelId === query('channelId')) &&
+          (query('threadId') === undefined || s.threadId === query('threadId')) &&
+          (createdBy === undefined || s.createdBy.id === createdBy || principalId(s.createdBy.principal) === createdBy),
+      )
+      return { schedules: kept.map(showSchedule), cursor }
+    }
+    if ((found = /^\/schedules\/([^/]+)\/cancel$/.exec(rest)) && method === 'POST') {
+      const target = schedules.get(decodeURIComponent(found[1]!))
+      if (!target) throw new Refused(404, 'schedule_not_found')
+      if (!samePrincipal(target.createdBy.principal, actor.principal)) throw new Refused(403, 'schedule_not_owned')
+      if (target.state !== 'pending') return { schedule: showSchedule(target), canceled: false }
+      Object.assign(target, { state: 'canceled', nextAt: null, canceled: { by: actor, at: now(), reason: 'canceled' }, revision: target.revision + 1 })
+      return { schedule: showSchedule(target), canceled: true }
+    }
+    return undefined
+  }
+
   async function route(request: Request): Promise<unknown> {
     const url = new URL(request.url)
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
@@ -412,6 +529,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       return again
     }
     if (rest === '/watchers' || rest.startsWith('/watchers/')) return watchers(method, rest, actor, body, url)
+    if (rest === '/schedules' || rest.startsWith('/schedules/')) {
+      const answered = schedulesRoute(method, rest, actor, body, url)
+      if (answered !== undefined) return answered
+    }
     if (method === 'POST' && rest === '/attachments') {
       const attachment: Attachment = { id: `att_${randomUUID()}`, boardId: boardId!, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
       attachments.set(attachment.id, attachment)
@@ -551,6 +672,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     requests,
     /** The watchers each principal registered, as the API keeps them. */
     registrations,
+    /** Every schedule, by ID, as the API keeps them. */
+    schedules,
+    /** Posts a schedule's next send now, as its timer would: the message's ID. */
+    send,
     /** The attachments bucket, as presigned URLs reach it: a PUT stores bytes, a GET reads them. */
     files: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
