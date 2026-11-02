@@ -311,6 +311,8 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
     links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX).optional(),
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
+    /** A reply's precondition, as a post's: a sync callback's reply after the newest message it read. */
+    after: Ref.optional(),
   }),
   z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional() }),
   z.object({ op: z.literal('delete'), ...Imported, ...Changed }),
