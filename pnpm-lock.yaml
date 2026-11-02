@@ -216,8 +216,8 @@ importers:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       experimental-a2:
-        specifier: 0.22.0
-        version: 0.22.0(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
+        specifier: 0.24.0
+        version: 0.24.0(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
       ioredis:
         specifier: 5.11.1
         version: 5.11.1
@@ -1909,8 +1909,8 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
-  experimental-a2@0.22.0:
-    resolution: {integrity: sha512-hvIW5fyu/Wg9E37n+HsyCpzoRtbzoRXbX8npRZ31fVLTI2m/3unQlZ4kQRbzdWQAbEFMCNfGO/JjJ1gT05md8Q==}
+  experimental-a2@0.24.0:
+    resolution: {integrity: sha512-r9nCbSy6wvWdJBY+2wGqXi3h0UvQTAL4YZ708bp4Gul2es7R4Veg2NPsMDADqQqfgWGyUz8C3LNoKh+ge8qOTg==}
     engines: {node: '>=22.13'}
     peerDependencies:
       '@earendil-works/pi-ai': ^1.0.2
@@ -1923,6 +1923,7 @@ packages:
       libfx: ^0.0.12
       pg: ^8.11.0
       react: ^19.0.0
+      redis: ^5.8.0 || ^6.0.0
     peerDependenciesMeta:
       '@earendil-works/pi-ai':
         optional: true
@@ -1943,6 +1944,8 @@ packages:
       pg:
         optional: true
       react:
+        optional: true
+      redis:
         optional: true
 
   express-rate-limit@8.7.0:
@@ -4765,7 +4768,7 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  experimental-a2@0.22.0(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0):
+  experimental-a2@0.24.0(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0):
     optionalDependencies:
       '@upstash/qstash': 2.12.0
       '@vercel/queue': 0.7.0
