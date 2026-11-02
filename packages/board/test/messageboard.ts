@@ -673,14 +673,17 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     schedules,
     /** Posts a schedule's next send now, as its timer would: the message's ID. */
     send,
-    /** The attachments bucket, as presigned URLs reach it: a PUT stores bytes, a GET reads them. */
+    /** The attachments bucket, as presigned URLs reach it: a PUT stores bytes, held to its signed SHA-256 as S3 holds it, and a GET reads them. */
     files: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const id = request.url.slice(STORAGE.length)
       if (request.headers.has('authorization')) return new Response('credentials never go to storage', { status: 400 })
       if (request.method === 'PUT') {
         if (stored.has(id)) return new Response(null, { status: 412 })
-        stored.set(id, new Uint8Array(await request.arrayBuffer()))
+        const bytes = new Uint8Array(await request.arrayBuffer())
+        const digest = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))))
+        if (request.headers.get('x-amz-checksum-sha256') !== digest) return new Response('BadDigest', { status: 400 })
+        stored.set(id, bytes)
         return new Response(null, { status: 200 })
       }
       const bytes = stored.get(id)
