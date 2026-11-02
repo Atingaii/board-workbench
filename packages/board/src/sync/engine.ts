@@ -1119,7 +1119,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
               postedAsPerson = true
               return asPerson
             }
-            return platform.post(native(target), 'channel', body)
+            if (root.attachments.length === 0 || !platform.startsThreadsWithFiles) return platform.post(native(target), 'channel', body)
           }
           try {
             const sent = await platform.post(native(target), 'channel', { ...body, files: await messageFiles(root) })

@@ -307,6 +307,56 @@ describe('sync', () => {
     expect(g.posts[1]!.text).toContain('cc @TK, not `@tk`')
   })
 
+  it("starts a Slack thread with a root's files in the same message as its text, and notes them when Slack refuses", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let refuse = false
+    const uploads: { channel_id: string; initial_comment: string; file_uploads: { filename: string }[] }[] = []
+    const files = {
+      delete: async () => ({}),
+      uploadV2: async (args: (typeof uploads)[number]) => {
+        if (refuse) throw Object.assign(new Error('missing_scope'), { data: { error: 'missing_scope' } })
+        uploads.push(args)
+        return { files: [{ files: [{ id: 'F1' }] }] }
+      },
+      info: async () => ({ file: { shares: { public: { C1: [{ ts: '1800.1' }] } } } }),
+    }
+    const { board, s } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files } })
+    // What the real adapter has, that the fake one lacks.
+    Object.assign(s.adapter, {
+      decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
+      formatConverter: { toResponseUrlText: ({ markdown }: { markdown: string }) => `mrkdwn(${markdown})` },
+    })
+    const token = await personToken()
+    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const upload = async () => {
+      const response = await board.fetch(
+        new Request(`${BOARD_URL}/attachments`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'video/mp4', 'x-board-filename': 'after.mp4' },
+          body: new Uint8Array([1, 2, 3]),
+        }),
+      )
+      return ((await response.json()) as { attachment: { id: string } }).attachment.id
+    }
+
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'shipped the fix', attachments: [await upload()] })).body.message
+    await vi.waitFor(() => expect(uploads).toHaveLength(1))
+    expect(uploads[0]).toMatchObject({ channel_id: 'C1', initial_comment: expect.stringContaining('shipped the fix'), file_uploads: [{ filename: 'after.mp4' }] })
+    // A reply lands under the message the upload made.
+    await julian('POST', '/messages', { re: root.id, text: 'rolled out' })
+    await vi.waitFor(() => expect(s.posts).toHaveLength(1))
+    expect(s.posts[0]!.threadId).toBe('slack:C1:1800.1')
+    expect(s.channelPosts).toEqual([])
+
+    refuse = true
+    await julian('POST', '/messages', { channel: 'firehose', text: 'another fix', attachments: [await upload()] })
+    await vi.waitFor(() => expect(s.channelPosts).toHaveLength(1))
+    expect(s.channelPosts[0]!.text).toContain('another fix')
+    expect(s.channelPosts[0]!.text).toContain('📎 after.mp4')
+    expect(uploads).toHaveLength(1)
+    warn.mockRestore()
+  })
+
   it('brings files posted in Slack onto the board, fetched through the adapter', async () => {
     const { board, s, webhook } = setup()
     const julian = caller(board.fetch, await personToken())

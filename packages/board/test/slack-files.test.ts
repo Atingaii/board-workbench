@@ -58,3 +58,62 @@ describe('files to Slack', () => {
     expect(slackFileName('unknown.log')).toBe('unknown.log')
   })
 })
+
+describe('a new thread with files, to Slack', () => {
+  function slackUploading(sharedAfter: number) {
+    const adapter = createSlackAdapter({ signingSecret: 'secret', botToken: 'xoxb-test' })
+    const internals = adapter as unknown as { initialize(chat: unknown): Promise<void>; chat: unknown }
+    internals.initialize = async function (chat) {
+      internals.chat = chat
+    }
+    const viaAdapter: unknown[] = []
+    adapter.postMessage = async (threadId, message) => {
+      viaAdapter.push(message)
+      return { id: '1700000000.000300', threadId, raw: {} }
+    }
+    const uploads: { channel_id: string; initial_comment: string; file_uploads: { file: Buffer; filename: string }[] }[] = []
+    let looks = 0
+    const client = {
+      conversations: { list: async () => ({}), info: async () => ({}) },
+      files: {
+        delete: async () => ({}),
+        uploadV2: async (args: (typeof uploads)[number]) => {
+          uploads.push(args)
+          return { files: [{ files: args.file_uploads.map((f) => ({ id: `F_${f.filename}` })) }] }
+        },
+        // Slack shares the upload a moment after it answers.
+        info: async () => (++looks > sharedAfter ? { file: { shares: { public: { C1: [{ ts: '1700000000.000400' }] } } } } : { file: {} }),
+      },
+    }
+    const provider = slack({ adapter, client: async () => client }, channels({}))
+    return { provider, uploads, viaAdapter, looks: () => looks }
+  }
+
+  it('posts its text and files as one message, the thread root', async () => {
+    const { provider, uploads, viaAdapter, looks } = slackUploading(1)
+    const sent = await provider.post('C1', 'channel', {
+      markdown: '**factory**: :merge: [Color picker stays put](https://github.com/vercel/v0/pull/1)',
+      files: [{ data: new Uint8Array([1, 2, 3]), filename: 'after.mp4', mimeType: 'video/mp4' }],
+    })
+    expect(uploads).toEqual([
+      {
+        channel_id: 'C1',
+        initial_comment: '*factory*: :merge: <https://github.com/vercel/v0/pull/1|Color picker stays put>',
+        file_uploads: [{ file: Buffer.from([1, 2, 3]), filename: 'after.mp4' }],
+      },
+    ])
+    expect(uploads[0]).not.toHaveProperty('thread_ts')
+    expect(viaAdapter).toEqual([])
+    expect(looks()).toBe(2)
+    expect(sent).toEqual({ thread: 'C1:1700000000.000400', message: '1700000000.000400', files: ['F_after.mp4'] })
+  })
+
+  it('keeps replies and file-only roots on the adapter', async () => {
+    const { provider, uploads, viaAdapter } = slackUploading(0)
+    const files = [{ data: new Uint8Array([1]), filename: 'a.png', mimeType: 'image/png' }]
+    await provider.post('C1:1700000000.000100', 'thread', { markdown: 'see after', files })
+    await provider.post('C1', 'channel', { markdown: '', files })
+    expect(uploads).toEqual([])
+    expect(viaAdapter).toHaveLength(2)
+  })
+})
