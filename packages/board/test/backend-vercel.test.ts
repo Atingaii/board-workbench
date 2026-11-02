@@ -253,7 +253,14 @@ describe('vercel()', () => {
 
   it('lets a caller that is the project upload files, past a request straight to storage, and post them, and refuses anyone else', async () => {
     const api = fakeMessageboard()
-    const { client } = gateway(api, [])
+    // Any middleware has board() look up a post's files first, as the caller, before they're posted.
+    const screened: string[][] = []
+    const { client } = gateway(api, [
+      async ({ write, next }) => {
+        if (write.kind === 'post') screened.push(write.attachments.map((file) => file.name))
+        await next()
+      },
+    ])
     const factory = client('factory')
     const log = await factory.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })
     // Bigger than a request takes: the client sends it to Vercel's storage on the URL the API signs.
@@ -262,19 +269,25 @@ describe('vercel()', () => {
     expect(api.requests.filter((r) => r.endsWith('/complete'))).toHaveLength(2)
     const posted = await factory.post('dev', { text: 'before and after', attachments: [log.id, after.id] })
     expect(posted.attachments.map((file) => file.id)).toEqual([log.id, after.id])
+    expect(screened).toEqual([['a.log', 'after.mp4']])
     expect(Buffer.from(await (await factory.download(after.id)).arrayBuffer()).equals(Buffer.from(video))).toBe(true)
     // Anyone else would be uploading and posting the project's files.
     const ada = client('ada')
     await expect(ada.upload({ data: new TextEncoder().encode('log'), name: 'b.log' })).rejects.toMatchObject({ status: 403 })
     await expect(ada.upload({ data: video, name: 'big.mp4', type: 'video/mp4' })).rejects.toMatchObject({ status: 403 })
     const unposted = await factory.upload({ data: new TextEncoder().encode('mine'), name: 'c.log' })
-    await expect(ada.post('dev', { text: 'not mine', attachments: [unposted.id] })).rejects.toMatchObject({ status: 403 })
+    // Its file isn't one Ada may have: as missing to her as one that isn't there.
+    await expect(ada.post('dev', { text: 'not mine', attachments: [unposted.id] })).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
   })
 
-  it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for", async () => {
+  it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for, and anyone else finishing the project's", async () => {
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
     const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
-    await expect(backend.uploadStart(project, { name: 'big.mp4', type: 'video/mp4', size: 5 * 1024 * 1024 }, new AbortController().signal)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    const signal = new AbortController().signal
+    const file = { name: 'big.mp4', type: 'video/mp4', size: 5 * 1024 * 1024 }
+    await expect(backend.uploadStart(project, file, signal)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    const ticket = await backend.uploadStart(project, { ...file, sha256: `${'A'.repeat(43)}=` }, signal)
+    await expect(backend.uploadFinish(verified('all'), { id: ticket.id }, signal)).rejects.toMatchObject({ status: 403 })
   })
 
   it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {

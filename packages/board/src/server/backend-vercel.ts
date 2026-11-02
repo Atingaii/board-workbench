@@ -144,7 +144,6 @@ const WAIT_MAX_S = 25
 /** Pages a filtered read of one channel scans for matches before it answers with what it found. */
 const SCAN_PAGES = 10
 
-
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
@@ -831,9 +830,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * a caller that is the project (its own deployment's token) changes what it wrote, as on any
    * board, and anyone else would be changing what the project wrote for others.
    */
+  /** Whether a caller is this project: the deployment's own code, or a caller verified as its principal. */
+  const isProject = async (caller: Caller, who: Who) => !('identity' in caller) || caller.identity.principal.id === principalId((await self(who)).actor.principal)
   async function checkOwner(what: string, caller: Caller, who: Who): Promise<void> {
-    if ('identity' in caller && caller.identity.principal.id !== principalId((await self(who)).actor.principal))
-      throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${what} there`)
+    if (!(await isProject(caller, who))) throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${what} there`)
   }
 
   /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a2(). */
@@ -1178,10 +1178,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       const access = accessOf(caller)
       const found = await api<{ attachment: ApiAttachment; url: string }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`), signal ? { signal } : {})
-      // The API sees this project, which uploaded every file here: a caller reads one only through a message it can.
-      if (access) {
-        if (!found.attachment.messageId) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
-        const { message } = await readableMessage(who, access, found.attachment.messageId, signal).catch((error: unknown) => {
+      // The API sees this project, which uploaded every file here: one not posted yet is the project's own,
+      // as an upload is its uploader's, and a caller reads any other only through a message it can.
+      if (access && !found.attachment.messageId) {
+        if (!(await isProject(caller, who))) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
+      } else if (access) {
+        const { message } = await readableMessage(who, access, found.attachment.messageId!, signal).catch((error: unknown) => {
           if (error instanceof HttpError && error.status === 404) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
           throw error
         })
