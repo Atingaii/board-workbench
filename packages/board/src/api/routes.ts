@@ -240,6 +240,8 @@ export const AckBody = z.object({
 export const SourceReadQuery = z.object({
   target: z.string().min(1).max(4000),
   limit: z.coerce.number().int().min(1).max(200).optional(),
+  /** Where the last read left off: its `next`. */
+  after: z.string().min(1).max(400).optional(),
 })
 
 /** A channel to add the board's app to, so it can be read on demand: `#name`, an ID, or a link into it. */
@@ -670,6 +672,8 @@ export type SourceRead = {
   messages: SourceMessage[]
   /** The platform has more than `limit`: older messages in a channel, later replies in a thread. */
   more: boolean
+  /** Where to pick up, as `after`, when the platform can page past `limit`. */
+  next?: string | null
 }
 
 /** A channel the board's app joined, or was already in (`joined: false`). */

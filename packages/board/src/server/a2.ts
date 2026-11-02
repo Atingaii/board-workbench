@@ -720,13 +720,13 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       const { message, replies } = await methods.message(caller, { id }, signal)
       return { targets: await binding.typing([message, ...replies], status) }
     },
-    async readSource(caller, { key, target, limit }) {
+    async readSource(caller, { key, target, limit, after }) {
       // Only the board that runs a sync entry has its platform's app to read with.
       if (!binding.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: read it where its sync runs`, 'not_synced_here')
       // The app's token reads what the app can, not what the caller can.
       const { principal } = await identityOf(caller)
       if (!principal.access.everywhere('manage')) throw forbidden("this token can't read a source: it needs manage in every channel")
-      return binding.readSource(key, target, limit ?? 50)
+      return binding.readSource(key, target, limit ?? 50, after ?? null)
     },
     async joinSource(caller, { key, target }) {
       if (!binding.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: join it where its sync runs`, 'not_synced_here')

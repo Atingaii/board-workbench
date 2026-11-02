@@ -328,7 +328,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     },
     // A source this board's own sync reads is read here; any other is the board it uses' to read.
     async readSource(caller, input, signal) {
-      if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().readSource(input.key, input.target, input.limit ?? 50)
+      if ('self' in caller && bound().sync.some((entry) => entry.key === input.key)) return bound().readSource(input.key, input.target, input.limit ?? 50, input.after ?? null)
       return remoteCall('readSource', caller, input, signal) as Promise<Protocol['readSource']['output']>
     },
     async joinSource(caller, input, signal) {

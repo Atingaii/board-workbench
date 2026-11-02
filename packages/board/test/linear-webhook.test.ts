@@ -4,6 +4,7 @@ import type { Adapter } from 'chat'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { linear, teams } from '../src/sync/linear.ts'
 import type { ReceivedEvent } from '../src/sync/provider.ts'
+import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 const secret = 'test-secret'
 const BOT = 'bot-user'
@@ -13,6 +14,16 @@ const ada = { id: 'user-ada', name: 'Ada Lovelace', url: 'https://linear.app/acm
 const board = { id: BOT, name: 'board', url: 'https://linear.app/acme/profiles/board', type: 'OauthClient' }
 const issue = { id: ISSUE, identifier: 'ENG-12', title: 'Sync Linear to the board', url: 'https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board' }
 const thread = `linear:ENG:${ISSUE}`
+
+const readIssue = {
+  ...issue, description: 'Line numbers are not read out.', createdAt: '2026-10-29T10:00:00Z', priority: 2, priorityLabel: 'High',
+  state: { name: 'In Review' }, assignee: ada, creator: ada, project: { name: 'v0 Accessibility' }, labels: { nodes: [{ name: 'Screen reader' }] },
+}
+const readComment = (id: string, body: string, createdAt: string) => ({ id, body, createdAt, user: ada })
+const readIssues = (variables: Record<string, unknown>) => ({
+  nodes: [{ ...readIssue, comments: { nodes: [{ id: 'c1', createdAt: '2026-10-30T10:00:00Z' }] } }, { ...readIssue, id: 'other', identifier: 'ENG-13', title: 'Unassigned one', description: null, priority: 0, priorityLabel: 'No priority', assignee: null, labels: { nodes: [] }, comments: { nodes: [] } }],
+  pageInfo: variables.after ? { hasNextPage: false, endCursor: null } : { hasNextPage: true, endCursor: 'cursor-2' },
+})
 
 // Linear's GraphQL API, answering by operation: who the app is, its teams, its issues, and what it creates.
 const calls: { query: string; variables: Record<string, unknown> }[] = []
@@ -25,11 +36,22 @@ beforeEach(() => {
     if (query.includes('LinearAdapterViewerOrganization')) return answer({ viewer: { id: BOT, displayName: 'board', organization: { id: 'org-1' } } })
     if (/query teams/i.test(query)) return answer({ teams: { nodes: [{ id: 'team-eng', key: 'ENG', name: 'Engineering' }], pageInfo: { hasNextPage: false } } })
     if (/^\s*query issue\(/i.test(query)) {
-      return answer({ issue: { ...issue, team: { id: 'team-eng' }, state: { id: 'state-todo' }, reactions: [], sharedAccess: { isShared: false, sharedWithCount: 0, viewerHasOnlySharedAccess: false, sharedWithUsers: [], disallowedIssueFields: [] } } })
+      return answer({ issue: { ...issue, description: 'Comments and states, both ways.', priority: 2, priorityLabel: 'High', team: { id: 'team-eng' }, state: { id: 'state-todo' }, reactions: [], sharedAccess: { isShared: false, sharedWithCount: 0, viewerHasOnlySharedAccess: false, sharedWithUsers: [], disallowedIssueFields: [] } } })
     }
     if (/^\s*query workflowState\(/i.test(query)) return answer({ workflowState: { id: 'state-todo', name: 'Todo', type: 'unstarted', color: '#ccc', position: 1, team: { id: 'team-eng' } } })
     if (/issueCreate\(/.test(query)) return answer({ issueCreate: { success: true, lastSyncId: 1, issue: { id: OPENED } } })
     if (/issueUpdate\(/.test(query)) return answer({ issueUpdate: { success: true, lastSyncId: 2, issue: { id: OPENED } } })
+    if (/^\s*query issue_labels\(/i.test(query)) return answer({ issue: { labels: { nodes: [{ id: 'label-1', name: 'Bug', color: '#f00' }], pageInfo: { hasNextPage: false } } } })
+    if (/query BoardReadProject/.test(query)) return answer({ projects: { nodes: variables.slugId === 'aa87a7750b04' ? [{ id: 'project-1', name: 'v0 Accessibility', url: 'https://linear.app/acme/project/v0-accessibility-aa87a7750b04' }] : [] } })
+    if (/query BoardReadIssues/.test(query)) return answer({ issues: readIssues(variables) })
+    if (/query BoardReadIssue\(/.test(query)) {
+      if (variables.id !== 'ENG-12') return answer({ issue: null })
+      // Linear's pages come newest first: the board puts them in order.
+      const comments = variables.after
+        ? { nodes: [readComment('c1', 'first', '2026-10-30T10:00:00Z')], pageInfo: { hasNextPage: false, endCursor: null } }
+        : { nodes: [readComment('c3', 'third', '2026-10-30T12:00:00Z'), readComment('c2', 'second', '2026-10-30T11:00:00Z')], pageInfo: { hasNextPage: true, endCursor: 'cursor-c' } }
+      return answer({ issue: { ...readIssue, comments } })
+    }
     throw new Error(`unexpected Linear call: ${query.slice(0, 80)}`)
   })
 })
@@ -127,6 +149,54 @@ it('opens a thread on any edit to an issue the board has not seen, like a bulk e
   expect(removed.received).toEqual([])
 })
 
+it("carries an issue's description, and its priority, project, labels, and assignee as labels", async () => {
+  const { send } = setup()
+  const data = {
+    ...issue, team: { key: 'ENG' }, state: { name: 'In Review', type: 'started' },
+    description: '  Line numbers are not read out.\n\nSteps: open the editor.  ',
+    priority: 2, priorityLabel: 'High', projectId: 'project-1', project: { id: 'project-1', name: 'v0 Accessibility' },
+    labels: [{ id: 'label-1', name: 'Screen reader' }], assigneeId: 'user-ada', assignee: ada,
+  }
+  const { received } = await send({ type: 'Issue', action: 'create', url: issue.url, data, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{
+    body: 'Line numbers are not read out.\n\nSteps: open the editor.',
+    labels: { issue: 'ENG-12', state: 'started', priority: 'high', project: 'v0-accessibility', 'tag.screen-reader': 'Screen reader', 'assignee.ada': 'ada' },
+    unset: [],
+    owns: ['tag.', 'assignee.'],
+  }])
+  // Unassigned, with no priority or project: their labels go, by name for the single keys.
+  const cleared = await send({
+    type: 'Issue', action: 'update', url: issue.url, actor: ada, updatedFrom: { assigneeId: 'user-ada' },
+    data: { ...data, description: null, priority: 0, priorityLabel: 'No priority', projectId: null, project: null, labels: [], assigneeId: null, assignee: null },
+  })
+  const [event] = cleared.received.map((r) => r.event) as { labels: Record<string, string>; unset: string[]; owns: string[]; body: string | null }[]
+  expect(event!.labels).toEqual({ issue: 'ENG-12', state: 'started' })
+  expect(event!.unset).toEqual(['priority', 'project'])
+  expect(event!.owns).toEqual(['tag.', 'assignee.'])
+  expect(event!.body).toBeNull()
+})
+
+it('leaves a property as it was when the payload names it without its details', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, priority: 2, projectId: 'project-1', assigneeId: 'user-ada' }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { priority: 1 }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{ labels: { issue: 'ENG-12', state: 'unstarted' }, unset: [], owns: [] }])
+})
+
+it('names an assignee without a profile link by their name, as Linear sends one', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, assigneeId: 'user-ada', assignee: { id: 'user-ada', name: 'Ada Lovelace', email: 'ada@acme.test' } }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { assigneeId: null }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{ labels: { 'assignee.ada-lovelace': 'Ada Lovelace' }, owns: ['assignee.'] }])
+})
+
+it('marks a description change as a redraw of the root', async () => {
+  const { send } = setup()
+  const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, description: 'New steps' }
+  const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { description: 'Old steps' }, actor: ada })
+  expect(received.map((r) => r.event)).toMatchObject([{ retitled: true, body: 'New steps', owns: [] }])
+})
+
 it('never opens a second root for an issue the board opened', async () => {
   const { send } = setup()
   const data = { ...issue, id: OPENED, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, creatorId: BOT }
@@ -200,5 +270,67 @@ it('reaches Linear outside a webhook with a Connect token', async () => {
   await expect(provider.resolveChannel('ENG')).resolves.toBe('ENG')
   await expect(provider.resolveTarget('ENG-12')).resolves.toEqual({ target: `ENG:${ISSUE}`, channel: 'ENG', kind: 'thread' })
   await expect(provider.post('ENG', 'channel', { markdown: 'From Connect' })).resolves.toEqual({ thread: `ENG:${OPENED}`, message: 'issue' })
-  await expect(provider.fetchRoot(`ENG:${ISSUE}`)).resolves.toMatchObject({ text: `ENG-12: Sync Linear to the board\n${issue.url}`, labels: { issue: 'ENG-12', state: 'unstarted' } })
+  await expect(provider.fetchRoot(`ENG:${ISSUE}`)).resolves.toMatchObject({
+    text: `ENG-12: Sync Linear to the board\n${issue.url}\n\nComments and states, both ways.`,
+    labels: { issue: 'ENG-12', state: 'unstarted', priority: 'high', 'tag.bug': 'Bug' },
+  })
+})
+
+it("puts an issue's description on its root, redraws it when the description changes, and keeps its labels in step", async () => {
+  const adapter = createLinearAdapter({ apiKey: 'lin_api_test', webhookSecret: secret, userName: 'board' }) as unknown as Adapter
+  const board = testBoard({ sync: { linear: linear({ adapter }, teams({ ENG: 'dev' })) } })
+  const julian = caller(board.fetch, await personToken())
+  const send = (payload: Record<string, unknown>) => {
+    const body = JSON.stringify({ organizationId: 'org-1', webhookId: 'hook-1', webhookTimestamp: Date.now(), ...payload })
+    return board.fetch(new Request(`${BOARD_URL}/webhooks/linear`, {
+      method: 'POST', body,
+      headers: { 'content-type': 'application/json', 'linear-delivery': `delivery-${Math.random()}`, 'linear-signature': createHmac('sha256', secret).update(body).digest('hex') },
+    }))
+  }
+  const root = async () => ((await julian('GET', '/messages?channel=dev')).body.messages as { id: string; text: string; labels: Record<string, string> }[])[0]
+  const data = {
+    ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, description: 'Old steps',
+    priority: 2, priorityLabel: 'High', projectId: 'project-1', project: { id: 'project-1', name: 'v0 Accessibility' },
+  }
+  await send({ type: 'Issue', action: 'create', url: issue.url, data, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.text).toBe(`ENG-12: Sync Linear to the board\n${issue.url}\n\nOld steps`))
+  const { id } = (await root())!
+  // A label someone set that only starts like a property's stays.
+  await julian('POST', `/messages/${id}/labels`, { set: { 'project-lead': 'ada' } })
+
+  await send({ type: 'Issue', action: 'update', url: issue.url, data: { ...data, description: 'New steps', priority: 0, priorityLabel: 'No priority' }, updatedFrom: { description: 'Old steps', priority: 2 }, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.text).toBe(`ENG-12: Sync Linear to the board\n${issue.url}\n\nNew steps`))
+  await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'unstarted', project: 'v0-accessibility', 'project-lead': 'ada' }))
+})
+
+it("reads a project's issues on demand, with their properties and descriptions, a page at a time", async () => {
+  const { provider } = setup()
+  const read = await provider.read('https://linear.app/acme/project/v0-accessibility-aa87a7750b04/issues?layout=list', { limit: 50, after: null })
+  expect(read).toMatchObject({ channel: 'https://linear.app/acme/project/v0-accessibility-aa87a7750b04', name: 'v0 Accessibility', thread: null, more: true, next: 'cursor-2' })
+  expect(read.messages.map((message) => message.text)).toEqual([
+    `ENG-12: Sync Linear to the board\nIn Review · High · assigned to ada · v0 Accessibility · Screen reader\n${issue.url}\n\nLine numbers are not read out.`,
+    `ENG-13: Unassigned one\nIn Review · unassigned · v0 Accessibility\n${issue.url}`,
+  ])
+  expect(read.messages[0]).toMatchObject({ id: 'ENG-12', thread: 'ENG-12', author: 'ada', replies: 1 })
+  const filters = apiCalls().filter((call) => /BoardReadIssues/.test(call.query)).map((call) => call.variables)
+  expect(filters).toEqual([{ filter: { project: { id: { eq: 'project-1' } } }, first: 50, after: null }])
+  const second = await provider.read('https://linear.app/acme/project/v0-accessibility-aa87a7750b04', { limit: 50, after: 'cursor-2' })
+  expect(second).toMatchObject({ more: false, next: null })
+})
+
+it("reads a team's issues by its key, and one issue with its comments, oldest first", async () => {
+  const { provider } = setup()
+  const team = await provider.read('eng', { limit: 200, after: null })
+  expect(team).toMatchObject({ channel: 'ENG', thread: null })
+  expect(apiCalls().find((call) => /BoardReadIssues/.test(call.query))!.variables).toMatchObject({ filter: { team: { key: { eq: 'ENG' } } }, first: 100 })
+  const one = await provider.read('https://linear.app/acme/issue/ENG-12/sync-linear-to-the-board', { limit: 2, after: null })
+  expect(one).toMatchObject({ channel: 'ENG', thread: 'ENG-12', more: true, next: '2' })
+  expect(one.messages.map((message) => [message.id, message.text.split('\n')[0]])).toEqual([['ENG-12', 'ENG-12: Sync Linear to the board'], ['c1', 'first'], ['c2', 'second']])
+  expect(one.messages[0]!.replies).toBe(3)
+  const rest = await provider.read('ENG-12', { limit: 2, after: '2' })
+  expect(rest).toMatchObject({ more: false, next: null })
+  expect(rest.messages.map((message) => message.id)).toEqual(['c3'])
+  await expect(provider.read('ENG-99', { limit: 50, after: null })).rejects.toMatchObject({ code: 'channel_not_found' })
+  await expect(provider.read('https://linear.app/acme/project/missing-0123456789ab', { limit: 50, after: null })).rejects.toMatchObject({ code: 'channel_not_found' })
+  await expect(provider.read('#general', { limit: 50, after: null })).rejects.toMatchObject({ code: 'invalid_target' })
 })

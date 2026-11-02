@@ -132,7 +132,7 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
    * A channel or thread, read on demand for whoever asked: nothing is synced,
    * stored, or joined. Throws `UnreadableError` for what it won't read.
    */
-  async read(_target: string, _options: { limit: number }): Promise<SourceRead> {
+  async read(_target: string, _options: { limit: number; after: string | null }): Promise<SourceRead> {
     throw new UnreadableError('unsupported', `${this.platform} can't be read on demand`)
   }
   /** Adds the board's app to a channel so `read` can read it, where the board opted in. Throws `UnreadableError` otherwise. */

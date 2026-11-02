@@ -8,6 +8,8 @@ import { UnreadableError, type ProviderDelivery, type ProviderPost, type Receive
 import { createLinearAdapter } from '@chat-adapter/linear'
 import { connectLinearAdapter } from '@vercel/connect/chat'
 import { channels, type SyncFn, type SyncUnit } from './fn.ts'
+import { slug, tagOf } from './tags.ts'
+import type { SourceMessage, SourceRead } from '../api/routes.ts'
 
 export const LinearEvent = eventSchema('linear', 'comment')
 export type LinearEvent = z.infer<typeof LinearEvent>
@@ -56,13 +58,50 @@ const teamOf = (identifierOrUrl: string | undefined | null) => /(?:^|\/issue\/)(
 type CommentData = { id: string; body?: string; issueId?: string; parentId?: string | null; user?: User; issue?: { id?: string; identifier?: string } }
 type CommentPayload = { type: 'Comment'; action: string; url?: string; data: CommentData; organizationId: string }
 type IssueData = {
-  id: string; identifier: string; title: string; url?: string
+  id: string; identifier: string; title: string; url?: string; description?: string | null
   team?: { key?: string }; state?: { name?: string; type?: string }
   creatorId?: string | null; archivedAt?: string | null
+  priority?: number; priorityLabel?: string
+  assigneeId?: string | null; assignee?: User | null
+  labels?: { name?: string }[]
+  projectId?: string | null; project?: { name?: string } | null
 }
 type IssuePayload = {
   type: 'Issue'; action: string; url?: string; data: IssueData
-  updatedFrom?: { stateId?: unknown; title?: unknown }; actor?: User; webhookId?: string; webhookTimestamp?: number
+  updatedFrom?: { stateId?: unknown; title?: unknown; description?: unknown }; actor?: User; webhookId?: string; webhookTimestamp?: number
+}
+
+/** An issue's description, or null when it has none. */
+const bodyOf = (description: string | null | undefined) => description?.trim() || null
+
+/**
+ * An issue's properties as board labels: `priority=high`, `project=v0-accessibility`, a label per
+ * Linear label (`tag.bug`), and its assignee (`assignee.ada`). Only what the payload says: a
+ * property it carries empty is unset, and one it names without its details is left as it was.
+ * `priority` and `project` are single keys, so they're unset by name; `tag.` and `assignee.` are
+ * prefixes the mirror owns, so a key under them that Linear doesn't have goes.
+ */
+function propertiesOf(data: IssueData): { labels: Record<string, string>; unset: string[]; owns: string[] } {
+  const labels: Record<string, string> = {}
+  const unset: string[] = []
+  const owns: string[] = []
+  if (data.priority === 0 || data.priorityLabel === 'No priority') unset.push('priority')
+  else if (data.priorityLabel && slug(data.priorityLabel)) labels.priority = slug(data.priorityLabel).slice(0, 256)
+  if (data.project?.name && slug(data.project.name)) labels.project = slug(data.project.name).slice(0, 256)
+  else if (data.project === null || data.projectId === null) unset.push('project')
+  if (Array.isArray(data.labels)) {
+    owns.push('tag.')
+    for (const label of data.labels) {
+      const tag = tagOf('tag', label.name)
+      if (tag) labels[tag[0]] = tag[1]
+    }
+  }
+  if (data.assignee) {
+    owns.push('assignee.')
+    const tag = tagOf('assignee', handleOf(data.assignee))
+    if (tag) labels[tag[0]] = tag[1]
+  } else if (data.assignee === null || data.assigneeId === null) owns.push('assignee.')
+  return { labels, unset, owns }
 }
 type LinearRaw = { kind?: string; comment?: { url?: string; issueId?: string; parentId?: string; id?: string; body?: string; user?: { avatarUrl?: string } } }
 
@@ -76,10 +115,14 @@ type LinearAdapter = Adapter & {
 }
 
 type Issue = {
-  id: string; identifier: string; title: string; url: string
+  id: string; identifier: string; title: string; url: string; description?: string | null
   state?: Promise<{ name?: string; type?: string } | undefined>
   team?: Promise<{ key?: string } | undefined>
   creator?: Promise<User | undefined>
+  priority?: number; priorityLabel?: string
+  project?: Promise<{ name?: string } | undefined>
+  assignee?: Promise<User | undefined>
+  labels?: () => Promise<{ nodes: { name?: string }[] }>
 }
 type LinearClient = {
   teams(args: { filter: { key: { eq: string } } }): Promise<{ nodes: { id: string; key: string }[] }>
@@ -111,6 +154,57 @@ function titleOf(markdown: string) {
 
 function stateOf(state: { name?: string; type?: string } | undefined) {
   return state?.type ?? state?.name?.toLowerCase() ?? null
+}
+
+type ReadIssue = {
+  id: string; identifier: string; title: string; description?: string | null; url: string; createdAt: string
+  priority?: number; priorityLabel?: string
+  state?: { name?: string } | null; assignee?: User | null; creator?: User | null; project?: { name?: string } | null
+  labels?: { nodes: { name?: string }[] }
+  comments?: { nodes: ReadComment[]; pageInfo?: Page }
+}
+type ReadComment = { id: string; body?: string; createdAt: string; user?: User | null }
+type Page = { hasNextPage: boolean; endCursor?: string | null }
+type GraphQL = { client: { rawRequest<T>(query: string, variables: Record<string, unknown>): Promise<{ data?: T }> } }
+
+const ISSUE_FIELDS = `id identifier title description url createdAt priority priorityLabel
+  state { name } assignee { name displayName url } creator { name displayName url } project { name }
+  labels(first: 10) { nodes { name } }`
+// Linear caps a query's complexity, so a page of issues is smaller than the 200 a read can ask for.
+const ISSUES_PER_PAGE = 100
+const DESCRIPTION_IN_LIST = 1500
+const MAX_COMMENTS = 1000
+
+/** What a read names: a project (by its link), a team (by its key), or an issue (by its ID or link). */
+function readTargetOf(target: string): { kind: 'project'; slugId: string } | { kind: 'team'; key: string } | { kind: 'issue'; id: string } {
+  const project = /\/project\/(?:[^/?#]*-)?([0-9a-f]{8,})(?:[/?#]|$)/i.exec(target)
+  if (project) return { kind: 'project', slugId: project[1]! }
+  const issue = /(?:^|\/issue\/)([A-Z0-9_]+-\d+)(?:[/?#]|$)/i.exec(target.trim())
+  if (issue) return { kind: 'issue', id: issue[1]!.toUpperCase() }
+  if (/^[A-Z0-9_]+$/i.test(target.trim())) return { kind: 'team', key: target.trim().toUpperCase() }
+  throw new UnreadableError('invalid_target', `can't read ${target} from Linear: name a project by its link, a team by its key (ENG), or an issue (ENG-123)`)
+}
+
+/** An issue as a read shows it: its title, its properties on one line, its link, and what it says. */
+function issueMessage(issue: ReadIssue, descriptionMax: number | null): SourceMessage {
+  const properties = [
+    issue.state?.name,
+    issue.priority ? issue.priorityLabel : undefined,
+    issue.assignee ? `assigned to ${handleOf(issue.assignee)}` : 'unassigned',
+    issue.project?.name,
+    ...(issue.labels?.nodes ?? []).map((label) => label.name),
+  ].filter(Boolean)
+  const description = bodyOf(issue.description)
+  const shown = description && descriptionMax !== null && description.length > descriptionMax ? `${description.slice(0, descriptionMax)}…` : description
+  return {
+    id: issue.identifier,
+    thread: issue.identifier,
+    author: handleOf(issue.creator ?? undefined) ?? 'unknown',
+    text: [`${issue.identifier}: ${issue.title}\n${properties.join(' · ')}\n${issue.url}`, shown].filter(Boolean).join('\n\n'),
+    createdAt: issue.createdAt,
+    replies: issue.comments?.nodes.length ?? 0,
+    files: [],
+  }
 }
 
 export class LinearProvider extends ChatSyncProvider<LinearEvent> {
@@ -180,7 +274,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
         const { data } = payload
         const created = payload.action === 'create'
         if (!created && payload.action !== 'update') return []
-        const retitled = payload.action === 'update' && payload.updatedFrom?.title !== undefined
+        const retitled = payload.action === 'update' && (payload.updatedFrom?.title !== undefined || payload.updatedFrom?.description !== undefined)
         const team = data.team?.key ?? teamOf(data.identifier)!
         const state = stateOf(data.state)
         // An issue the board opened: its root is the board's, recorded when the post returns,
@@ -196,6 +290,7 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
           ? !own
           : !own && (bot === null || data.creatorId !== bot) && payload.actor?.type === 'user' && !data.archivedAt
         const delivery = headers.get('linear-delivery') ?? `${payload.webhookId}:${payload.webhookTimestamp}`
+        const properties = propertiesOf(data)
         return [{
           event: {
             kind: 'lifecycle',
@@ -204,8 +299,10 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
             type: created ? 'issue.created' : 'issue.updated',
             title: `${data.identifier}: ${data.title}`,
             url: data.url ?? payload.url ?? null,
-            labels: { issue: data.identifier, ...(state ? { state } : {}) },
-            unset: [],
+            body: bodyOf(data.description),
+            labels: { issue: data.identifier, ...(state ? { state } : {}), ...properties.labels },
+            unset: properties.unset,
+            owns: properties.owns,
             reply: null,
             createRoot: opens,
             ...(retitled ? { retitled: true } : {}),
@@ -226,6 +323,85 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   private async api<T>(fn: () => Promise<T>): Promise<T> {
     await this.ready()
     return this.linear.isConnectMode() ? this.linear.withConnectClient(undefined, fn) : fn()
+  }
+
+  /**
+   * A project's or team's issues, newest first, or one issue and its comments, read on demand:
+   * nothing is synced or stored. `next` pages past a read's `limit`.
+   */
+  override async read(target: string, { limit, after }: { limit: number; after: string | null }): Promise<SourceRead> {
+    const wanted = readTargetOf(target)
+    const query = <T>(text: string, variables: Record<string, unknown>) =>
+      this.api(async () => (await (this.client() as unknown as GraphQL).client.rawRequest<T>(text, variables)).data)
+    if (wanted.kind === 'issue') {
+      // Linear pages comments by its own order, so read them all and page oldest first here.
+      let issue: ReadIssue | null = null
+      const comments: ReadComment[] = []
+      let cursor: string | null = null
+      do {
+        const data: { issue: ReadIssue | null } | undefined = await query<{ issue: ReadIssue | null }>(
+          `query BoardReadIssue($id: String!, $first: Int!, $after: String) { issue(id: $id) { ${ISSUE_FIELDS}
+            comments(first: $first, after: $after) { nodes { id body createdAt user { name displayName url } } pageInfo { hasNextPage endCursor } } } }`,
+          { id: wanted.id, first: ISSUES_PER_PAGE, after: cursor },
+        )
+        if (!data?.issue) throw new UnreadableError('channel_not_found', `no Linear issue ${wanted.id}`)
+        issue = data.issue
+        comments.push(...(issue.comments?.nodes ?? []))
+        const page: Page | undefined = issue.comments?.pageInfo
+        cursor = page?.hasNextPage ? page.endCursor ?? null : null
+      } while (cursor !== null && comments.length < MAX_COMMENTS)
+      comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      const from = after === null ? 0 : Math.max(0, Number.parseInt(after, 10) || 0)
+      const shown = comments.slice(from, from + Math.min(limit, ISSUES_PER_PAGE))
+      const to = from + shown.length
+      return {
+        channel: teamOf(issue.identifier) ?? wanted.id,
+        name: null,
+        thread: issue.identifier,
+        messages: [
+          ...(from === 0 ? [{ ...issueMessage(issue, null), replies: comments.length }] : []),
+          ...shown.map((comment) => ({
+            id: comment.id, thread: issue.identifier, author: handleOf(comment.user ?? undefined) ?? 'unknown',
+            text: comment.body ?? '', createdAt: comment.createdAt, replies: 0, files: [],
+          })),
+        ],
+        more: to < comments.length,
+        next: to < comments.length ? String(to) : null,
+      }
+    }
+    let filter: Record<string, unknown>
+    let channel: string
+    let name: string | null
+    if (wanted.kind === 'project') {
+      const data = await query<{ projects: { nodes: { id: string; name: string; url: string }[] } }>(
+        'query BoardReadProject($slugId: String!) { projects(filter: { slugId: { eq: $slugId } }, first: 1) { nodes { id name url } } }',
+        { slugId: wanted.slugId },
+      )
+      const project = data?.projects.nodes[0]
+      if (!project) throw new UnreadableError('channel_not_found', `no Linear project ${target}`)
+      filter = { project: { id: { eq: project.id } } }
+      channel = project.url
+      name = project.name
+    } else {
+      await this.team(wanted.key)
+      filter = { team: { key: { eq: wanted.key } } }
+      channel = wanted.key
+      name = null
+    }
+    const data = await query<{ issues: { nodes: ReadIssue[]; pageInfo: Page } }>(
+      `query BoardReadIssues($filter: IssueFilter, $first: Int!, $after: String) {
+        issues(filter: $filter, first: $first, after: $after) { nodes { ${ISSUE_FIELDS} comments(first: 20) { nodes { id createdAt } } } pageInfo { hasNextPage endCursor } } }`,
+      { filter, first: Math.min(limit, ISSUES_PER_PAGE), after },
+    )
+    const issues = data?.issues
+    return {
+      channel,
+      name,
+      thread: null,
+      messages: (issues?.nodes ?? []).map((issue) => issueMessage(issue, DESCRIPTION_IN_LIST)),
+      more: issues?.pageInfo.hasNextPage ?? false,
+      next: issues?.pageInfo.hasNextPage ? issues.pageInfo.endCursor ?? null : null,
+    }
   }
 
   override async resolveChannel(key: string) {
@@ -252,13 +428,17 @@ export class LinearProvider extends ChatSyncProvider<LinearEvent> {
   override async fetchRoot(thread: string) {
     return this.api(async () => {
       const issue = await this.client().issue(parseThread(thread).issue)
-      const [state, creator] = await Promise.all([issue.state, issue.creator])
+      const [state, creator, project, assignee, tags] = await Promise.all([issue.state, issue.creator, issue.project, issue.assignee, issue.labels?.()])
       const found = stateOf(state)
+      const properties = propertiesOf({
+        id: issue.id, identifier: issue.identifier, title: issue.title,
+        priority: issue.priority, priorityLabel: issue.priorityLabel, project, assignee, labels: tags?.nodes,
+      })
       return {
-        text: `${issue.identifier}: ${issue.title}\n${issue.url}`,
+        text: [`${issue.identifier}: ${issue.title}\n${issue.url}`, bodyOf(issue.description)].filter(Boolean).join('\n\n'),
         raw: { issue: { id: issue.id, identifier: issue.identifier, title: issue.title, url: issue.url } },
         author: author(creator, false),
-        labels: { issue: issue.identifier, ...(found ? { state: found } : {}) },
+        labels: { issue: issue.identifier, ...(found ? { state: found } : {}), ...properties.labels },
       }
     })
   }

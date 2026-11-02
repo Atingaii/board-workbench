@@ -1118,7 +1118,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       if (sub !== 'read' && sub !== 'join') throw usage(sub === undefined ? `Missing what to do with ${key}: read or join.` : `Unknown command ${sub} for ${named()} sources.`, { reason: sub === undefined ? 'missing_arguments' : 'unknown_command' })
       if (!target) throw usage(`Missing the channel, thread, or link to ${sub}.`, { reason: 'missing_arguments' })
-      const read = await client().readSource(key, target, flags.limit ? { limit: Number(flags.limit) } : {})
+      const read = await client().readSource(key, target, { ...(flags.limit ? { limit: Number(flags.limit) } : {}), ...(flags.after ? { after: String(flags.after) } : {}) })
       if (flags.json) return result(read), 0
       return out(formatSourceRead(key, read, Date.now(), named())), 0
     }

@@ -1,4 +1,5 @@
 import { ChatSyncProvider } from './chat-provider.ts'
+import { tagOf } from './tags.ts'
 import type { Adapter, Message as ChatMessage } from 'chat'
 import type { ExternalAuthor, ExternalEvent } from '../contract/external.ts'
 import { markdownOf } from './chat.ts'
@@ -63,25 +64,6 @@ type GitHubClient = {
       deleteForIssue(args: { owner: string; repo: string; issue_number: number; reaction_id: number }): Promise<unknown>
     }
   }
-}
-
-/** `good first issue` → `good-first-issue`: the part of a label key a name gives. Empty when nothing's left. */
-const slug = (name: string) =>
-  name
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, '-')
-    .replace(/^[-_.]+|-+$/g, '')
-
-/**
- * A GitHub label or assignee as a board label: `bug` → `tag.bug=bug`,
- * `julianbenegas` → `assignee.julianbenegas=julianbenegas`. The keys don't
- * name GitHub, so a filter like `--label tag.bug` holds for any platform.
- */
-function tagOf(prefix: 'tag' | 'assignee', name: string | undefined): [string, string] | null {
-  const key = name ? slug(name) : ''
-  return key ? [`${prefix}.${key}`.slice(0, 64), name!.slice(0, 256)] : null
 }
 
 /** A PR's or issue's current labels and assignees, as board labels. */

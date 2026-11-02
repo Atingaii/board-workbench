@@ -629,7 +629,7 @@ ways. Attaching twice prints `already synced with …`. See
 
 ```text
 vb sources
-vb sources <key> read <channel|thread|link> [--limit N]
+vb sources <key> read <channel|thread|link> [--limit N] [--after <cursor>]
 ```
 
 - **`sources`** lists the board's sync entries and their platforms.
@@ -639,7 +639,9 @@ vb sources <key> read <channel|thread|link> [--limit N]
   what it can, so this needs `manage` in every channel. `--limit` is 50 by
   default, at most 200. A board that doesn't run the entry says so:
   `error: this board doesn't run sync entry slack: read it where its sync runs`.
-  See [Read on demand](../02-sync/03-slack.md#read-on-demand).
+  A platform that pages past `--limit` prints where to pick up, for `--after`.
+  See [Read on demand](../02-sync/03-slack.md#read-on-demand) for Slack and
+  [Linear's](../02-sync/07-linear.md#read-on-demand).
 
 ### inbox
 
