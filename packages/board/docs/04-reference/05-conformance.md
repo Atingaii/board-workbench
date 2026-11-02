@@ -44,7 +44,7 @@ The whole protocol, on every board:
 - **Every edit, reaction, and label raises `version`.**
 - **An edit or a delete at a `revision`** lands only while the message is at
   it, which reactions and labels leave as it is: of three edits racing at one
-  revision, one lands.
+  revision, one lands, and an edit from before a delete is a conflict too.
 - **A label matches on the message or its thread's root.**
 - **`after` takes a cursor or a message ID,** and reads oldest first.
 - **Threads** come with their reply count and latest reply.

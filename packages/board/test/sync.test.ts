@@ -1730,6 +1730,26 @@ describe('provider callbacks', () => {
     expect((await read(call, 'support')).map((m) => m.text)).toEqual(['hello', 'first'])
   })
 
+  it("refuses a callback's edit at a revision another edit came after, as a request's", async () => {
+    const s = fakePlatform('slack')
+    const outcomes: string[] = []
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({
+      C1: delivering(async (sync) => {
+        const imported = await sync.import('support')
+        const { id, revision } = await sync.board.reply(imported.root!, 'step 1 of 5')
+        await sync.board.edit(id, 'step 2 of 5', { revision })
+        await sync.board.edit(id, 'step 2 of 5, again', { revision }).then(
+          () => outcomes.push('landed'),
+          (error: { code?: string }) => outcomes.push(error.code ?? 'error'),
+        )
+      }),
+    })) } })
+    const call = caller(board.fetch, await personToken())
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U1' }) }))
+    await vi.waitFor(() => expect(outcomes).toEqual(['revision_conflict']))
+    expect((await read(call, 'support')).map((m) => m.text)).toEqual(['hello', 'step 2 of 5'])
+  })
+
   it('resumes a failed callback after import without treating the retry as an echo', async () => {
     const s = fakePlatform('slack')
     let attempts = 0

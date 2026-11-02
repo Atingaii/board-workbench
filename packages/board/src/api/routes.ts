@@ -24,6 +24,9 @@ import type { AccessSummary } from '../server/access.ts'
  * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals.
  */
 export const Ref = z.string().min(1).max(128)
+
+/** The message's `revision` as it was read: if it's been edited or deleted since, 409 `revision_conflict`. */
+const Revision = z.number().int().positive()
 const id = Ref
 const repeated = z
   .union([z.string(), z.array(z.string())])
@@ -314,8 +317,9 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     /** A reply's precondition, as a post's: a sync callback's reply after the newest message it read. */
     after: Ref.optional(),
   }),
-  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional() }),
-  z.object({ op: z.literal('delete'), ...Imported, ...Changed }),
+  /** `revision`, as an edit's or a delete's: only if the message is still at it. */
+  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional() }),
+  z.object({ op: z.literal('delete'), ...Imported, ...Changed, revision: Revision.optional() }),
   z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
   z.object({ op: z.literal('labels'), ...Imported, ...Changed, set: Labels.optional(), unset: z.array(LabelKey).optional() }),
   z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
@@ -399,8 +403,6 @@ export const UploadStartBody = z.object({
 /** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
 export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
 
-/** The message's `revision` as it was read: if it's been edited or deleted since, 409 `revision_conflict`. */
-const Revision = z.number().int().positive()
 export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
 export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */

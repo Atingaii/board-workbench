@@ -568,11 +568,13 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       case 'post':
         return importPost(caller, input as Protocol['post']['input'], signal)
       case 'edit': {
-        const { id, text } = input as Protocol['edit']['input']
-        return change({ op: 'edit', author, from: null, message: id, text: await withEmails(text), source })
+        const { id, text, revision } = input as Protocol['edit']['input']
+        return change({ op: 'edit', author, from: null, message: id, text: await withEmails(text), source, ...(revision !== undefined ? { revision } : {}) })
       }
-      case 'delete':
-        return change({ op: 'delete', author, from: null, message: (input as Protocol['delete']['input']).id })
+      case 'delete': {
+        const { id, revision } = input as Protocol['delete']['input']
+        return change({ op: 'delete', author, from: null, message: id, ...(revision !== undefined ? { revision } : {}) })
+      }
       case 'react': {
         const { id, emoji, remove } = input as Protocol['react']['input']
         return change({ op: 'react', author, from: null, message: id, emoji, ...(remove !== undefined ? { remove } : {}) })

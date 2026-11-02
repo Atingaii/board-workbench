@@ -219,8 +219,11 @@ const CHECKS: Check[] = [
         const error = result.reason as unknown
         check(error instanceof BoardError && error.status === 409 && error.code === 'revision_conflict', `an edit that lost the race should be 409 revision_conflict, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
       }
-      await ctx.board.delete(message.id, { revision: (await read()).revision })
+      const last = (await read()).revision
+      await ctx.board.delete(message.id, { revision: last })
       check((await read()).deleted, 'a delete at the revision it has should delete it')
+      // Read before the delete, an edit learns it changed since, not that it's gone.
+      await rejects(ctx.board.edit(message.id, 'conformance: too late', { revision: last }), 409, 'revision_conflict', 'an edit at a revision a delete came after')
     },
   },
   {

@@ -454,7 +454,11 @@ export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ 
   const message = spent(input.authorized, 'post')
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
-  if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
+  if (message.deleted) {
+    // Read before the delete, it's that the message changed since that the caller needs to know.
+    if (input.revision !== undefined && input.revision !== (message.revision ?? message.id)) throw new HttpError(409, 'revision_conflict', `#${message.id} was deleted since revision ${input.revision}`)
+    throw badRequest('message was deleted', 'message_deleted')
+  }
   return commitEdit(ctx, input, message)
 }
 
