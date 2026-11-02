@@ -96,7 +96,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   const pad = options.reply ? '    ' : '      '
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
-  }${message.schedule ? ` · scheduled s${message.schedule.id}` : ''}${labels(message)}`
+  }${message.schedule ? ` · scheduled ${message.schedule.id}` : ''}${labels(message)}`
   const body = message.deleted ? `${pad}(message removed)` : indent(displayText(message.text, message.by.actor), pad)
   const files = (message.attachments ?? []).map((a) => `${pad}file ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))
@@ -222,7 +222,7 @@ export function formatSchedule(schedule: ScheduleView, options: { pad?: string; 
   const files = schedule.attachments.length ? ` · ${schedule.attachments.length} ${schedule.attachments.length === 1 ? 'file' : 'files'}` : ''
   const text = displayText(schedule.text, schedule.by.actor)
   return [
-    `${pad}s${schedule.id}  ${where} · ${repeat}${stop} · ${when}${sent}${files} · by ${authorName(schedule)}`,
+    `${pad}${schedule.id}  ${where} · ${repeat}${stop} · ${when}${sent}${files} · by ${authorName(schedule)}`,
     indent(text || '(no text)', `${pad}    `),
   ].join('\n')
 }
