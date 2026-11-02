@@ -831,6 +831,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if ('identity' in caller && PROJECTS_OWN.has(method)) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: ${method} is the project's own to do there`)
   }
 
+  /**
+   * The API owns messages and schedules by principal, and sees every caller here as this project:
+   * a caller that is the project (its own deployment's token) changes what it wrote, as on any
+   * board, and anyone else would be changing what the project wrote for others.
+   */
+  async function checkOwner(method: Method, caller: Caller, who: Who): Promise<void> {
+    if ('identity' in caller && caller.identity.principal.id !== principalId((await self(who)).actor.principal))
+      throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${method} there`)
+  }
+
   const meOf = (identity: Identity): Me => {
     const { principal, author, actor } = identity
     return {
@@ -1214,10 +1224,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (access && !access.readable(channel.name)) throw notFound(`no post of yours has id ${id}`, 'post_not_found')
       return { message: await view(who, found.message, channel.name) }
     },
-    // Every caller here writes as this project, which the API says owns what any of them wrote: each
-    // edits, deletes, schedules, and cancels where its grant lets it post.
     async edit(caller, { id, text }, signal) {
       const who = whoOf(caller)
+      await checkOwner('edit', caller, who)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
       const access = accessOf(caller)
@@ -1227,6 +1236,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async delete(caller, { id }, signal) {
       const who = whoOf(caller)
+      await checkOwner('delete', caller, who)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
       const access = accessOf(caller)
@@ -1263,6 +1273,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async schedule(caller, input, signal) {
       if (input.attachments?.length) throw notSupported('files on scheduled messages')
       const who = whoOf(caller)
+      await checkOwner('schedule', caller, who)
       const access = accessOf(caller)
       const labels = input.labels && Object.keys(input.labels).length ? input.labels : undefined
       let target: { channelId: string } | { threadId: string }
@@ -1324,6 +1335,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async cancelSchedule(caller, { id }, signal) {
       const who = whoOf(caller)
+      await checkOwner('cancelSchedule', caller, who)
       const access = accessOf(caller)
       if (access) {
         // The API reads no one schedule by its ID: a caller here finds it among the board's.
