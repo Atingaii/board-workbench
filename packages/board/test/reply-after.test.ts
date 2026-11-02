@@ -48,7 +48,9 @@ describe('a reply after a message, on a2()', () => {
     const other = await team.post('deploys', 'deploy d4e5f6')
     const landed = await team.reply(root.id, { text: 'on it', id: 'step-1', after: root.id })
     await team.reply(root.id, 'me too')
-    for (const after of [root.id, other.id]) expect((await team.reply(root.id, { text: 'on it', id: 'step-1', after })).id).toBe(landed.id)
+    // An `after` that's stale, in another thread, or no message at all.
+    for (const after of [root.id, other.id, 'not-a-message']) expect((await team.reply(root.id, { text: 'on it', id: 'step-1', after })).id).toBe(landed.id)
+    await expect(team.reply(root.id, { text: 'on it', id: 'step-2', after: 'not-a-message' })).rejects.toMatchObject({ status: 400, code: 'invalid_after' })
     expect((await team.thread(root.id)).replies.map((m) => m.text)).toEqual(['on it', 'me too'])
   })
 

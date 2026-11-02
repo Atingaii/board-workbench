@@ -58,6 +58,10 @@ describe('vercel()', () => {
     const { id: other } = await julian.post('dev', { text: 'another' })
     await expect(julian.reply(root, { text: 'hello', after: other })).rejects.toMatchObject({ status: 400, code: 'invalid_after' })
     expect((await julian.thread(root)).replies).toEqual([])
+    // A retry of one that landed gets it back, whatever its `after` says now.
+    const landed = await julian.reply(root, { text: 'hello', id: 'hello-1', after: root })
+    expect((await julian.reply(root, { text: 'hello', id: 'hello-1', after: other })).id).toBe(landed.id)
+    expect((await julian.thread(root)).replies.map((m) => m.id)).toEqual([landed.id])
   })
 
   it("names a person by their Vercel username and name, and an agent by its profile under them, as the API does", async () => {
