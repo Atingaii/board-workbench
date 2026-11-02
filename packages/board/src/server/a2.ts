@@ -91,13 +91,11 @@ function messageAt(value: string): number {
   return index
 }
 
-/** A reply's `after`, as the index of a message: one that isn't one names no message in any thread. */
-function afterAt(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined
-  const index = indexOf(value)
-  if (index === null || index === 0) throw badRequest(`after: ${value} isn't a message`, 'invalid_after')
-  return index
-}
+/**
+ * A reply's `after`, as the index of a message. One that isn't one is 0, which names no message:
+ * the post refuses it, after a retry that landed gets its reply back.
+ */
+const afterAt = (value: string | undefined): number | undefined => (value === undefined ? undefined : (indexOf(value) ?? 0))
 
 /** A schedule's ID, `12` or as the CLI shows it, `s12`, as its index in session `schedules`. */
 function scheduleAt(value: string): number {
