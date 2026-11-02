@@ -42,6 +42,28 @@ describe('a reply after a message, on a2()', () => {
     expect((await team.thread(root)).replies.map((m) => m.text)).toEqual(['me first'])
   })
 
+  it('gives a retry with the same ID the reply that landed, whatever its `after` says now', async () => {
+    const team = testBoard()
+    const root = await team.post('deploys', 'deploy a1b2c3')
+    const other = await team.post('deploys', 'deploy d4e5f6')
+    const landed = await team.reply(root.id, { text: 'on it', id: 'step-1', after: root.id })
+    await team.reply(root.id, 'me too')
+    for (const after of [root.id, other.id]) expect((await team.reply(root.id, { text: 'on it', id: 'step-1', after })).id).toBe(landed.id)
+    expect((await team.thread(root.id)).replies.map((m) => m.text)).toEqual(['on it', 'me too'])
+  })
+
+  it('lands once for the same request sent twice at once, and gives both the reply', async () => {
+    let root = ''
+    let first = ''
+    // An agent's first write records who it is too, so the two batches aren't the same.
+    const { team, state } = landingFirst('on it', async (team) => (first = (await team.as('claude').reply(root, { text: 'on it', id: 'step-1', after: root })).id))
+    root = (await team.post('deploys', 'deploy a1b2c3')).id
+    const again = await team.as('claude').reply(root, { text: 'on it', id: 'step-1', after: root })
+    expect(state.landed).toBe(true)
+    expect(again.id).toBe(first)
+    expect((await team.thread(root)).replies.map((m) => m.id)).toEqual([first])
+  })
+
   it('takes only a message in its own thread', async () => {
     const team = testBoard()
     const root = await team.post('deploys', 'deploy a1b2c3')
