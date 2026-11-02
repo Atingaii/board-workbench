@@ -24,7 +24,7 @@ const verified = (can: Can) =>
   }) as unknown as Caller
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, attachments, and watchers, and keeps no schedules or sync", async () => {
+  it("passes the conformance kit's core, schedules, attachments, and watchers, and keeps no sync", async () => {
     const report = await conformance(handleOn(fakeMessageboard()))
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
@@ -42,7 +42,7 @@ describe('vercel()', () => {
       'core: lists the channel and you in it': 'passed',
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
-      'schedules: schedules a reply, lists it, and cancels it': 'skipped',
+      'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
@@ -364,6 +364,118 @@ describe('vercel()', () => {
     })
     for (const tail of ['general --mentions @ada', 'general --source slack'])
       await expect(team.register({ url: null, watch: { w: { tail } } })).rejects.toMatchObject({ status: 400, code: 'bad_watcher' })
+  })
+
+  it('schedules a thread and a reply in the API, in its times, and each send says which schedule posted it', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const root = await pong.post('pings', { text: 'root' })
+    const before = Date.now()
+    const reply = await pong.as('claude').schedule({ re: root.id }, { text: 'check in', in: '1h', every: '30m', for: '7d', noSync: true })
+    const kept = api.schedules.get(reply.id)!
+    expect(kept).toMatchObject({ threadId: root.thread, every: 30 * 60_000, text: 'check in' })
+    expect(kept.firstAt).toBeGreaterThanOrEqual(before + 3_600_000)
+    expect(kept.until).toBe(kept.firstAt + 7 * 86_400_000)
+    expect(reply).toMatchObject({ channel: 'pings', re: root.id, every: 30 * 60_000, times: null, sent: 0, state: 'pending', canceled: null, by: { actor: 'vercel:project:prj_pong:production+claude', profile: 'claude' }, author: { kind: 'agent', handle: 'claude' } })
+    expect(reply.until).toBe(new Date(kept.until!).toISOString())
+    const thread = await pong.schedule('standup', { text: 'standup', every: '1d', times: 3, labels: { kind: 'standup' } })
+    expect(api.schedules.get(thread.id)).toMatchObject({ labels: { kind: 'standup' }, times: 3 })
+    expect(api.schedules.get(thread.id)!.firstAt).toBeGreaterThanOrEqual(before + 86_400_000)
+    // A send is the creator's post, marked as the schedule's: what tells a watcher its own check-in from its other posts.
+    const sent = api.send(reply.id)
+    const { replies } = await pong.thread(root.id)
+    expect(replies).toMatchObject([{ id: sent, text: 'check in', schedule: { id: reply.id, n: 0 }, by: { profile: 'claude' } }])
+    expect((await pong.schedules({ re: root.id }))[0]).toMatchObject({ id: reply.id, sent: 1, last: sent })
+    const started = api.send(thread.id)
+    expect((await pong.thread(started)).message).toMatchObject({ channel: 'standup', text: 'standup', labels: { kind: 'standup' }, schedule: { id: thread.id, n: 0 } })
+    expect((await pong.thread(root.id)).message.schedule).toBeUndefined()
+  })
+
+  it('lists pending schedules by thread, channel, and creator, across short pages, and every one with `all`', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const root = await pong.post('pings', { text: 'root' })
+    const mine = await pong.schedule({ re: root.id }, { text: 'mine', in: '1h' })
+    const claude = await pong.as('claude').schedule({ re: root.id }, { text: 'claude', in: '1h' })
+    const elsewhere = await pong.schedule('ops', { text: 'ops', in: '1h' })
+    const done = await pong.schedule('ops', { text: 'once', in: '1m' })
+    api.send(done.id)
+    const ids = async (query: object) => (await pong.schedules(query as never)).map((s) => s.id).sort()
+    expect(await ids({})).toEqual([mine.id, claude.id, elsewhere.id].sort())
+    expect(await ids({ re: root.id })).toEqual([mine.id, claude.id].sort())
+    expect(await ids({ channel: 'ops' })).toEqual([elsewhere.id])
+    expect(await ids({ channel: 'nowhere' })).toEqual([])
+    expect(await ids({ by: 'claude' })).toEqual([claude.id])
+    // A principal covers its agents; `me` is the actor alone.
+    expect(await ids({ by: 'vercel:project:prj_pong:production' })).toEqual([mine.id, claude.id, elsewhere.id].sort())
+    expect((await pong.as('claude').schedules({ by: 'me' })).map((s) => s.id)).toEqual([claude.id])
+    expect(await ids({ all: true })).toEqual([mine.id, claude.id, elsewhere.id, done.id].sort())
+    expect((await pong.schedules({ all: true })).find((s) => s.id === done.id)).toMatchObject({ state: 'done', next: null, sent: 1 })
+  })
+
+  it('cancels a schedule once, as the API answers it, and shows who did', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const root = await pong.post('pings', { text: 'root' })
+    const later = await pong.schedule({ re: root.id }, { text: 'later', in: '1d' })
+    const first = await pong.cancelSchedule(later.id)
+    expect(first).toMatchObject({ canceled: true, schedule: { state: 'canceled', next: null, canceled: { reason: 'canceled', by: { actor: 'vercel:project:prj_pong:production' } } } })
+    expect(await pong.cancelSchedule(later.id)).toMatchObject({ canceled: false, schedule: { state: 'canceled' } })
+    // Its team turning Messageboard off stops it as a lost grant does, by no one in particular.
+    const off = await pong.schedule({ re: root.id }, { text: 'off', in: '1d' })
+    Object.assign(api.schedules.get(off.id)!, { state: 'canceled', nextAt: null, canceled: { at: Date.now(), reason: 'disabled' } })
+    expect((await pong.schedules({ all: true })).find((s) => s.id === off.id)?.canceled).toEqual({ reason: 'revoked', by: { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null } })
+    await expect(handleOn(api, 'user:u_ada').cancelSchedule(off.id)).rejects.toMatchObject({ status: 403, code: 'schedule_not_owned' })
+    await expect(pong.cancelSchedule('sch_missing')).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
+  })
+
+  it("refuses what the API can't schedule: files, and labels on a reply", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const root = await pong.post('pings', { text: 'root' })
+    await expect(pong.schedule({ re: root.id }, { text: 'labeled', in: '1h', labels: { kind: 'task' } })).rejects.toMatchObject({ status: 501, code: 'not_supported' })
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
+    const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
+    const signal = new AbortController().signal
+    const { attachment } = await backend.upload(project, { data: new TextEncoder().encode('log'), name: 'a.log', type: 'text/plain' }, signal)
+    await expect(backend.schedule(project, { channel: 'pings', text: 'file', in: '1h', attachments: [attachment.id] } as never, signal)).rejects.toMatchObject({ status: 501, code: 'not_supported' })
+    expect(api.schedules.size).toBe(0)
+  })
+
+  it("lets a verified caller edit, delete, schedule, and cancel what the project wrote, where it posts and nowhere else", async () => {
+    const api = fakeMessageboard()
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const dev = await pong.post('dev', { text: 'dev' })
+    const ops = await pong.post('ops', { text: 'ops' })
+    const secret = await pong.post('secret', { text: 'secret' })
+    const inDev = await pong.as('claude').schedule({ re: dev.id }, { text: 'dev later', in: '1h' })
+    const inOps = await pong.schedule({ re: ops.id }, { text: 'ops later', in: '1h' })
+    const inSecret = await pong.schedule({ re: secret.id }, { text: 'secret later', in: '1h' })
+    const ada = verified({ 'dev/': ['read', 'post'], ops: ['read'] })
+    const signal = new AbortController().signal
+    // Anything the project wrote, by any caller here, where Ada posts.
+    await backend.edit(ada, { id: dev.id, text: 'dev, edited' }, signal)
+    expect((await pong.thread(dev.id)).message.text).toBe('dev, edited')
+    const { schedule } = await backend.schedule(ada, { re: dev.id, text: 'mine', in: '1h' } as never, signal)
+    expect(schedule).toMatchObject({ re: dev.id, by: { profile: 'ada' } })
+    await expect(backend.cancelSchedule(ada, { id: inDev.id }, signal)).resolves.toMatchObject({ canceled: true })
+    const reply = await pong.reply(dev.id, { text: 'a reply' })
+    await backend.delete(ada, { id: reply.id }, signal)
+    expect((await pong.thread(dev.id)).replies[0]).toMatchObject({ id: reply.id, deleted: true })
+    // Where Ada only reads, 403; where Ada can't read, as missing as anything else there.
+    await expect(backend.edit(ada, { id: ops.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.delete(ada, { id: ops.id }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.schedule(ada, { re: ops.id, text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.schedule(ada, { channel: 'ops', text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.cancelSchedule(ada, { id: inOps.id }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.edit(ada, { id: secret.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
+    await expect(backend.cancelSchedule(ada, { id: inSecret.id }, signal)).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
+    expect((await pong.thread(ops.id)).message.text).toBe('ops')
+    expect(api.schedules.get(inOps.id)?.state).toBe('pending')
+    // And it lists only the schedules where it reads.
+    expect((await backend.schedules(ada, {}, signal)).schedules.map((s) => s.id)).toEqual([inOps.id, schedule.id])
+    expect((await backend.schedules(ada, { re: secret.id }, signal)).schedules).toEqual([])
   })
 
   it('refuses watchers for a caller it serves, which would replace the deployment\'s own', async () => {
