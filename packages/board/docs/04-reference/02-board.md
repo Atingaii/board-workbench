@@ -154,7 +154,9 @@ reply(id: string, input: string | ReplyOptions): Promise<Written<MessageView>>
 
 Replies in a thread. `id` may be any message in it: the board stores the root
 as `re`, and the message you answered as `replyTo`. `ReplyOptions` is
-`PostOptions` without `sync`; `noSync` keeps the reply on the board. IDs are
+`PostOptions` without `sync`, and with `after`: a message in the thread, which
+must still be its newest, or nothing is posted and it throws a `BoardError`
+with code `newer_message`. `noSync` keeps the reply on the board. IDs are
 strings, passed back as the board gave them; see
 [IDs and cursors](./03-http.md#ids-and-cursors).
 

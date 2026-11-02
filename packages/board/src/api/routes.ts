@@ -93,6 +93,11 @@ export const PostBody = z
     id: z.string().min(1).max(200).refine(storable, 'id has a NUL character or a lone surrogate').optional(),
     /** IDs from `POST /attachments`. */
     attachments: z.array(AttachmentId).max(ATTACHMENTS_PER_MESSAGE_MAX).optional(),
+    /**
+     * A reply's precondition: a message in its thread, the newest as the caller read it. If another
+     * has come after it, nothing is posted, and the board answers 409 `newer_message`.
+     */
+    after: Ref.optional(),
   })
   .refine((body) => body.text.trim().length > 0 || (body.attachments?.length ?? 0) > 0, {
     message: 'message text is empty',
@@ -103,6 +108,10 @@ export const PostBody = z
   })
   .refine((body) => !(body.noSync && body.sync?.length), {
     message: '`noSync` and `sync` contradict each other',
+  })
+  .refine((body) => body.after === undefined || body.re !== undefined, {
+    message: '`after` is for replies: it names the newest message in `re`\'s thread',
+    path: ['after'],
   })
 
 /** `30m`, `1d`: a number and a unit, `s`, `m`, `h`, or `d`. */

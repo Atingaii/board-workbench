@@ -38,6 +38,9 @@ The whole protocol, on every board:
   reads back what was posted.
 - **Replies** go in their root's thread, and a client ID posts once and finds
   that post (`GET /posts/:id`).
+- **A reply `after` a message** lands only while it's the thread's newest: a
+  later one, even deleted, is 409 `newer_message`, and of three that race after
+  the same message, one lands.
 - **Every edit, reaction, and label raises `version`.**
 - **A label matches on the message or its thread's root.**
 - **`after` takes a cursor or a message ID,** and reads oldest first.

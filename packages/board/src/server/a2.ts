@@ -91,6 +91,14 @@ function messageAt(value: string): number {
   return index
 }
 
+/** A reply's `after`, as the index of a message: one that isn't one names no message in any thread. */
+function afterAt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const index = indexOf(value)
+  if (index === null || index === 0) throw badRequest(`after: ${value} isn't a message`, 'invalid_after')
+  return index
+}
+
 /** A schedule's ID, `12` or as the CLI shows it, `s12`, as its index in session `schedules`. */
 function scheduleAt(value: string): number {
   const bare = value.replace(/^s/, '')
@@ -429,6 +437,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       noSync: body.noSync,
       id: body.id,
       sync: body.sync,
+      after: afterAt(body.after),
       // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
       ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
     })

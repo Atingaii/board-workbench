@@ -178,6 +178,8 @@ export type PostInput = WriteOrigin & {
   schedule?: { id: number; n: number }
   /** The principal of the sync elsewhere that imports it, whose copy its `origin` is. */
   importedBy?: string | undefined
+  /** A reply's precondition: the message in its thread that must still be the newest. */
+  after?: number | undefined
 }
 
 /**
@@ -204,8 +206,13 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
     thread = target.thread
     if (input.sync?.length)
       throw badRequest('sync attaches whole threads: use `board sync <id> <target>`')
+    if (input.after !== undefined) {
+      const named = await ctx.reads.message(input.after)
+      if (named?.thread !== thread) throw badRequest(`after: #${input.after} isn't in #${re}'s thread`, 'invalid_after')
+    }
   } else {
     if (!channel) throw badRequest('a post needs a channel')
+    if (input.after !== undefined) throw badRequest('`after` is for replies', 'invalid_after')
     thread = id!
   }
   spend(input.proofs.post, 'post', { channel })
@@ -290,7 +297,7 @@ async function commitPost(
       payload: { thread, target, kind, cause, by: identity.author },
     })),
   )
-  const rows = await ctx.session.append(
+  const events: Parameters<BoardSession['append']> = [
     ...(seen ? [seen] : []),
     ...named,
     {
@@ -316,7 +323,8 @@ async function commitPost(
       },
     },
     ...synced,
-  )
+  ]
+  const rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendAfter(ctx, { root: re, after: input.after }, events)
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
@@ -381,6 +389,28 @@ async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[
 
 /** How long a write waits for the tables before it answers anyway. */
 const LANDED_WAIT_MS = 10_000
+
+/**
+ * Appends a reply only while `after` is still the newest message in its thread. The tables say
+ * so as of an index, and the append holds only while that index is still the log's last: anything
+ * that lands in between, anywhere on the board, moves it, and it looks again from there.
+ */
+async function appendAfter(ctx: WriteContext, { root, after }: { root: number; after: number }, events: Parameters<BoardSession['append']>) {
+  for (let attempt = 1; ; attempt++) {
+    await ctx.reads.ensure()
+    const { messages: [newer], position } = await ctx.reads.tables.messages({ re: root }, { after, limit: 1 })
+    if (newer) throw new HttpError(409, 'newer_message', `#${newer.id} came after #${after}`)
+    try {
+      return await appendIfLast(ctx.session, position, events)
+    } catch (error) {
+      if (!headMoved(error)) throw error
+      if (attempt === AFTER_TRIES) throw new HttpError(503, 'unavailable', `the board kept changing while it checked #${after}: try again`)
+    }
+  }
+}
+
+/** How many times a reply after a message looks again, as the board moves on, before it gives up. */
+const AFTER_TRIES = 10
 
 /** The message a by-ID write targets, as the board looked it up, once its proof is spent on the message's channel. */
 function spent<P extends Permission>(authorized: Authorized<P>, permission: P): Message {
@@ -520,3 +550,9 @@ export async function writeAttach(
   }))
   return { attached: true }
 }
+
+/** The batch, only while `index` is still the session's last: A2's conditional append. */
+const appendIfLast = (session: BoardSession, index: number, events: Parameters<BoardSession['append']>) => session.append.ifLastIndex(index, ...events)
+
+/** What A2 throws when the session's last index isn't the one a conditional append named. */
+const headMoved = (error: unknown) => (error as { code?: unknown } | null)?.code === 'LAST_INDEX_MISMATCH'

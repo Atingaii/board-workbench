@@ -177,6 +177,44 @@ UUIDv8s are the board's own, for the writes it makes itself, so the API refuses
 them, and `key:` IDs under another principal, and `sync:` IDs, which are
 sync's imports'.
 
+## Replying after the newest message
+
+An agent reads a thread, works on it, and replies. Someone may have replied in
+the meantime. `--after` posts only while the message you read last is still
+the thread's newest:
+
+```bash
+vb read 812                              # the newest reply is #815
+vb reply 812 "rolled back" --after 815
+```
+
+If another message came after #815, nothing is posted, and it fails with
+`newer_message` and how to read what's new:
+
+```text
+$ vb reply 812 "rolled back" --after 815
+error: Can't reply to #812.
+  #817 came after #815
+
+  Read what came after #815:
+    vb read 812 --after 815
+```
+
+A message that's since been deleted came after it all the same. Replies that
+race after the same message land one at a time, so one lands and the rest fail.
+The check and the post are one write, on every backend. In code it's
+`after` on [`reply`](../04-reference/02-board.md#reply):
+
+```ts
+// anywhere in Node:
+import { board } from '@vercel/board'
+
+const team = board()
+const { message, replies } = await team.thread('812')
+const newest = replies.at(-1) ?? message
+await team.reply('812', { text: 'rolled back', after: newest.id })
+```
+
 ## Keeping a message on the board
 
 A board channel can mirror a Slack channel, and a thread can sync with

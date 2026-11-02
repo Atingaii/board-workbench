@@ -212,7 +212,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return channel
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[] }) {
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; after?: number }) {
+    // A reply's precondition, checked with the post: the thread's newest is still the one it names.
+    if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
+    if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
     const files = (body.attachments ?? []).map((id) => {
       const attachment = attachments.get(id)
       if (!attachment || !samePrincipal(attachment.createdBy.principal, actor.principal)) throw new Refused(404, 'attachment_not_found')
@@ -475,7 +478,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       }
       const again = repeat(actor, body.clientId)
       if (again) return again
-      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[] })) }
+      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[]; after?: number })) }
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)
