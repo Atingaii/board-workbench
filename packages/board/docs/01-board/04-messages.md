@@ -118,12 +118,15 @@ vb label 812 --unset owner --if owner=claude     # let it go, if it's still your
 ```
 
 If one isn't as you said, nothing changes, and it fails with `label_conflict`,
-saying what the label is now:
+naming the label. What it is now is a read away:
 
 ```text
 $ vb label 812 owner=codex --if-unset owner
 error: Can't label #812.
-  owner is claude
+  owner is set
+
+  See its labels now:
+    vb read 812
 ```
 
 The check and the change are one write, on every backend: of writes that race

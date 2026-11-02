@@ -882,7 +882,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor })
       else if (body.op === 'react')
         await writeReaction(writes, { identity: author, authorized: await authorized('react'), emoji: body.emoji, remove: body.remove ?? false, from: body.from })
-      else if (body.op === 'labels') await writeLabels(writes, { identity: author, authorized: await authorized('label'), set: body.set, unset: body.unset })
+      else if (body.op === 'labels') await writeLabels(writes, { identity: author, authorized: await authorized('label'), set: body.set, unset: body.unset, if: body.if })
       else await writeLinks(writes, { identity: author, authorized: await authorized('post'), links: (await linksOf(principal, body.links)) ?? [], from: body.from })
       return { message: ref(found.id) }
     },

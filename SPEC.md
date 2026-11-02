@@ -1196,8 +1196,8 @@ export const schedulesContract = contract({
   API checks the thread's newest sequence in the post's own transaction.
 - **A label write can be conditional.** `if` maps keys to the value each must
   have now, or `null` for none, or nothing changes and it's 409
-  `label_conflict`, saying what the label is: two agents can't both claim a
-  thread with `owner=`. It's checked as a reply's `after` is, in one write. No
+  `label_conflict`, naming the label but never its value, which only a read
+  shows: two agents can't both claim a thread with `owner=`. It's checked as a reply's `after` is, in one write. No
   claim expires: a stuck one is in plain view, and anyone who labels clears it.
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.

@@ -571,7 +571,9 @@ const labelsAre = (ctx: WriteContext, id: number, expected: Record<string, strin
   for (const key of Object.keys(expected).sort()) {
     const now = own(labels, key)
     if (now === expected[key] || (now === undefined && expected[key] === null)) continue
-    throw new HttpError(409, 'label_conflict', now === undefined ? `${key} isn't set` : `${key} is ${now}`)
+    // It names what the caller asked about, never what's stored: reading that is a read's to allow.
+    const wanted = expected[key]
+    throw new HttpError(409, 'label_conflict', wanted === null ? `${key} is set` : now === undefined ? `${key} isn't set` : `${key} isn't ${wanted}`)
   }
   return position
 }

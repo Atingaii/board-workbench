@@ -471,7 +471,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
 | 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
-| 409 | `label_conflict` | a label write whose `if` doesn't hold: the message says what the label is now |
+| 409 | `label_conflict` | a label write whose `if` doesn't hold: the message names the label (`owner is set`, `state isn't open`), never its value |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |

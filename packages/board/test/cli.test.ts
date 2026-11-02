@@ -261,7 +261,7 @@ describe('cli', () => {
     // Someone claimed it first.
     const taken = await vb(['label', id, 'owner=codex', '--if-unset', 'owner'])
     expect(taken).toMatchObject({ code: 1, stdout: '' })
-    expect(taken.stderr).toBe(`error: Can't label #${id}.\n  owner is claude\n`)
+    expect(taken.stderr).toBe(`error: Can't label #${id}.\n  owner is set\n\n  See its labels now:\n    vb read ${id}\n`)
     expect(failure(await vb(['label', id, 'state=fixing', '--if', 'state=open', '--json']))).toMatchObject({ reason: 'label_conflict' })
     expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message.labels).toEqual({ owner: 'claude' })
     // Its owner lets it go.

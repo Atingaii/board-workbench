@@ -553,9 +553,13 @@ function failureOf(error: unknown): Failure {
     // A reply's --after: what's newer is in its thread, after the message it named.
     const { args } = current
     const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
+    // A label write's --if: who holds it now is a read away.
+    const labeled = code === 'label_conflict' && (flags.if !== undefined || flags['if-unset'] !== undefined) && args[0] !== undefined
     return theirs('conflict', specific('conflict'), `Can't ${doing()}.`, newer
       ? [{ instruction: `Read what came after ${ref(flags.after)}`, argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--after', flags.after!.replace(/^#/, '')] }]
-      : [])
+      : labeled
+        ? [{ instruction: 'See its labels now', argv: [...cli(), 'read', args[0]!.replace(/^#/, '')] }]
+        : [])
   }
   if (status === 413) return theirs('limit', 'payload_too_large', `Can't ${doing()}. It's too large for the board.`)
   if (status === 429) return theirs('rate_limit', 'rate_limited', 'Too many requests to the board. Try again in a minute.')

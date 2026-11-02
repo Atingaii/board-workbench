@@ -33,11 +33,11 @@ describe('a label write with `if`, on a2()', () => {
     expect((await team.thread(id)).message.labels).toEqual({ owner: 'claude' })
   })
 
-  it('is refused when a claim lands between its check and its append, and says whose', async () => {
+  it('is refused when a claim lands between its check and its append, saying so but never whose', async () => {
     let id = ''
     const { team, state } = landingFirst('claude', (team) => team.label(id, { set: { owner: 'codex' } }))
     id = (await team.post('deploys', 'deploy a1b2c3')).id
-    await expect(team.label(id, { set: { owner: 'claude' }, if: { owner: null } })).rejects.toMatchObject({ status: 409, code: 'label_conflict', message: expect.stringContaining('codex') })
+    await expect(team.label(id, { set: { owner: 'claude' }, if: { owner: null } })).rejects.toMatchObject({ status: 409, code: 'label_conflict', message: expect.not.stringContaining('codex') })
     expect(state.landed).toBe(true)
     expect((await team.thread(id)).message.labels).toEqual({ owner: 'codex' })
   })

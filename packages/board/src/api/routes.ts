@@ -318,7 +318,15 @@ export const SyncImportBody = z.discriminatedUnion('op', [
   z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional() }),
   z.object({ op: z.literal('delete'), ...Imported, ...Changed }),
   z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
-  z.object({ op: z.literal('labels'), ...Imported, ...Changed, set: Labels.optional(), unset: z.array(LabelKey).optional() }),
+  z.object({
+    op: z.literal('labels'),
+    ...Imported,
+    ...Changed,
+    set: Labels.optional(),
+    unset: z.array(LabelKey).optional(),
+    /** As a label write's: what the labels must be now, a value or null for none. */
+    if: z.record(LabelKey, LabelValue.nullable()).optional(),
+  }),
   z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
   /** A platform user the board should know, for a mention of them: `@[ada@vercel.com]` found on Slack. */
   z.object({ op: z.literal('seen'), author: PlatformUser }),
