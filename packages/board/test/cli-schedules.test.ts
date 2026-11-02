@@ -19,18 +19,20 @@ describe('cli schedules', () => {
       expect(once.stdout).toMatch(new RegExp(`^s\\d+  #${root} · once · next in 1s \\(.+\\) · by julian\\n    friendly ping: review\\?\\n$`))
       const repeat = await vb(['schedule', root, 'check prod', '--every', '30m', '--for', '1d', '--json'], as)
       const { id } = JSON.parse(repeat.stdout).schedule
+      expect(id).toMatch(/^s\d+$/)
 
       const before = (await vb(['read', root], as)).stdout
       expect(before).toContain('  s1  #')
-      expect(before).toContain(`  s${id}  #${root} · every 30m · until `)
+      expect(before).toContain(`  ${id}  #${root} · every 30m · until `)
       expect((await vb(['schedules', root], as)).stdout.match(/^s\d+  /gm)).toHaveLength(2)
 
       await new Promise((resolve) => setTimeout(resolve, 1100))
       await queue.fire()
       await vi.waitFor(async () => expect((await vb(['read', root], as)).stdout).toMatch(/↳ #\d+  julian · \d+s · scheduled s1\n {4}friendly ping: review\?/))
 
-      expect((await vb(['schedule', 'cancel', `s${id}`], as)).stdout).toBe(`canceled s${id}\n`)
-      expect((await vb(['schedule', 'cancel', `s${id}`], as)).stdout).toBe(`s${id} is already canceled\n`)
+      // What `schedules` prints cancels it, as do the bare number an older client sends and the `ss2` an older CLI prints.
+      expect((await vb(['schedule', 'cancel', id], as)).stdout).toBe(`canceled ${id}\n`)
+      for (const given of [id.slice(1), `s${id}`]) expect((await vb(['schedule', 'cancel', given], as)).stdout).toBe(`${id} is already canceled\n`)
       expect((await vb(['schedules', root], as)).stdout).toBe('no pending schedules\n')
       expect((await vb(['schedules', '--all'], as)).stdout).toMatch(/· done · 1 sent · by julian[\s\S]*· canceled · by julian/)
 

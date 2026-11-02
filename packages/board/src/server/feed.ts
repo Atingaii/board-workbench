@@ -89,6 +89,9 @@ export function viewedBy(view: BoardEventView, reader: Reader): BoardEventView {
 /** A message's or a cursor's ID as clients see it. On this board it's the log index, in decimal. */
 export const ref = (index: number): string => String(index)
 
+/** A schedule's ID as clients see it: its index in session `schedules`, as `s12`, so it reads apart from message `12`. */
+export const scheduleRef = (index: number): string => `s${index}`
+
 /** The log index a ref names on this board, or null for a string that names nothing here. */
 export const indexOf = (value: string): number | null => (/^(0|[1-9]\d{0,15})$/.test(value) ? Number(value) : null)
 
@@ -102,7 +105,7 @@ export function view(message: Message, actors: ActorsState, reader: Reader): Mes
     re: message.re === null ? null : ref(message.re),
     replyTo: message.replyTo === null ? null : ref(message.replyTo),
     version: version ?? message.id,
-    ...(schedule ? { schedule: { id: ref(schedule.id), n: schedule.n } } : {}),
+    ...(schedule ? { schedule: { id: scheduleRef(schedule.id), n: schedule.n } } : {}),
     links: readableLinks(message.links, reader),
     labels: { ...message.labels },
     reactions: Object.fromEntries(
@@ -303,7 +306,7 @@ function payloadView(payload: Record<string, unknown>, links: LinkView[] | undef
   const shown: Record<string, unknown> = { ...payload }
   for (const key of ['id', 're', 'replyTo'] as const) if (typeof shown[key] === 'number') shown[key] = ref(shown[key])
   const schedule = shown.schedule as { id: number; n: number } | undefined
-  if (schedule) shown.schedule = { id: ref(schedule.id), n: schedule.n }
+  if (schedule) shown.schedule = { id: scheduleRef(schedule.id), n: schedule.n }
   if (links) shown.links = links
   return shown
 }

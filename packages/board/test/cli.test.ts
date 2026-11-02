@@ -646,7 +646,7 @@ describe('cli', () => {
     expect(partial.stdout).toContain(
       '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
     )
-    expect(partial.stdout).toMatch(/\n\n\d+ passed, 1 skipped\n$/)
+    expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
   })
 

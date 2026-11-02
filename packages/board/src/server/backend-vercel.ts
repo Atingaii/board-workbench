@@ -1,6 +1,6 @@
 import type { Method, Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ThreadSummaryView } from '../api/routes.ts'
-import type { ProfileOption } from '../client/client.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
+import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
@@ -48,6 +48,27 @@ type ApiMessage = {
   reactors?: Record<string, string[]>
   labels?: Labels
   attachments?: Attachment[]
+  /** Set when a schedule posted it: which schedule, and which of its sends, from 0. */
+  schedule?: { id: string; n: number }
+}
+/** A message posted later as its creator, in `channelId` or as a reply in `threadId`. Times are milliseconds. */
+type ApiSchedule = {
+  id: string
+  channelId: string
+  threadId?: string
+  text: string
+  labels?: Labels
+  firstAt: number
+  every?: number
+  until?: number
+  times?: number
+  sent: number
+  nextAt: number | null
+  lastMessageId?: string
+  state: 'pending' | 'done' | 'canceled'
+  canceled?: { by?: ApiActor; at: number; reason: 'canceled' | 'revoked' | 'disabled' }
+  createdAt: number
+  createdBy: ApiActor
 }
 /** A file on the board: `messageId` once a post carries it. */
 type ApiAttachment = Attachment & { boardId: string; sha256: string; state: 'pending' | 'ready'; messageId?: string }
@@ -125,9 +146,6 @@ const SCAN_PAGES = 10
 
 /** What the API keeps none of: a check that gets one of these is told it isn't kept here. */
 const UNKEPT: Partial<Record<Method, [code: string, message: string]>> = {
-  schedule: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
-  schedules: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
-  cancelSchedule: ['no_scheduler', "Vercel's boards don't schedule messages yet"],
   uploadStart: ['no_direct_uploads', "Vercel's boards take files up to 4 MB in one upload for now"],
   uploadFinish: ['no_direct_uploads', "Vercel's boards take files up to 4 MB in one upload for now"],
 }
@@ -181,6 +199,9 @@ const authorOf = (actor: ApiActor): Author => ({
   session: actor.session ?? null,
 })
 
+/** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a2()'s scheduler. */
+const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null }
+
 /** The API names nobody, so an actor's handle is its profile, or a short form of its principal. */
 function actorView(actor: ApiActor): ActorView & { id: string } {
   const { principal } = actor
@@ -201,8 +222,8 @@ type Filters = Protocol['messages']['input']
 
 /**
  * Vercel's board for your team, in Vercel's API: this deployment keeps nothing and reads and writes
- * it as itself, its people as themselves. Messages, threads, reactions, labels, and a channel's
- * changes work; what the API keeps none of yet (schedules, files, watchers, sync) answers 501.
+ * it as itself, its people as themselves. Messages, threads, reactions, labels, a channel's
+ * changes, schedules, files, and watchers work; what the API keeps none of yet (sync) answers 501.
  */
 export function createVercel(options: VercelOptions, environment: VercelEnvironment | null) {
   const origin = (options.api ?? 'https://api.vercel.com').replace(/\/+$/, '')
@@ -448,6 +469,33 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       links: [],
       version: message.version,
       author: await nameOf(who, message.createdBy),
+      ...(message.schedule ? { schedule: { id: message.schedule.id, n: message.schedule.n } } : {}),
+    }
+  }
+
+  async function scheduleView(who: Who, schedule: ApiSchedule): Promise<ScheduleView> {
+    const { canceled } = schedule
+    return {
+      id: schedule.id,
+      channel: (await channelById(who, schedule.channelId)).name,
+      re: schedule.threadId === undefined ? null : idAt(schedule.threadId, 1),
+      text: schedule.text,
+      labels: { ...schedule.labels },
+      noSync: false,
+      attachments: [],
+      first: iso(schedule.firstAt),
+      every: schedule.every ?? null,
+      until: schedule.until === undefined ? null : iso(schedule.until),
+      times: schedule.times ?? null,
+      sent: schedule.sent,
+      next: schedule.nextAt === null ? null : iso(schedule.nextAt),
+      last: schedule.lastMessageId ?? null,
+      state: schedule.state,
+      // The API stops a schedule whose team turned Messageboard off as one whose creator lost access: neither may post.
+      canceled: canceled ? { by: canceled.by ? authorOf(canceled.by) : SCHEDULER, reason: canceled.reason === 'disabled' ? 'revoked' : canceled.reason } : null,
+      by: authorOf(schedule.createdBy),
+      author: await nameOf(who, schedule.createdBy),
+      createdAt: iso(schedule.createdAt),
     }
   }
 
@@ -781,6 +829,16 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** What a gateway caller does here, as this deployment: never what's the project's own. */
   function checkCaller(method: Method, caller: Caller): void {
     if ('identity' in caller && PROJECTS_OWN.has(method)) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: ${method} is the project's own to do there`)
+  }
+
+  /**
+   * The API owns messages and schedules by principal, and sees every caller here as this project:
+   * a caller that is the project (its own deployment's token) changes what it wrote, as on any
+   * board, and anyone else would be changing what the project wrote for others.
+   */
+  async function checkOwner(method: Method, caller: Caller, who: Who): Promise<void> {
+    if ('identity' in caller && caller.identity.principal.id !== principalId((await self(who)).actor.principal))
+      throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${method} there`)
   }
 
   const meOf = (identity: Identity): Me => {
@@ -1179,18 +1237,22 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { message: await view(who, found.message, channel.name) }
     },
     async edit(caller, { id, text }, signal) {
-      checkCaller('edit', caller)
       const who = whoOf(caller)
+      await checkOwner('edit', caller, who)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      const access = accessOf(caller)
+      if (access) need(access, 'post', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'PATCH', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}`), { body: { operationId: operationId(), text }, signal })
       return { ok: true }
     },
     async delete(caller, { id }, signal) {
-      checkCaller('delete', caller)
       const who = whoOf(caller)
+      await checkOwner('delete', caller, who)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
+      const access = accessOf(caller)
+      if (access) need(access, 'post', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/delete`), { body: { operationId: operationId() }, signal })
       return { ok: true }
     },
@@ -1220,6 +1282,86 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         signal,
       })
       return { ok: true }
+    },
+    async schedule(caller, input, signal) {
+      if (input.attachments?.length) throw notSupported('files on scheduled messages')
+      const who = whoOf(caller)
+      await checkOwner('schedule', caller, who)
+      const access = accessOf(caller)
+      const labels = input.labels && Object.keys(input.labels).length ? input.labels : undefined
+      let target: { channelId: string } | { threadId: string }
+      if (input.channel !== undefined) {
+        need(access, 'post', input.channel)
+        if (labels) need(access, 'label', input.channel)
+        target = { channelId: (await channelToPost(who, input.channel)).id }
+      } else {
+        // The API labels a scheduled thread's root, and posts a scheduled reply with no labels.
+        if (labels) throw notSupported('labels on a scheduled reply')
+        const { thread, channel } = await readableMessage(who, access, input.re!, signal)
+        need(access, 'post', channel.name)
+        target = { threadId: thread.id }
+      }
+      // The API takes whole milliseconds since the epoch: the first send, and the stop.
+      const ms = (value: string) => Math.round(duration(value))
+      const firstAt = input.at !== undefined ? Date.parse(input.at) : Date.now() + ms(input.in ?? input.every!)
+      const until = input.until !== undefined ? Date.parse(input.until) : input.for !== undefined ? firstAt + ms(input.for) : undefined
+      const { schedule } = await api<{ schedule: ApiSchedule }>(who, 'POST', await onBoard(who, '/schedules'), {
+        body: {
+          operationId: operationId(),
+          ...target,
+          text: input.text,
+          ...(labels ? { labels } : {}),
+          firstAt,
+          ...(input.every !== undefined ? { every: ms(input.every) } : {}),
+          ...(until !== undefined ? { until } : {}),
+          ...(input.times !== undefined ? { times: input.times } : {}),
+        },
+        signal,
+      })
+      return { schedule: await scheduleView(who, schedule) }
+    },
+    async schedules(caller, query, signal) {
+      const who = whoOf(caller)
+      const access = accessOf(caller)
+      const filter: Record<string, string | undefined> = { state: query.all ? undefined : 'pending' }
+      if (query.re !== undefined) {
+        const found = await readableMessage(who, access, query.re, signal).catch((error: unknown) => {
+          if (error instanceof HttpError && error.status === 404) return null
+          throw error
+        })
+        if (!found) return { schedules: [] }
+        filter.threadId = found.thread.id
+      }
+      if (query.channel !== undefined) {
+        const channel = await channelNamed(who, query.channel)
+        if (!channel) return { schedules: [] }
+        filter.channelId = channel.id
+      }
+      // `by` names an actor, a principal and its agents, or a profile, as a read's does; `me` is the actor itself.
+      const me = query.by === 'me' ? await actorOf(who) : undefined
+      const by = me ?? query.by
+      if (by?.startsWith('vercel:')) filter.createdBy = by
+      const created = (actor: ApiActor) => by === undefined || (me ? actor.id === me : [actor.id, principalId(actor.principal), actor.profile?.name].includes(by))
+      const listed = await all<ApiSchedule>(who, await onBoard(who, '/schedules'), 'schedules', filter, signal)
+      const views = await Promise.all(listed.filter((schedule) => created(schedule.createdBy)).map((schedule) => scheduleView(who, schedule)))
+      return { schedules: views.filter((schedule) => access === null || access.readable(schedule.channel)) }
+    },
+    async cancelSchedule(caller, { id }, signal) {
+      const who = whoOf(caller)
+      await checkOwner('cancelSchedule', caller, who)
+      const access = accessOf(caller)
+      if (access) {
+        // The API reads no one schedule by its ID: a caller here finds it among the board's.
+        const found = (await all<ApiSchedule>(who, await onBoard(who, '/schedules'), 'schedules', {}, signal)).find((schedule) => schedule.id === id)
+        const channel = found && (await channelById(who, found.channelId))
+        if (!channel || !access.readable(channel.name)) throw notFound(`no schedule: ${id}`, 'schedule_not_found')
+        need(access, 'post', channel.name)
+      }
+      const { schedule, canceled } = await api<{ schedule: ApiSchedule; canceled: boolean }>(who, 'POST', await onBoard(who, `/schedules/${encodeURIComponent(id)}/cancel`), {
+        body: { operationId: operationId() },
+        signal,
+      })
+      return { schedule: await scheduleView(who, schedule), canceled }
     },
     async events(caller, query, signal) {
       checkCaller('events', caller)
@@ -1301,6 +1443,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     routes: runner.routes,
     // The board is Vercel's: a board here serves requests only with an `access` of its own.
     keeps: false,
+    // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
+    sendsSchedulesHere: false,
     bind(next: BoardBinding) {
       if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
       const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
