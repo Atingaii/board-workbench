@@ -16,10 +16,10 @@ description: The board's routes, headers, filters, errors, and event feed, relat
 
 ## Authentication
 
-Every request sends an OIDC token:
+Every request sends an OIDC token, or a token the board issued:
 
 ```text
-Authorization: Bearer <OIDC JWT>
+Authorization: Bearer <OIDC JWT | board_…>
 ```
 
 - **The token's `aud` must be the board's URL**, as discovery returns it
@@ -27,11 +27,14 @@ Authorization: Bearer <OIDC JWT>
   replayed on another, even on the same origin.
 - **Issuers:** Vercel (`https://oidc.vercel.com/<team>`), GitHub Actions
   (`https://token.actions.githubusercontent.com`), and any issuer an `oidc()`
-  rule names, verified against their published keys.
+  rule or a grant names, verified against their published keys.
+- **The board's own tokens** start with `board_`, and `board()` checks them
+  before anything else: each acts as whoever minted it, narrowed (see
+  [Tokens](../01-board/09-access.md#tokens)).
 - **Who's trusted:** people with access to the board's Vercel project (a
   development token carrying `user_id`), the project's own deployments in the
   environment the board runs in, and
-  anything matching a rule in `access`. See [Access](../01-board/09-access.md).
+  anything matching a rule in `access` or one of the board's grants. See [Access](../01-board/09-access.md).
 - **`board()` verifies.** It checks the token for the board's URL with its
   `authenticate`, which may also take a session cookie of the app's own (see
   [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier)),
@@ -83,7 +86,7 @@ uses the target's own.
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
-| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, and every registration in `GET /watchers` |
+| `manage` | `POST /schedules/:id/cancel` for someone else's; in every channel, `GET /sources/:key/read`, `POST /sources/:key/join`, every registration in `GET /watchers`, `/grants`, and everyone's `/tokens` |
 
 `react`, `label`, and `sync` imply `read`, and `manage` implies everything. A
 message, schedule, or file the caller can't read answers 404 on every route;
@@ -117,6 +120,12 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `a2()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
+| GET | `/grants` | `{ grants }`: each one's `id`, `issuer`, `claims`, `can`, `by`, and `at`. Needs `manage` in every channel. See [Grants and tokens](#grants-and-tokens) |
+| POST | `/grants` | `{ issuer, claims, can? }`: set a grant, or the `can` of the one with that issuer and claims. Answers `{ grant, created }` |
+| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
+| POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
+| POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`; someone else's is 404 `token_not_found` |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
 | POST | `/watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
 | GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |
@@ -150,7 +159,8 @@ unless it has an `access` of its own: then it serves its callers as its
 project on the board it uses (see [A board on `http()`](../01-board/09-access.md#a-board-on-http)). There are no
 optional groups, so a client never asks a board what it does. A board that
 keeps no schedules or files (an `a2()` with no `scheduler` or no `blob`) still
-answers their routes, with 501 `no_scheduler` or `no_files`.
+answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
+no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
 
@@ -346,6 +356,32 @@ one stop, and only with `every`. Everything reaches at most a year out. A board
 without a scheduler (an `a2()` with no `scheduler`) answers 501
 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
+
+### Grants and tokens
+
+```json
+{ "issuer": "github", "claims": { "repository": "acme/web", "event_name": ["push", "schedule"] }, "can": { "ci/": ["read", "post"] } }
+```
+
+`POST /grants` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an
+https URL on the internet) that carry every one of `claims`, a list being any
+of its values. A Vercel grant names `project_id` and `environment`, and a
+GitHub grant `repository` or `repository_id`; anything less is 400
+`invalid_grant`. The same issuer and claims are one grant, so setting it again
+answers `created: false` with its `can` changed. `can` left out is read, post,
+react, and label everywhere.
+
+```json
+{ "name": "sandbox-1956", "can": { "dev/": ["read", "post", "react"] }, "profile": "clever-lemur", "session": "thread-1956", "expires": "7d" }
+```
+
+`POST /tokens` mints a token that acts as the caller, narrowed to `can`, until
+it's revoked or it expires: 30 days, or `expires`, 90 days at most. Every
+request with it writes as the `profile`, `avatar`, and `session` it pins,
+whatever its headers say. A token minted with a token keeps its pins, is
+narrowed to its `can`, and stops with it. See
+[Grants](../01-board/09-access.md#grants) and
+[Tokens](../01-board/09-access.md#tokens).
 
 ## Filters
 

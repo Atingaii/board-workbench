@@ -1,6 +1,6 @@
 import type { JWTPayload, JWTVerifyGetKey } from 'jose'
-import { compileAccess, FULL_ACCESS, parseScope, type Access, type Can } from './access.ts'
-import { unauthorized, forbidden } from './errors.ts'
+import { compileAccess, FULL_ACCESS, parseScope, union, type Access, type Can } from './access.ts'
+import { badRequest, unauthorized, forbidden } from './errors.ts'
 
 /**
  * What a request says about who's calling, beside its credential: labels the caller picks for
@@ -50,6 +50,23 @@ export type Principal = {
   facts?: TokenFacts
   /** The `x-board-scope` a proxy sent, which narrows whatever it may do. */
   scope?: string
+  /**
+   * The board token it came with (its ID), kept with what it stores: a schedule or a registration
+   * made with one stops when the token does.
+   */
+  token?: string
+  /** What a board token pins for every request with it: the profile, avatar, and session it writes as, and a person's handle and name. */
+  pinned?: Pinned
+}
+
+/** What a board token says about who writes, beside its principal: labels, but the board's, so a request can't change them. */
+export type Pinned = {
+  profile: string | null
+  avatar: string | null
+  session: string | null
+  /** A person's handle and display name as they were when they minted it: whoever holds the token sends none. */
+  handle: string | null
+  name: string | null
 }
 
 /** A principal and what it may do in each channel, as board()'s `access` worked it out. */
@@ -268,8 +285,117 @@ export type AccessFunction = (principal: Known) => Can | null | undefined | Prom
  */
 export type RuleFunction = (principal: Known) => Can | null | undefined | Promise<Can | null | undefined>
 
-/** A principal as the board keeps it to work its access out again: who it is, its token's facts, and its scope. */
-export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope'>
+/** A principal as the board keeps it to work its access out again: who it is, its token's facts, its scope, and the board token it came with. */
+export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope' | 'token'>
+
+/**
+ * A grant as it's asked for: an issuer, the claims its tokens must carry, and what they may do.
+ * `vercel` and `github` name their issuers; any other is an https URL. Every claim must match
+ * exactly, and a list is any of its values.
+ */
+export type GrantSpec = {
+  issuer: string
+  claims: Readonly<Record<string, string | readonly string[]>>
+  /** What it lets them do; read, post, react, and label everywhere when left out. */
+  can?: Can
+}
+
+/** A grant the board keeps: its ID, its issuer and claims as the board checked them, and who set it when. */
+export type StoredGrant = {
+  id: string
+  issuer: string
+  claims: Readonly<Record<string, string | readonly string[]>>
+  can: Can
+  /** The actor that last set it, and when. */
+  by: string
+  at: string
+}
+
+/** What a board token starts with, so board() knows its own before it tries any other verifier. */
+export const BOARD_TOKEN_PREFIX = 'board_'
+
+/** What a grant left without `can` gives: what Vercel's API gives a project it lets use a board. */
+export const GRANT_DEFAULT: Can = { '*': ['read', 'post', 'react', 'label'] }
+const GRANT_CLAIMS_MAX = 32
+const GRANT_VALUES_MAX = 32
+const GRANT_VALUE_MAX = 1000
+
+const invalidGrant = (message: string) => badRequest(message, 'invalid_grant')
+
+/** Whether `host` names something on the board's own network rather than on the internet. */
+function privateHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/\.$/, '')
+  if (name.startsWith('[') || /^\d+(\.\d+){3}$/.test(name) || /^\d+$/.test(name)) return true
+  if (!name.includes('.') || name === 'localhost') return true
+  return /\.(localhost|local|internal|home|lan|corp|intranet)$/.test(name)
+}
+
+/**
+ * A grant checked and put in one form: its issuer, its claims with keys and lists sorted, its
+ * `can`, and the key that says it's the same grant as another. A 400 `invalid_grant` that says
+ * what to write. `trusted`: the issuers the board's rules and other grants name, which no two may
+ * share principals between.
+ */
+export function checkGrant(spec: GrantSpec, trusted: readonly string[]): { issuer: string; claims: Record<string, string | string[]>; can: Can; key: string } {
+  const { issuer } = spec
+  if (typeof issuer !== 'string' || issuer === '') throw invalidGrant('a grant needs an issuer: vercel, github, or an https URL')
+  if (issuer !== 'vercel' && issuer !== 'github') {
+    let url: URL
+    try {
+      url = new URL(issuer)
+    } catch {
+      throw invalidGrant(`a grant's issuer is vercel, github, or an https URL, got ${issuer}`)
+    }
+    if (VERCEL_ISSUER.test(issuer)) throw invalidGrant("write the issuer as vercel, and another team's projects with owner_id")
+    if (issuer === GITHUB_ISSUER) throw invalidGrant('write the issuer as github')
+    if (url.protocol !== 'https:' || url.search || url.hash || url.username || url.password)
+      throw invalidGrant(`a grant's issuer is an https URL with no query or credentials, got ${issuer}`)
+    if (privateHost(url.hostname)) throw invalidGrant(`a grant's issuer is on the internet, not ${url.hostname}`)
+    const name = issuerName(issuer)
+    const other = trusted.find((candidate) => candidate !== issuer && /^https:/.test(candidate) && issuerName(candidate) === name)
+    if (other !== undefined) throw invalidGrant(`issuers ${other} and ${issuer} name the same principals, oidc:${name}:<sub>: use ${other}`)
+  }
+  const entries = typeof spec.claims === 'object' && spec.claims !== null ? Object.entries(spec.claims) : []
+  if (entries.length === 0) throw invalidGrant(`name at least one claim for ${issuer}: its issuer signs tokens for everyone it serves`)
+  if (entries.length > GRANT_CLAIMS_MAX) throw invalidGrant(`a grant names at most ${GRANT_CLAIMS_MAX} claims`)
+  const claims: Record<string, string | string[]> = {}
+  for (const [name, value] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+    const values = typeof value === 'string' ? [value] : Array.isArray(value) ? [...new Set(value as readonly unknown[])] : []
+    if (values.length === 0 || values.some((one) => typeof one !== 'string' || one === ''))
+      throw invalidGrant(`claim ${name} has no value to match: give a string, or a list of them`)
+    if (values.length > GRANT_VALUES_MAX || values.some((one) => (one as string).length > GRANT_VALUE_MAX))
+      throw invalidGrant(`claim ${name} lists at most ${GRANT_VALUES_MAX} values of up to ${GRANT_VALUE_MAX} characters`)
+    const sorted = (values as string[]).sort()
+    claims[name] = sorted.length === 1 ? sorted[0]! : sorted
+  }
+  if (issuer === 'vercel' && (claims.project_id === undefined || claims.environment === undefined))
+    throw invalidGrant('a Vercel grant names project_id and environment: a preview runs any branch, so it says outright whether they get in')
+  if (issuer === 'github' && claims.repository === undefined && claims.repository_id === undefined)
+    throw invalidGrant('a GitHub grant names repository or repository_id: GitHub signs tokens for every repository')
+  const can = spec.can ?? GRANT_DEFAULT
+  try {
+    compileAccess(can)
+  } catch (error) {
+    throw invalidGrant((error as Error).message)
+  }
+  return { issuer, claims, can, key: JSON.stringify([issuer, claims]) }
+}
+
+/** Whether a verified token's facts are a grant's: its issuer, and every claim it names. */
+export function grantMatches(grant: Pick<StoredGrant, 'issuer' | 'claims'>, facts: TokenFacts): boolean {
+  const issuer = grant.issuer === 'vercel' || grant.issuer === 'github' ? facts.issuer === grant.issuer : facts.issuer === 'oidc' && facts.iss === grant.issuer
+  if (!issuer) return false
+  return Object.entries(grant.claims).every(([name, allowed]) => {
+    const value = facts.claims[name]
+    if (value === undefined) return false
+    const text = String(value)
+    return typeof allowed === 'string' ? text === allowed : allowed.includes(text)
+  })
+}
+
+/** The OIDC issuers grants name past Vercel and GitHub: their tokens are verified too. */
+export const grantIssuers = (grants: readonly Pick<StoredGrant, 'issuer'>[]) =>
+  [...new Set(grants.flatMap((grant) => (grant.issuer === 'vercel' || grant.issuer === 'github' ? [] : [grant.issuer])))]
 
 /**
  * What principals may do, under a board's rules: `vercelProject()`, `githubActions()`, `oidc()`,
@@ -283,6 +409,8 @@ export function createAuthority(options: {
   hosts: boolean
   /** The board's own Vercel project and team. */
   project: () => Promise<{ id: string | null; teamId: string | null }>
+  /** The grants the board keeps, as they are now: what a principal no rule matches may do. Null where it keeps none. */
+  grants?: (() => Promise<readonly StoredGrant[]>) | null
 }) {
   const rules = typeof options.access === 'function' ? [] : options.access
   const host = typeof options.access === 'function' ? options.access : null
@@ -296,7 +424,6 @@ export function createAuthority(options: {
    */
   async function byRules(principal: Known, facts: TokenFacts | null): Promise<Access> {
     if (facts?.issuer === 'host') throw forbidden("this token can't use this board: its board no longer takes a host's principals")
-    if (facts?.issuer === 'oidc' && !oidcIssuers.has(facts.iss)) throw unauthorized(`untrusted issuer: ${facts.iss}`)
     const claims = (facts?.claims ?? {}) as TokenClaims
     const own = facts?.issuer === 'vercel' ? await options.project() : null
     const context: MatchContext = own ? { teamId: facts!.team ?? own.teamId, projectId: own.id } : { teamId: null, projectId: null }
@@ -319,6 +446,13 @@ export function createAuthority(options: {
     }
     if (ownHere) return FULL_ACCESS
     if (!facts) throw forbidden("this token can't use this board")
+    // No rule matches, so the board's grants decide, all that match adding up: they only let more in.
+    const grants = options.grants ? await options.grants() : []
+    const granted = grants.filter((grant) => grantMatches(grant, facts))
+    if (granted.length > 0) return union(granted.map((grant) => compileAccess(grant.can)))
+    // An issuer a grant names is trusted: its token just isn't one the grant lets in.
+    if (facts.issuer === 'oidc' && !oidcIssuers.has(facts.iss) && !grants.some((grant) => grant.issuer === facts.iss)) throw unauthorized(`untrusted issuer: ${facts.iss}`)
+    if (facts.issuer === 'oidc' && !oidcIssuers.has(facts.iss)) throw forbidden("this token can't use this board: no grant lets in its claims")
     if (facts.issuer === 'oidc') throw notInAccess(`oidc({ issuer: '${facts.iss}', claims, can })`)
     if (facts.issuer === 'github') throw notInAccess(`githubActions({ repository: '${String(claims.repository)}', can })`)
     if (ownDeployment)

@@ -60,15 +60,17 @@ Then the rest, a group each in the report:
 | Group | Check |
 | --- | --- |
 | `schedules` | schedules a reply a day out, lists it, and cancels it; and keeps a schedule's `noSync`, so its sends stay off every platform |
+| `grants` | grants a project that doesn't exist, lists it, takes the same issuer and claims again as one grant, revokes it twice, and changes a grant's `can` by setting it again. Skipped when the token can't change the board's grants |
+| `tokens` | mints a token for an hour that reads the channel, checks its `can` and its expiry, lists it without its secret, and revokes it twice |
 | `attachments` | uploads a file, posts it, and downloads it |
 | `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers or a sync registered there, since registering replaces them |
 | `sync` | imports a message as a platform user of its own (`conformance:user:<id>`), finds it by its platform IDs, imports it again to the same message, refuses a second root from the same platform thread, records a receipt and reads the copy back, lists where the thread is synced with it, answers 404 for a link no sync there knows, and deletes it. Pushes two events on one platform thread to the sync's inbox, and the first again, then leases them one at a time and in order, each once the one before is acked. Pulls the sync's `@sync` match for a post. Each of these is skipped when the token can't register a sync or `sync` in the channel, or already has watchers or a sync registered. Then, registering nothing: reads a post's and a reply's `noSync` back, and finds no one linked to a platform account nobody linked |
 
 Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
-schedules or no files, and say so: one that answers the schedules or
-attachments check with a 501 has it skipped, `not kept here`, with what the
-board said. A board on `a2()` without a `scheduler` answers 501
+schedules, grants, or files, or issue no tokens, and say so: one that answers
+one of those groups' checks with a 501 has it skipped, `not kept here`, with
+what the board said. Vercel's boards issue no tokens yet. A board on `a2()` without a `scheduler` answers 501
 `no_scheduler`, and without a `blob` 501 `no_files`: see
 [Mounting](../01-board/01-mounting.md#without-a-scheduler). `vb serve` keeps
 both, so it passes every check.
@@ -86,7 +88,7 @@ attachments
   skipped  takes a file, posts it, and gives it back
            not kept here: this board keeps no files: pass `blob` to `a2()`
 …
-21 passed, 3 skipped
+24 passed, 3 skipped
 ```
 
 ## The report
@@ -94,7 +96,7 @@ attachments
 ```ts
 type ConformanceReport = {
   url: string
-  checks: { group: 'core' | 'schedules' | 'attachments' | 'watchers' | 'sync'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
+  checks: { group: 'core' | 'schedules' | 'grants' | 'tokens' | 'attachments' | 'watchers' | 'sync'; name: string; status: 'passed' | 'failed' | 'skipped'; detail?: string }[]
   ok: boolean // nothing failed
 }
 ```

@@ -13,7 +13,8 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { parseScope } from '../server/access.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
@@ -350,6 +351,34 @@ function scheduleId(value: string | undefined): string {
   return value
 }
 
+/** A grant's or token's ID as the board gave it: `g3`, `t12`, or another board's own. */
+function trustId(what: 'grant' | 'token', value: string | undefined): string {
+  const like = what === 'grant' ? 'g3' : 't12'
+  if (value === undefined) throw usage(`Missing the ${what} ID, like ${like}.`, { reason: 'missing_arguments' })
+  if (!/^[^\s/]+$/.test(value)) throw usage(`${value} isn't a ${what} ID like ${like}.`)
+  return value
+}
+
+/** `--can`, as `x-board-scope` writes it: `dev/=read,post;ci/=read`. */
+function canFlag(value: string) {
+  try {
+    return parseScope(value)
+  } catch (error) {
+    throw usage(`${(error as Error).message.replace(/x-board-scope/g, '--can')}.`)
+  }
+}
+
+/** `--claim k=v`, each again: the same name twice is any of its values. */
+function claimPairs(values: string[] | undefined): Record<string, string | string[]> {
+  const claims: Record<string, string[]> = {}
+  for (const value of values ?? []) {
+    const at = value.indexOf('=')
+    if (at <= 0 || at === value.length - 1) throw usage(`Claims look like name=value, and ${value} isn't one.`)
+    ;(claims[value.slice(0, at)] ??= []).push(value.slice(at + 1))
+  }
+  return Object.fromEntries(Object.entries(claims).map(([name, list]) => [name, list.length === 1 ? list[0]! : list]))
+}
+
 /** A time flag: anything `Date` reads, as ISO. */
 function instant(flag: string, value: string): string {
   const time = new Date(value)
@@ -433,7 +462,13 @@ function doing(): string {
     case 'schedules':
     case 'channels':
     case 'actors':
+    case 'grants':
+    case 'tokens':
       return `list ${command}`
+    case 'grant':
+      return a === 'revoke' ? `revoke grant ${b}` : `grant ${a ?? 'an issuer'}`
+    case 'token':
+      return a === 'revoke' ? `revoke token ${b}` : `mint token ${a ?? ''}`.trimEnd()
     case 'sources':
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
     case 'identity':
@@ -466,6 +501,7 @@ function missing(): string | undefined {
   if (command === 'read' && /^https?:\/\//i.test(a)) return "that link's message on this board"
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
+  if ((command === 'grant' || command === 'token') && a === 'revoke' && b !== undefined) return `${command} ${b}`
   if (command === 'download') return `attachment ${a}`
   return undefined
 }
@@ -541,7 +577,13 @@ function failureOf(error: unknown): Failure {
   // What the board said is what to fix: an ambiguous mention names whom it could be.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
-    return theirs('auth', 'login_required', "The board didn't accept your credentials.", [{ instruction: 'Log in again', argv: ['vercel', 'login'] }])
+    return theirs(
+      'auth',
+      'login_required',
+      "The board didn't accept your credentials.",
+      // A token you passed is yours to replace: logging in changes nothing while BOARD_TOKEN is set.
+      process.env.BOARD_TOKEN ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }] : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
+    )
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`)
   if (status === 404) {
     const thing = missing()
@@ -976,6 +1018,64 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       warnUnknownMentions(schedule.unknownMentions)
       if (flags.json) result({ schedule, outcome: 'scheduled' })
       else out(formatSchedule(schedule))
+      return 0
+    }
+
+    case 'grant': {
+      if (args[0] === 'revoke' && args.length === 2) {
+        const id = trustId('grant', args[1])
+        const { revoked } = await client().revokeGrant(id)
+        if (flags.json) result({ grant: id, outcome: revoked ? 'revoked' : 'unchanged' })
+        else out(revoked ? `revoked ${id}` : `${id} is already gone`)
+        return 0
+      }
+      const [issuer, extra] = args
+      if (!issuer) throw usage('Missing the issuer to grant: vercel, github, or an https URL.', { reason: 'missing_arguments' })
+      if (extra !== undefined) throw usage(`grant takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
+      const claims = claimPairs(flags.claim)
+      if (Object.keys(claims).length === 0)
+        throw usage(`Missing the claims ${issuer}'s tokens must carry: pass --claim name=value.`, { reason: 'missing_arguments' })
+      const { grant, created } = await client().grant({ issuer, claims, ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}) })
+      if (flags.json) result({ grant, outcome: created ? 'granted' : 'updated' })
+      else out(`${created ? 'granted' : 'updated'} ${grant.id}`)
+      return 0
+    }
+
+    case 'grants': {
+      const list = await client().grants()
+      if (flags.json) return result({ grants: list }), 0
+      out(list.length === 0 ? 'no grants' : formatGrants(list))
+      return 0
+    }
+
+    case 'token': {
+      if (args[0] === 'revoke' && args.length === 2) {
+        const id = trustId('token', args[1])
+        const { revoked } = await client().revokeToken(id)
+        if (flags.json) result({ token: id, outcome: revoked ? 'revoked' : 'unchanged' })
+        else out(revoked ? `revoked ${id}` : `${id} is already revoked`)
+        return 0
+      }
+      const [name, extra] = args
+      if (!name) throw usage('Missing a name for the token, like feedback-widget.', { reason: 'missing_arguments' })
+      if (extra !== undefined) throw usage(`token takes one name: ${extra} is one too many.`)
+      const { token, secret } = await client().token({
+        name,
+        ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}),
+        ...(flags.profile !== undefined ? { profile: flags.profile } : {}),
+        ...(flags.session !== undefined ? { session: flags.session } : {}),
+        ...(flags.expires !== undefined ? { expires: flags.expires } : {}),
+      })
+      // The secret alone, so it pipes: BOARD_TOKEN=$(vb token widget --can feedback/=post).
+      if (flags.json) result({ token, secret })
+      else out(secret)
+      return 0
+    }
+
+    case 'tokens': {
+      const list = await client().tokens()
+      if (flags.json) return result({ tokens: list }), 0
+      out(list.length === 0 ? 'no tokens' : formatTokens(list))
       return 0
     }
 

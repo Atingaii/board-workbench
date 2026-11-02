@@ -552,7 +552,8 @@ function guarded(url: string, doFetch: typeof fetch, suppliedToken?: Resolvable<
         const bearer = headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1]
         const token = bearer ?? (typeof suppliedToken === 'function' ? await suppliedToken() : suppliedToken)
           ?? (process.env.BOARD_TOKEN || await hostedToken(url))
-        headers.set('x-vercel-trusted-oidc-idp-token', token)
+        // The edge trusts OIDC tokens only: a board's own token gets through as this deployment's.
+        headers.set('x-vercel-trusted-oidc-idp-token', token.startsWith('board_') ? await hostedToken(url) : token)
       }
       return through(doFetch, input, init, null).catch((error) => {
         throw error instanceof Wall

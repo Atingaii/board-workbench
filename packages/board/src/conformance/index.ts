@@ -11,7 +11,7 @@ import type { Board } from '../server/board.ts'
  */
 
 /** What a check is about, for the report's headings. */
-export type CheckGroup = 'core' | 'schedules' | 'attachments' | 'watchers' | 'sync'
+export type CheckGroup = 'core' | 'schedules' | 'grants' | 'tokens' | 'attachments' | 'watchers' | 'sync'
 
 export type CheckResult = {
   group: CheckGroup
@@ -83,13 +83,27 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 
 /**
  * The groups a board may keep none of, saying so with a 501: a board on `a2()` without a scheduler
- * answers `no_scheduler`, and without a blob store `no_files`.
+ * answers `no_scheduler`, and without a blob store `no_files`; one that keeps no grants or issues no
+ * tokens, `no_grants` or `no_tokens`.
  */
-const OPTIONAL = new Set<CheckGroup>(['schedules', 'attachments'])
+const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])
 
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
   return { root: ctx.root, reply: ctx.reply }
+}
+
+/** A grant for a project that doesn't exist, from an environment its deployments would have: it lets nobody in. */
+const grantFor = (ctx: Context) => ({ issuer: 'vercel', claims: { environment: 'preview', project_id: `prj_conformance${ctx.labels.conformance}` } })
+
+/** Sets the check's grant, or says why it can't: changing who the board trusts takes `manage` in every channel. */
+async function firstGrant(ctx: Context): Promise<Awaited<ReturnType<Board['grant']>> | { skip: string }> {
+  try {
+    return await ctx.board.grant(grantFor(ctx))
+  } catch (error) {
+    if (error instanceof BoardError && error.status === 403) return { skip: "this token can't change the board's grants" }
+    throw error
+  }
 }
 
 /** The sync key the sync checks register, a platform of their own, so nothing reaches a real one. */
@@ -363,6 +377,75 @@ const CHECKS: Check[] = [
       } finally {
         await ctx.board.cancelSchedule(schedule.id).catch(() => {})
       }
+    },
+  },
+  {
+    group: 'grants',
+    name: 'grants a project, lists it, takes the same grant again as one, and revokes it',
+    run: async (ctx) => {
+      const asked = grantFor(ctx)
+      const first = await firstGrant(ctx)
+      if ('skip' in first) return first.skip
+      try {
+        isRef(first.grant.id, "a grant's id")
+        same(first.created, true, 'a new grant: created')
+        same(first.grant.issuer, 'vercel', "the grant's issuer")
+        same(first.grant.claims.project_id, asked.claims.project_id, "the grant's project_id")
+        check(first.grant.can['*']?.includes('post'), `a grant with no can should let them post everywhere, got ${show(first.grant.can)}`)
+        same(first.grant.by, ctx.me.actor, "the grant's by")
+        const again = await ctx.board.grant(asked)
+        same(again.created, false, 'the same issuer and claims again: created')
+        same(again.grant.id, first.grant.id, 'the same issuer and claims again: its id')
+        same((await ctx.board.grants()).filter((grant) => grant.id === first.grant.id).length, 1, 'grants listing it')
+      } catch (error) {
+        await ctx.board.revokeGrant(first.grant.id).catch(() => {})
+        throw error
+      }
+      same((await ctx.board.revokeGrant(first.grant.id)).revoked, true, 'revoking it')
+      same((await ctx.board.revokeGrant(first.grant.id)).revoked, false, 'revoking it again')
+      check(!(await ctx.board.grants()).some((grant) => grant.id === first.grant.id), "grants shouldn't list it once it's revoked")
+    },
+  },
+  {
+    group: 'grants',
+    name: "changes a grant's can when it's set again",
+    run: async (ctx) => {
+      const first = await firstGrant(ctx)
+      if ('skip' in first) return first.skip
+      const { grant } = first
+      try {
+        const narrowed = await ctx.board.grant({ ...grantFor(ctx), can: { [ctx.channel]: ['post'] } })
+        same(narrowed.created, false, 'setting its can: created')
+        same(narrowed.grant.id, grant.id, 'setting its can: its id')
+        same(show(narrowed.grant.can), show({ [ctx.channel]: ['post'] }), "the grant's can")
+      } finally {
+        await ctx.board.revokeGrant(grant.id).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'tokens',
+    name: 'mints a token, shows its secret only then, lists it, and revokes it',
+    run: async (ctx) => {
+      const name = `conformance-${ctx.labels.conformance}`
+      const { token, secret } = await ctx.board.token({ name, can: { [ctx.channel]: ['read'] }, expires: '1h' })
+      try {
+        isRef(token.id, "a token's id")
+        check(typeof secret === 'string' && secret.length >= 32, `a token's secret should be a string of at least 32 characters, got ${typeof secret}`)
+        same(token.name, name, "the token's name")
+        same(show(token.can), show({ [ctx.channel]: ['read'] }), "the token's can")
+        const left = Date.parse(token.expiresAt) - Date.now()
+        check(left > 55 * 60_000 && left <= 60 * 60_000 + 5_000, `a token minted for 1h should expire in an hour, got ${token.expiresAt}`)
+        const listed = await ctx.board.tokens()
+        check(listed.some((found) => found.id === token.id), `tokens should list ${token.id}`)
+        check(!JSON.stringify(listed).includes(secret), "tokens shouldn't show a token's secret")
+      } catch (error) {
+        await ctx.board.revokeToken(token.id).catch(() => {})
+        throw error
+      }
+      same((await ctx.board.revokeToken(token.id)).revoked, true, 'revoking it')
+      same((await ctx.board.revokeToken(token.id)).revoked, false, 'revoking it again')
+      check(!(await ctx.board.tokens()).some((found) => found.id === token.id), "tokens shouldn't list it once it's revoked")
     },
   },
   {

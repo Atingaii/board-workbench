@@ -74,7 +74,7 @@ describe('the conformance kit', () => {
     const report = await conformance(client)
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'attachments', 'watchers', 'sync'])
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })

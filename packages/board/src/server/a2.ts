@@ -5,6 +5,7 @@ import { A2Error, idempotentId, reducer } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type ConsumerContext } from 'experimental-a2/server'
 import { boardContract, IDENTITY_SESSION, identityContract, inboxContract, INBOXES_SESSION, inboxSession, SCHEDULES_SESSION, type InboxEvent } from '../contract/contract.ts'
 import { BOARD_SESSION, type BoardEvent, type BoardEvents } from '../contract/events.ts'
+import { createTrust } from './trust.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer, identityCodesReducer } from '../contract/reducers.ts'
 import { linkedTo, type Actor, type ExternalCopy, type IdentityCode, type Message } from '../contract/folds.ts'
@@ -14,7 +15,7 @@ import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
 import { actorSeen } from './actors.ts'
-import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller } from './backend.ts'
+import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
 import { attachmentBody, attachmentNotFound, finishUpload, readUpload, startUpload, writeUpload, type BlobStore } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
@@ -315,6 +316,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers: [inbound],
   })
+  // Who the board trusts beside its code's rules: grants, and the tokens it issued.
+  const access = createTrust({ store: log, issuers: () => binding.issuers() })
   const identityServer = createServer({ contract: identityContract, store: log })
   const codes = identityServer.session(IDENTITY_SESSION)
   const inboxes = inboxServer.session(INBOXES_SESSION)
@@ -629,6 +632,12 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       const answer = await schedules.cancel(identity, scheduleAt(id))
       return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
     },
+    grants: async (caller) => access.grants(await identityOf(caller)),
+    grant: async (caller, body) => access.grant(await identityOf(caller), body),
+    revokeGrant: async (caller, input) => access.revokeGrant(await identityOf(caller), input),
+    tokens: async (caller) => access.tokens(await identityOf(caller)),
+    token: async (caller, body) => access.token(await identityOf(caller), body),
+    revokeToken: async (caller, input) => access.revokeToken(await identityOf(caller), input),
     async upload(caller, { data, name, type }) {
       const { principal } = (await identityOf(caller))
       // A file is no use until a post or an import carries it, so uploading needs `post` or `sync` somewhere.
@@ -1078,6 +1087,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       // A person's own, for themselves: no one gets a code for someone else.
       const identity = await identityOf(caller)
       if (identity.principal.kind !== 'person') throw forbidden('only people link platform accounts')
+      // Whoever holds a narrowed credential (a board token, a proxy's) isn't the person: a code would link their account to them.
+      if (identity.principal.scope !== undefined) throw forbidden("this token is narrowed, so it can't link accounts: link them with your own login")
       const entry = (await linkable()).find((candidate) => candidate.key === sync)
       if (!entry) throw notFound(`no sync entry named ${sync}`)
       const principal = identity.principal.id
@@ -1110,6 +1121,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
 
     async syncUnlink(caller, { account }) {
       const { principal, author } = (await identityOf(caller))
+      if (principal.scope !== undefined) throw forbidden("this token is narrowed, so it can't unlink accounts: unlink them with your own login")
       const { state } = await session.state(actorsReducer)
       const found = state.links[account]
       // Your own account, or anyone's for a caller that speaks for platform users in every channel: a link holds board-wide.
@@ -1353,6 +1365,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
   return {
     methods,
     schedules,
+    trust: access.trust,
     /** The scheduler's callback, for every A2 server behind the board. */
     scheduler: options.scheduler
       ? options.scheduler.handler(...servers)
@@ -1406,6 +1419,12 @@ export function a2(options: A2Options = {}) {
     routes: [] as BackendRoute[],
     // The board lives here: board() lets its people and own deployments in by default.
     keeps: true,
+    // Its grants and tokens, in its log: board() checks requests against them.
+    trust: {
+      grants: async () => (await ready()).trust.grants(),
+      token: async (hash: string) => (await ready()).trust.token(hash),
+      live: async (id: string) => (await ready()).trust.live(id),
+    } satisfies Trust,
     bind(given: BoardBinding) {
       if (binding) throw new Error('a2: this backend already serves a board: create one a2() per board()')
       binding = given

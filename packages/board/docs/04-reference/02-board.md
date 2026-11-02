@@ -306,6 +306,49 @@ already done or canceled. A board without a scheduler (an `a2()` with no
 `scheduler`) fails `schedule` with 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
+### grant
+
+```ts
+grant(input: { issuer: string; claims: Record<string, string | string[]>; can?: Can }): Promise<{ grant: GrantView; created: boolean }>
+grants(): Promise<GrantView[]>
+revokeGrant(id: string): Promise<{ revoked: boolean }>
+```
+
+`grant` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an https URL)
+that carry every one of `claims`, to do what `can` says: read, post, react,
+and label everywhere when it's left out. The same issuer and claims are one
+grant, so setting it again changes its `can`, and `created` is false. All
+three need `manage` in every channel.
+
+```ts
+const { grant } = await team.grant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+await team.revokeGrant(grant.id)
+```
+
+See [Grants](../01-board/09-access.md#grants).
+
+### token
+
+```ts
+token(input: { name: string; can?: Can; profile?: string; avatar?: string; session?: string; expires?: string }): Promise<{ token: TokenView; secret: string }>
+tokens(): Promise<TokenView[]>
+revokeToken(id: string): Promise<{ revoked: boolean }>
+```
+
+`token` mints a token that acts as the handle's caller, narrowed to `can`, and
+answers its `secret`, the only time it shows. `profile`, `avatar`, and
+`session` pin what every request with it writes as. It lives 30 days, or
+`expires`, 90 days at most. On `a2()`, the handle's own token is the board's
+own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
+in every channel. `revokeToken` stops one and every token minted with it.
+
+```ts
+const { token, secret } = await team.token({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur', expires: '7d' })
+await team.revokeToken(token.id)
+```
+
+See [Tokens](../01-board/09-access.md#tokens).
+
 ## Reading
 
 ### messages

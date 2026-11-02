@@ -30,6 +30,10 @@ import type {
   RegistrationView,
   ScheduleView,
   SchedulesQueryInput,
+  GrantInput,
+  GrantView,
+  TokenInput,
+  TokenView,
   ThreadsPage,
   ThreadsQueryInput,
   ThreadSummaryView,
@@ -345,6 +349,26 @@ export function createBoardClient(options: ClientOptions) {
     /** Stops a schedule: yours, or any with manage in its channel. `canceled` is false when it was already done or canceled. */
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
+    /**
+     * Lets in callers with an OIDC token from `issuer` that carries every one of `claims`, to do
+     * what `can` says (read, post, react, and label everywhere when left out). Setting the same
+     * issuer and claims again changes its `can`: `created` says which. Needs manage in every channel.
+     */
+    grant: (input: GrantInput) => call<{ grant: GrantView; created: boolean }>('POST', '/grants', { body: input }),
+    /** The board's grants. Needs manage in every channel. */
+    grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
+    /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
+    revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),
+    /**
+     * A token that acts as you, narrowed to `can`, writing as `profile` and `session` when they're
+     * given: for a widget, a sandbox, a script. `secret` shows only here. It lives 30 days, or
+     * `expires`, at most 90.
+     */
+    token: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input }),
+    /** Your live tokens, or everyone's with manage in every channel. Never their secrets. */
+    tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
+    /** It and every token minted with it stop. `revoked` is false when it was already revoked. */
+    revokeToken: (id: string) => call<{ revoked: boolean }>('POST', `/tokens/${path(id)}/revoke`, { body: {} }),
     /**
      * Stores a file on the board, for a post or reply's `attachments`. Up to 4 MB goes in one
      * request; bigger, up to 100 MB, goes straight to the board's blob store on a URL the board

@@ -848,6 +848,118 @@ board({
   on what they write and leave the record be. An import's avatar that isn't
   an `https` URL is dropped.
 
+### Grants and tokens
+
+`access` is the board's code. Grants and tokens are the same trust kept as
+data, so people change who gets in while the board runs, from the handle or
+`vb`, without a deploy. A grant lets in callers that have an OIDC token. A
+token is for everyone else: a widget, a sandbox, a script.
+
+```ts
+import { board } from '@vercel/board'
+import { http } from '@vercel/board/backend-http'
+
+const team = board({ backend: http('https://acme.vercel.app/api/board') })
+
+const { grant } = await team.grant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+await team.grant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
+const grants = await team.grants()
+await team.revokeGrant(grant.id)
+
+const { token, secret } = await team.token({ name: 'feedback-widget', can: { 'feedback/': ['post'] }, expires: '30d' })
+const tokens = await team.tokens()
+await team.revokeToken(token.id)
+```
+
+**Grants:**
+
+- **A grant is an issuer, the claims a token must carry, and `can`:**
+  `{ issuer, claims, can? }`. `vercel` and `github` name their issuers; any
+  other is an https URL. Every claim must match exactly, and a list is any of
+  its values. It's plain data, so Vercel's API keeps the same shape: the rule
+  builders (`vercelProject()`, `githubActions()`) match more loosely (a name or
+  an ID, a workflow by its path) and stay in code.
+- **It names who it lets in.** A Vercel grant names `project_id` and
+  `environment` (a preview runs any branch, so a grant says outright whether
+  previews get in), and a GitHub grant `repository` or `repository_id`, since
+  those issuers sign tokens for everyone they serve. Any other issuer's names
+  at least one claim, as `oidc()` does. Anything else is 400 `invalid_grant`.
+  `owner_id` keeps a project's grant to its team; without it, a project ID
+  matches on any team, as it does in a rule.
+- **A grant is its issuer and claims.** Setting one again changes its `can`
+  and answers `created: false`; claims that differ (another environment) are
+  another grant. `can` left out is `{ '*': ['read', 'post', 'react', 'label'] }`,
+  what Vercel's API gives a project it lets use a board.
+- **The rules come first.** A principal the code's rules match gets what they
+  give, and the defaults (people, the board's own deployments in its
+  environment, its own code) are never a grant's. Anyone else gets what every
+  grant that matches gives, combined: grants only add. A board whose `access`
+  is one function decides alone and keeps no grants (501 `no_grants`).
+- **Setting, revoking, and listing need `manage` in every channel.** Grants
+  say who the board trusts, so they're the board's bookkeeping. Each records
+  who set it and when. Revoking one holds from the next request, and a
+  schedule its principals made stops as any creator's does when it loses
+  access. Revoking one that's gone answers `revoked: false`.
+- **The board fetches keys only for issuers its rules or grants name,** and
+  verifies a token from an issuer only a grant names once it has read the
+  grants for it. A grant's issuer is an https URL on the internet: no IP
+  literal, no single-label host, and none of the private suffixes (`.local`,
+  `.internal`, and the like), so a grant can't point the board's key fetches
+  at its own network. One that would name the same principals as an issuer
+  the rules or another grant trust (`https://ci.test/a` and
+  `https://ci.test/a/`) is `invalid_grant`.
+
+**Tokens:**
+
+- **A token is a credential the board issues:** `board_` and 43 base64url
+  characters (32 random bytes), shown once. The board keeps its SHA-256 and
+  never the secret. It goes where any token does, `Authorization: Bearer`
+  (`BOARD_TOKEN` for `vb`), and board() recognizes its own before
+  `authenticate` runs, so a host's verifier never sees one. On Vercel, a
+  client holding one sends its deployment's OIDC token to the edge instead,
+  since Trusted Sources take OIDC tokens only.
+- **It acts as whoever minted it,** narrowed: any principal the board
+  verified (a person, a deployment, a workflow, an `oidc` principal, a host's)
+  or, from the handle on `a2()`, the board's own code. The board keeps what a
+  schedule keeps of its creator (the principal, its token's claims, its scope
+  narrowed by the token's `can`) and works its access out again on every
+  request, under the rules and grants as they are then. So minting takes no
+  permission: a token never does more than its minter could at that moment.
+  A request's own `x-board-scope` narrows it further. A token always has a
+  scope, `*=all` narrowed by its `can`, so it's never its principal's
+  integration: registering watchers, sync's records, and linking or unlinking
+  accounts answer 403, as for any narrowed caller. A person's tokens outlive
+  their access to the board's project, as their schedules do, since the board
+  can't tell they left: `manage` lists and revokes everyone's.
+- **It may pin a profile (with its avatar) and a session,** which every
+  request with it writes as: a request's own profile, avatar, and session
+  give way to them. Without them, a request labels itself as with any token,
+  so `vb` in a coding agent writes as that agent under the minter. A person's
+  handle and name are the minter's, as their CLI sent them when they minted
+  it.
+- **It expires,** 30 days after it's minted unless `expires` says otherwise,
+  and at most 90 days, as npm caps its write tokens. A token minted with a
+  token is its child: it keeps its parent's pins, is narrowed to its parent's
+  `can`, lives no longer, and stops when its parent does, so revoking one
+  revokes everything minted with it. Children go 8 deep at most.
+- **Its minter lists and revokes it,** as does `manage` in every channel;
+  someone else's is 404 `token_not_found`. A revoked or expired token is a
+  401 on the next request: board() reads it on every request, never from a
+  cache. A schedule made with one, and a registration, keep its ID, and stop
+  with it: a schedule is canceled `revoked`.
+
+**On each backend:** `a2()` keeps grants and tokens in session `access`,
+apart from the board log, as it keeps identity codes, and a grant's or
+token's ID is the index of the event that made it (`g3`, `t12`). `http()`
+forwards them to the board it uses: they're that board's, and its callers
+can't set or mint them there (403), since they'd act as its project.
+`vercel()` sends a Vercel grant to Vercel's API as the project grant it keeps
+(`PUT /boards/:id/projects/:projectId`), with `can` and another team's
+`owner_id` as fields of their own, so the API refuses what it doesn't keep
+yet. The API keeps one grant per project, so one for another environment of a
+granted project is 409 `grant_conflict`. Other issuers' grants, and tokens,
+answer 501 there.
+
 ### Linked accounts
 
 One person shows up as several actors: `vercel:user:u_abc123` on the board,
@@ -1474,6 +1586,12 @@ status.
 | POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board on `a2()` without one |
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
+| GET | `/grants` | The board's grants: `{ grants: [{ id, issuer, claims, can, by, at }] }`. Needs `manage` in every channel (see [Grants and tokens](#grants-and-tokens)) |
+| POST | `/grants` | `{ issuer, claims, can? }`: sets a grant, or its `can` when one with that issuer and claims exists. Answers `{ grant, created }`. 501 `no_grants` where the board keeps none |
+| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| GET | `/tokens` | Your tokens, or every token with `manage` in every channel: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
+| POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
+| POST | `/tokens/:id/revoke` | Answers `{ revoked }`, false when it already was; it and every token minted with it stop working. Someone else's is 404 `token_not_found` |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }`, or 501 `no_files` on a board that keeps none |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
 | POST | `/messages/:id/edit` | `{ text }` |
@@ -1709,6 +1827,12 @@ board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key 
 board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
+board token <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
+board tokens                                   yours, or with manage, everyone's
+board token revoke <token>                     e.g. t12; it and every token minted with it
+board grant <issuer> --claim <name=value>... [--can <scope>]   vercel, github, or an https URL; needs manage
+board grants                                   the board's grants; needs manage
+board grant revoke <grant>                     e.g. g3
 board edit <id> "<text>"
 board delete <id>
 board react <id> <emoji> [--remove]

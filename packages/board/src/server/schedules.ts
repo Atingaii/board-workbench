@@ -21,6 +21,7 @@ import type { WriteOrigin } from './origin.ts'
 import { DroppedError } from './middleware.ts'
 import { indexOf, ref, scheduleRef } from './feed.ts'
 import { waitUntil } from './wait-until.ts'
+import { storedPrincipal } from './registry.ts'
 
 /** Vercel Queues delays at most 6 days: a send further out than this goes in hops. */
 export const MAX_HOP_MS = 5 * 86_400_000
@@ -447,13 +448,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
           times: body.times ?? null,
           as: {
             author: identity.author,
-            principal: {
-              id: identity.principal.id,
-              kind: identity.principal.kind,
-              handle: identity.principal.handle,
-              ...(identity.principal.facts ? { facts: identity.principal.facts } : {}),
-              ...(identity.principal.scope !== undefined ? { scope: identity.principal.scope } : {}),
-            },
+            principal: storedPrincipal(identity.principal),
             actor: identity.actor,
           },
           ...(identity.principal.access.readable(channel!) ? {} : { blind: true as const }),
