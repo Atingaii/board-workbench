@@ -24,7 +24,7 @@ const verified = (can: Can) =>
   }) as unknown as Caller
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, schedules, attachments, and watchers, and keeps no sync", async () => {
+  it("passes the conformance kit's core, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
     const report = await conformance(handleOn(fakeMessageboard()))
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
@@ -43,10 +43,15 @@ describe('vercel()', () => {
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
+      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
       "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',
+      "sync: queues a platform event in its sync's inbox once, leases it out, and takes its ack": 'failed',
+      'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
+      'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      'sync: finds no one for a platform account nobody linked': 'failed',
     })
   }, 30_000)
 

@@ -680,8 +680,12 @@ watchers
 
 sync
   passed   keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced
+  passed   queues a platform event in its sync's inbox once, leases it out, and takes its ack
+  passed   hands a sync each message change as a match of its @sync watcher
+  passed   keeps noSync on a post and a reply, so sync sends neither
+  passed   finds no one for a platform account nobody linked
 
-19 passed
+24 passed
 ```
 
 A board that keeps no schedules or no files answers that check with a 501, and

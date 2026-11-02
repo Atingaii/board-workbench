@@ -53,10 +53,10 @@ Then the rest, a group each in the report:
 
 | Group | Check |
 | --- | --- |
-| `schedules` | schedules a reply a day out, lists it, and cancels it |
+| `schedules` | schedules a reply a day out, lists it, and cancels it; and keeps a schedule's `noSync`, so its sends stay off every platform |
 | `attachments` | uploads a file, posts it, and downloads it |
 | `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers or a sync registered there, since registering replaces them |
-| `sync` | imports a message as a platform user of its own (`conformance:user:<id>`), finds it by its platform IDs, imports it again to the same message, refuses a second root from the same platform thread, records a receipt and reads the copy back, lists where the thread is synced with it, answers 404 for a link no sync there knows, and deletes it. Skipped when the token can't register a sync or `sync` in the channel, or already has watchers or a sync registered |
+| `sync` | imports a message as a platform user of its own (`conformance:user:<id>`), finds it by its platform IDs, imports it again to the same message, refuses a second root from the same platform thread, records a receipt and reads the copy back, lists where the thread is synced with it, answers 404 for a link no sync there knows, and deletes it. Pushes a platform event to the sync's inbox twice, leases it once, and acks it. Pulls the sync's `@sync` match for a post. Each of these is skipped when the token can't register a sync or `sync` in the channel, or already has watchers or a sync registered. Then, registering nothing: reads a post's and a reply's `noSync` back, and finds no one linked to a platform account nobody linked |
 
 Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
@@ -73,12 +73,14 @@ $ vb conformance
 schedules
   skipped  schedules a reply, lists it, and cancels it
            not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later
+  skipped  keeps noSync on a schedule, so its sends stay off every platform
+           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later
 
 attachments
   skipped  takes a file, posts it, and gives it back
            not kept here: this board keeps no files: pass `blob` to `a2()`
 …
-16 passed, 2 skipped
+21 passed, 3 skipped
 ```
 
 ## The report
