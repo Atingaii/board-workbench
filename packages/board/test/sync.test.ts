@@ -1711,6 +1711,25 @@ describe('provider callbacks', () => {
   })
 
 
+  it("refuses a callback's reply after a message another came after, as a request's", async () => {
+    const s = fakePlatform('slack')
+    const outcomes: string[] = []
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({
+      C1: delivering(async (sync) => {
+        const imported = await sync.import('support')
+        await sync.board.reply(imported.root!, { text: 'first', after: imported.root! })
+        await sync.board.reply(imported.root!, { text: 'late', after: imported.root! }).then(
+          () => outcomes.push('landed'),
+          (error: { code?: string }) => outcomes.push(error.code ?? 'error'),
+        )
+      }),
+    })) } })
+    const call = caller(board.fetch, await personToken())
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U1' }) }))
+    await vi.waitFor(() => expect(outcomes).toEqual(['newer_message']))
+    expect((await read(call, 'support')).map((m) => m.text)).toEqual(['hello', 'first'])
+  })
+
   it('resumes a failed callback after import without treating the retry as an echo', async () => {
     const s = fakePlatform('slack')
     let attempts = 0

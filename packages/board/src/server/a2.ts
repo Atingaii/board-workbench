@@ -846,6 +846,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
             from: body.from,
             // Its platform message is the copy of the sync that imported it.
             ...(body.origin && !ownSync(caller) ? { importedBy: principal.id } : {}),
+            after: afterAt(body.after),
             lenientMentions: true,
             attachments,
             links: await linksOf(principal, body.links),

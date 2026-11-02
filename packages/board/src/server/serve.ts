@@ -615,6 +615,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         ...(input.noSync ? { noSync: true } : {}),
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(input.id !== undefined ? { id: input.id } : {}),
+        ...(input.after !== undefined ? { after: input.after } : {}),
       }, signal),
     )
     // The targets it asked for, as sync records a thread's.

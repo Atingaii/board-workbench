@@ -206,10 +206,6 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
     thread = target.thread
     if (input.sync?.length)
       throw badRequest('sync attaches whole threads: use `board sync <id> <target>`')
-    if (input.after !== undefined) {
-      const named = await ctx.reads.message(input.after)
-      if (named?.thread !== thread) throw badRequest(`after: #${input.after} isn't in #${re}'s thread`, 'invalid_after')
-    }
   } else {
     if (!channel) throw badRequest('a post needs a channel')
     if (input.after !== undefined) throw badRequest('`after` is for replies', 'invalid_after')
@@ -219,19 +215,28 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
   if (hasLabels(input.labels)) spend(input.proofs.label, 'label', { channel })
   if (input.sync?.length) spend(input.proofs.sync, 'sync', { channel })
 
-  if (input.id !== undefined) {
-    // A retry of a write that landed (only a caller's own ID can be one): what's on the board stands.
-    const landed = await ctx.reads.byEventId(input.id)
-    if (landed) {
-      // Only the same author's post in the same place is a retry. Text and labels can't tell:
-      // the middleware may have changed them, and edits may have since.
-      if (landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo) throw duplicateId()
-      const shown = await landedFor(ctx, identity, landed)
-      if (!shown) throw duplicateId()
-      return shownTo(shown, identity.principal.access, sent)
-    }
+  // A retry of a write that landed (only a caller's own ID can be one): what's on the board
+  // stands, whatever its `after` says now.
+  const replayed = await replayOf(ctx, input, { channel: channel!, re, replyTo }, sent)
+  if (replayed) return replayed
+  if (input.after !== undefined) {
+    const named = await ctx.reads.message(input.after)
+    if (named?.thread !== thread) throw badRequest(`after: #${input.after} isn't in #${re}'s thread`, 'invalid_after')
   }
   return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id, sent })
+}
+
+/** The post a caller's own ID already landed, as its retry gets it back: null when there's none. */
+async function replayOf(ctx: WriteContext, input: PostInput, place: { channel: string; re: number | null; replyTo: number | null }, sent: string): Promise<Posted | null> {
+  if (input.id === undefined) return null
+  const landed = await ctx.reads.byEventId(input.id)
+  if (!landed) return null
+  // Only the same author's post in the same place is a retry. Text and labels can't tell:
+  // the middleware may have changed them, and edits may have since.
+  if (landed.channel !== place.channel || landed.re !== place.re || landed.replyTo !== place.replyTo) throw duplicateId()
+  const shown = await landedFor(ctx, input.identity, landed)
+  if (!shown) throw duplicateId()
+  return shownTo(shown, input.identity.principal.access, sent)
 }
 
 /**
@@ -324,7 +329,15 @@ async function commitPost(
     },
     ...synced,
   ]
-  const rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
+  let rows: Awaited<ReturnType<BoardSession['append']>>
+  try {
+    rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
+  } catch (error) {
+    // The same request sent twice at once: what came after `after` may be the other one.
+    const replayed = error instanceof HttpError && error.code === 'newer_message' ? await replayOf(ctx, input, { channel, re, replyTo }, sent) : null
+    if (replayed) return replayed
+    throw error
+  }
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
@@ -405,6 +418,8 @@ async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, even
     } catch (error) {
       if (!headMoved(error)) throw error
       if (attempt === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
+      // Writers the same write moved on look again apart, so they don't keep meeting.
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * attempt))
     }
   }
 }
