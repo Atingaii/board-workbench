@@ -585,16 +585,16 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     async post(caller, parsed) {
       return postNow(caller, await identityOf(caller), parsed)
     },
-    async edit(caller, { id, text }) {
+    async edit(caller, { id, text, revision }) {
       const identity = await identityOf(caller)
       const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
-      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text })
+      const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, revision })
       return { ok: true as const, ...(unknownMentions ? { unknownMentions } : {}) }
     },
-    async delete(caller, { id }) {
+    async delete(caller, { id, revision }) {
       const identity = (await identityOf(caller))
       const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'delete')
-      await writeDelete(writes, { identity, authorized })
+      await writeDelete(writes, { identity, authorized, revision })
       return { ok: true }
     },
     async react(caller, { id, emoji, remove }) {
@@ -882,14 +882,14 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       if (body.op === 'edit') {
         const proof = await authorized('post')
         const commit = async ({ text }: { text: string }) => {
-          await writeEdit(writes, { identity: author, authorized: proof, text, from: body.from, asAuthor })
+          await writeEdit(writes, { identity: author, authorized: proof, text, from: body.from, asAuthor, revision: body.revision })
           return ref(found.id)
         }
         const write = { kind: 'edit' as const, id: ref(found.id), channel: found.channel, re: found.re === null ? null : ref(found.re), text: body.text }
         if (!found.deleted && !(asAuthor && found.by.principal !== body.author.id)) await checkSource(caller, principal.id, body.source)
         return { message: await commit(write) }
       }
-      if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor })
+      if (body.op === 'delete') await writeDelete(writes, { identity: author, authorized: await authorized('post'), from: body.from, asAuthor, revision: body.revision })
       else if (body.op === 'react')
         await writeReaction(writes, { identity: author, authorized: await authorized('react'), emoji: body.emoji, remove: body.remove ?? false, from: body.from })
       else if (body.op === 'labels') await writeLabels(writes, { identity: author, authorized: await authorized('label'), set: body.set, unset: body.unset, if: body.if })

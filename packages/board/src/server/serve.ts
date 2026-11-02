@@ -1,5 +1,6 @@
 import {
   AckBody,
+  DeleteBody,
   EditBody,
   EventsQuery,
   IdentityUnlinkBody,
@@ -100,7 +101,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'message':
     case 'posted':
     case 'synced':
-    case 'delete':
     case 'cancelSchedule':
     case 'revokeGrant':
     case 'revokeToken':
@@ -134,6 +134,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return RegisterBody.parse(await body())
     case 'edit':
       return { id, ...EditBody.parse(await body()) }
+    case 'delete':
+      return { id, ...DeleteBody.parse(await body()) }
     case 'react':
       return { id, ...ReactBody.parse(await body()) }
     case 'label':
@@ -583,11 +585,13 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       case 'post':
         return importPost(caller, input as Protocol['post']['input'], signal)
       case 'edit': {
-        const { id, text } = input as Protocol['edit']['input']
-        return change({ op: 'edit', author, from: null, message: id, text: await withEmails(text), source })
+        const { id, text, revision } = input as Protocol['edit']['input']
+        return change({ op: 'edit', author, from: null, message: id, text: await withEmails(text), source, ...(revision !== undefined ? { revision } : {}) })
       }
-      case 'delete':
-        return change({ op: 'delete', author, from: null, message: (input as Protocol['delete']['input']).id })
+      case 'delete': {
+        const { id, revision } = input as Protocol['delete']['input']
+        return change({ op: 'delete', author, from: null, message: id, ...(revision !== undefined ? { revision } : {}) })
+      }
       case 'react': {
         const { id, emoji, remove } = input as Protocol['react']['input']
         return change({ op: 'react', author, from: null, message: id, emoji, ...(remove !== undefined ? { remove } : {}) })
@@ -648,10 +652,10 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return post(caller, input as Protocol['post']['input'], signal)
       case 'edit': {
         // Its emails resolve once the caller may post where the message is, and read it.
-        const { id, text } = input as Protocol['edit']['input']
+        const edit = input as Protocol['edit']['input']
         const send = (body: Protocol['edit']['input']) => screenEdit(caller, body, signal, (patched) => backend.edit(caller, patched, signal))
-        if (!engine || !mentionsEmails(text) || !(await mayPost(caller, { re: id }, signal))) return send({ id, text })
-        return send({ id, text: await withEmails(text) })
+        if (!engine || !mentionsEmails(edit.text) || !(await mayPost(caller, { re: edit.id }, signal))) return send(edit)
+        return send({ ...edit, text: await withEmails(edit.text) })
       }
       case 'syncImport':
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)

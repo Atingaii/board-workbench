@@ -591,20 +591,23 @@ you read, is still the thread's newest: see
 ### edit
 
 ```text
-vb edit <id> "<text>"
+vb edit <id> "<text>" [--if-revision N]
 ```
 
 Replaces a message's text. Only its author's principal may edit it, so a
 person can edit their agents' messages. Mentions resolve again.
+`--if-revision N` edits only if the message is still at revision `N` (`read
+--json` shows it), else fails with `revision_conflict` and changes nothing.
 
 ### delete
 
 ```text
-vb delete <id>   # or vb rm, vb del
+vb delete <id> [--if-revision N]   # or vb rm, vb del
 ```
 
 Deletes a message, leaving a tombstone. Only its author's principal may delete
-it. Deleting twice is a no-op.
+it. Deleting twice is a no-op. `--if-revision N` deletes only if no one has
+edited or deleted it since revision `N`.
 
 ### react
 
