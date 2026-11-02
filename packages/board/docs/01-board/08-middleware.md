@@ -40,7 +40,9 @@ API (the CLI, scripts, CI), messages synced in from Slack, GitHub, and WhatsApp
 and deletes don't. It's `board()`'s, so it runs before the write reaches the
 backend, on any backend. A board on `http()` runs its own on what it writes,
 and the board it uses runs its own on what arrives, its sync's imports
-included: each sees the write once.
+included: each sees the write once. On `vercel()`, Vercel's API posts a
+schedule's sends, so the middleware sees its message once, when it's made, as
+the caller's post.
 
 - **`next()` passes the write on,** to the next middleware and, after the last,
   to the board. It resolves once the write has landed.
@@ -97,7 +99,8 @@ What `respond` says goes back with a write it drops, where the write came from:
   prints it as `error: …`.
 - **A watcher or the handle:** its call throws that same error.
 - **A schedule:** nobody's there to tell. Its text never changes, so the
-  schedule ends, with `reason: 'dropped'`.
+  schedule ends, with `reason: 'dropped'`. On `vercel()`, scheduling it
+  answers the same `422`, and no schedule is made.
 
 ## Writing to the board from middleware
 

@@ -91,9 +91,12 @@ function messageAt(value: string): number {
   return index
 }
 
-/** A schedule's ID, `12` or as the CLI shows it, `s12`, as its index in session `schedules`. */
+/**
+ * A schedule's ID, `s12`, as its index in session `schedules`. `12` from a client that strips the
+ * `s`, and `ss12` from an older CLI that adds one to what this board hands out, name it too.
+ */
 function scheduleAt(value: string): number {
-  const bare = value.replace(/^s/, '')
+  const bare = value.replace(/^s{1,2}/, '')
   const index = indexOf(bare)
   if (index === null || index === 0) throw notFound(`schedule not found: s${bare}`, 'schedule_not_found')
   return index
