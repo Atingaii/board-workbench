@@ -680,7 +680,7 @@ watchers
 
 sync
   passed   keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced
-  passed   queues a platform event in its sync's inbox once, leases it out, and takes its ack
+  passed   queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked
   passed   hands a sync each message change as a match of its @sync watcher
   passed   keeps noSync on a post and a reply, so sync sends neither
   passed   finds no one for a platform account nobody linked

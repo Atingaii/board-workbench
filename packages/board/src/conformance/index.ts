@@ -1,5 +1,6 @@
-import type { MessageView, RegistrationView } from '../api/routes.ts'
+import type { Me, MessageView, RegistrationView } from '../api/routes.ts'
 import { BoardError } from '../client/client.ts'
+import { compileAccess } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
 
 /**
@@ -72,7 +73,7 @@ type Context = {
   labels: { conformance: string }
   /** The board's position before this run wrote anything. */
   start: string
-  me: { actor: string; principal: string }
+  me: Me
   root?: MessageView
   reply?: MessageView
   posted: string[]
@@ -439,25 +440,34 @@ const CHECKS: Check[] = [
   },
   {
     group: 'sync',
-    name: "queues a platform event in its sync's inbox once, leases it out, and takes its ack",
+    name: "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked",
     run: async (ctx) => {
       const registered = await registerSync(ctx)
       if ('skip' in registered) return registered.skip
       try {
         const run = ctx.labels.conformance
         const author = { id: `${SYNC_KEY}:user:${run}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
-        const event = { kind: 'message' as const, channel: `${SYNC_KEY}:${run}`, thread: `${SYNC_KEY}:${run}:inbox`, subthread: null, message: '1', isRoot: true, text: 'conformance: an inbox event', context: null, author }
-        const pushed = { id: `conformance-inbox-${run}`, event, raw: { conformance: run } }
-        await ctx.board.inboxPush(SYNC_KEY, [pushed])
-        // A platform's retry of the same event lands once.
-        await ctx.board.inboxPush(SYNC_KEY, [pushed])
-        const leased = (await ctx.board.inboxNext(SYNC_KEY, { limit: 50 })).filter((item) => item.thread === event.thread)
-        same(leased.length, 1, "the events leased from the pushed event's platform thread")
-        const item = leased[0]!
-        same(item.event.kind === 'message' ? item.event.text : null, event.text, "the leased event's text")
-        same(JSON.stringify(item.raw), JSON.stringify(pushed.raw), "the leased event's raw payload")
-        await ctx.board.inboxAck(SYNC_KEY, item.id, { lease: item.lease })
-        check(!(await ctx.board.inboxNext(SYNC_KEY, { limit: 50 })).some((next) => next.id === item.id), 'an acked event should not be leased again')
+        const thread = `${SYNC_KEY}:${run}:inbox`
+        const eventOf = (message: string) => ({
+          id: `conformance-inbox-${run}-${message}`,
+          event: { kind: 'message' as const, channel: `${SYNC_KEY}:${run}`, thread, subthread: null, message, isRoot: message === '1', text: `conformance: inbox event ${message}`, context: null, author },
+          raw: { conformance: run, message },
+        })
+        const pushed = [eventOf('1'), eventOf('2')]
+        await ctx.board.inboxPush(SYNC_KEY, pushed)
+        // A platform's retry of an event lands once.
+        await ctx.board.inboxPush(SYNC_KEY, [pushed[0]!])
+        const lease = async () => (await ctx.board.inboxNext(SYNC_KEY, { limit: 50 })).filter((item) => item.thread === thread)
+        // A platform thread's events come one at a time, in order: each only once the one before is acked.
+        for (const { event, raw } of pushed) {
+          const leased = await lease()
+          same(leased.length, 1, `the events leased from the platform thread, for message ${event.message}`)
+          const item = leased[0]!
+          same(item.event.kind === 'message' ? item.event.message : null, event.message, 'the platform message leased next')
+          same(JSON.stringify(item.raw), JSON.stringify(raw), "the leased event's raw payload")
+          await ctx.board.inboxAck(SYNC_KEY, item.id, { lease: item.lease })
+        }
+        same((await lease()).length, 0, 'the events leased once both are acked')
       } finally {
         await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
       }
@@ -467,6 +477,10 @@ const CHECKS: Check[] = [
     group: 'sync',
     name: 'hands a sync each message change as a match of its @sync watcher',
     run: async (ctx) => {
+      // A token that syncs elsewhere but not here gets no match for a post here. One that names no
+      // sync anywhere, as a board that lists no permissions, is checked.
+      const access = compileAccess(ctx.me.can)
+      if (access.anywhere('sync') && !access.can('sync', ctx.channel)) return `this token can't sync in ${ctx.channel}`
       const registered = await registerSync(ctx)
       if ('skip' in registered) return registered.skip
       try {

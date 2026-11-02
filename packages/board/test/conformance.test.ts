@@ -160,6 +160,34 @@ describe('the conformance kit', () => {
     ])
   })
 
+  it("fails a board whose inbox acks nothing, or queues a platform's retry as a new event", async () => {
+    const inboxCheck = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith("queues a platform thread's events"))
+    // An ack that answers ok and changes nothing: the thread's next event never comes.
+    const acking = testBoard({ scheduler: fakeQueue().scheduler })
+    const noAck: Fetch = async (request) =>
+      request.method === 'POST' && /\/inbox\/[^/]+\/[^/]+\/ack$/.test(new URL(request.url).pathname) ? Response.json({ ok: true }) : acking.fetch(request)
+    expect(inboxCheck(await conformance(await clientOf(noAck)))).toMatchObject({ status: 'failed', detail: 'the events leased from the platform thread, for message 2: expected 1, got 0' })
+    // Each push under a new ID, so the platform's retry is queued again.
+    const queueing = testBoard({ scheduler: fakeQueue().scheduler })
+    const renamed: Fetch = async (request) => {
+      if (request.method !== 'POST' || !/\/inbox\/[^/]+$/.test(new URL(request.url).pathname)) return queueing.fetch(request)
+      const body = (await request.json()) as { events: { id: string }[] }
+      const events = body.events.map((event) => ({ ...event, id: `${event.id}-${crypto.randomUUID()}` }))
+      return queueing.fetch(new Request(request, { body: JSON.stringify({ ...body, events }) }))
+    }
+    expect(inboxCheck(await conformance(await clientOf(renamed)))).toMatchObject({ status: 'failed', detail: 'the events leased once both are acked: expected 0, got 1' })
+  })
+
+  it('skips the @sync check for a token that syncs elsewhere, but not where the kit posts', async () => {
+    const can = { conformance: ['read', 'post', 'react', 'label'], 'elsewhere/': ['sync'] } as const
+    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can })] })
+    const report = await conformance(await clientAs(board.fetch, () => deploymentToken('v0', 'prj_v0', 'production')))
+    expect(report.checks.find((check) => check.name === 'hands a sync each message change as a match of its @sync watcher')).toMatchObject({
+      status: 'skipped',
+      detail: "this token can't sync in conformance",
+    })
+  })
+
   it('fails a board that answers only part of the protocol any other way', async () => {
     // Schedules that are missing, not refused, and files the board takes but loses.
     const board = testBoard({ scheduler: fakeQueue().scheduler })

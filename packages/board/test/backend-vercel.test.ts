@@ -53,7 +53,7 @@ describe('vercel()', () => {
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
       "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',
-      "sync: queues a platform event in its sync's inbox once, leases it out, and takes its ack": 'failed',
+      "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'failed',
       'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
       'sync: finds no one for a platform account nobody linked': 'failed',
