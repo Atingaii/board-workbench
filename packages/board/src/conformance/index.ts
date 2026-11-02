@@ -1,5 +1,6 @@
-import type { MessageView, RegistrationView } from '../api/routes.ts'
+import type { Me, MessageView, RegistrationView } from '../api/routes.ts'
 import { BoardError } from '../client/client.ts'
+import { compileAccess } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
 
 /**
@@ -72,7 +73,7 @@ type Context = {
   labels: { conformance: string }
   /** The board's position before this run wrote anything. */
   start: string
-  me: { actor: string; principal: string }
+  me: Me
   root?: MessageView
   reply?: MessageView
   posted: string[]
@@ -89,6 +90,27 @@ const OPTIONAL = new Set<CheckGroup>(['schedules', 'attachments'])
 const needRoot = (ctx: Context) => {
   check(ctx.root && ctx.reply, "posting failed, so there's nothing to read")
   return { root: ctx.root, reply: ctx.reply }
+}
+
+/** The sync key the sync checks register, a platform of their own, so nothing reaches a real one. */
+const SYNC_KEY = 'conformance'
+
+/**
+ * Registers a sync on `SYNC_KEY` for a check, and says where to put the token's registration back
+ * after: or why it can't, since registering replaces the token's watchers.
+ */
+async function registerSync(ctx: Context): Promise<{ where: ReturnType<typeof wokenAt> } | { skip: string }> {
+  const registered = (await ctx.board.watchers()).find((registration) => registration.owner === ctx.me.principal)
+  if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
+    return { skip: 'this token has watchers or a sync registered here, which registering would replace' }
+  const where = wokenAt(registered)
+  try {
+    await ctx.board.register({ url: null, watch: {}, sync: [{ key: SYNC_KEY, platform: SYNC_KEY }] })
+  } catch (error) {
+    if (error instanceof BoardError && error.status === 403) return { skip: "this token can't register a sync here" }
+    throw error
+  }
+  return { where }
 }
 
 async function post(ctx: Context, text: string, extra: { id?: string; attachments?: string[] } = {}) {
@@ -339,6 +361,20 @@ const CHECKS: Check[] = [
     },
   },
   {
+    group: 'schedules',
+    name: 'keeps noSync on a schedule, so its sends stay off every platform',
+    run: async (ctx) => {
+      const { root } = needRoot(ctx)
+      const schedule = await ctx.board.schedule({ re: root.id }, { text: 'conformance: later, on the board only', noSync: true, in: '1d' })
+      try {
+        same(schedule.noSync, true, "the schedule's noSync")
+        same((await ctx.board.schedules({ re: root.id })).find((s) => s.id === schedule.id)?.noSync, true, "the listed schedule's noSync")
+      } finally {
+        await ctx.board.cancelSchedule(schedule.id).catch(() => {})
+      }
+    },
+  },
+  {
     group: 'attachments',
     name: 'takes a file, posts it, and gives it back',
     run: async (ctx) => {
@@ -409,22 +445,14 @@ const CHECKS: Check[] = [
     group: 'sync',
     name: "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced",
     run: async (ctx) => {
-      // A platform of its own, so nothing reaches a real one: `conformance:<run>`.
-      const key = 'conformance'
+      const key = SYNC_KEY
       const thread = `${key}:${ctx.labels.conformance}:1`
       const author = { id: `${key}:user:${ctx.labels.conformance}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
       const origin = { thread, message: '1' }
-      // A sync names its entries when it registers; registering replaces the token's watchers.
-      const registered = (await ctx.board.watchers()).find((registration) => registration.owner === ctx.me.principal)
-      if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
-        return 'this token has watchers or a sync registered here, which registering would replace'
-      const where = wokenAt(registered)
-      try {
-        await ctx.board.register({ url: null, watch: {}, sync: [{ key, platform: key }] })
-      } catch (error) {
-        if (error instanceof BoardError && error.status === 403) return "this token can't register a sync here"
-        throw error
-      }
+      // A sync names its entries when it registers.
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      const { where } = registered
       let imported: { message: string | null }
       try {
         imported = await ctx.board.syncImport({
@@ -473,6 +501,88 @@ const CHECKS: Check[] = [
         await ctx.board.syncImport({ op: 'delete', author, from: key, origin: { thread, message: '3' } }).catch(() => {})
         await ctx.board.register({ ...where, watch: {} }).catch(() => {})
       }
+    },
+  },
+  {
+    group: 'sync',
+    name: "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked",
+    run: async (ctx) => {
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      try {
+        const run = ctx.labels.conformance
+        const author = { id: `${SYNC_KEY}:user:${run}`, handle: 'conformance', name: 'Conformance', avatar: null, isBot: false }
+        const thread = `${SYNC_KEY}:${run}:inbox`
+        const eventOf = (message: string) => ({
+          id: `conformance-inbox-${run}-${message}`,
+          event: { kind: 'message' as const, channel: `${SYNC_KEY}:${run}`, thread, subthread: null, message, isRoot: message === '1', text: `conformance: inbox event ${message}`, context: null, author },
+          raw: { conformance: run, message },
+        })
+        const pushed = [eventOf('1'), eventOf('2')]
+        await ctx.board.inboxPush(SYNC_KEY, pushed)
+        // A platform's retry of an event lands once.
+        await ctx.board.inboxPush(SYNC_KEY, [pushed[0]!])
+        const lease = async () => (await ctx.board.inboxNext(SYNC_KEY, { limit: 50 })).filter((item) => item.thread === thread)
+        // A platform thread's events come one at a time, in order: each only once the one before is acked.
+        for (const { event, raw } of pushed) {
+          const leased = await lease()
+          same(leased.length, 1, `the events leased from the platform thread, for message ${event.message}`)
+          const item = leased[0]!
+          same(item.event.kind === 'message' ? item.event.message : null, event.message, 'the platform message leased next')
+          same(JSON.stringify(item.raw), JSON.stringify(raw), "the leased event's raw payload")
+          await ctx.board.inboxAck(SYNC_KEY, item.id, { lease: item.lease })
+        }
+        same((await lease()).length, 0, 'the events leased once both are acked')
+      } finally {
+        await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'sync',
+    name: 'hands a sync each message change as a match of its @sync watcher',
+    run: async (ctx) => {
+      // A token that syncs elsewhere but not here gets no match for a post here. One that names no
+      // sync anywhere, as a board that lists no permissions, is checked.
+      const access = compileAccess(ctx.me.can)
+      if (access.anywhere('sync') && !access.can('sync', ctx.channel)) return `this token can't sync in ${ctx.channel}`
+      const registered = await registerSync(ctx)
+      if ('skip' in registered) return registered.skip
+      try {
+        const message = await post(ctx, 'conformance: for a sync')
+        const deadline = Date.now() + 10_000
+        let match: Awaited<ReturnType<Board['matches']>>[number] | undefined
+        while (!match && Date.now() < deadline) match = (await ctx.board.matches({ wait: 5 })).find((m) => m.watcher === '@sync' && m.event.message?.id === message.id)
+        check(match, "a pull should hand the sync a match for the post, as its @sync watcher's")
+        same(match.event.type, 'message.posted', "the sync's match")
+        await ctx.board.ack(match.id, { lease: match.lease })
+      } finally {
+        await ctx.board.register({ ...registered.where, watch: {} }).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'sync',
+    name: 'keeps noSync on a post and a reply, so sync sends neither',
+    run: async (ctx) => {
+      const { root, reply } = needRoot(ctx)
+      const thread = await ctx.board.thread(root.id)
+      same(thread.message.noSync, true, "a post's noSync, read back")
+      same(thread.replies.find((m) => m.id === reply.id)?.noSync, true, "a reply's noSync, read back")
+    },
+  },
+  {
+    group: 'sync',
+    name: 'finds no one for a platform account nobody linked',
+    run: async (ctx) => {
+      let found
+      try {
+        found = await ctx.board.syncFind({ account: `${SYNC_KEY}:user:${ctx.labels.conformance}` })
+      } catch (error) {
+        if (error instanceof BoardError && error.status === 403) return "this token can't look up a sync here"
+        throw error
+      }
+      same(found.person, null, 'who an account nobody linked is')
     },
   },
 ]

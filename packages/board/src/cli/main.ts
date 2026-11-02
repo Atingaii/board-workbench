@@ -351,12 +351,11 @@ async function attachments(board: ReturnType<typeof client>): Promise<Attachment
   return uploaded
 }
 
-/** `s12` or `12`. */
+/** A schedule's ID as the board gave it: `s12`, or `sch_…` on Vercel's board. */
 function scheduleId(value: string | undefined): string {
-  const id = value?.replace(/^s(?=\d)/i, '') ?? ''
   if (value === undefined) throw usage('Missing the schedule ID, like s12.', { reason: 'missing_arguments' })
-  if (!/^[^\s/]+$/.test(id)) throw usage(`${value} isn't a schedule ID like s12.`)
-  return id
+  if (!/^[^\s/]+$/.test(value)) throw usage(`${value} isn't a schedule ID like s12.`)
+  return value
 }
 
 /** A time flag: anything `Date` reads, as ISO. */
@@ -957,7 +956,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (args[0] === 'cancel' && args.length === 2) {
         const { schedule, canceled } = await client().cancelSchedule(scheduleId(args[1]))
         if (flags.json) result({ schedule, outcome: canceled ? 'canceled' : 'unchanged' })
-        else out(canceled ? `canceled s${schedule.id}` : `s${schedule.id} is already ${schedule.state}`)
+        else out(canceled ? `canceled ${schedule.id}` : `${schedule.id} is already ${schedule.state}`)
         return 0
       }
       const [target, body] = args

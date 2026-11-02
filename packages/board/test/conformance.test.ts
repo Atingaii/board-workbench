@@ -99,14 +99,15 @@ describe('the conformance kit', () => {
       expect((await v0('POST', '/watchers', registration)).status).toBe(200)
       const before = await registered()
       const report = await conformance(asV0)
-      expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'skipped'])
+      // What registers is skipped; noSync and an account lookup register nothing.
+      expect(watcherStatuses(report)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'passed'])
       expect(await registered()).toEqual(before)
     }
     // One with nothing in it is checked, and keeps where it's woken.
     const empty = { owner: 'vercel:project:prj_v0:production', url: 'https://v0.test/api/board', watch: {}, sync: [] }
     expect((await v0('POST', '/watchers', { url: empty.url, watch: {} })).status).toBe(200)
     const report = await conformance(asV0)
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect(await registered()).toEqual([empty])
   })
 
@@ -116,7 +117,7 @@ describe('the conformance kit', () => {
     const asV0 = await clientAs(older, () => deploymentToken('v0', 'prj_v0', 'production'))
     const watching = { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback', when: 'matches' } }, sync: [] }
     expect((await v0('POST', '/watchers', watching)).status).toBe(200)
-    expect(watcherStatuses(await conformance(asV0))).toEqual(['skipped', 'skipped', 'skipped'])
+    expect(watcherStatuses(await conformance(asV0))).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'passed', 'passed'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([watching])
     // An empty one fails the check, since the board took the path, and keeps where it's woken.
     expect((await v0('POST', '/watchers', { url: watching.url, watch: {} })).status).toBe(200)
@@ -132,11 +133,11 @@ describe('the conformance kit', () => {
     const v0 = caller(byPath, await deploymentToken('v0', 'prj_v0', 'production'))
     expect((await v0('POST', '/watchers', { path: '/api/board', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'production')))
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await v0('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', watch: {} }])
     // A person's token names no project to wake.
     const person = await conformance(await clientOf(wakingByPath(testBoard({ scheduler: fakeQueue().scheduler }).fetch)))
-    expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed'])
+    expect(watcherStatuses(person)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
   })
 
   it("checks a preview's path with its branch, and gives the branch back", async () => {
@@ -144,7 +145,7 @@ describe('the conformance kit', () => {
     const preview = caller(byPath, await deploymentToken('v0', 'prj_v0', 'preview'))
     expect((await preview('POST', '/watchers', { path: '/api/board', branch: 'jb/watchers', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')))
-    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed'])
+    expect(watcherStatuses(report)).toEqual(['passed', 'passed', 'passed', 'passed', 'passed', 'passed', 'passed'])
     expect((await preview('GET', '/watchers')).body.watchers).toMatchObject([{ url: null, path: '/api/board', branch: 'jb/watchers', watch: {} }])
   })
 
@@ -154,8 +155,37 @@ describe('the conformance kit', () => {
     expect(report.ok).toBe(true)
     expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.group, check.status, check.detail])).toEqual([
       ['schedules', 'skipped', 'not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later'],
+      ['schedules', 'skipped', 'not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later'],
       ['attachments', 'skipped', 'not kept here: this board keeps no files: pass `blob` to `a2()`'],
     ])
+  })
+
+  it("fails a board whose inbox acks nothing, or queues a platform's retry as a new event", async () => {
+    const inboxCheck = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith("queues a platform thread's events"))
+    // An ack that answers ok and changes nothing: the thread's next event never comes.
+    const acking = testBoard({ scheduler: fakeQueue().scheduler })
+    const noAck: Fetch = async (request) =>
+      request.method === 'POST' && /\/inbox\/[^/]+\/[^/]+\/ack$/.test(new URL(request.url).pathname) ? Response.json({ ok: true }) : acking.fetch(request)
+    expect(inboxCheck(await conformance(await clientOf(noAck)))).toMatchObject({ status: 'failed', detail: 'the events leased from the platform thread, for message 2: expected 1, got 0' })
+    // Each push under a new ID, so the platform's retry is queued again.
+    const queueing = testBoard({ scheduler: fakeQueue().scheduler })
+    const renamed: Fetch = async (request) => {
+      if (request.method !== 'POST' || !/\/inbox\/[^/]+$/.test(new URL(request.url).pathname)) return queueing.fetch(request)
+      const body = (await request.json()) as { events: { id: string }[] }
+      const events = body.events.map((event) => ({ ...event, id: `${event.id}-${crypto.randomUUID()}` }))
+      return queueing.fetch(new Request(request, { body: JSON.stringify({ ...body, events }) }))
+    }
+    expect(inboxCheck(await conformance(await clientOf(renamed)))).toMatchObject({ status: 'failed', detail: 'the events leased once both are acked: expected 0, got 1' })
+  })
+
+  it('skips the @sync check for a token that syncs elsewhere, but not where the kit posts', async () => {
+    const can = { conformance: ['read', 'post', 'react', 'label'], 'elsewhere/': ['sync'] } as const
+    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can })] })
+    const report = await conformance(await clientAs(board.fetch, () => deploymentToken('v0', 'prj_v0', 'production')))
+    expect(report.checks.find((check) => check.name === 'hands a sync each message change as a match of its @sync watcher')).toMatchObject({
+      status: 'skipped',
+      detail: "this token can't sync in conformance",
+    })
   })
 
   it('fails a board that answers only part of the protocol any other way', async () => {
@@ -166,6 +196,7 @@ describe('the conformance kit', () => {
     expect(report.ok).toBe(false)
     expect(report.checks.filter((check) => check.status === 'failed').map((check) => [check.group, check.name])).toEqual([
       ['schedules', 'schedules a reply, lists it, and cancels it'],
+      ['schedules', 'keeps noSync on a schedule, so its sends stay off every platform'],
     ])
   })
 
