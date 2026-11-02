@@ -2,7 +2,7 @@
 '@vercel/board': minor
 ---
 
-Who gets into a board is now kept in the board's data as well as its code, so people change it while the board runs. Before, letting a CI run or another project in took an `access` rule in the board's route and a deploy, and a caller without an OIDC token couldn't get in at all.
+Who gets into a board is now kept in the board's data as well as its code, so people change it while the board runs. Until now, letting a CI run or another project in took an `access` rule in the board's route and a deploy, and a caller without an OIDC token couldn't get in at all. Rules in `access` work as they did, and come first.
 
 A grant lets in OIDC tokens from an issuer that carry the claims it names: `vb grant create github --claim repository=acme/web --can ci/=read,post`, or `team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })`. `vercel`, `github`, or any https issuer, another team's projects included. Grants come after `access`'s rules and only add; creating, listing, and revoking them takes `manage` in every channel.
 
