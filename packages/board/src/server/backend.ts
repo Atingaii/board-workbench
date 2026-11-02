@@ -149,6 +149,12 @@ export interface Backend extends ProtocolMethods {
    */
   readonly keeps: boolean
   /**
+   * Whether a schedule's sends come back through board(), as a2()'s do, so its middleware screens
+   * each. A backend whose sends post elsewhere, as vercel()'s do from Vercel's API, says false, and
+   * board() screens a schedule's message once, when it's made. True when left out.
+   */
+  readonly sendsSchedulesHere?: boolean
+  /**
    * board() calls it once, when it's created, before any request: what background work needs
    * from the board (its subscriptions, its sync, its policy, a handle through it). It does no I/O.
    */

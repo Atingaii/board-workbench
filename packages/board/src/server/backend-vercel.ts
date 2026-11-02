@@ -1430,6 +1430,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     routes: runner.routes,
     // The board is Vercel's: a board here serves requests only with an `access` of its own.
     keeps: false,
+    // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
+    sendsSchedulesHere: false,
     bind(next: BoardBinding) {
       if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
       const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
