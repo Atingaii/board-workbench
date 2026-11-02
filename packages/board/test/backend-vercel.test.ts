@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
+import { http } from '../src/backend-http/index.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
@@ -12,13 +13,17 @@ const API = 'http://localhost'
 const handleOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_jb') =>
   board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal), files: api.files }) })
 
-/** A caller board() verified, with `can`: what a board with an `access` passes its backend. */
-const verified = (can: Can) =>
+const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', name: 'Ada' } as const
+/** The project's own deployment, as its agent calls the board it runs with that deployment's token. */
+const FACTORY = { id: 'vercel:project:prj_pong:production', kind: 'deployment', handle: 'factory', name: 'factory' } as const
+
+/** A caller board() verified, with `can`: what a board with an `access` passes its backend. Ada by default. */
+const verified = (can: Can, who: { id: string; kind: string; handle: string; name: string } = ADA) =>
   ({
     identity: {
-      principal: { id: 'vercel:user:u_ada', access: compileAccess(can), expiresAt: null },
-      author: { actor: 'vercel:user:u_ada', principal: 'vercel:user:u_ada', profile: null, session: null },
-      actor: { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', name: 'Ada', avatar: null },
+      principal: { id: who.id, access: compileAccess(can), expiresAt: null },
+      author: { actor: who.id, principal: who.id, profile: null, session: null },
+      actor: { id: who.id, kind: who.kind, handle: who.handle, name: who.name, avatar: null },
     },
     origin: { via: null },
   }) as unknown as Caller
@@ -442,7 +447,7 @@ describe('vercel()', () => {
     expect(api.schedules.size).toBe(0)
   })
 
-  it("lets a verified caller edit, delete, schedule, and cancel what the project wrote, where it posts and nowhere else", async () => {
+  it('lets a verified caller that is the project edit, delete, schedule, and cancel where it posts, and nowhere else', async () => {
     const api = fakeMessageboard()
     const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
     const pong = handleOn(api, 'project:prj_pong:production')
@@ -452,30 +457,84 @@ describe('vercel()', () => {
     const inDev = await pong.as('claude').schedule({ re: dev.id }, { text: 'dev later', in: '1h' })
     const inOps = await pong.schedule({ re: ops.id }, { text: 'ops later', in: '1h' })
     const inSecret = await pong.schedule({ re: secret.id }, { text: 'secret later', in: '1h' })
-    const ada = verified({ 'dev/': ['read', 'post'], ops: ['read'] })
+    const factory = verified({ 'dev/': ['read', 'post'], ops: ['read'] }, FACTORY)
     const signal = new AbortController().signal
-    // Anything the project wrote, by any caller here, where Ada posts.
-    await backend.edit(ada, { id: dev.id, text: 'dev, edited' }, signal)
+    // What the project wrote, under any of its profiles, where the caller posts.
+    await backend.edit(factory, { id: dev.id, text: 'dev, edited' }, signal)
     expect((await pong.thread(dev.id)).message.text).toBe('dev, edited')
-    const { schedule } = await backend.schedule(ada, { re: dev.id, text: 'mine', in: '1h' } as never, signal)
-    expect(schedule).toMatchObject({ re: dev.id, by: { profile: 'ada' } })
-    await expect(backend.cancelSchedule(ada, { id: inDev.id }, signal)).resolves.toMatchObject({ canceled: true })
+    const { schedule } = await backend.schedule(factory, { re: dev.id, text: 'mine', in: '1h' } as never, signal)
+    expect(schedule).toMatchObject({ re: dev.id, by: { principal: FACTORY.id, profile: 'factory' } })
+    await expect(backend.cancelSchedule(factory, { id: inDev.id }, signal)).resolves.toMatchObject({ canceled: true })
     const reply = await pong.reply(dev.id, { text: 'a reply' })
-    await backend.delete(ada, { id: reply.id }, signal)
+    await backend.delete(factory, { id: reply.id }, signal)
     expect((await pong.thread(dev.id)).replies[0]).toMatchObject({ id: reply.id, deleted: true })
-    // Where Ada only reads, 403; where Ada can't read, as missing as anything else there.
-    await expect(backend.edit(ada, { id: ops.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.delete(ada, { id: ops.id }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.schedule(ada, { re: ops.id, text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.schedule(ada, { channel: 'ops', text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.cancelSchedule(ada, { id: inOps.id }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.edit(ada, { id: secret.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
-    await expect(backend.cancelSchedule(ada, { id: inSecret.id }, signal)).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
+    // Where it only reads, 403; where it can't read, as missing as anything else there.
+    await expect(backend.edit(factory, { id: ops.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.delete(factory, { id: ops.id }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.schedule(factory, { re: ops.id, text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.schedule(factory, { channel: 'ops', text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.cancelSchedule(factory, { id: inOps.id }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.edit(factory, { id: secret.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 404, code: 'message_not_found' })
+    await expect(backend.cancelSchedule(factory, { id: inSecret.id }, signal)).rejects.toMatchObject({ status: 404, code: 'schedule_not_found' })
     expect((await pong.thread(ops.id)).message.text).toBe('ops')
     expect(api.schedules.get(inOps.id)?.state).toBe('pending')
     // And it lists only the schedules where it reads.
-    expect((await backend.schedules(ada, {}, signal)).schedules.map((s) => s.id)).toEqual([inOps.id, schedule.id])
-    expect((await backend.schedules(ada, { re: secret.id }, signal)).schedules).toEqual([])
+    expect((await backend.schedules(factory, {}, signal)).schedules.map((s) => s.id)).toEqual([inOps.id, schedule.id])
+    expect((await backend.schedules(factory, { re: secret.id }, signal)).schedules).toEqual([])
+  })
+
+  it('refuses any other caller it serves an edit, delete, schedule, or cancel, which would change what the project wrote for others', async () => {
+    const api = fakeMessageboard()
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const dev = await pong.post('dev', { text: 'dev' })
+    const later = await pong.schedule({ re: dev.id }, { text: 'later', in: '1h' })
+    const ada = verified('all')
+    const signal = new AbortController().signal
+    await expect(backend.edit(ada, { id: dev.id, text: 'no' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.delete(ada, { id: dev.id }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.schedule(ada, { re: dev.id, text: 'no', in: '1h' } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.cancelSchedule(ada, { id: later.id }, signal)).rejects.toMatchObject({ status: 403 })
+    expect((await pong.thread(dev.id)).message).toMatchObject({ text: 'dev', deleted: false })
+    expect([...api.schedules.values()].map((s) => [s.id, s.state])).toEqual([[later.id, 'pending']])
+    // It still posts, reacts, and reads them, as the project.
+    await expect(backend.post(ada, { re: dev.id, text: 'a reply' } as never, signal)).resolves.toMatchObject({ message: { by: { profile: 'ada' } } })
+    expect((await backend.schedules(ada, {}, signal)).schedules.map((s) => s.id)).toEqual([later.id])
+  })
+
+  it("runs board()'s middleware on an edit by a caller that is the project, and refuses anyone else's before it", async () => {
+    const api = fakeMessageboard()
+    const screened: string[] = []
+    const callers = { factory: FACTORY, ada: ADA }
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+      url: 'https://pong.example/api/board',
+      authenticate: async (request) => callers[request.headers.get('authorization')?.replace(/^Bearer /, '') as keyof typeof callers] ?? null,
+      access: [() => 'all'],
+      middleware: [
+        async ({ write, next }) => {
+          screened.push(`${write.kind} ${write.text}`)
+          await next({ text: write.text.toUpperCase() })
+        },
+      ],
+    })
+    /** A handle on pong over HTTP, as the caller named `name`. */
+    const as_ = (name: keyof typeof callers) =>
+      board({
+        backend: http('https://pong.example/api/board', {
+          fetch: (input, init) => {
+            const headers = new Headers(init?.headers)
+            headers.set('authorization', `Bearer ${name}`)
+            return pong.fetch(new Request(input, { ...init, headers }))
+          },
+        }),
+      }).as(null)
+    const factory = as_('factory')
+    const { id } = await factory.post('dev', { text: 'hello' })
+    await factory.edit(id, 'edited')
+    await expect(as_('ada').edit(id, 'sneaky')).rejects.toMatchObject({ status: 403 })
+    expect(screened).toEqual(['post hello', 'edit edited'])
+    expect((await factory.thread(id)).message.text).toBe('EDITED')
   })
 
   it('refuses watchers for a caller it serves, which would replace the deployment\'s own', async () => {
