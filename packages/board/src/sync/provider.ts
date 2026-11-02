@@ -58,6 +58,8 @@ export type ProviderOptions = {
   canStartThreads?: boolean
   singleReaction?: boolean
   uploadsFiles?: boolean
+  /** Whether a new thread's root can carry its files in the same message as its text. */
+  startsThreadsWithFiles?: boolean
   /** People's own tokens, to post as them and to link accounts by signing in. */
   users?: UserTokens | null
 }
@@ -75,6 +77,7 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   readonly canStartThreads: boolean
   readonly singleReaction: boolean
   readonly uploadsFiles: boolean
+  readonly startsThreadsWithFiles: boolean
   // A method's parameter is checked both ways, so a SlackProvider is still a SyncProvider.
   private readonly fn: { run(sync: Sync<E>): unknown }
   /** People's tokens, when the adapter has them: messages they write post as them. */
@@ -92,6 +95,7 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
     this.canStartThreads = options.canStartThreads ?? false
     this.singleReaction = options.singleReaction ?? false
     this.uploadsFiles = options.uploadsFiles ?? false
+    this.startsThreadsWithFiles = this.uploadsFiles && (options.startsThreadsWithFiles ?? false)
   }
 
   abstract receive(key: string, request: Request, emit: Receive): Promise<Response>

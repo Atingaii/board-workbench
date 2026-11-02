@@ -3,7 +3,7 @@ import type { Adapter, Message as ChatMessage } from 'chat'
 import { markdownOf } from './chat.ts'
 import { z } from 'zod'
 import { envelope, eventSchema } from './events.ts'
-import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
+import { UnreadableError, type ResolvedTarget, type ProviderPost, type ProviderDelivery, type ProviderFile, type ProviderSender, type SyncContext, type ReceivedEvent, type FetchedLink } from './provider.ts'
 import type { SourceJoin, SourceMessage, SourceRead } from '../api/routes.ts'
 import { stringifyMarkdown } from 'chat'
 import { LINKS_PER_MESSAGE_MAX, type ExternalLink } from '../contract/external.ts'
@@ -32,7 +32,13 @@ export type SlackClient = {
     info(args: { user: string }): Promise<{ user?: SlackUser }>
     lookupByEmail?(args: { email: string }): Promise<{ user?: SlackUser }>
   }
-  files?: { delete(args: { file: string }): Promise<unknown> }
+  files?: {
+    delete(args: { file: string }): Promise<unknown>
+    /** Uploads files and shares them in one message, with `initial_comment` as its text; needs `files:write`. */
+    uploadV2?(args: { channel_id: string; initial_comment: string; file_uploads: { file: Buffer; filename: string }[] }): Promise<{ files?: { files?: { id?: string }[] }[] }>
+    /** Where a file was shared (`shares`), to find the message an upload made; needs `files:read`. */
+    info?(args: { file: string }): Promise<{ file?: { shares?: Partial<Record<'public' | 'private', Record<string, { ts?: string }[]>>> } }>
+  }
   /** Posts an agent's message under its own name; needs `chat:write.customize` for `username` and `icon_url`. */
   chat?: {
     postMessage(args: SlackPost): Promise<{ ts?: string }>
@@ -58,7 +64,11 @@ type SlackPost = {
 /** What the Slack adapter does to a message before posting it, used when board posts one itself. */
 type SlackInternals = Omit<Adapter, 'decodeThreadId'> & {
   decodeThreadId(threadId: string): { channel: string; threadTs: string }
-  formatConverter?: { toSlackPayload?(message: { markdown: string }): { text: string } | { markdown_text: string } }
+  formatConverter?: {
+    toSlackPayload?(message: { markdown: string }): { text: string } | { markdown_text: string }
+    /** Markdown as Slack's older mrkdwn, the only text a file upload's comment takes. */
+    toResponseUrlText?(message: { markdown: string }): string
+  }
   resolveMessageMentions?(message: { markdown: string }, threadId: string): Promise<{ markdown: string }>
 }
 
@@ -293,6 +303,9 @@ export function slack(app: string | SlackOptions, sync: SyncFn<SlackEvent>): Sla
   return new SlackProvider(typeof app === 'string' ? { adapter: app } : app, sync)
 }
 
+/** How many times to look for the message an upload made, about 15 seconds in all. */
+const SHARE_POLLS = 10
+
 type SlackWithTokens = Adapter & { webClient?: SlackClient; withBotToken?<T>(token: string, fn: () => T): T }
 
 /**
@@ -313,7 +326,7 @@ function fromConnector(connector: string) {
 
 export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   private readonly web: () => Promise<SlackClient | undefined>
-  private customize: Promise<boolean> | undefined
+  private scopes: Promise<string[]> | undefined
 
   constructor(given: SlackOptions, sync: SyncFn<SlackEvent>) {
     const connected = typeof given.adapter === 'string' ? fromConnector(given.adapter) : null
@@ -465,6 +478,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       platform: 'slack',
       adapter: options.adapter,
       canStartThreads: true,
+      startsThreadsWithFiles: true,
       // The adapter uploads files given without text as their own message: here, right after the text.
       async uploadFiles(thread, files) {
         const sent = await options.adapter.postMessage(thread, { markdown: '', files })
@@ -710,7 +724,56 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
   override async post(target: string, kind: ResolvedTarget['kind'], body: ProviderPost): Promise<ProviderDelivery> {
     const { as, ...given } = body
     const post = { ...given, markdown: withoutHtml(given.markdown) }
+    if (kind === 'channel' && post.files?.length && post.markdown.trim()) {
+      const sent = await this.postWithFiles(target, post.markdown, post.files)
+      if (sent) return sent
+      // Text alone, as a reply's goes: without `files`, the engine uploads them under it.
+      const { files: _files, ...text } = post
+      return (as ? await this.postNamed(target, as, text.markdown) : null) ?? super.post(target, kind, text)
+    }
     return (as && !post.files?.length ? await this.postNamed(target, as, post.markdown) : null) ?? super.post(target, kind, post)
+  }
+
+  /**
+   * A new thread whose root shows its files under its text, as one message: Slack makes
+   * that message from an upload's `initial_comment`, and names it only on the file, a
+   * moment later. A file upload can't set a username, so it goes out as the app, label and all.
+   * Null, before anything is sent, where the client can't, or the app can't read files
+   * (`files:read`) to find that message.
+   */
+  private async postWithFiles(target: string, markdown: string, files: ProviderFile[]): Promise<ProviderDelivery | null> {
+    const adapter = (await this.ready()) as SlackInternals
+    const web = await this.web()
+    const toMrkdwn = adapter.formatConverter?.toResponseUrlText
+    if (!web?.files?.uploadV2 || !web.files.info || !toMrkdwn || !(await this.hasScope(web, 'files:read'))) return null
+    const threadId = this.toChat(target)
+    const { channel } = adapter.decodeThreadId(threadId)
+    const message = { markdown }
+    const resolved = (await adapter.resolveMessageMentions?.(message, threadId)) ?? message
+    const uploaded = await web.files.uploadV2({
+      channel_id: channel,
+      initial_comment: toMrkdwn.call(adapter.formatConverter, resolved),
+      file_uploads: files.map((file) => ({ file: Buffer.from(file.data), filename: slackFileName(file.filename, file.mimeType) })),
+    })
+    const ids = (uploaded.files?.[0]?.files ?? []).map((file) => file.id).filter((id): id is string => !!id)
+    // From here on the message is in Slack, so no error may read as a refusal, which would post the text again.
+    const found = async () => {
+      for (let attempt = 0; attempt < SHARE_POLLS; attempt++) {
+        const shares = (await web.files!.info!({ file: ids[0]! })).file?.shares
+        const ts = shares?.public?.[channel]?.[0]?.ts ?? shares?.private?.[channel]?.[0]?.ts
+        if (ts) return ts
+        await new Promise((resolve) => setTimeout(resolve, Math.min(250 * 2 ** attempt, 2000)))
+      }
+      throw new Error('never shared')
+    }
+    if (!ids[0]) throw new Error('slack: files.uploadV2 returned no file IDs')
+    let ts: string
+    try {
+      ts = await found()
+    } catch (error) {
+      throw new Error(`slack: couldn't find the message uploading ${ids[0]} made in ${channel} (${slackError(error)})`)
+    }
+    return { thread: this.toNative(`${adapter.name}:${channel}:${ts}`), message: ts, files: ids }
   }
 
   /** An edit keeps the label out only where the message went out under the agent's name. */
@@ -743,16 +806,19 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     return { thread: this.toNative(`${adapter.name}:${channel}:${threadTs || sent.ts}`), message: sent.ts }
   }
 
-  /** Whether the app may set a message's username and icon (`chat:write.customize`), asked once. */
+  /** Whether the app may set a message's username and icon (`chat:write.customize`). */
   private canCustomize(web: SlackClient): Promise<boolean> {
-    this.customize ??= (async () => (await web.auth?.test())?.response_metadata?.scopes?.includes('chat:write.customize') ?? false)().catch(
-      (error: unknown) => {
-        this.customize = undefined
-        console.warn(`[board] slack: couldn't check the app's scopes (${slackError(error)}); posting as the app`)
-        return false
-      },
-    )
-    return this.customize
+    return this.hasScope(web, 'chat:write.customize')
+  }
+
+  /** Whether the app has a scope, from its scopes, asked once. */
+  private async hasScope(web: SlackClient, scope: string): Promise<boolean> {
+    this.scopes ??= (async () => (await web.auth?.test())?.response_metadata?.scopes ?? [])().catch((error: unknown) => {
+      this.scopes = undefined
+      console.warn(`[board] slack: couldn't check the app's scopes (${slackError(error)}); posting as the app`)
+      return []
+    })
+    return (await this.scopes).includes(scope)
   }
 
   /** Whether a message Slack has went out under `name`. */

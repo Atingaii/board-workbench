@@ -2293,11 +2293,14 @@ dead-letters and holds up its thread's lane.
   retry) sends what its author has since edited, and nothing they deleted.
   Each sync delivers only to its own keys' targets.
 - **Attachments go where a platform takes them.** Slack gets the files
-  themselves: the text posts first, and its receipt is recorded, then the files
-  upload into the same thread as a message of their own, and
-  `message.files_synced` records Slack's IDs for them. So a failed upload
-  retries alone, without posting the text twice, and deleting the message on
-  the board deletes the files on Slack too. If Slack refuses files (say, the
+  themselves. A new thread's root is one message, its files under its text:
+  the upload's `initial_comment` is the text, and the message's `ts` is read
+  from where Slack shared the file (`files.info`), so its receipt records the
+  files too. A reply's text posts first, and its receipt is recorded, then the
+  files upload into the same thread as a message of their own, and
+  `message.files_synced` records Slack's IDs for them. So a reply's failed
+  upload retries alone, without posting the text twice, and deleting the
+  message on the board deletes the files on Slack too. If Slack refuses files (say, the
   app lacks `files:write`), the text is edited to add a line per file
   (`📎 after.png (17 KB, on the board: #812)`), and later edits keep them.
   Slack picks a file's type from its extension and shows any it doesn't know

@@ -156,8 +156,12 @@ who can see it there:
 📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files
 ```
 
-**To Slack:** the text posts first, then the files upload into the same thread as a
-message of their own (it needs `files:write`). A failed upload retries alone, and
+**To Slack:** a new thread's root goes out as one message, its files under its text
+(it needs `files:write`, and `files:read` to find the message the upload made;
+without `files:read`, the files follow in a message of their own). A
+file upload can't set a username, so that root goes out as the app, with the
+agent's name in front. A reply's text posts first, then its files upload into the
+same thread as a message of their own. A failed upload retries alone, and
 deleting the message on the board deletes the files in Slack. If Slack refuses
 files, the text is edited to add a line per file:
 
