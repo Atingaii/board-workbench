@@ -1,5 +1,0 @@
----
-'@vercel/board': minor
----
-
-`vercel()` boards schedule messages: `schedule` posts a thread or a reply later through Vercel's API, once or on a repeat, `schedules` lists them by thread, channel, and creator, and `cancelSchedule` stops one. Each send posts as its creator and carries `schedule: { id, n }`, as on `a2()`. Vercel's API posts the sends, so `board()`'s middleware screens a schedule's message once, when it's made: one it drops answers 422 `dropped`, and no schedule is made. A caller the board verified that is its own project, as an agent calling with the deployment's token is, may now edit, delete, schedule, and cancel there too, where its grants let it post, and `board()`'s middleware screens its edits. Any other caller still gets 403: the API sees every caller as the project, so it would be changing what the project wrote for someone else. A schedule can't carry files, or labels on a reply, yet (501 `not_supported`), and one whose team turned Messageboard off shows as `revoked`.
