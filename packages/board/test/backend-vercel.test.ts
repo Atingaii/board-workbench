@@ -5,6 +5,7 @@ import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
+import type { Middleware } from '../src/server/middleware.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 
 const API = 'http://localhost'
@@ -16,6 +17,33 @@ const handleOn = (api: ReturnType<typeof fakeMessageboard>, principal = 'user:u_
 const ADA = { id: 'vercel:user:u_ada', kind: 'person', handle: 'ada', name: 'Ada' } as const
 /** The project's own deployment, as its agent calls the board it runs with that deployment's token. */
 const FACTORY = { id: 'vercel:project:prj_pong:production', kind: 'deployment', handle: 'factory', name: 'factory' } as const
+
+/**
+ * A vercel() board that serves its callers over HTTP, as the factory's does, with `middleware`:
+ * `factory` is the project itself (its deployment's token), `ada` anyone else. `via` is a handle on
+ * it as one of them.
+ */
+function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middleware[]) {
+  const callers = { factory: FACTORY, ada: ADA }
+  const pong = board({
+    backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+    url: 'https://pong.example/api/board',
+    authenticate: async (request) => callers[request.headers.get('authorization')?.replace(/^Bearer /, '') as keyof typeof callers] ?? null,
+    access: [() => 'all'],
+    middleware,
+  })
+  const via = (name: keyof typeof callers) =>
+    board({
+      backend: http('https://pong.example/api/board', {
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers)
+          headers.set('authorization', `Bearer ${name}`)
+          return pong.fetch(new Request(input, { ...init, headers }))
+        },
+      }),
+    }).as(null)
+  return { pong, via }
+}
 
 /** A caller board() verified, with `can`: what a board with an `access` passes its backend. Ada by default. */
 const verified = (can: Can, who: { id: string; kind: string; handle: string; name: string } = ADA) =>
@@ -505,36 +533,39 @@ describe('vercel()', () => {
   it("runs board()'s middleware on an edit by a caller that is the project, and refuses anyone else's before it", async () => {
     const api = fakeMessageboard()
     const screened: string[] = []
-    const callers = { factory: FACTORY, ada: ADA }
-    const pong = board({
-      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
-      url: 'https://pong.example/api/board',
-      authenticate: async (request) => callers[request.headers.get('authorization')?.replace(/^Bearer /, '') as keyof typeof callers] ?? null,
-      access: [() => 'all'],
-      middleware: [
-        async ({ write, next }) => {
-          screened.push(`${write.kind} ${write.text}`)
-          await next({ text: write.text.toUpperCase() })
-        },
-      ],
-    })
-    /** A handle on pong over HTTP, as the caller named `name`. */
-    const as_ = (name: keyof typeof callers) =>
-      board({
-        backend: http('https://pong.example/api/board', {
-          fetch: (input, init) => {
-            const headers = new Headers(init?.headers)
-            headers.set('authorization', `Bearer ${name}`)
-            return pong.fetch(new Request(input, { ...init, headers }))
-          },
-        }),
-      }).as(null)
-    const factory = as_('factory')
+    const { via } = gateway(api, [
+      async ({ write, next }) => {
+        screened.push(`${write.kind} ${write.text}`)
+        await next({ text: write.text.toUpperCase() })
+      },
+    ])
+    const factory = via('factory')
     const { id } = await factory.post('dev', { text: 'hello' })
     await factory.edit(id, 'edited')
-    await expect(as_('ada').edit(id, 'sneaky')).rejects.toMatchObject({ status: 403 })
+    await expect(via('ada').edit(id, 'sneaky')).rejects.toMatchObject({ status: 403 })
     expect(screened).toEqual(['post hello', 'edit edited'])
     expect((await factory.thread(id)).message.text).toBe('EDITED')
+  })
+
+  it("screens a schedule's message through board()'s middleware when it's made, since Vercel's API posts its sends", async () => {
+    const api = fakeMessageboard()
+    const screened: string[] = []
+    const { pong, via } = gateway(api, [
+      async ({ write, respond, next }) => {
+        screened.push(`${write.kind} ${write.channel} ${write.text}`)
+        // As the factory's memory judge does: a note it rejects never lands.
+        if (write.channel.startsWith('memory/')) return respond('Memory note not saved: rejected')
+        await next({ text: write.text.toUpperCase() })
+      },
+    ])
+    const root = await pong.post('dev', { text: 'root' })
+    const own = await pong.schedule({ re: root.id }, { text: 'check in', in: '1h' })
+    const agent = await via('factory').schedule({ re: root.id }, { text: 'check later', in: '2h' })
+    expect([own.id, agent.id].map((id) => api.schedules.get(id)?.text)).toEqual(['CHECK IN', 'CHECK LATER'])
+    await expect(via('factory').schedule('memory/notes', { text: 'remember this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
+    await expect(pong.schedule('memory/notes', { text: 'and this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
+    expect(api.schedules.size).toBe(2)
+    expect(screened).toEqual(['post dev root', 'post dev check in', 'post dev check later', 'post memory/notes remember this', 'post memory/notes and this'])
   })
 
   it('refuses watchers for a caller it serves, which would replace the deployment\'s own', async () => {
