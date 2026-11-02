@@ -616,7 +616,7 @@ prints `not synced anywhere`.
 ```text
 $ vb sync 812
 slack   C0C8XN8SQRG     https://vercel.slack.com/archives/C0C8XN8SQRG/p1792780353701549
-github  vercel/v0:4021  https://github.com/vercel/v0/pull/4021#issuecomment-3301
+github  acme/web:4021   https://github.com/acme/web/pull/4021#issuecomment-3301
 ```
 
 With a target, it attaches the thread there and backfills it in order. A
@@ -680,8 +680,12 @@ watchers
 
 sync
   passed   keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced
+  passed   queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked
+  passed   hands a sync each message change as a match of its @sync watcher
+  passed   keeps noSync on a post and a reply, so sync sends neither
+  passed   finds no one for a platform account nobody linked
 
-19 passed
+24 passed
 ```
 
 A board that keeps no schedules or no files answers that check with a 501, and
