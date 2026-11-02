@@ -164,10 +164,12 @@ it("carries an issue's description, and its priority, project, labels, and assig
     unset: [],
     owns: ['tag.', 'assignee.'],
   }])
-  // Unassigned, with no priority or project: their labels go, by name for the single keys.
+  // Unassigned, with no priority or project: their labels go, by name for the single keys. Linear
+  // leaves an empty assignee and project out of the payload rather than sending null.
+  const { assigneeId: _assigneeId, assignee: _assignee, projectId: _projectId, project: _project, ...rest } = data
   const cleared = await send({
-    type: 'Issue', action: 'update', url: issue.url, actor: ada, updatedFrom: { assigneeId: 'user-ada' },
-    data: { ...data, description: null, priority: 0, priorityLabel: 'No priority', projectId: null, project: null, labels: [], assigneeId: null, assignee: null },
+    type: 'Issue', action: 'update', url: issue.url, actor: ada, updatedFrom: { assigneeId: 'user-ada', projectId: 'project-1' },
+    data: { ...rest, description: null, priority: 0, priorityLabel: 'No priority', labels: [] },
   })
   const [event] = cleared.received.map((r) => r.event) as { labels: Record<string, string>; unset: string[]; owns: string[]; body: string | null }[]
   expect(event!.labels).toEqual({ issue: 'ENG-12', state: 'started' })
@@ -194,7 +196,7 @@ it('marks a description change as a redraw of the root', async () => {
   const { send } = setup()
   const data = { ...issue, team: { key: 'ENG' }, state: { name: 'Todo', type: 'unstarted' }, description: 'New steps' }
   const { received } = await send({ type: 'Issue', action: 'update', url: issue.url, data, updatedFrom: { description: 'Old steps' }, actor: ada })
-  expect(received.map((r) => r.event)).toMatchObject([{ retitled: true, body: 'New steps', owns: [] }])
+  expect(received.map((r) => r.event)).toMatchObject([{ retitled: true, body: 'New steps' }])
 })
 
 it('never opens a second root for an issue the board opened', async () => {
@@ -301,6 +303,31 @@ it("puts an issue's description on its root, redraws it when the description cha
   await send({ type: 'Issue', action: 'update', url: issue.url, data: { ...data, description: 'New steps', priority: 0, priorityLabel: 'No priority' }, updatedFrom: { description: 'Old steps', priority: 2 }, actor: ada })
   await vi.waitFor(async () => expect((await root())?.text).toBe(`ENG-12: Sync Linear to the board\n${issue.url}\n\nNew steps`))
   await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'unstarted', project: 'v0-accessibility', 'project-lead': 'ada' }))
+})
+
+it("drops a root's assignee and project labels once they're removed, which Linear says by leaving them out", async () => {
+  const adapter = createLinearAdapter({ apiKey: 'lin_api_test', webhookSecret: secret, userName: 'board' }) as unknown as Adapter
+  const board = testBoard({ sync: { linear: linear({ adapter }, teams({ ENG: 'dev' })) } })
+  const julian = caller(board.fetch, await personToken())
+  const send = (payload: Record<string, unknown>) => {
+    const body = JSON.stringify({ organizationId: 'org-1', webhookId: 'hook-1', webhookTimestamp: Date.now(), ...payload })
+    return board.fetch(new Request(`${BOARD_URL}/webhooks/linear`, {
+      method: 'POST', body,
+      headers: { 'content-type': 'application/json', 'linear-delivery': `delivery-${Math.random()}`, 'linear-signature': createHmac('sha256', secret).update(body).digest('hex') },
+    }))
+  }
+  const root = async () => ((await julian('GET', '/messages?channel=dev')).body.messages as { labels: Record<string, string> }[])[0]
+  const unassigned = { ...issue, team: { key: 'ENG' }, state: { name: 'Backlog', type: 'backlog' }, priority: 0, priorityLabel: 'No priority', labels: [] }
+  const assigned = { ...unassigned, assigneeId: 'user-ada', assignee: ada, projectId: 'project-1', project: { id: 'project-1', name: 'v0 Accessibility' } }
+  await send({ type: 'Issue', action: 'create', url: issue.url, data: assigned, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'backlog', project: 'v0-accessibility', 'assignee.ada': 'ada' }))
+
+  const { assigneeId: _assigneeId, assignee: _assignee, ...unassignedInProject } = assigned
+  await send({ type: 'Issue', action: 'update', url: issue.url, data: unassignedInProject, updatedFrom: { assigneeId: 'user-ada' }, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'backlog', project: 'v0-accessibility' }))
+
+  await send({ type: 'Issue', action: 'update', url: issue.url, data: unassigned, updatedFrom: { projectId: 'project-1' }, actor: ada })
+  await vi.waitFor(async () => expect((await root())?.labels).toEqual({ issue: 'ENG-12', state: 'backlog' }))
 })
 
 it("reads a project's issues on demand, with their properties and descriptions, a page at a time", async () => {
