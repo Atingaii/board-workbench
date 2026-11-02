@@ -63,7 +63,7 @@ Then the rest, a group each in the report:
 | Group | Check |
 | --- | --- |
 | `schedules` | schedules a reply a day out, lists it, and cancels it; and keeps a schedule's `noSync`, so its sends stay off every platform |
-| `grants` | grants a project that doesn't exist, lists it, takes the same issuer and claims again as one grant, revokes it twice, and changes a grant's `can` by setting it again. Skipped when the token can't change the board's grants |
+| `grants` | grants a project that doesn't exist, lists it, takes the same issuer and claims again as one grant, revokes it twice, and changes a grant's `can` by creating it again. Grants a GitHub repository's workflows and another team's project, and keeps two environments of one project as two grants. Skipped when the token can't change the board's grants |
 | `tokens` | mints a token for an hour that reads the channel, checks its `can` and its expiry, lists it without its secret, and revokes it twice |
 | `attachments` | uploads a file, posts it, and downloads it |
 | `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers or a sync registered there, since registering replaces them |
@@ -73,7 +73,7 @@ Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
 schedules, grants, or files, or issue no tokens, and say so: one that answers
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
-what the board said. Vercel's boards issue no tokens yet. A board on `a2()` without a `scheduler` answers 501
+what the board said. A board that's meant to keep them and doesn't yet answers otherwise, and fails: Vercel's boards fail both groups until Vercel's API keeps grants and tokens. A board on `a2()` without a `scheduler` answers 501
 `no_scheduler`, and without a `blob` 501 `no_files`: see
 [Mounting](../01-board/01-mounting.md#without-a-scheduler). `vb serve` keeps
 both, so it passes every check.
@@ -91,7 +91,7 @@ attachments
   skipped  takes a file, posts it, and gives it back
            not kept here: this board keeps no files: pass `blob` to `a2()`
 …
-24 passed, 3 skipped
+26 passed, 3 skipped
 ```
 
 ## The report

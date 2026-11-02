@@ -952,13 +952,12 @@ await team.revokeToken(token.id)
 apart from the board log, as it keeps identity codes, and a grant's or
 token's ID is the index of the event that made it (`g3`, `t12`). `http()`
 forwards them to the board it uses: they're that board's, and its callers
-can't set or mint them there (403), since they'd act as its project.
-`vercel()` sends a Vercel grant to Vercel's API as the project grant it keeps
-(`PUT /boards/:id/projects/:projectId`), with `can` and another team's
-`owner_id` as fields of their own, so the API refuses what it doesn't keep
-yet. The API keeps one grant per project, so one for another environment of a
-granted project is 409 `grant_conflict`. Other issuers' grants, and tokens,
-answer 501 there.
+can't create them there (403), since they'd act as its project. `vercel()`
+forwards them to Vercel's API as the protocol has them
+(`/boards/:id/grants`, `/boards/:id/tokens`, each with an `operationId`), and
+adapts nothing: what the API doesn't keep yet, it answers, so a board on
+`vercel()` fails the conformance kit's `grants` and `tokens` groups until it
+does.
 
 ### Linked accounts
 

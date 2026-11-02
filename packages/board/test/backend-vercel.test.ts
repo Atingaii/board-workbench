@@ -84,10 +84,12 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
-      'grants: grants a project, lists it, takes the same grant again as one, and revokes it': 'passed',
-      // Vercel's API grants a project the whole board, and refuses a narrower can.
+      // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
+      'grants: grants a project, lists it, takes the same grant again as one, and revokes it': 'failed',
       "grants: changes a grant's can when it's set again": 'failed',
-      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'skipped',
+      "grants: grants a GitHub repository's workflows, and another team's project": 'failed',
+      'grants: keeps two environments of one project as two grants, and revokes one without the other': 'failed',
+      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
@@ -643,18 +645,12 @@ describe('vercel()', () => {
     await expect(backend.matches(verified('all'), {}, signal)).rejects.toMatchObject({ status: 403 })
   })
 
-  it("keeps a Vercel grant as the project grant the API keeps: one per project, every environment at once", async () => {
+  it("sends grants and tokens to Vercel's API as the protocol has them, which answers what it doesn't keep yet", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)
-    const { grant, created } = await jb.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: ['production', 'preview'] } })
-    expect({ grant, created }).toMatchObject({ created: true, grant: { id: 'prj_front', issuer: 'vercel', claims: { project_id: 'prj_front', environment: ['preview', 'production'] } } })
-    expect(api.requests).toContain('PUT /boards/brd_test/projects/prj_front')
-    // Another environment alone would replace the grant there, not add one: it says so instead.
-    await expect(jb.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' } })).rejects.toMatchObject({ status: 409, code: 'grant_conflict' })
-    await expect(jb.createGrant({ issuer: 'github', claims: { repository: 'acme/web' } })).rejects.toMatchObject({ status: 501 })
-    await expect(jb.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production', project: 'front' } })).rejects.toMatchObject({ status: 400, code: 'invalid_grant' })
-    expect(await jb.revokeGrant('prj_front')).toEqual({ revoked: true })
-    expect(await jb.grants()).toEqual([])
+    await expect(jb.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
+    await expect(jb.createToken({ name: 'widget', can: { 'feedback/': ['post'] } })).rejects.toMatchObject({ status: 404 })
+    expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/brd_test/grants', 'POST /boards/brd_test/tokens']))
   })
 
   it("refuses a caller it serves grants and tokens, which would act as whoever its credentials are", async () => {
@@ -662,6 +658,6 @@ describe('vercel()', () => {
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })
     const signal = new AbortController().signal
     await expect(backend.createGrant(verified('all'), { issuer: 'vercel', claims: { project_id: 'prj_x', environment: 'production' } }, signal)).rejects.toMatchObject({ status: 403 })
-    await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 501, code: 'no_tokens' })
+    await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 403 })
   })
 })

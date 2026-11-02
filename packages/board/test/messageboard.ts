@@ -91,8 +91,6 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const feeds = new Map<string, Change[]>()
   const actors = new Map<string, ActorView>()
   const requests: string[] = []
-  /** The projects the board grants, by ID. */
-  const projects = new Map<string, { projectId: string; environments: string[]; grantedAt: number; grantedBy: Actor }>()
   const attachments = new Map<string, Attachment>()
   /** The bucket: bytes by attachment ID, as presigned PUTs leave them. */
   const stored = new Map<string, Uint8Array<ArrayBuffer>>()
@@ -481,24 +479,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     const rest = onBoard[2] ?? ''
     let found: RegExpExecArray | null
 
-    // A deployment sees a board without the projects it grants, as Vercel's API shows it.
-    const shownBoard = () => ({ id: boardId, teamId, name: 'General', visibility: 'team', ...(actor.principal.type !== 'project' && projects.size > 0 ? { projects: [...projects.values()] } : {}) })
-    if (method === 'GET' && rest === '') return { board: shownBoard() }
-    // Project grants: one per project, replaced by a PUT, which takes nothing but its environments.
-    if ((found = /^\/projects\/(prj_[A-Za-z0-9]{1,64})(\/revoke)?$/.exec(rest))) {
-      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
-      const projectId = found[1]!
-      if (method === 'PUT' && !found[2]) {
-        const extra = Object.keys(body).filter((key) => key !== 'operationId' && key !== 'environments')
-        if (extra.length > 0 || !Array.isArray(body.environments) || body.environments.length === 0) throw new Refused(400, 'invalid_request')
-        projects.set(projectId, { projectId, environments: [...new Set(body.environments as string[])].sort(), grantedAt: now(), grantedBy: actor })
-        return { board: shownBoard() }
-      }
-      if (method === 'POST' && found[2]) {
-        projects.delete(projectId)
-        return { board: shownBoard() }
-      }
-    }
+    if (method === 'GET' && rest === '') return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')

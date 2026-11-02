@@ -83,8 +83,9 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 
 /**
  * The groups a board may keep none of, saying so with a 501: a board on `a2()` without a scheduler
- * answers `no_scheduler`, and without a blob store `no_files`; one that keeps no grants or issues no
- * tokens, `no_grants` or `no_tokens`.
+ * answers `no_scheduler`, and without a blob store `no_files`; one whose `access` is one function keeps
+ * no grants, `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
+ * and fails.
  */
 const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])
 
@@ -454,6 +455,50 @@ const CHECKS: Check[] = [
         same(show(narrowed.grant.can), show({ [ctx.channel]: ['post'] }), "the grant's can")
       } finally {
         await ctx.board.revokeGrant(grant.id).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'grants',
+    name: "grants a GitHub repository's workflows, and another team's project",
+    run: async (ctx) => {
+      const first = await firstGrant(ctx)
+      if ('skip' in first) return first.skip
+      const made = [first.grant.id]
+      try {
+        const github = await ctx.board.createGrant({ issuer: 'github', claims: { repository: `acme/conformance-${ctx.labels.conformance}` }, can: { [ctx.channel]: ['post'] } })
+        made.push(github.grant.id)
+        same(github.grant.issuer, 'github', "the GitHub grant's issuer")
+        const theirs = await ctx.board.createGrant({
+          issuer: 'vercel',
+          claims: { environment: 'production', owner_id: `team_conformance${ctx.labels.conformance}`, project_id: `prj_conformance${ctx.labels.conformance}x` },
+        })
+        made.push(theirs.grant.id)
+        same(theirs.grant.claims.owner_id, `team_conformance${ctx.labels.conformance}`, "another team's grant's owner_id")
+        const listed = new Set((await ctx.board.grants()).map((grant) => grant.id))
+        check(made.every((id) => listed.has(id)), `grants should list ${made.join(', ')}`)
+      } finally {
+        for (const id of made) await ctx.board.revokeGrant(id).catch(() => {})
+      }
+    },
+  },
+  {
+    group: 'grants',
+    name: "keeps two environments of one project as two grants, and revokes one without the other",
+    run: async (ctx) => {
+      const first = await firstGrant(ctx)
+      if ('skip' in first) return first.skip
+      const made = [first.grant.id]
+      try {
+        const production = await ctx.board.createGrant({ ...grantFor(ctx), claims: { ...grantFor(ctx).claims, environment: 'production' } })
+        made.push(production.grant.id)
+        same(production.created, true, 'another environment: created')
+        check(production.grant.id !== first.grant.id, 'another environment should be another grant')
+        same((await ctx.board.revokeGrant(first.grant.id)).revoked, true, 'revoking the preview grant')
+        const listed = (await ctx.board.grants()).map((grant) => grant.id)
+        check(listed.includes(production.grant.id) && !listed.includes(first.grant.id), `grants should list ${production.grant.id} and not ${first.grant.id}, got ${show(listed)}`)
+      } finally {
+        for (const id of made) await ctx.board.revokeGrant(id).catch(() => {})
       }
     },
   },

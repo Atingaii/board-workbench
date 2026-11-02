@@ -1,11 +1,10 @@
 import type { Method, Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import { compileAccess, type Access, type Permission } from './access.ts'
-import { checkGrant, GRANT_DEFAULT, type GrantSpec } from './auth.ts'
+import type { Access, Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { fileName, mediaType } from './blob.ts'
@@ -90,9 +89,6 @@ type ApiChange = {
   /** With `include=message`, the message as it is now. */
   currentMessage?: ApiMessage
 }
-/** A project the board lets in, from the environments listed: what the API calls a grant. */
-type ApiProjectGrant = { projectId: string; environments: string[]; grantedAt: number; grantedBy: ApiActor }
-type ApiBoard = { id: string; projects?: ApiProjectGrant[] }
 type ApiMe = { teamId: string; actor: ApiActor; view?: ApiActorView; project?: { id: string; environment: string } }
 /** Which messages a watcher sees, in the API's terms: a tail is translated into one. */
 type ApiWatcherFilter = {
@@ -850,22 +846,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (access && !access.anywhere('post') && !access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
   }
 
-  /**
-   * A project grant as the protocol has it: Vercel's issuer, its project and environments, and
-   * what Vercel's API gives a project it lets in. Its ID is the project's, since the API keeps one
-   * per project.
-   */
-  const grantOf = (grant: ApiProjectGrant): GrantView => ({
-    id: grant.projectId,
-    issuer: 'vercel',
-    claims: { environment: grant.environments.length === 1 ? grant.environments[0]! : [...grant.environments].sort(), project_id: grant.projectId },
-    can: compileAccess(GRANT_DEFAULT).summary() as GrantView['can'],
-    by: grant.grantedBy.id,
-    at: iso(grant.grantedAt),
-  })
-  const projectsOf = async (who: Who, signal?: AbortSignal) =>
-    (await api<{ board: ApiBoard }>(who, 'GET', await onBoard(who), signal ? { signal } : {})).board.projects ?? []
-
   const meOf = (identity: Identity): Me => {
     const { principal, author, actor } = identity
     return {
@@ -1029,7 +1009,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     METHODS.map((method) => [
       method,
       async () => {
-        if (method === 'createToken' || method === 'tokens' || method === 'revokeToken') throw new HttpError(501, 'no_tokens', "Vercel's boards don't issue tokens yet")
         throw notSupported(method === 'register' || method === 'watchers' || method === 'matches' || method === 'ack' ? 'watchers' : method)
       },
     ]),
@@ -1324,42 +1303,37 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       return { ok: true }
     },
-    // Who the board trusts is the API's project grants: a person changes them, as on Vercel.
+    // Grants and tokens are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
+    // A caller this board serves gets none of them, since it reaches the API as these credentials.
     async grants(caller, _input, signal) {
       checkCaller('grants', caller)
-      return { grants: (await projectsOf(whoOf(caller), signal)).map(grantOf) }
+      const who = whoOf(caller)
+      return api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
     },
     async createGrant(caller, input, signal) {
       checkCaller('createGrant', caller)
-      if (input.issuer !== 'vercel') throw notSupported(`grants for ${input.issuer}`)
-      const { claims } = checkGrant(input as GrantSpec, [])
-      const extra = Object.keys(claims).filter((name) => !['project_id', 'environment', 'owner_id'].includes(name))
-      if (extra.length > 0) throw new HttpError(400, 'invalid_grant', `Vercel's boards grant a project by project_id and environment: drop ${extra.join(', ')}`)
-      if (typeof claims.project_id !== 'string') throw new HttpError(400, 'invalid_grant', "Vercel's boards grant one project_id at a time")
-      const projectId = claims.project_id
-      const environments = typeof claims.environment === 'string' ? [claims.environment] : claims.environment!
       const who = whoOf(caller)
-      const existing = (await projectsOf(who, signal)).find((grant) => grant.projectId === projectId)
-      // The API keeps one grant per project, so another environment's would be replaced, not added to.
-      if (existing && [...existing.environments].sort().join(',') !== [...environments].sort().join(','))
-        throw new HttpError(409, 'grant_conflict', `Vercel's boards keep one grant per project, and ${projectId}'s is for ${existing.environments.join(', ')}: revoke it, then grant every environment at once`)
-      // What the API doesn't keep yet, it refuses: another team, and a narrower can.
-      const own = (await self(who)).teamId
-      const team = claims.owner_id !== undefined && claims.owner_id !== own ? claims.owner_id : undefined
-      const { board } = await api<{ board: ApiBoard }>(who, 'PUT', await onBoard(who, `/projects/${encodeURIComponent(projectId)}`), {
-        body: { operationId: operationId(), environments, ...(input.can !== undefined ? { can: input.can } : {}), ...(team !== undefined ? { teamId: team } : {}) },
-        ...(signal ? { signal } : {}),
-      })
-      const granted = board.projects?.find((grant) => grant.projectId === projectId)
-      if (!granted) throw new HttpError(502, 'remote_error', `Vercel's API granted ${projectId} but doesn't list it`)
-      return { grant: grantOf(granted), created: existing === undefined }
+      return api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
     },
     async revokeGrant(caller, { id }, signal) {
       checkCaller('revokeGrant', caller)
       const who = whoOf(caller)
-      if (!(await projectsOf(who, signal)).some((grant) => grant.projectId === id)) return { revoked: false }
-      await api(who, 'POST', await onBoard(who, `/projects/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
-      return { revoked: true }
+      return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
+    },
+    async tokens(caller, _input, signal) {
+      checkCaller('tokens', caller)
+      const who = whoOf(caller)
+      return api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+    },
+    async createToken(caller, input, signal) {
+      checkCaller('createToken', caller)
+      const who = whoOf(caller)
+      return api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+    },
+    async revokeToken(caller, { id }, signal) {
+      checkCaller('revokeToken', caller)
+      const who = whoOf(caller)
+      return api<Protocol['revokeToken']['output']>(who, 'POST', await onBoard(who, `/tokens/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
     async schedule(caller, input, signal) {
       if (input.attachments?.length) throw notSupported('files on scheduled messages')
