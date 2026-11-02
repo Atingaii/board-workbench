@@ -5,6 +5,7 @@ import type {
   AckBody,
   ChannelView,
   Discovery,
+  DeleteBody,
   EditBody,
   EventsPage,
   EventsQuery,
@@ -80,7 +81,7 @@ export type Protocol = {
   /** The caller's own post with client ID `id`, as it landed: 404 `post_not_found` when there's none. */
   posted: { input: Id; output: { message: MessageView } }
   edit: { input: Id & Input<typeof EditBody>; output: { ok: true; unknownMentions?: string[] } }
-  delete: { input: Id; output: { ok: true } }
+  delete: { input: Id & Input<typeof DeleteBody>; output: { ok: true } }
   react: { input: Id & Input<typeof ReactBody>; output: { ok: true } }
   label: { input: Id & Input<typeof LabelBody>; output: { ok: true } }
   schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; unknownMentions?: string[] } }

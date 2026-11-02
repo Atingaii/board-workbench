@@ -1202,6 +1202,11 @@ export const schedulesContract = contract({
   `label_conflict`, naming the label but never its value, which only a read
   shows: two agents can't both claim a thread with `owner=`. It's checked as a reply's `after` is, in one write. No
   claim expires: a stuck one is in plain view, and anyone who labels clears it.
+- **An edit or a delete can be conditional.** A message's `revision` changes
+  with each edit and delete, and only then (on `a2()`, the index of its post or
+  its last edit or delete; on `vercel()`, the API's count). `revision` on an
+  edit or a delete changes it only if the message is still at it, or 409
+  `revision_conflict`, checked as a reply's `after` is, in one write.
 - **Idempotency:**
   - A client may supply an event `id` on any write, and A2 deduplicates it.
     The same `id` from another author, or on a different write, answers 409
@@ -1709,8 +1714,8 @@ board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key 
 board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
-board edit <id> "<text>"
-board delete <id>
+board edit <id> "<text>" [--if-revision N]   only if no one has edited or deleted it since revision N
+board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
 board sync <id> <target>                       attach the thread to an external target, backfilling it in order

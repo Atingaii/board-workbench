@@ -448,13 +448,19 @@ export type EditInput = WriteOrigin & {
   text: string
   from?: string | null
   asAuthor?: boolean
+  /** The message's revision as the caller read it: an edit or a delete since refuses this one. */
+  revision?: number | undefined
 }
 
 export async function writeEdit(ctx: WriteContext, input: EditInput): Promise<{ unknownMentions?: string[] }> {
   const message = spent(input.authorized, 'post')
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can edit a message')
-  if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
+  if (message.deleted) {
+    // Read before the delete, it's that the message changed since that the caller needs to know.
+    if (input.revision !== undefined && input.revision !== (message.revision ?? message.id)) throw new HttpError(409, 'revision_conflict', `#${message.id} was deleted since revision ${input.revision}`)
+    throw badRequest('message was deleted', 'message_deleted')
+  }
   return commitEdit(ctx, input, message)
 }
 
@@ -470,7 +476,7 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
     input.from != null,
     input.identity.principal.access.readsAll,
   )
-  const rows = await ctx.session.append(...(seen ? [seen] : []), ...named, {
+  const events: Parameters<BoardSession['append']> = [...(seen ? [seen] : []), ...named, {
     type: 'message.edited',
     payload: {
       id: message.id,
@@ -480,7 +486,8 @@ async function commitEdit(ctx: WriteContext, input: EditInput, message: Message)
       by: input.identity.author,
       from: input.from ?? null,
     },
-  })
+  }]
+  const rows = input.revision === undefined ? await ctx.session.append(...events) : await appendWhile(ctx, revisionIs(ctx, message.id, input.revision), events)
   await untilApplied(ctx, rows)
   // As on a post: which handles matched no one is only for a caller that reads the channel.
   return unknown.length && input.identity.principal.access.readable(message.channel) ? { unknownMentions: unknown } : {}
@@ -501,16 +508,30 @@ export async function writeLinks(
 
 export async function writeDelete(
   ctx: WriteContext,
-  input: { identity: Identity; authorized: Authorized<'post'>; from?: string | null; asAuthor?: boolean },
+  input: { identity: Identity; authorized: Authorized<'post'>; from?: string | null; asAuthor?: boolean; revision?: number | undefined },
 ) {
   const message = spent(input.authorized, 'post')
   if (input.asAuthor !== false && message.by.principal !== input.identity.principal.id)
     throw forbidden('only the author can delete a message')
-  if (message.deleted) return
-  await untilApplied(ctx, await ctx.session.append({
+  // A tombstone changes no more: deleting it again is nothing, unless the caller read it before.
+  if (message.deleted) {
+    if (input.revision !== undefined && input.revision !== (message.revision ?? message.id)) throw new HttpError(409, 'revision_conflict', `#${message.id} was deleted since revision ${input.revision}`)
+    return
+  }
+  const deleted: Parameters<BoardSession['append']> = [{
     type: 'message.deleted',
     payload: { id: message.id, thread: message.thread, by: input.identity.author, from: input.from ?? null },
-  }))
+  }]
+  await untilApplied(ctx, input.revision === undefined ? await ctx.session.append(...deleted) : await appendWhile(ctx, revisionIs(ctx, message.id, input.revision), deleted))
+}
+
+/** An edit's or a delete's `revision`: no edit or delete since, as of the index the read reflects. */
+const revisionIs = (ctx: WriteContext, id: number, revision: number) => async () => {
+  const position = await ctx.reads.tables.position()
+  const message = (await ctx.reads.tables.messagesAt([id], position)).get(id)
+  const now = message ? (message.revision ?? message.id) : null
+  if (now !== revision) throw new HttpError(409, 'revision_conflict', message?.deleted ? `#${id} was deleted since revision ${revision}` : `#${id} was edited since revision ${revision}: it's at ${now}`)
+  return position
 }
 
 export async function writeReaction(

@@ -42,6 +42,9 @@ The whole protocol, on every board:
   later one, even deleted, is 409 `newer_message`, and of three that race after
   the same message, one lands.
 - **Every edit, reaction, and label raises `version`.**
+- **An edit or a delete at a `revision`** lands only while the message is at
+  it, which reactions and labels leave as it is: of three edits racing at one
+  revision, one lands, and an edit from before a delete is a conflict too.
 - **A label matches on the message or its thread's root.**
 - **A label write `if`** lands only while the labels are as it says: of three
   claims racing where no one has one, one lands, and the rest are 409

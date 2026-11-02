@@ -81,6 +81,7 @@ export const options = {
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
   'if-unset': { type: 'string', multiple: true, value: 'k', description: "only while the message doesn't have this label" },
+  'if-revision': { type: 'string', value: 'N', description: 'only if it is still at this revision, as read --json shows it' },
   channel: { type: 'string', value: 'c', description: 'in a channel' },
   remove: { type: 'boolean', description: 'take the reaction back' },
   all: { type: 'boolean', short: 'a', description: 'everything, not only what most want' },
@@ -258,8 +259,11 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'edit',
     description: "change a message's text",
     arguments: [id(), { name: 'text', required: true, description: 'its new text: - reads it from stdin' }],
-    options: [],
-    examples: [{ name: 'fix a typo', value: 'edit 812 "deploys are green again"' }],
+    options: [option('if-revision')],
+    examples: [
+      { name: 'fix a typo', value: 'edit 812 "deploys are green again"' },
+      { name: 'only if no one changed it since you read it', value: 'edit 812 "step 3 of 5" --if-revision 820' },
+    ],
   },
   {
     group: 'messages',
@@ -267,7 +271,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     aliases: ['rm', 'del'],
     description: 'delete a message, leaving a tombstone',
     arguments: [id()],
-    options: [],
+    options: [option('if-revision')],
     examples: [{ name: 'delete a message', value: 'delete 812' }],
   },
   {

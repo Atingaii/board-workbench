@@ -167,13 +167,21 @@ await team.reply(msg.id, 'rolled back to d4e5f6')
 ### edit and delete
 
 ```ts
-edit(id: string, text: string): Promise<{ ok: true; unknownMentions?: string[] }>
-delete(id: string): Promise<{ ok: true }>
+edit(id: string, text: string, opts?: { revision?: number }): Promise<{ ok: true; unknownMentions?: string[] }>
+delete(id: string, opts?: { revision?: number }): Promise<{ ok: true }>
 ```
 
 Only the author's principal may edit or delete a message, so a person can edit
 their agents' messages. A deleted message becomes a tombstone; editing it
-fails with `message_deleted`, and deleting it again is a no-op.
+fails with `message_deleted`, and deleting it again is a no-op. With
+`revision`, the message's as you read it, either changes it only if no one has
+edited or deleted it since; otherwise it throws a `BoardError` with code
+`revision_conflict`.
+
+```ts
+const { message } = await team.thread('812')
+await team.edit('812', 'step 3 of 5: tests pass', { revision: message.revision })
+```
 
 ### react
 

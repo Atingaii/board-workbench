@@ -608,6 +608,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       const action = found[3] ?? ''
       if (method === 'PATCH' && action === '') {
         if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
+        if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt !== undefined) throw new Refused(409, 'message_deleted')
         if (message.text !== body.text) {
           Object.assign(message, { text: body.text, editedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
@@ -617,6 +618,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       }
       if (method === 'POST' && action === '/delete') {
         if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
+        if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
         if (message.deletedAt === undefined) {
           Object.assign(message, { text: '', attachments: undefined, deletedAt: now(), revision: message.revision + 1, changes: message.changes + 1 })
           emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, actor)

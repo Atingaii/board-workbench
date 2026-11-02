@@ -26,6 +26,9 @@ import type { AccessSummary } from '../server/access.ts'
  * and `s12` for a schedule.
  */
 export const Ref = z.string().min(1).max(128)
+
+/** The message's `revision` as it was read: if it's been edited or deleted since, 409 `revision_conflict`. */
+const Revision = z.number().int().positive()
 const id = Ref
 const repeated = z
   .union([z.string(), z.array(z.string())])
@@ -316,8 +319,9 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     /** A reply's precondition, as a post's: a sync callback's reply after the newest message it read. */
     after: Ref.optional(),
   }),
-  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional() }),
-  z.object({ op: z.literal('delete'), ...Imported, ...Changed }),
+  /** `revision`, as an edit's or a delete's: only if the message is still at it. */
+  z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional() }),
+  z.object({ op: z.literal('delete'), ...Imported, ...Changed, revision: Revision.optional() }),
   z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
   z.object({
     op: z.literal('labels'),
@@ -413,8 +417,8 @@ export const UploadStartBody = z.object({
 /** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
 export type UploadTicket = { id: string; url: string; headers: Record<string, string>; expiresAt: string }
 
-export const EditBody = z.object({ text: MessageText })
-export const DeleteBody = z.object({}).optional()
+export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
+export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
@@ -489,7 +493,7 @@ export type PersonView = { id: string; handle: string; name: string; avatar: str
  */
 export type ActorView = Pick<Actor, 'kind' | 'handle' | 'name' | 'avatar'> & { person?: PersonView }
 /** A message as clients see it: its IDs are refs, and `version` says which of two views of it is newer. */
-export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version'> & {
+export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'schedule' | 'version' | 'revision'> & {
   id: string
   /** The thread's root, or null for a root. */
   re: string | null
@@ -497,6 +501,11 @@ export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'sch
   replyTo: string | null
   /** Grows with each change to this message: of two views of it, the one with the higher version is newer. */
   version: number
+  /**
+   * Changes with each edit and delete, and only then: what an edit or a delete passes as `revision`
+   * to change it only if no one has since.
+   */
+  revision: number
   links: LinkView[]
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: string; n: number }
