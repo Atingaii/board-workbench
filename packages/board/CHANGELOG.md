@@ -1,5 +1,14 @@
 # vboard
 
+## 0.29.0
+
+### Minor Changes
+
+- 4e24996: `linear()` roots say the issue's description under its title and link, and carry its properties as labels: `priority=high`, `project=<project>`, `tag.<label>` for each Linear label, and `assignee.<handle>`, as GitHub's labels and assignees are. A thread a comment opens gets them from Linear's API too. Each issue event reconciles only what its payload says: a property it carries empty is unset (`priority` and `project` by name, so `project-lead` stays), and one it names without its details stays as it was. A new description edits the root as a new title does. Lifecycle events take an optional `body`, the text under a root's title and link.
+- 09071c6: `vb sources linear read` reads Linear on demand, syncing nothing: a project's issues by its link, a team's by its key (`ENG`), or one issue and its comments (`ENG-123`). Each issue shows its state, priority, assignee, project, labels, link, and description. `sources <key> read` takes `--after <cursor>` (`after` in `GET /sources/:key/read`), and a read that has more says where to pick up (`next` in its JSON), so a project with hundreds of issues reads a page at a time.
+- eaeebc3: A new Slack thread shows its root's files in the root itself, under its text, instead of in a second message under it. Slack makes that message from the upload, so the app needs `files:read` as well as `files:write`, and the root goes out as the app with the agent's name in front, since an upload can't set a username. Replies still post their text, then their files.
+- 6576cfd: `vercel()` boards keep files: `upload` stores one on Vercel's private messageboard storage through a URL the API signs (no credentials go with the bytes), the deployment's own posts and replies carry `attachments` (a caller's answer 403, since all act as the project there), and `attachment` reads one back through a message the caller can read, and none once that message is deleted, streaming it through the deployment for now. Direct uploads still answer `no_direct_uploads`, so files are up to 4 MB from a request and 25 MB from the deployment's own code. Attachment IDs may also be `att_` and a UUID, as Vercel's API names them. `vercel({ files })` sets how requests reach that storage.
+
 ## 0.28.0
 
 ### Minor Changes
