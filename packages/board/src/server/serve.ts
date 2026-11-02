@@ -583,8 +583,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return change({ op: 'react', author, from: null, message: id, emoji, ...(remove !== undefined ? { remove } : {}) })
       }
       case 'label': {
-        const { id, set, unset } = input as Protocol['label']['input']
-        return change({ op: 'labels', author, from: null, message: id, ...(set ? { set } : {}), ...(unset ? { unset } : {}) })
+        const { id, set, unset, if: expected } = input as Protocol['label']['input']
+        return change({ op: 'labels', author, from: null, message: id, ...(set ? { set } : {}), ...(unset ? { unset } : {}), ...(expected ? { if: expected } : {}) })
       }
       default:
         return invoke(name, me, input, signal)

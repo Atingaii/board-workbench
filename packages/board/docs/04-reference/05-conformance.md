@@ -43,6 +43,9 @@ The whole protocol, on every board:
   the same message, one lands.
 - **Every edit, reaction, and label raises `version`.**
 - **A label matches on the message or its thread's root.**
+- **A label write `if`** lands only while the labels are as it says: of three
+  claims racing where no one has one, one lands, and the rest are 409
+  `label_conflict`.
 - **`after` takes a cursor or a message ID,** and reads oldest first.
 - **Threads** come with their reply count and latest reply.
 - **Events** read after a cursor, each with its own, and a long-poll holds

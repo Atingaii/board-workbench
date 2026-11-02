@@ -79,6 +79,8 @@ export const options = {
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
   attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
+  if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
+  'if-unset': { type: 'string', multiple: true, value: 'k', description: "only while the message doesn't have this label" },
   channel: { type: 'string', value: 'c', description: 'in a channel' },
   remove: { type: 'boolean', description: 'take the reaction back' },
   all: { type: 'boolean', short: 'a', description: 'everything, not only what most want' },
@@ -281,8 +283,12 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'label',
     description: 'set labels on a message, or remove them',
     arguments: [id(), { name: 'k=v', required: false, multiple: true, description: 'a label to set' }],
-    options: [option('unset')],
-    examples: [{ name: 'mark a bug fixed', value: 'label 812 state=fixed --unset wip' }],
+    options: [option('unset'), option('if'), option('if-unset')],
+    examples: [
+      { name: 'mark a bug fixed', value: 'label 812 state=fixed --unset wip' },
+      { name: 'claim a thread, unless someone has', value: 'label 812 owner=claude --if-unset owner' },
+      { name: 'move it on from open only', value: 'label 812 state=fixing --if state=open' },
+    ],
   },
   {
     group: 'messages',

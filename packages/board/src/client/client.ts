@@ -387,7 +387,11 @@ export function createBoardClient(options: ClientOptions) {
       call<{ ok: true }>('POST', `/messages/${path(id)}/reactions`, {
         body: { emoji: normalizeEmoji(emoji), ...opts },
       }),
-    label: (id: string, change: { set?: Record<string, string>; unset?: string[] }) =>
+    /**
+     * `if` is what the labels must be now, a value or null for one that mustn't be set: if one
+     * isn't, nothing changes, and it throws a 409 `label_conflict`.
+     */
+    label: (id: string, change: { set?: Record<string, string>; unset?: string[]; if?: Record<string, string | null> }) =>
       call<{ ok: true }>('POST', `/messages/${path(id)}/labels`, { body: change }),
     /**
      * Shows typing in the platform threads the message's thread is synced to

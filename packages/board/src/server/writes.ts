@@ -3,6 +3,7 @@ import type { BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
 import { actorsReducer } from '../contract/reducers.ts'
 import { foldMessages, type Actor, type ActorsState, type Message } from '../contract/folds.ts'
+import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
 import type { Granted } from './auth.ts'
@@ -534,22 +535,48 @@ export async function writeReaction(
 
 export async function writeLabels(
   ctx: WriteContext,
-  input: { identity: Identity; authorized: Authorized<'label'>; set?: Labels | undefined; unset?: string[] | undefined },
+  input: {
+    identity: Identity
+    authorized: Authorized<'label'>
+    set?: Labels | undefined
+    unset?: string[] | undefined
+    /** What its labels must be now: a value, or null for one that mustn't be set. */
+    if?: Record<string, string | null> | undefined
+  },
 ) {
   const message = spent(input.authorized, 'label')
   if (message.deleted) throw badRequest('message was deleted', 'message_deleted')
   const { state: actors } = await ctx.session.state(actorsReducer)
   const seen = seenFor(input.identity, actors)
-  await untilApplied(ctx, await ctx.session.append(...(seen ? [seen] : []), {
-    type: 'labels.changed',
-    payload: {
-      id: message.id,
-      thread: message.thread,
-      set: input.set ?? {},
-      unset: input.unset ?? [],
-      by: input.identity.author,
+  const events: Parameters<BoardSession['append']> = [
+    ...(seen ? [seen] : []),
+    {
+      type: 'labels.changed',
+      payload: {
+        id: message.id,
+        thread: message.thread,
+        set: input.set ?? {},
+        unset: input.unset ?? [],
+        by: input.identity.author,
+      },
     },
-  }))
+  ]
+  const conditional = input.if !== undefined && Object.keys(input.if).length > 0
+  await untilApplied(ctx, conditional ? await appendWhile(ctx, labelsAre(ctx, message.id, input.if!), events) : await ctx.session.append(...events))
+}
+
+/** A label write's `if`: each label is as it says, as of the index the read reflects. */
+const labelsAre = (ctx: WriteContext, id: number, expected: Record<string, string | null>) => async () => {
+  const position = await ctx.reads.tables.position()
+  const labels = (await ctx.reads.tables.messagesAt([id], position)).get(id)?.labels ?? {}
+  for (const key of Object.keys(expected).sort()) {
+    const now = own(labels, key)
+    if (now === expected[key] || (now === undefined && expected[key] === null)) continue
+    // It names what the caller asked about, never what's stored: reading that is a read's to allow.
+    const wanted = expected[key]
+    throw new HttpError(409, 'label_conflict', wanted === null ? `${key} is set` : now === undefined ? `${key} isn't set` : `${key} isn't ${wanted}`)
+  }
+  return position
 }
 
 /**

@@ -1286,7 +1286,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
       return { ok: true }
     },
-    async label(caller, { id, set, unset }, signal) {
+    async label(caller, { id, set, unset, if: expected }, signal) {
       checkCaller('label', caller)
       const who = whoOf(caller)
       const at = locate(id)
@@ -1294,7 +1294,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const access = accessOf(caller)
       if (access) need(access, 'label', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/labels`), {
-        body: { operationId: operationId(), ...(set ? { set } : {}), ...(unset ? { unset } : {}) },
+        // The API checks `if` against the labels in the same write that changes them.
+        body: { operationId: operationId(), ...(set ? { set } : {}), ...(unset ? { unset } : {}), ...(expected && Object.keys(expected).length ? { if: expected } : {}) },
         signal,
       })
       return { ok: true }
