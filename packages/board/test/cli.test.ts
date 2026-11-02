@@ -255,6 +255,21 @@ describe('cli', () => {
     expect(await vb(['post', 'deploys', 'hello', '--after', root])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --after on a new thread\./) })
   })
 
+  it("labels --if its labels are as it says, and says what they are when they aren't", async () => {
+    const id = (await vb(['post', 'deploys', 'deploy a1b2c3 is rolling out'])).stdout.trim()
+    expect(await vb(['label', id, 'owner=claude', '--if-unset', 'owner'])).toMatchObject({ code: 0, stderr: '' })
+    // Someone claimed it first.
+    const taken = await vb(['label', id, 'owner=codex', '--if-unset', 'owner'])
+    expect(taken).toMatchObject({ code: 1, stdout: '' })
+    expect(taken.stderr).toBe(`error: Can't label #${id}.\n  owner is set\n\n  See its labels now:\n    vb read ${id}\n`)
+    expect(failure(await vb(['label', id, 'state=fixing', '--if', 'state=open', '--json']))).toMatchObject({ reason: 'label_conflict' })
+    expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message.labels).toEqual({ owner: 'claude' })
+    // Its owner lets it go.
+    expect(await vb(['label', id, '--unset', 'owner', '--if', 'owner=claude'])).toMatchObject({ code: 0, stderr: '' })
+    expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message.labels).toEqual({})
+    expect(await vb(['label', id, 'x=1', '--if', 'owner'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --if takes key=value, and owner isn't one\. For a label that mustn't be set, --if-unset key\./) })
+  })
+
   it('edits and deletes --if-revision only while no one has changed the message since', async () => {
     const id = (await vb(['post', 'deploys', 'step 1 of 5'])).stdout.trim()
     const read = async () => JSON.parse((await vb(['read', id, '--json'])).stdout).message as { text: string; deleted: boolean; revision: number }

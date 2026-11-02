@@ -320,11 +320,11 @@ function ifRevision(): { revision?: number } {
   return { revision: Number(given) }
 }
 
-function labelPairs(values: string[] | undefined): Record<string, string> {
+function labelPairs(values: string[] | undefined, wrong = "Labels look like key=value, and {value} isn't one."): Record<string, string> {
   const pairs: Record<string, string> = {}
   for (const value of values ?? []) {
     const at = value.indexOf('=')
-    if (at <= 0) throw usage(`Labels look like key=value, and ${value} isn't one.`)
+    if (at <= 0) throw usage(wrong.replace('{value}', value))
     pairs[value.slice(0, at)] = value.slice(at + 1)
   }
   return pairs
@@ -560,13 +560,17 @@ function failureOf(error: unknown): Failure {
     // A reply's --after: what's newer is in its thread, after the message it named.
     const { args } = current
     const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
+    // A label write's --if: who holds it now is a read away.
+    const labeled = code === 'label_conflict' && (flags.if !== undefined || flags['if-unset'] !== undefined) && args[0] !== undefined
     // An edit's or a delete's --if-revision: the message as it is now has the revision to pass.
     const changed = code === 'revision_conflict' && flags['if-revision'] !== undefined && args[0] !== undefined
     return theirs('conflict', specific('conflict'), `Can't ${doing()}.`, newer
       ? [{ instruction: `Read what came after ${ref(flags.after)}`, argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--after', flags.after!.replace(/^#/, '')] }]
-      : changed
-        ? [{ instruction: 'Read it as it is now', argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--json'] }]
-        : [])
+      : labeled
+        ? [{ instruction: 'See its labels now', argv: [...cli(), 'read', args[0]!.replace(/^#/, '')] }]
+        : changed
+          ? [{ instruction: 'Read it as it is now', argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--json'] }]
+          : [])
   }
   if (status === 413) return theirs('limit', 'payload_too_large', `Can't ${doing()}. It's too large for the board.`)
   if (status === 429) return theirs('rate_limit', 'rate_limited', 'Too many requests to the board. Try again in a minute.')
@@ -1063,7 +1067,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const unset = flags.unset ?? []
       if (Object.keys(set).length === 0 && unset.length === 0)
         throw usage('Missing the labels: k=v to set one, --unset k to remove one.', { reason: 'missing_arguments' })
-      await client().label(id, { set, unset })
+      // What the labels must be now: --if k=v has the value, --if-unset k has none.
+      const expected: Record<string, string | null> = labelPairs(flags.if, "--if takes key=value, and {value} isn't one. For a label that mustn't be set, --if-unset key.")
+      for (const key of flags['if-unset'] ?? []) {
+        if (Object.hasOwn(expected, key)) throw usage(`Can't use --if ${key}=… with --if-unset ${key}.`)
+        expected[key] = null
+      }
+      await client().label(id, { set, unset, ...(Object.keys(expected).length ? { if: expected } : {}) })
       printDone(id, 'labeled')
       return 0
     }

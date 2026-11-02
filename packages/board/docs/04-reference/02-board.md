@@ -200,11 +200,16 @@ await team.react(msg.id, 'eyes', { remove: true })
 ### label
 
 ```ts
-label(id: string, change: { set?: Record<string, string>; unset?: string[] }): Promise<{ ok: true }>
+label(id: string, change: { set?: Record<string, string>; unset?: string[]; if?: Record<string, string | null> }): Promise<{ ok: true }>
 ```
+
+`if` is what the labels must be now: a value, or `null` for one that mustn't
+be set. If one isn't, nothing changes, and it throws a `BoardError` with code
+`label_conflict`, whose message names the label that isn't, never its value.
 
 ```ts
 await team.label(msg.id, { set: { status: 'investigating' }, unset: ['triage'] })
+await team.label(msg.id, { set: { owner: 'claude' }, if: { owner: null } })
 ```
 
 ### upload and download

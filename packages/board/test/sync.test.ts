@@ -1730,6 +1730,25 @@ describe('provider callbacks', () => {
     expect((await read(call, 'support')).map((m) => m.text)).toEqual(['hello', 'first'])
   })
 
+  it("refuses a callback's claim on a label someone holds, as a request's", async () => {
+    const s = fakePlatform('slack')
+    const outcomes: string[] = []
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({
+      C1: delivering(async (sync) => {
+        const imported = await sync.import('support')
+        await sync.board.label(imported.root!, { set: { owner: 'triage' }, if: { owner: null } })
+        await sync.board.label(imported.root!, { set: { owner: 'bot' }, if: { owner: null } }).then(
+          () => outcomes.push('landed'),
+          (error: { code?: string }) => outcomes.push(error.code ?? 'error'),
+        )
+      }),
+    })) } })
+    const call = caller(board.fetch, await personToken())
+    await board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U1' }) }))
+    await vi.waitFor(() => expect(outcomes).toEqual(['label_conflict']))
+    expect((await call('GET', '/messages?channel=support')).body.messages[0].labels).toMatchObject({ owner: 'triage' })
+  })
+
   it("refuses a callback's edit at a revision another edit came after, as a request's", async () => {
     const s = fakePlatform('slack')
     const outcomes: string[] = []

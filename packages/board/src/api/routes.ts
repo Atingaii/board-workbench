@@ -8,6 +8,7 @@ import {
   Emoji,
   LabelKey,
   Labels,
+  LabelValue,
   MESSAGE_TEXT_MAX,
   MessageText,
   platformAvatar,
@@ -322,7 +323,15 @@ export const SyncImportBody = z.discriminatedUnion('op', [
   z.object({ op: z.literal('edit'), ...Imported, ...Changed, text: MessageText, source: ImportSource.optional(), revision: Revision.optional() }),
   z.object({ op: z.literal('delete'), ...Imported, ...Changed, revision: Revision.optional() }),
   z.object({ op: z.literal('react'), ...Imported, ...Changed, emoji: Emoji, remove: z.boolean().optional() }),
-  z.object({ op: z.literal('labels'), ...Imported, ...Changed, set: Labels.optional(), unset: z.array(LabelKey).optional() }),
+  z.object({
+    op: z.literal('labels'),
+    ...Imported,
+    ...Changed,
+    set: Labels.optional(),
+    unset: z.array(LabelKey).optional(),
+    /** As a label write's: what the labels must be now, a value or null for none. */
+    if: z.record(LabelKey, LabelValue.nullable()).optional(),
+  }),
   z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
   /** A platform user the board should know, for a mention of them: `@[ada@vercel.com]` found on Slack. */
   z.object({ op: z.literal('seen'), author: PlatformUser }),
@@ -394,11 +403,15 @@ export const SyncAccountBody = z.object({
 export const SignInQuery = z.object({ sync: SyncKey, code: z.string().min(1).max(64) })
 export const SyncUnlinkBody = z.object({ account: ActorId })
 
-/** A direct upload, before its bytes: what the file will be called, its type, and its exact size. */
+/**
+ * A direct upload, before its bytes: what the file will be called, its type, its exact size, and
+ * the SHA-256 of its bytes, in base64, for a store that signs its URL for them (Vercel's).
+ */
 export const UploadStartBody = z.object({
   name: z.string().max(1024).nullable().optional(),
   type: z.string().max(1024).nullable().optional(),
   size: z.number().int().positive().max(DIRECT_UPLOAD_BYTES_MAX, `direct uploads are at most ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB`),
+  sha256: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, 'sha256 is the base64 SHA-256 of the bytes').optional(),
 })
 
 /** Where to send a direct upload's bytes: `PUT` the file to `url` with `headers` (its `content-type` included), before `expiresAt`, then finish it. */
@@ -409,8 +422,22 @@ export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
+/** At most this many labels in a label write's `if`. */
+export const LABEL_CONDITIONS_MAX = 16
+
 export const LabelBody = z
-  .object({ set: Labels.optional(), unset: z.array(LabelKey).optional() })
+  .object({
+    set: Labels.optional(),
+    unset: z.array(LabelKey).optional(),
+    /**
+     * What the message's labels must be now: a key's value, or null for one that mustn't be set.
+     * If one isn't, nothing changes, and the board answers 409 `label_conflict`.
+     */
+    if: z
+      .record(LabelKey, LabelValue.nullable())
+      .refine((expected) => Object.keys(expected).length <= LABEL_CONDITIONS_MAX, `at most ${LABEL_CONDITIONS_MAX} labels`)
+      .optional(),
+  })
   .refine((body) => body.set !== undefined || body.unset !== undefined, {
     message: 'nothing to change: pass `set` or `unset`',
   })

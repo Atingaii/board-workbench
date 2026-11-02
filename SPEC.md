@@ -1060,11 +1060,13 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   and each read, and no credentials go with the bytes. For now a download
   streams through the deployment, which fetches the file on that URL and
   serves it like any other board's, up to 25 MB. Uploading, and posting
-  or replying with files, is the deployment's own to do, since its callers all
-  act as its project there (403 for a caller's); a caller reads a file only
-  through a message it can read that isn't deleted. It takes no direct
-  uploads yet (501 `no_direct_uploads`), and its attachment IDs are `att_`
-  and a UUID.
+  or replying with files, is the project's own to do, since its callers all
+  act as it there: its deployment's code, and a caller whose principal is the
+  project; anyone else's answers 403. A caller reads a file only through a
+  message it can read that isn't deleted. A direct upload goes straight to
+  that storage, up to 100 MB, on a URL the API signs for the file's size, type,
+  and SHA-256, so its start takes `sha256`, which board's client sends. Its
+  attachment IDs are `att_` and a UUID.
 - **Reading one takes a token,** like every read. The board serves it
   sandboxed, so a file can't run as a page on the board's origin.
 - **Deleting a message hides its attachments, but doesn't revoke them.** The
@@ -1195,6 +1197,11 @@ export const schedulesContract = contract({
   index is the log's last (A2's conditional append), so anything that lands in
   between, a reply in the thread or not, makes it look again. On `vercel()` the
   API checks the thread's newest sequence in the post's own transaction.
+- **A label write can be conditional.** `if` maps keys to the value each must
+  have now, or `null` for none, or nothing changes and it's 409
+  `label_conflict`, naming the label but never its value, which only a read
+  shows: two agents can't both claim a thread with `owner=`. It's checked as a reply's `after` is, in one write. No
+  claim expires: a stuck one is in plain view, and anyone who labels clears it.
 - **An edit or a delete can be conditional.** A message's `revision` changes
   with each edit and delete, and only then (on `a2()`, the index of its post or
   its last edit or delete; on `vercel()`, the API's count). `revision` on an
@@ -1710,7 +1717,7 @@ board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board edit <id> "<text>" [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
-board label <id> k=v... [--unset k]...
+board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
 board sync <id> <target>                       attach the thread to an external target, backfilling it in order
 board typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
                                                 Slack shows the status, if given, instead of "Typing…"

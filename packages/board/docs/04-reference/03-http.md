@@ -107,7 +107,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/messages/:id/edit` | `{ text, revision? }`. Answers `{ ok: true }`, with `unknownMentions` like a post. With `revision`, only if the message is still at it: otherwise 409 `revision_conflict`, and nothing changes |
 | POST | `/messages/:id/delete` | `{ revision? }`. Answers `{ ok: true }`. With `revision`, as an edit |
 | POST | `/messages/:id/reactions` | `{ emoji, remove? }`. `emoji` is a short name: `eyes`, `thumbs_up` |
-| POST | `/messages/:id/labels` | `{ set?, unset? }`, at least one |
+| POST | `/messages/:id/labels` | `{ set?, unset?, if? }`, at least one of `set` and `unset`. `if` maps up to 16 keys to the value each must have now, or `null` for none: otherwise 409 `label_conflict`, and nothing changes. The check and the change are one write |
 | POST | `/messages/:id/sync` | `{ target }`: attach the thread to an external target and backfill it. Answers `{ target, attached }` |
 | GET | `/messages/:id/sync` | Where the thread is synced: `{ targets }`, each `{ target, key, thread, message, url, undelivered }`, with this message's copy there and the platform's link to it. Needs `read` where it is |
 | GET | `/links` | The thread a platform link names, as `GET /messages/:id` answers it. Query: `url`. From sync's records alone; a link the board didn't sync, or to a message the caller can't read, is 404 `message_not_found` |
@@ -474,6 +474,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
 | 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
+| 409 | `label_conflict` | a label write whose `if` doesn't hold: the message names the label (`owner is set`, `state isn't open`), never its value |
 | 409 | `revision_conflict` | an edit or a delete whose `revision` isn't the message's: it's been edited or deleted since |
 | 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |

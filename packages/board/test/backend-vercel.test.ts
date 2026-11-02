@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
+import { createBoardClient } from '../src/client/client.ts'
+import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
@@ -21,12 +23,12 @@ const FACTORY = { id: 'vercel:project:prj_pong:production', kind: 'deployment', 
 /**
  * A vercel() board that serves its callers over HTTP, as the factory's does, with `middleware`:
  * `factory` is the project itself (its deployment's token), `ada` anyone else. `via` is a handle on
- * it as one of them.
+ * it as one of them, and `client` a client as one of them that reaches Vercel's storage itself.
  */
 function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middleware[]) {
   const callers = { factory: FACTORY, ada: ADA }
   const pong = board({
-    backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+    backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
     url: 'https://pong.example/api/board',
     authenticate: async (request) => callers[request.headers.get('authorization')?.replace(/^Bearer /, '') as keyof typeof callers] ?? null,
     access: [() => 'all'],
@@ -42,7 +44,9 @@ function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middlewar
         },
       }),
     }).as(null)
-  return { pong, via }
+  const client = (name: keyof typeof callers) =>
+    createBoardClient({ url: 'https://pong.example/api/board', token: name, fetch: ((input, init) => pong.fetch(new Request(input, init))) as typeof fetch, storeFetch: api.files })
+  return { pong, via, client }
 }
 
 /** A caller board() verified, with `can`: what a board with an `access` passes its backend. Ada by default. */
@@ -64,6 +68,7 @@ describe('vercel()', () => {
       'core: says in its discovery where it is': 'passed',
       'core: posts a message, and reads it back by its ID': 'passed',
       "core: puts a reply in its root's thread": 'passed',
+      'core: labels a message only while its labels are as the write says, one of any that race': 'passed',
       'core: edits and deletes a message only at the revision it was read at, which only edits and deletes change': 'passed',
       "core: replies after a message only while it's the thread's newest, one of any that race": 'passed',
       'core: posts once for a client ID, however many times it is sent': 'passed',
@@ -260,6 +265,45 @@ describe('vercel()', () => {
     await expect(backend.post(ada, { re: root.id, text: '', attachments: [file.id] } as never, signal)).rejects.toMatchObject({ status: 403 })
     await expect(backend.attachment(ada, { id: file.id }, signal)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
     await expect(backend.post(project, { re: root.id, text: '', attachments: [file.id] } as never, signal)).resolves.toMatchObject({ message: { attachments: [{ id: file.id }] } })
+  })
+
+  it('lets a caller that is the project upload files, past a request straight to storage, and post them, and refuses anyone else', async () => {
+    const api = fakeMessageboard()
+    // Any middleware has board() look up a post's files first, as the caller, before they're posted.
+    const screened: string[][] = []
+    const { client } = gateway(api, [
+      async ({ write, next }) => {
+        if (write.kind === 'post') screened.push(write.attachments.map((file) => file.name))
+        await next()
+      },
+    ])
+    const factory = client('factory')
+    const log = await factory.upload({ data: new TextEncoder().encode('log'), name: 'a.log' })
+    // Bigger than a request takes: the client sends it to Vercel's storage on the URL the API signs.
+    const video = new Uint8Array(ATTACHMENT_BYTES_MAX + 1).fill(7)
+    const after = await factory.upload({ data: video, name: 'after.mp4', type: 'video/mp4' })
+    expect(api.requests.filter((r) => r.endsWith('/complete'))).toHaveLength(2)
+    const posted = await factory.post('dev', { text: 'before and after', attachments: [log.id, after.id] })
+    expect(posted.attachments.map((file) => file.id)).toEqual([log.id, after.id])
+    expect(screened).toEqual([['a.log', 'after.mp4']])
+    expect(Buffer.from(await (await factory.download(after.id)).arrayBuffer()).equals(Buffer.from(video))).toBe(true)
+    // Anyone else would be uploading and posting the project's files.
+    const ada = client('ada')
+    await expect(ada.upload({ data: new TextEncoder().encode('log'), name: 'b.log' })).rejects.toMatchObject({ status: 403 })
+    await expect(ada.upload({ data: video, name: 'big.mp4', type: 'video/mp4' })).rejects.toMatchObject({ status: 403 })
+    const unposted = await factory.upload({ data: new TextEncoder().encode('mine'), name: 'c.log' })
+    // Its file isn't one Ada may have: as missing to her as one that isn't there.
+    await expect(ada.post('dev', { text: 'not mine', attachments: [unposted.id] })).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
+  })
+
+  it("refuses a direct upload without its bytes' SHA-256, which Vercel's API signs the upload for, and anyone else finishing the project's", async () => {
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
+    const project = { self: null, origin: { via: { kind: 'client', name: null } } } as Caller
+    const signal = new AbortController().signal
+    const file = { name: 'big.mp4', type: 'video/mp4', size: 5 * 1024 * 1024 }
+    await expect(backend.uploadStart(project, file, signal)).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    const ticket = await backend.uploadStart(project, { ...file, sha256: `${'A'.repeat(43)}=` }, signal)
+    await expect(backend.uploadFinish(verified('all'), { id: ticket.id }, signal)).rejects.toMatchObject({ status: 403 })
   })
 
   it("reads one channel from the API's message list and feed, with cursors another process resumes", async () => {
