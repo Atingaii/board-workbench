@@ -118,7 +118,13 @@ export type PostOptions = {
   attachments?: (Attachment | string)[]
 }
 
-export type ReplyOptions = Omit<PostOptions, 'sync'>
+export type ReplyOptions = Omit<PostOptions, 'sync'> & {
+  /**
+   * Posts only while this is the thread's newest message: the ID of the last one you read. If
+   * another has come after it, nothing is posted, and it throws a 409 `newer_message`.
+   */
+  after?: string
+}
 
 /**
  * When a scheduled message goes out: once `in` a while or `at` a time, or

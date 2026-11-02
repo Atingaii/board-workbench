@@ -8,7 +8,7 @@ import type { Access, Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { fileName, mediaType } from './blob.ts'
-import { forbidden, HttpError, json, notFound } from './errors.ts'
+import { badRequest, forbidden, HttpError, json, notFound } from './errors.ts'
 import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
@@ -1216,9 +1216,21 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         const { thread, message: to, channel } = await readableMessage(who, access, input.re!, signal)
         need(access, 'post', channel.name)
         if (labeled) need(access, 'label', channel.name)
-        made = await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
-          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}) },
+        // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
+        const after = input.after === undefined ? undefined : locate(input.after)
+        if (after !== undefined && after?.threadId !== thread.id) {
+          // A retry of one that landed gets it back, as the API gives it, whatever its `after` says now.
+          const landed = clientId ? await api<{ thread: ApiThread; message: ApiMessage }>(who, 'GET', await onBoard(who, `/posts/${encodeURIComponent(clientId)}`), { signal }).catch(() => null) : null
+          if (landed?.thread.id === thread.id) return { message: await view(who, landed.message, channel.name) }
+          throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
+        }
+        made = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
+          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}) },
           signal,
+        }).catch((error: unknown) => {
+          // The API names messages by their sequence in the thread, which a board's IDs don't show.
+          if (error instanceof HttpError && error.code === 'newer_message') throw new HttpError(409, 'newer_message', `a message came after ${input.after}`)
+          throw error
         })
         // The API labels a new thread as it starts, and a reply after.
         if (input.labels && Object.keys(input.labels).length) {

@@ -92,6 +92,12 @@ function messageAt(value: string): number {
 }
 
 /**
+ * A reply's `after`, as the index of a message. One that isn't one is 0, which names no message:
+ * the post refuses it, after a retry that landed gets its reply back.
+ */
+const afterAt = (value: string | undefined): number | undefined => (value === undefined ? undefined : (indexOf(value) ?? 0))
+
+/**
  * A schedule's ID, `s12`, as its index in session `schedules`. `12` from a client that strips the
  * `s`, and `ss12` from an older CLI that adds one to what this board hands out, name it too.
  */
@@ -432,6 +438,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       noSync: body.noSync,
       id: body.id,
       sync: body.sync,
+      after: afterAt(body.after),
       // A schedule's send, which only this board's own schedules make: a handle that's ambiguous since it was checked stays plain text.
       ...(schedule && !fromRequest(caller) ? { schedule, lenientMentions: true } : {}),
     })
@@ -840,6 +847,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
             from: body.from,
             // Its platform message is the copy of the sync that imported it.
             ...(body.origin && !ownSync(caller) ? { importedBy: principal.id } : {}),
+            after: afterAt(body.after),
             lenientMentions: true,
             attachments,
             links: await linksOf(principal, body.links),

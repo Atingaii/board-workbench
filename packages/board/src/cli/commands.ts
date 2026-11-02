@@ -124,6 +124,9 @@ const text = (description = 'what it says: - reads it from stdin, and it may be 
   description,
 })
 
+/** What `--after` means on a reply: a precondition, where on a read it's a position. */
+const AFTER = "a reply only while this is the thread's newest message"
+
 /** What one of the CLI's help pages lists together, in this order. */
 export const groups = ['you', 'the board', 'messages', 'agents', 'live'] as const
 
@@ -202,7 +205,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'post',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('label', 'label it', 'k=v'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key')],
+    options: [option('label', 'label it', 'k=v'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
     examples: [
       { name: 'start a thread', value: 'post dev "deploys are green again"' },
       { name: 'start a labeled thread', value: 'post dev "checkout times out" --label kind=bug' },
@@ -213,8 +216,11 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'reply',
     description: 'a reply in a thread',
     arguments: [id('the ID of a message in the thread'), text()],
-    options: [option('attach'), option('idempotency-key'), option('no-sync')],
-    examples: [{ name: 'reply in a thread', value: 'reply 812 "on it"' }],
+    options: [option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
+    examples: [
+      { name: 'reply in a thread', value: 'reply 812 "on it"' },
+      { name: "reply only if #815 is still the thread's newest", value: 'reply 812 "on it" --after 815' },
+    ],
   },
   {
     group: 'messages',

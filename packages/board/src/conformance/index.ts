@@ -119,6 +119,12 @@ async function post(ctx: Context, text: string, extra: { id?: string; attachment
   return message
 }
 
+async function reply(ctx: Context, re: string, text: string, extra: { after?: string } = {}) {
+  const message = await ctx.board.reply(re, { text, noSync: true, ...extra })
+  ctx.posted.push(message.id)
+  return message
+}
+
 const CHECKS: Check[] = [
   {
     group: 'core',
@@ -144,6 +150,31 @@ const CHECKS: Check[] = [
       same(reply.re, root.id, "the reply's re")
       const thread = await ctx.board.thread(root.id)
       check(thread.replies.some((m) => m.id === reply.id), `the thread's replies should include ${reply.id}`)
+    },
+  },
+  {
+    group: 'core',
+    name: "replies after a message only while it's the thread's newest, one of any that race",
+    run: async (ctx) => {
+      // A thread of its own, so the other checks' counts stay as they are.
+      const root = await post(ctx, 'conformance: a thread to reply after')
+      const first = await reply(ctx, root.id, 'conformance: after the root', { after: root.id })
+      await rejects(reply(ctx, root.id, 'conformance: late', { after: root.id }), 409, 'newer_message', 'a reply after the root, once another came after it')
+      same((await ctx.board.thread(root.id)).replies.length, 1, 'the replies after a refused one')
+      // One that's since been deleted came after it all the same.
+      const deleted = await reply(ctx, root.id, 'conformance: deleted', { after: first.id })
+      await ctx.board.delete(deleted.id)
+      await rejects(reply(ctx, root.id, 'conformance: after a deleted one', { after: first.id }), 409, 'newer_message', 'a reply after a message a deleted one came after')
+      // Racing after the same message, one lands and the rest are refused.
+      const racing = await Promise.allSettled([1, 2, 3].map((n) => reply(ctx, root.id, `conformance: racing ${n}`, { after: deleted.id })))
+      const landed = racing.filter((result) => result.status === 'fulfilled')
+      same(landed.length, 1, 'the replies that landed of three racing after the same message')
+      for (const result of racing) {
+        if (result.status === 'fulfilled') continue
+        const error = result.reason as unknown
+        check(error instanceof BoardError && error.status === 409 && error.code === 'newer_message', `a reply that lost the race should be 409 newer_message, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+      }
+      same((await ctx.board.thread(root.id)).replies.length, 3, 'the replies after the race, a deleted one included')
     },
   },
   {

@@ -236,6 +236,25 @@ describe('cli', () => {
       await elsewhere.close()
     }
   }, 20_000)
+  it("replies --after a message only while it's the thread's newest, and says how to read what came after", async () => {
+    const root = (await vb(['post', 'deploys', 'deploy a1b2c3 is rolling out'])).stdout.trim()
+    const first = await vb(['reply', root, 'on it', '--after', root])
+    expect(first).toMatchObject({ code: 0, stderr: '' })
+    const newer = first.stdout.trim()
+    // Someone read the thread before that reply landed.
+    const late = await vb(['reply', root, 'me too', '--after', `#${root}`])
+    expect(late).toMatchObject({ code: 1, stdout: '' })
+    expect(late.stderr).toBe(`error: Can't reply to #${root}.\n  #${newer} came after #${root}\n\n  Read what came after #${root}:\n    vb read ${root} --after ${root}\n`)
+    expect(failure(await vb(['post', root, 'me too', '--after', root, '--json']))).toMatchObject({ reason: 'newer_message' })
+    // What it says to run shows what came after, and the refused replies posted nothing.
+    expect((await vb(['read', root, '--after', root])).stdout).toContain('on it')
+    expect(JSON.parse((await vb(['read', root, '--json'])).stdout).replies.map((m: { text: string }) => m.text)).toEqual(['on it'])
+    // After the newest, it lands.
+    expect(await vb(['reply', root, 'rolled back', '--after', newer])).toMatchObject({ code: 0, stderr: '' })
+    // A new thread has nothing to come after.
+    expect(await vb(['post', 'deploys', 'hello', '--after', root])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --after on a new thread\./) })
+  })
+
   it('posts, replies, reacts, labels, and reads a thread', async () => {
     const posted = await vb(['post', 'errors-www', 'deploy failed on a1b2c3', '--label', 'status=open'])
     expect(posted).toMatchObject({ code: 0, stderr: '' })

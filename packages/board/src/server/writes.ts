@@ -178,6 +178,8 @@ export type PostInput = WriteOrigin & {
   schedule?: { id: number; n: number }
   /** The principal of the sync elsewhere that imports it, whose copy its `origin` is. */
   importedBy?: string | undefined
+  /** A reply's precondition: the message in its thread that must still be the newest. */
+  after?: number | undefined
 }
 
 /**
@@ -206,25 +208,36 @@ export async function writePost(ctx: WriteContext, input: PostInput): Promise<Po
       throw badRequest('sync attaches whole threads: use `board sync <id> <target>`')
   } else {
     if (!channel) throw badRequest('a post needs a channel')
+    if (input.after !== undefined) throw badRequest('`after` is for replies', 'invalid_after')
     thread = id!
   }
   spend(input.proofs.post, 'post', { channel })
   if (hasLabels(input.labels)) spend(input.proofs.label, 'label', { channel })
   if (input.sync?.length) spend(input.proofs.sync, 'sync', { channel })
 
-  if (input.id !== undefined) {
-    // A retry of a write that landed (only a caller's own ID can be one): what's on the board stands.
-    const landed = await ctx.reads.byEventId(input.id)
-    if (landed) {
-      // Only the same author's post in the same place is a retry. Text and labels can't tell:
-      // the middleware may have changed them, and edits may have since.
-      if (landed.channel !== channel || landed.re !== re || landed.replyTo !== replyTo) throw duplicateId()
-      const shown = await landedFor(ctx, identity, landed)
-      if (!shown) throw duplicateId()
-      return shownTo(shown, identity.principal.access, sent)
-    }
+  // A retry of a write that landed (only a caller's own ID can be one): what's on the board
+  // stands, whatever its `after` says now.
+  const replayed = await replayOf(ctx, input, { channel: channel!, re, replyTo }, sent)
+  if (replayed) return replayed
+  if (input.after !== undefined) {
+    const named = await ctx.reads.message(input.after)
+    // The same words for a message elsewhere and none: which one it is is a read's to tell.
+    if (named?.thread !== thread) throw badRequest(`after names no message in #${re}'s thread`, 'invalid_after')
   }
   return commitPost(ctx, input, { channel: channel!, re, replyTo, thread, id, sent })
+}
+
+/** The post a caller's own ID already landed, as its retry gets it back: null when there's none. */
+async function replayOf(ctx: WriteContext, input: PostInput, place: { channel: string; re: number | null; replyTo: number | null }, sent: string): Promise<Posted | null> {
+  if (input.id === undefined) return null
+  const landed = await ctx.reads.byEventId(input.id)
+  if (!landed) return null
+  // Only the same author's post in the same place is a retry. Text and labels can't tell:
+  // the middleware may have changed them, and edits may have since.
+  if (landed.channel !== place.channel || landed.re !== place.re || landed.replyTo !== place.replyTo) throw duplicateId()
+  const shown = await landedFor(ctx, input.identity, landed)
+  if (!shown) throw duplicateId()
+  return shownTo(shown, input.identity.principal.access, sent)
 }
 
 /**
@@ -290,7 +303,7 @@ async function commitPost(
       payload: { thread, target, kind, cause, by: identity.author },
     })),
   )
-  const rows = await ctx.session.append(
+  const events: Parameters<BoardSession['append']> = [
     ...(seen ? [seen] : []),
     ...named,
     {
@@ -316,7 +329,16 @@ async function commitPost(
       },
     },
     ...synced,
-  )
+  ]
+  let rows: Awaited<ReturnType<BoardSession['append']>>
+  try {
+    rows = input.after === undefined || re === null ? await ctx.session.append(...events) : await appendWhile(ctx, nothingAfter(ctx, re, input.after), events)
+  } catch (error) {
+    // The same request sent twice at once: what came after `after` may be the other one.
+    const replayed = error instanceof HttpError && error.code === 'newer_message' ? await replayOf(ctx, input, { channel, re, replyTo }, sent) : null
+    if (replayed) return replayed
+    throw error
+  }
   const posted = rows.find((row) => row.type === 'message.posted') as BoardEvent
   await untilApplied(ctx, rows)
   const message = foldMessages({ byId: {}, replies: {} }, posted).byId[posted.index]!
@@ -381,6 +403,37 @@ async function untilApplied(ctx: WriteContext, rows: readonly { index: number }[
 
 /** How long a write waits for the tables before it answers anyway. */
 const LANDED_WAIT_MS = 10_000
+
+/**
+ * Appends `events` only while the board, as `holds` reads it, still allows them: `holds` checks
+ * the tables, throws what refuses the write, and returns the index its reads reflect. The append
+ * holds only while that index is still the log's last, so anything that lands in between,
+ * anywhere on the board, moves it, and it looks again from there.
+ */
+async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, events: Parameters<BoardSession['append']>) {
+  for (let attempt = 1; ; attempt++) {
+    await ctx.reads.ensure()
+    const position = await holds()
+    try {
+      return await appendIfLast(ctx.session, position, events)
+    } catch (error) {
+      if (!headMoved(error)) throw error
+      if (attempt === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
+      // Writers the same write moved on look again apart, so they don't keep meeting.
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * attempt))
+    }
+  }
+}
+
+/** How many times a conditional write looks again, as the board moves on, before it gives up. */
+const CONDITIONAL_TRIES = 10
+
+/** A reply's `after`: nothing came after it in the thread, as of the index the read reflects. */
+const nothingAfter = (ctx: WriteContext, root: number, after: number) => async () => {
+  const { messages: [newer], position } = await ctx.reads.tables.messages({ re: root }, { after, limit: 1 })
+  if (newer) throw new HttpError(409, 'newer_message', `#${newer.id} came after #${after}`)
+  return position
+}
 
 /** The message a by-ID write targets, as the board looked it up, once its proof is spent on the message's channel. */
 function spent<P extends Permission>(authorized: Authorized<P>, permission: P): Message {
@@ -520,3 +573,9 @@ export async function writeAttach(
   }))
   return { attached: true }
 }
+
+/** The batch, only while `index` is still the session's last: A2's conditional append. */
+const appendIfLast = (session: BoardSession, index: number, events: Parameters<BoardSession['append']>) => session.append.ifLastIndex(index, ...events)
+
+/** What A2 throws when the session's last index isn't the one a conditional append named. */
+const headMoved = (error: unknown) => (error as { code?: unknown } | null)?.code === 'LAST_INDEX_MISMATCH'

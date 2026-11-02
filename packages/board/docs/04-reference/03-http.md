@@ -229,9 +229,13 @@ of two views of one message, the one with the higher `version` is newer.
 | `sync` | external targets a new thread starts in or joins, at most 10: `slack:#incidents`, or `{ target, kind }` as the board that syncs it resolved it |
 | `noSync` | `true` keeps the message on the board |
 | `id` | an idempotency key, up to 200 characters. Not a UUIDv8 or a `sync:` ID: those are the board's own and sync's. A `key:` ID only as `key:<your principal>:<32 hex>` |
+| `after` | a reply's precondition: a message in its thread that must still be the newest. One that isn't is 409 `newer_message`, and nothing is posted |
 
 A post needs `channel` and a reply needs `re`, never both. `sync` is for posts
-only, and contradicts `noSync`.
+only, and contradicts `noSync`. `after` is for replies only. The board checks
+it and posts in one write, so of replies that race after the same message, one
+lands. A deleted message counts: it came after. A retry with the same `id`
+gets back the reply that landed, whatever `after` says now.
 
 ### Listing messages
 
@@ -444,6 +448,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | --- | --- | --- |
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |
 | 400 | `invalid_cursor` | an `after` or `before` that isn't a cursor or a message ID on this board |
+| 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
 | 400 | `invalid_scope` | an `x-board-scope` header the board can't parse, or one longer than 4000 characters; the message says what to write |
 | 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` for a caller that reads the channel |
@@ -466,6 +471,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | 404 | `not_synced_here` | a source read on a board that doesn't run that sync entry |
 | 404 | `channel_not_found` | a source read of a channel the platform doesn't have |
 | 409 | `duplicate_id` | an `id` already used for a post in another channel or thread, or by someone else |
+| 409 | `newer_message` | a reply whose `after` isn't the thread's newest message: the message names one that came after it |
 | 409 | `already_synced` | a sync target, an import's origin, or a delivery that's a platform thread or message another board thread or message is synced with |
 | 409 | `not_synced` | an imported reply from a platform thread its board thread isn't synced with |
 | 409 | `sync_key_taken` | a registration with a sync entry whose key the board's own sync has |

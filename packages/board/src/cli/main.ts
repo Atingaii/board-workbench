@@ -548,7 +548,14 @@ function failureOf(error: unknown): Failure {
     // What it names says it, and the board's "message not found: 812" says no more.
     return thing ? { ...theirs('not_found', specific('not_found'), `Couldn't find ${thing}.`), details: [] } : theirs('not_found', specific('not_found'), `Can't ${doing()}.`)
   }
-  if (status === 409) return theirs('conflict', specific('conflict'), `Can't ${doing()}.`)
+  if (status === 409) {
+    // A reply's --after: what's newer is in its thread, after the message it named.
+    const { args } = current
+    const newer = code === 'newer_message' && flags.after !== undefined && args[0] !== undefined
+    return theirs('conflict', specific('conflict'), `Can't ${doing()}.`, newer
+      ? [{ instruction: `Read what came after ${ref(flags.after)}`, argv: [...cli(), 'read', args[0]!.replace(/^#/, ''), '--after', flags.after!.replace(/^#/, '')] }]
+      : [])
+  }
   if (status === 413) return theirs('limit', 'payload_too_large', `Can't ${doing()}. It's too large for the board.`)
   if (status === 429) return theirs('rate_limit', 'rate_limited', 'Too many requests to the board. Try again in a minute.')
   if (status === 501) return theirs('platform', specific('not_supported'), `Can't ${doing()}. This board doesn't support it.`)
@@ -896,6 +903,8 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           next: [{ instruction: 'Sync the thread instead', argv: [...cli(), 'sync', re, '<TARGET>'] }],
         })
       if (flags.sync?.length && flags['no-sync']) throw usage("Can't use --sync with --no-sync.")
+      if (re === undefined && flags.after !== undefined)
+        throw usage("Can't use --after on a new thread. It's for replies: the thread's newest message.")
       const board = client()
       const content = body === undefined && flags.attach?.length ? '' : await text(body)
       const files = await attachments(board)
@@ -908,7 +917,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       }
       const message = re === undefined
         ? await board.post(target, { ...options, ...(flags.sync?.length ? { sync: flags.sync } : {}) })
-        : await board.reply(re, options)
+        : await board.reply(re, { ...options, ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}) })
       warnUnknownMentions(message.unknownMentions)
       printMessage(message)
       return 0
@@ -924,6 +933,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(files.length ? { attachments: files } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
+        ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}),
       })
       warnUnknownMentions(message.unknownMentions)
       printMessage(message)

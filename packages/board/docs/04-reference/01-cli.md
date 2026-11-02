@@ -493,7 +493,7 @@ schedules that reply in that thread. `--all` adds done and canceled ones.
 ### post
 
 ```text
-vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>]
+vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Starts a thread. The channel is created by its first post. Given a message ID
@@ -508,6 +508,7 @@ for new threads only.
 | `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
 | `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--idempotency-key <key>` | the same key never posts twice, so a retried step posts once |
+| `--after <id>` | replies only while that message is still the thread's newest, else fails with `newer_message` and posts nothing; replies only |
 
 `--sync` and `--no-sync` together are a usage error. See
 [Messages](../01-board/04-messages.md) and
@@ -516,12 +517,14 @@ for new threads only.
 ### reply
 
 ```text
-vb reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>]
+vb reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
 root as `re`, and the message you answered as `replyTo`. `--no-sync` keeps the
-reply on the board.
+reply on the board. `--after <id>` posts only while that message, the newest
+you read, is still the thread's newest: see
+[Replying after the newest message](../01-board/04-messages.md#replying-after-the-newest-message).
 
 ### edit
 

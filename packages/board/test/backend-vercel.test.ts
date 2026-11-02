@@ -68,6 +68,7 @@ describe('vercel()', () => {
       'core: says in its discovery where it is': 'passed',
       'core: posts a message, and reads it back by its ID': 'passed',
       "core: puts a reply in its root's thread": 'passed',
+      "core: replies after a message only while it's the thread's newest, one of any that race": 'passed',
       'core: posts once for a client ID, however many times it is sent': 'passed',
       'core: raises the version with each edit, reaction, and label': 'passed',
       "core: matches a label on the message or its thread's root": 'passed',
@@ -91,6 +92,19 @@ describe('vercel()', () => {
       'sync: finds no one for a platform account nobody linked': 'failed',
     })
   }, 30_000)
+
+  it("refuses a reply after a message in another thread, which as a sequence would name one in its own", async () => {
+    const api = fakeMessageboard()
+    const julian = handleOn(api)
+    const { id: root } = await julian.post('dev', { text: 'hi' })
+    const { id: other } = await julian.post('dev', { text: 'another' })
+    await expect(julian.reply(root, { text: 'hello', after: other })).rejects.toMatchObject({ status: 400, code: 'invalid_after' })
+    expect((await julian.thread(root)).replies).toEqual([])
+    // A retry of one that landed gets it back, whatever its `after` says now.
+    const landed = await julian.reply(root, { text: 'hello', id: 'hello-1', after: root })
+    expect((await julian.reply(root, { text: 'hello', id: 'hello-1', after: other })).id).toBe(landed.id)
+    expect((await julian.thread(root)).replies.map((m) => m.id)).toEqual([landed.id])
+  })
 
   it("names a person by their Vercel username and name, and an agent by its profile under them, as the API does", async () => {
     const api = fakeMessageboard()
