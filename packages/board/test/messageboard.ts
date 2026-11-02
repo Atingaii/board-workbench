@@ -397,7 +397,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return made
   }
 
-  /** A schedule's next send, as subscriber-messageboard-schedules posts it: as its creator, marked as the schedule's. */
+  /** A schedule's next send, as the API posts it when it's due: as its creator, marked as the schedule's. */
   function send(id: string) {
     const due = schedules.get(id)
     if (!due || due.state !== 'pending') throw new Error(`schedule ${id} has nothing due`)
