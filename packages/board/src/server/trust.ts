@@ -6,7 +6,7 @@ import { duration } from '../client/client.ts'
 import { ACCESS_SESSION, accessContract, type AccessEvent } from '../contract/contract.ts'
 import { SCOPE_MAX } from '../contract/schemas.ts'
 import { compileAccess, FULL_ACCESS, parseScope, scopeOf, type Can } from './access.ts'
-import { BOARD_TOKEN_PREFIX, checkGrant, grantIssuers, type GrantSpec, type Known, type StoredGrant } from './auth.ts'
+import { BOARD_TOKEN_PREFIX, checkGrant, grantIssuers, tokenHash, type GrantSpec, type Known, type StoredGrant } from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
 import { badRequest, forbidden, notFound, unauthorized } from './errors.ts'
 
@@ -114,11 +114,6 @@ const tokenView = (row: TokenRow): TokenView => ({
 function newSecret(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   return `${BOARD_TOKEN_PREFIX}${btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`
-}
-
-async function sha256(text: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 const needsManage = (identity: Identity, what: string) => {
@@ -247,7 +242,7 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       const secret = newSecret()
       const [row] = await session.append({
         type: 'token.minted',
-        payload: { hash: await sha256(secret), name: body.name, minter, profile, avatar, session: pinnedSession, handle, personName, expiresAt, parent: parent?.id ?? null, by: actor.id },
+        payload: { hash: await tokenHash(secret), name: body.name, minter, profile, avatar, session: pinnedSession, handle, personName, expiresAt, parent: parent?.id ?? null, by: actor.id },
       })
       const minted = row && (await read()).tokens[row.index]
       if (!minted) throw new Error('a token was minted but its log has no record of it')

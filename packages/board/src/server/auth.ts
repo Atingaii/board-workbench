@@ -314,6 +314,15 @@ export type StoredGrant = {
 /** What a board token starts with, so board() knows its own before it tries any other verifier. */
 export const BOARD_TOKEN_PREFIX = 'board_'
 
+/**
+ * A board token's SHA-256, hex: what the board keeps instead of the secret, both when it mints one
+ * and when a request carries one. A token is 32 random bytes, so no salt or key is needed.
+ */
+export async function tokenHash(secret: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)))
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 /** What a grant left without `can` gives: what Vercel's API gives a project it lets use a board. */
 export const GRANT_DEFAULT: Can = { '*': ['read', 'post', 'react', 'label'] }
 const GRANT_CLAIMS_MAX = 32

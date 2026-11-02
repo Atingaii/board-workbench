@@ -3,6 +3,7 @@ import { resolveActor } from './actors.ts'
 import {
   BOARD_TOKEN_PREFIX,
   createAuthority,
+  tokenHash,
   fromTokens,
   GITHUB_ISSUER,
   grantIssuers,
@@ -248,10 +249,4 @@ function issuerOf(credential: string): string | null {
   } catch {
     return null
   }
-}
-
-/** A board token's SHA-256, hex: what the board keeps instead of the secret. */
-export async function tokenHash(secret: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)))
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
