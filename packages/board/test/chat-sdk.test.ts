@@ -1,49 +1,74 @@
-import { createHmac } from 'node:crypto'
-import { describe, expect, it, vi } from 'vitest'
-import { createKapsoAdapter } from '@kapso/chat-adapter'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createTelegramAdapter } from '@chat-adapter/telegram'
+import { createMockState } from '@chat-adapter/tests'
 import { chatSdk, channels, type ChatSdkEvent, type ChatSdkOptions } from '../src/sync/chat-sdk.ts'
+import type { ReceivedEvent } from '../src/sync/provider.ts'
 import type { SyncUnit } from '../src/sync/fn.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
-const SECRET = 'kapso-test-secret'
-const NUMBER = '16315558151'
-const JANE = '15551234567'
-// Kapso's adapter writes each part of an ID in base64url. With no hooks, the board's IDs are the adapter's.
-const id = (...parts: string[]) => parts.map((part) => Buffer.from(part).toString('base64url')).join(':')
+const SECRET = 'telegram-test-secret'
+const GROUP = -1001234567890
+const ADA = { id: 42, is_bot: false, first_name: 'Ada', username: 'ada' }
+const BOT = { id: 999, is_bot: true, first_name: 'Board', username: 'board_bot' }
 
-/** Kapso's real adapter, through `chatSdk()`, sending through a fake WhatsApp client that records what it sends. */
-function setup(numbers: Record<string, SyncUnit<ChatSdkEvent>>, hooks: Omit<ChatSdkOptions, 'adapter'> = {}) {
-  const texts: { phoneNumberId: string; to: string; body: string }[] = []
-  const client = {
-    isKapsoProxy: () => true,
-    messages: {
-      markRead: async () => ({ success: true }),
-      sendText: async (input: (typeof texts)[number]) => {
-        texts.push(input)
-        return { messages: [{ id: `wamid.out${texts.length}` }] }
-      },
-    },
-  }
-  const adapter = createKapsoAdapter({ client: client as never, webhookSecret: SECRET, phoneNumberId: NUMBER })
-  const board = testBoard({ sync: { whatsapp: chatSdk({ adapter, ...hooks }, channels(numbers)) } })
-  /** A `whatsapp.message.received` delivery, signed as Kapso signs it. The same message is the same body. */
-  const deliver = (message: Record<string, unknown>) => {
-    const body = JSON.stringify({
-      message: { timestamp: '1735689600', from: JANE, kapso: { direction: 'inbound' }, ...message },
-      conversation: { id: 'conv_1', contact_name: 'Jane Doe', phone_number_id: NUMBER, status: 'active' },
-      phone_number_id: NUMBER,
-    })
-    return board.fetch(new Request(`${BOARD_URL}/webhooks/whatsapp`, {
+type Call = { method: string; body: Record<string, unknown> }
+
+/** Telegram's Bot API, served locally: answers what the adapter asks, and records each call. */
+async function botApi() {
+  const calls: Call[] = []
+  let next = 500
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(chunk as Buffer)
+    const text = Buffer.concat(chunks).toString('utf8')
+    const body = text && request.headers['content-type']?.includes('json') ? JSON.parse(text) as Record<string, unknown> : {}
+    const method = request.url!.slice(request.url!.lastIndexOf('/') + 1)
+    calls.push({ method, body })
+    const result = method === 'getMe' ? BOT
+      : method.startsWith('send') ? { message_id: ++next, date: 1735689600, chat: { id: Number(body.chat_id), type: 'supergroup' }, from: BOT, text: textOf(body) }
+      : true
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({ ok: true, result }))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  servers.push(server)
+  /** The messages sent to Telegram, plain or rich, as the chat and the text. */
+  const sent = () => calls.filter((call) => call.method.startsWith('send')).map((call) => ({ chat: String(call.body.chat_id), text: textOf(call.body) }))
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, calls, sent }
+}
+const textOf = (body: Record<string, unknown>) => String(body.text ?? (body.rich_message as { markdown?: string } | undefined)?.markdown ?? '')
+const servers: ReturnType<typeof createServer>[] = []
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))))
+})
+
+/** Telegram's real adapter through `chatSdk()`, on an in-process board. */
+async function setup(groups: Record<string, SyncUnit<ChatSdkEvent>>, hooks: Omit<ChatSdkOptions, 'adapter'> = {}) {
+  const api = await botApi()
+  const adapter = createTelegramAdapter({ botToken: 'test-token', secretToken: SECRET, mode: 'webhook', apiUrl: api.url, userName: 'board_bot' })
+  const provider = chatSdk({ adapter, ...hooks }, channels(groups))
+  const board = testBoard({ sync: { telegram: provider } })
+  let update = 0
+  /** An update as Telegram sends it, with the webhook's secret token. The same `id` is a redelivery. */
+  const request = (payload: Record<string, unknown>, id = ++update) =>
+    new Request(`${BOARD_URL}/webhooks/telegram`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-webhook-event': 'whatsapp.message.received',
-        'x-webhook-signature': createHmac('sha256', SECRET).update(body).digest('hex'),
+      headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': SECRET },
+      body: JSON.stringify({ update_id: id, ...payload }),
+    })
+  const deliver = (payload: Record<string, unknown>, id?: number) => board.fetch(request(payload, id))
+  const say = (messageId: number, text: string) =>
+    deliver({ message: { message_id: messageId, date: 1735689600, chat: { id: GROUP, type: 'supergroup', title: 'Support' }, from: ADA, text } })
+  const react = (messageId: number, change: { old: string[]; now: string[] }, date: number, id?: number) =>
+    deliver({
+      message_reaction: {
+        chat: { id: GROUP, type: 'supergroup', title: 'Support' }, message_id: messageId, user: ADA, date,
+        old_reaction: change.old.map((emoji) => ({ type: 'emoji', emoji })), new_reaction: change.now.map((emoji) => ({ type: 'emoji', emoji })),
       },
-      body,
-    }))
-  }
-  return { board, texts, deliver }
+    }, id)
+  return { api, board, provider, request, deliver, say, react }
 }
 
 type Read = { id: number; text: string; from: string | null; reactions: Record<string, string[]>; by: { actor: string } }
@@ -51,65 +76,90 @@ const read = async (call: ReturnType<typeof caller>, channel: string) =>
   (await call('GET', `/messages?channel=${channel}`)).body.messages as Read[]
 
 describe('chatSdk() on a real adapter, with no hooks', () => {
-  it('mirrors a conversation both ways', async () => {
-    const { board, texts, deliver } = setup({ [id(NUMBER)]: 'support' })
+  it('mirrors a Telegram group both ways', async () => {
+    const { api, board, say } = await setup({ [String(GROUP)]: 'support' })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
 
-    expect((await deliver({ id: 'wamid.1', type: 'text', text: { body: 'export is *broken*' } })).status).toBe(200)
+    expect((await say(10, 'export is broken')).status).toBe(200)
     await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(1))
     const [root] = await read(julian, 'support')
-    expect(root).toMatchObject({ text: 'export is **broken**', from: 'whatsapp', by: { actor: `kapso:user:${JANE}` } })
+    expect(root).toMatchObject({ text: 'export is broken', from: 'telegram', by: { actor: `telegram:user:${ADA.id}` } })
 
-    await julian('POST', '/messages', { re: root!.id, text: 'looking **into** it' })
-    await vi.waitFor(() => expect(texts).toEqual([{ phoneNumberId: NUMBER, to: JANE, body: '*julian*: looking *into* it' }]))
+    await julian('POST', '/messages', { re: root!.id, text: 'looking into it' })
+    await vi.waitFor(() => expect(api.sent()).toHaveLength(1))
+    expect(api.sent()).toEqual([{ chat: String(GROUP), text: expect.stringMatching(/julian.*looking into it/) }])
   })
 
-  it("keeps a board root on the board where the adapter can't start a thread", async () => {
-    const { board, texts } = setup({ [id(NUMBER)]: 'support' })
+  it('keeps a new board root on the board, since a group is one conversation', async () => {
+    const { api, board } = await setup({ [String(GROUP)]: 'support' })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
     const { body } = await julian('POST', '/messages', { channel: 'support', text: 'board only' })
 
-    // The number is a channel, and Kapso's adapter can't post to one. A conversation is a thread it can post in.
-    expect((await julian('POST', `/messages/${body.message.id}/sync`, { target: `whatsapp:${id(NUMBER)}` })).status).toBe(400)
-    expect((await julian('POST', `/messages/${body.message.id}/sync`, { target: `whatsapp:${id(NUMBER, JANE, 'conv_1')}` })).status).toBe(200)
-    await julian('POST', '/messages', { re: body.message.id, text: 'following up' })
-    await vi.waitFor(() => expect(texts.at(-1)).toEqual({ phoneNumberId: NUMBER, to: JANE, body: '*julian*: following up' }))
+    const attach = await julian('POST', `/messages/${body.message.id}/sync`, { target: `telegram:${GROUP}` })
+    expect(attach.status).toBe(400)
+    expect(api.sent()).toEqual([])
   })
 
-  it('knows a reaction by its payload: a redelivery is the same reaction, a new one is another', async () => {
-    const { board, deliver } = setup({ [id(NUMBER)]: 'support' })
+  it('knows a reaction by its payload: a redelivery is the same reaction, a re-add is another', async () => {
+    const { board, say, react } = await setup({ [String(GROUP)]: 'support' })
     const julian = caller(board.fetch, await personToken())
-    await deliver({ id: 'wamid.1', type: 'text', text: { body: 'export is broken' } })
+    await say(10, 'export is broken')
     await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(1))
 
-    const thumbs = { type: 'reaction', reaction: { message_id: 'wamid.1', emoji: '👍' } }
-    await deliver({ id: 'wamid.r1', ...thumbs })
-    await deliver({ id: 'wamid.r1', ...thumbs }) // Kapso retries it
-    await deliver({ id: 'wamid.r2', ...thumbs }) // Jane reacts again
+    await react(10, { old: [], now: ['👍'] }, 1735689700, 100)
+    await react(10, { old: [], now: ['👍'] }, 1735689700, 100) // Telegram retries it
+    await react(10, { old: ['👍'], now: [] }, 1735689760)
+    await react(10, { old: [], now: ['👍'] }, 1735689820) // Ada adds it again
     // Each delivery is stored before its webhook answers.
-    const { body: inbox } = await julian('GET', '/inbox/whatsapp')
-    expect((inbox.events as { event: { kind: string } }[]).filter((record) => record.event.kind === 'reaction')).toHaveLength(2)
-    await vi.waitFor(async () => expect((await read(julian, 'support'))[0]!.reactions).toEqual({ thumbs_up: [`kapso:user:${JANE}`] }))
+    const { body: inbox } = await julian('GET', '/inbox/telegram')
+    const reactions = (inbox.events as { event: { kind: string; added: boolean } }[]).filter((record) => record.event.kind === 'reaction')
+    expect(reactions.map((record) => record.event.added)).toEqual([true, false, true])
+    await vi.waitFor(async () => expect((await read(julian, 'support'))[0]!.reactions).toEqual({ thumbs_up: [`telegram:user:${ADA.id}`] }))
+  })
+
+  it("lets Telegram's retry through when the board couldn't store the first delivery", async () => {
+    const { provider, request } = await setup({ [String(GROUP)]: 'support' })
+    const update = { message: { message_id: 10, date: 1735689600, chat: { id: GROUP, type: 'supergroup' }, from: ADA, text: 'export is broken' } }
+    const stored: ReceivedEvent[] = []
+    let attempts = 0
+    const emit = async (received: ReceivedEvent) => {
+      if (++attempts === 1) throw new Error('the board is down')
+      stored.push(received)
+    }
+
+    await expect(provider.receive('telegram', request(update, 7), emit)).rejects.toThrow('the board is down')
+    expect((await provider.receive('telegram', request(update, 7), emit)).status).toBe(200)
+    expect(stored.map((received) => received.event.kind)).toEqual(['message'])
   })
 })
 
 describe('chatSdk() hooks', () => {
   it("name channels and the platform where the adapter can't, under a sync function of your own", async () => {
-    const { board, texts, deliver } = setup({
-      'support line': async (sync) => {
+    const { api, board, say } = await setup({
+      'support group': async (sync) => {
         if (sync.direction === 'out') return sync.deliver()
         if (sync.event.kind !== 'message') return
         await sync.import('leads', { text: `${sync.event.author.name} on ${sync.event.platform}: ${sync.event.text}` })
       },
-    }, { platform: 'whatsapp', resolveChannel: async (name) => (name === 'support line' ? id(NUMBER) : name) })
+    }, { platform: 'tg', resolveChannel: async (name) => (name === 'support group' ? String(GROUP) : name) })
     const julian = caller(board.fetch, await personToken(), { 'x-board-handle': 'julian' })
 
-    await deliver({ id: 'wamid.1', type: 'text', text: { body: 'do you ship to Lima?' } })
+    await say(10, 'do you ship to Lima?')
     await vi.waitFor(async () => expect(await read(julian, 'leads')).toHaveLength(1))
     const [root] = await read(julian, 'leads')
-    expect(root).toMatchObject({ text: 'Jane Doe on whatsapp: do you ship to Lima?', by: { actor: `whatsapp:user:${JANE}` } })
+    expect(root).toMatchObject({ text: 'Ada on tg: do you ship to Lima?', by: { actor: `tg:user:${ADA.id}` } })
 
     await julian('POST', '/messages', { re: root!.id, text: 'we do' })
-    await vi.waitFor(() => expect(texts).toEqual([{ phoneNumberId: NUMBER, to: JANE, body: '*julian*: we do' }]))
+    await vi.waitFor(() => expect(api.sent()).toHaveLength(1))
+    expect(api.sent()).toEqual([{ chat: String(GROUP), text: expect.stringContaining('we do') }])
+  })
+
+  it('keep Chat SDK state where you say', async () => {
+    const state = createMockState()
+    const { board, say } = await setup({ [String(GROUP)]: 'support' }, { state })
+    const julian = caller(board.fetch, await personToken())
+    await say(10, 'export is broken')
+    await vi.waitFor(async () => expect(await read(julian, 'support')).toHaveLength(1))
+    expect(state.cache.size).toBeGreaterThan(0)
   })
 })

@@ -17,14 +17,20 @@ export type ChatSdkEvent<P extends string = string> = z.infer<ReturnType<typeof 
 export type ChatSdkOptions<P extends string = string> = Omit<ChatTransport, 'platform'> & {
   /** The platform's name, in author IDs, author labels, and `vb sources`. The adapter's `name` unless given. */
   platform?: P
+  /**
+   * Whether a new board root opens a thread of its own in a mirrored channel, as on Discord or
+   * Teams. Off unless given: on most platforms a chat is one conversation, so the root stays on
+   * the board, and threads that came from the platform sync both ways.
+   */
+  canStartThreads?: boolean
   /** The platform's ID for one reaction occurrence, the same on every redelivery. Without it, a reaction is known by its payload. */
   reactionId?(reaction: ReactionEvent): string
 }
 
 /**
  * Syncs any Chat SDK adapter with the board: `sync` is what each event does, both ways, like
- * `channels({ C0123ABC: 'support' })`. Channels are the adapter's own IDs, without its prefix.
- * A board root starts a thread when the adapter can post to a channel.
+ * `channels({ '-1001234567890': 'support' })`. Channels are the adapter's own IDs, without its
+ * prefix. Slack, GitHub, and Linear have entries of their own, with more than this reads.
  */
 export function chatSdk<P extends string = string>(options: ChatSdkOptions<P>, sync: SyncFn<ChatSdkEvent<P>>): SyncProvider<ChatSdkEvent<P>> {
   if (!options?.adapter?.name) throw new Error('chatSdk needs a Chat SDK adapter: chatSdk({ adapter }, channels({ … }))')
@@ -37,11 +43,7 @@ class ChatSdkProvider<P extends string> extends ChatSyncProvider<ChatSdkEvent<P>
 
   constructor({ platform, reactionId, ...transport }: ChatSdkOptions<P>, sync: SyncFn<ChatSdkEvent<P>>) {
     const name = platform ?? (transport.adapter.name as P)
-    super({
-      ...transport,
-      platform: name,
-      canStartThreads: transport.canStartThreads ?? typeof transport.adapter.postChannelMessage === 'function',
-    }, sync)
+    super({ ...transport, platform: name }, sync)
     this.schema = schemaOf(name)
     this.reactionId = reactionId
   }

@@ -7,7 +7,7 @@ description: Sync a platform board doesn't ship, through any Chat SDK adapter or
 
 | Import | Export | Use it when |
 | --- | --- | --- |
-| `@vercel/board/sync-chat-sdk` | `chatSdk()` | A Chat SDK adapter already speaks the platform. Slack, GitHub, WhatsApp, and Linear run on the same bridge. |
+| `@vercel/board/sync-chat-sdk` | `chatSdk()` | A Chat SDK adapter already speaks the platform. Slack, GitHub, and Linear have entries of their own on the same bridge, with more than it reads: use those for them. |
 | `@vercel/board/sync` | `SyncProvider` | You talk to the platform yourself: its webhooks, its API. Importing it doesn't load Chat SDK. |
 
 Either way, a provider translates between the platform and the board, and the
@@ -51,7 +51,7 @@ hook, passed beside `adapter`:
 | The platform's name | The adapter's `name`, in author IDs like `telegram:user:42` | `platform` |
 | Channels | The adapter's own channel IDs, without its `name:` prefix | `resolveChannel(name)` |
 | Targets | One the adapter reads as a thread is a thread in its channel; anything else is a channel | `resolveTarget(target)` |
-| New threads | A board root starts one where the adapter has `postChannelMessage` | `canStartThreads` |
+| New threads | Never: a new board root stays on the board, since on most platforms a chat is one conversation. Threads that came from the platform sync both ways. | `canStartThreads: true`, where a channel holds many threads (Discord, Teams) |
 | Reactions | Known by their payload: a redelivery is the same JSON, a new reaction is new JSON | `reactionId(reaction)` |
 | Reactions per person | Any number | `singleReaction` |
 
@@ -82,10 +82,27 @@ When no hook covers what an adapter gets wrong, extend the adapter
 ([Chat SDK's guide](https://chat-sdk.dev/docs/platform-adapters)) or write a
 native provider.
 
-> [!NOTE]
-> The bridge runs Chat SDK on in-memory state: the board's log is what lasts.
-> What an adapter keeps in Chat SDK's state, like a message history, is there
-> only on the instance that kept it.
+### State
+
+Chat SDK and the adapter keep their state in memory unless you pass `state`,
+a [Chat SDK state adapter](https://chat-sdk.dev/docs/state-adapters):
+
+```ts
+import { createRedisState } from '@chat-adapter/state-redis'
+import { channels, chatSdk } from '@vercel/board/sync-chat-sdk'
+
+// in board(), with an adapter of your own:
+sync: {
+  forum: chatSdk({ adapter, state: createRedisState() }, channels({ c_812: 'support' })),
+},
+```
+
+The board's log is what lasts either way, so most adapters need none. Pass one
+when an adapter reads back, on a later request, what it stored on an earlier
+one: Resend's finds the thread an email replies to that way, and on another
+instance it wouldn't. When the board can't store what a webhook brought, the
+bridge gives back whatever Chat SDK or the adapter claimed for it, like a
+message's dedupe key, so the platform's retry gets through.
 
 ## A native provider
 

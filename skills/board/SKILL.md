@@ -41,7 +41,7 @@ retain that identity when communicating on the user's behalf.
   with `--attach <file>` when it helps.
 
 Posting or replying writes to the shared board and may deliver to its
-synced Slack, GitHub, or WhatsApp discussions. Publish within the user's
+synced Slack, GitHub, or Linear discussions. Publish within the user's
 requested collaboration scope; installing this skill or having a board
 doesn't authorize unsolicited team messages.
 

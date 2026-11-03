@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import type { Adapter, Author as ChatAuthor, Chat, FileUpload, Message as ChatMessage, ReactionEvent } from 'chat'
+import type { Adapter, Author as ChatAuthor, Chat, FileUpload, Message as ChatMessage, ReactionEvent, StateAdapter } from 'chat'
 import type { Actor } from '../contract/folds.ts'
 import { LINKS_PER_MESSAGE_MAX, type ExternalAuthor, type ExternalFile, type ExternalLink } from '../contract/external.ts'
 import { SyncProvider, ResolvedTarget, type Receive, type ReceivedEvent, type ProviderOptions, type ProviderPost, type ProviderFile, type ProviderDelivery, type FileDelivery, type FetchedLink } from './provider.ts'
@@ -7,6 +7,7 @@ import type { ProviderEvent, SyncRoot } from './events.ts'
 import type { SyncFn } from './fn.ts'
 import type { SourceJoin, SourceRead } from '../api/routes.ts'
 import { createChat, markdownOf } from './chat.ts'
+import { ephemeralState } from './state.ts'
 import { externalAuthor } from './types.ts'
 import { userTokensOf } from './users.ts'
 export { externalAuthor } from './types.ts'
@@ -18,6 +19,11 @@ export type ChatInput =
 
 export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   adapter: Adapter
+  /**
+   * Where Chat SDK and the adapter keep their state, like `createRedisState()`. In memory unless
+   * given, which is enough when the board's log is all an adapter needs to last.
+   */
+  state?: StateAdapter
   findByEmail?(email: string): Promise<ExternalAuthor | null>
   mention?(actor: Actor): string | null
   author?(author: ChatAuthor, raw: unknown): ExternalAuthor
@@ -78,13 +84,15 @@ const externalFile = (file: NonNullable<ChatMessage['attachments']>[number]): Ex
 export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> extends SyncProvider<E> {
   protected readonly transport: ChatTransport
   private readonly chat: Chat
-  private readonly receiving = new AsyncLocalStorage<{ key: string; emit: Receive }>()
+  private readonly state: StateAdapter
+  private readonly receiving = new AsyncLocalStorage<{ key: string; emit: Receive; claims: string[]; failures: unknown[] }>()
   private initialized: Promise<void> | undefined
 
   constructor(transport: ChatTransport, sync: SyncFn<E>) {
     super({ ...transport, users: transport.users ?? userTokensOf(transport.adapter), uploadsFiles: !!transport.uploadFiles }, sync)
     this.transport = transport
-    this.chat = createChat(transport.adapter)
+    this.state = transport.state ?? ephemeralState()
+    this.chat = createChat(transport.adapter, this.claiming(this.state))
     const onMessage = async (_thread: unknown, message: ChatMessage) => this.emit({ kind: 'message', message })
     this.chat.onNewMessage(/[\s\S]*/, onMessage)
     this.chat.onNewMention(onMessage)
@@ -165,11 +173,43 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   private async emit(input: ChatInput) {
     const context = this.receiving.getStore()
     if (!context) throw new Error('Chat SDK emitted an event outside a verified request')
-    await context.emit(await this.normalize(context.key, input))
+    try {
+      await context.emit(await this.normalize(context.key, input))
+    } catch (error) {
+      // Kept here too: an adapter may catch what its handlers throw (Telegram's does) and answer 200.
+      context.failures.push(error)
+      throw error
+    }
   }
 
-  override receive(key: string, request: Request, emit: Receive): Promise<Response> {
-    return this.receiving.run({ key, emit }, () => this.receiveRequest(key, request, emit))
+  override async receive(key: string, request: Request, emit: Receive): Promise<Response> {
+    const claims: string[] = []
+    try {
+      return await this.receiving.run({ key, emit, claims, failures: [] }, () => this.receiveRequest(key, request, emit))
+    } catch (error) {
+      // The board couldn't store what came in, so the platform retries. Chat SDK and the adapter
+      // claimed it as handled (a message's dedupe key, Telegram's update ID): give that back, or
+      // they'd skip the retry and the event would be lost.
+      await Promise.allSettled(claims.map((claim) => this.state.delete(claim)))
+      throw error
+    }
+  }
+
+  /** `state`, noting each first claim (`setIfNotExists`) made while a webhook is handled. */
+  private claiming(state: StateAdapter): StateAdapter {
+    return new Proxy(state, {
+      get: (target, property) => {
+        if (property === 'setIfNotExists') {
+          return async (key: string, value: unknown, ttlMs?: number) => {
+            const claimed = await target.setIfNotExists(key, value, ttlMs)
+            if (claimed) this.receiving.getStore()?.claims.push(key)
+            return claimed
+          }
+        }
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
   }
 
   private async receiveRequest(key: string, request: Request, emit: Receive): Promise<Response> {
@@ -179,6 +219,8 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const response = await webhooks[this.transport.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
     const results: PromiseSettledResult<unknown>[] = []
     while (tasks.length) results.push(...await Promise.allSettled(tasks.splice(0)))
+    const { failures } = this.receiving.getStore()!
+    if (failures.length) throw failures[0]
     const failed = results.find((result) => result.status === 'rejected')
     if (failed) throw failed.reason
     if (response.ok && body !== null) {

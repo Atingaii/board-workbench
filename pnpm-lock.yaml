@@ -182,15 +182,15 @@ importers:
       '@chat-adapter/slack':
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(debug@4.4.3)(zod@4.6.5)
+      '@chat-adapter/telegram':
+        specifier: 4.41.1
+        version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
       '@chat-adapter/tests':
         specifier: ^4.41.1
         version: 4.41.1(chat@4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5))(vitest@5.0.3(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.1)))
       '@electric-sql/pglite':
         specifier: 0.3.15
         version: 0.3.15
-      '@kapso/chat-adapter':
-        specifier: ^0.1.1
-        version: 0.1.1(ai@7.0.130(zod@4.6.5))(chat@4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5))(zod@4.6.5)
       '@types/node':
         specifier: ^26.6.3
         version: 26.6.3
@@ -379,6 +379,10 @@ packages:
 
   '@chat-adapter/slack@4.41.1':
     resolution: {integrity: sha512-aq8sETBNrlrD13tB0pwMNf4jILRbrnc9TiDRP/Z9rVDejqDEImOrHVZgpX8ZHIJlT9cPXmJidgUPIE5iz45HLA==}
+    engines: {node: '>=20'}
+
+  '@chat-adapter/telegram@4.41.1':
+    resolution: {integrity: sha512-BgONRwr5RWHTXFGg5w/uWRHwW0Z7LclCQDnUa5psI+JYw19hsZ1HJSPnYq9PAZN/UpWflV2O6XWxFpT4Ff4CbQ==}
     engines: {node: '>=20'}
 
   '@chat-adapter/tests@4.41.1':
@@ -757,16 +761,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
-
-  '@kapso/chat-adapter@0.1.1':
-    resolution: {integrity: sha512-4QAqB4ADI7k1bbvHdjIB0r3qrBHahtET1IeJHYXc8ND+3uF0OmCK/5hRoNrKYhCzMMPHESK35t6wVkc+zWcJyw==}
-    engines: {node: '>=20.19'}
-    peerDependencies:
-      chat: ^4.29.0
-
-  '@kapso/whatsapp-cloud-api@0.2.3':
-    resolution: {integrity: sha512-qYZbxBvX6kX7I7dI0PX1W6TWUYQkJKXnf7UqmeWlYALIgsiP5CvFvH45jsWrdjdUPwK1emsyIuHKReDBd7j/Sg==}
-    engines: {node: '>=20.19'}
 
   '@linear/sdk@76.0.0':
     resolution: {integrity: sha512-Xt0x5Kl6qBoWhGFypb8ykyP+c5kT7scmRPs1uJidSPOaRgkMJ/4y41QpmZCWCBUMmZtf/O0VktgQio6rLXT94w==}
@@ -3564,6 +3558,16 @@ snapshots:
       - workflow
       - zod
 
+  '@chat-adapter/telegram@4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)':
+    dependencies:
+      '@chat-adapter/shared': 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+      chat: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+    transitivePeerDependencies:
+      - ai
+      - supports-color
+      - workflow
+      - zod
+
   '@chat-adapter/tests@4.41.1(chat@4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5))(vitest@5.0.3(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.1)))':
     dependencies:
       chat: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
@@ -3809,21 +3813,6 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
-
-  '@kapso/chat-adapter@0.1.1(ai@7.0.130(zod@4.6.5))(chat@4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5))(zod@4.6.5)':
-    dependencies:
-      '@chat-adapter/shared': 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
-      '@kapso/whatsapp-cloud-api': 0.2.3
-      chat: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
-    transitivePeerDependencies:
-      - ai
-      - supports-color
-      - workflow
-      - zod
-
-  '@kapso/whatsapp-cloud-api@0.2.3':
-    dependencies:
-      zod: 4.6.5
 
   '@linear/sdk@76.0.0(graphql@17.0.2)':
     dependencies:

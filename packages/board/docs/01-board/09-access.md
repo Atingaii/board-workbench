@@ -346,7 +346,7 @@ through the binding's `handle(caller)`, so the middleware sees it.
   inbox needs `sync` in all of them, since raw events span them.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
-  there as any Slack, GitHub, or WhatsApp user it names, which is what a board
+  there as any Slack, GitHub, or Linear user it names, which is what a board
   on `http()` that syncs needs on the board it uses. Who those users are (name,
   handle, avatar) shows in every channel, so only the board's own sync, or one
   with `sync` in every channel, changes that: anyone else's imports name their

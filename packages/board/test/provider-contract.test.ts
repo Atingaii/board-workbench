@@ -92,8 +92,8 @@ function chatSdkFixture(run: Inbound, options: Options) {
   const fake = recording(fakePlatform('opaque', (adapter) => {
     adapter.channelIdFromThreadId = (id) => id.replace(/:conversation:\d+$/, '')
   }), options)
-  // The adapter can post to a channel, so only a test that says it can't turns that off.
-  const provider = chatSdk({ adapter: fake.adapter, ...(options.starts === false ? { canStartThreads: false } : {}) }, routed(run, channel))
+  // Its channels hold many threads, as Slack's do, so it opts in to starting them.
+  const provider = chatSdk({ adapter: fake.adapter, canStartThreads: options.starts ?? true }, routed(run, channel))
   return { ...fake, provider, author: 'opaque:user:42' }
 }
 
@@ -185,6 +185,22 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
         if (event.kind === 'message') expect(event.text).toBe(event.key)
       }
       expect(new Set(events.map((event) => event.id)).size).toBe(2)
+    })
+
+    it("lets the platform's retry through when the board couldn't store the first delivery", async () => {
+      const configured = fixture(async () => {}, {})
+      const stored: string[] = []
+      let attempts = 0
+      const emit = async (received: { dedupe: string }) => {
+        if (++attempts === 1) throw new Error('the board is down')
+        stored.push(received.dedupe)
+      }
+      const delivery = () => new Request(`${BOARD_URL}/webhooks/tickets`, {
+        method: 'POST', headers: { 'x-native-signature': 'valid' }, body: JSON.stringify(configured.payload({ id: 'root', kind: 'message', text: 'hello' })),
+      })
+      await expect(configured.provider.receive('tickets', delivery(), emit as never)).rejects.toThrow('the board is down')
+      expect((await configured.provider.receive('tickets', delivery(), emit as never)).status).toBe(200)
+      expect(stored).toHaveLength(1)
     })
 
     it('keeps distinct add/remove/add occurrences even when the final payload repeats', async () => {
