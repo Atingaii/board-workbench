@@ -123,7 +123,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/grants` | `{ grants }`: each one's `id`, `issuer`, `claims`, `can`, `by`, and `at`. Needs `manage` in every channel. See [Grants and tokens](#grants-and-tokens) |
 | POST | `/grants` | `{ issuer, claims, can? }`: set a grant, or the `can` of the one with that issuer and claims. Answers `{ grant, created }` |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
+| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
@@ -382,7 +382,10 @@ react, and label everywhere.
 it's revoked or it expires: 30 days, or `expires`, 90 days at most. Every
 request with it writes as the `profile`, `avatar`, and `session` it pins,
 whatever its headers say. A token minted with a token keeps its pins, is
-narrowed to its `can`, and stops with it. See
+narrowed to its `can`, and stops with it. A token sees and revokes only itself
+and the tokens minted with it, and reads only the unposted files they
+uploaded. One that pins a profile edits, deletes, and cancels only what was
+written as that profile. See
 [Grants](../01-board/09-access.md#grants) and
 [Tokens](../01-board/09-access.md#tokens).
 

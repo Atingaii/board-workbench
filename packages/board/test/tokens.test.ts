@@ -121,6 +121,50 @@ describe('tokens', () => {
     expect((await pi('POST', `/tokens/${theirs.token.id}/revoke`, {})).body).toEqual({ revoked: true })
   })
 
+  it("sees and revokes only itself and the tokens minted with it, never its minter's others", async () => {
+    const { julian, as, mint } = await setUp()
+    const widget = await mint({ name: 'feedback-widget', can: { 'feedback/': ['post'] } })
+    const deploy = await mint({ name: 'deploy-bot', can: { 'deploys/': ['post'] } })
+    const child = await mint({ name: 'widget-child' }, as(widget.secret))
+    const names = async (secret: string) => (await as(secret)('GET', '/tokens')).body.tokens.map((token: { name: string }) => token.name)
+    expect(await names(widget.secret)).toEqual(['feedback-widget', 'widget-child'])
+    expect(await names(child.secret)).toEqual(['widget-child'])
+    // Its minter's other token, and to a child its parent, answer as tokens that aren't there, and stay live.
+    expect((await as(widget.secret)('POST', `/tokens/${deploy.token.id}/revoke`, {})).body).toEqual({ revoked: false })
+    expect((await as(child.secret)('POST', `/tokens/${widget.token.id}/revoke`, {})).body).toEqual({ revoked: false })
+    expect((await as(deploy.secret)('GET', '/me')).status).toBe(200)
+    expect((await as(widget.secret)('GET', '/me')).status).toBe(200)
+    expect((await as(widget.secret)('POST', `/tokens/${child.token.id}/revoke`, {})).body).toEqual({ revoked: true })
+    expect((await julian('GET', '/tokens')).body.tokens.map((token: { name: string }) => token.name)).toEqual(['feedback-widget', 'deploy-bot'])
+  })
+
+  it('edits and deletes only what was written as the profile it pins, not its minter\'s own posts', async () => {
+    const { julian, as, mint } = await setUp()
+    const dev = { 'dev/': ['read', 'post'] }
+    const eve = as((await mint({ name: 'eve-1956', profile: 'clever-lemur', can: dev })).secret)
+    const renewed = as((await mint({ name: 'eve-1956-renewed', profile: 'clever-lemur', can: dev })).secret)
+    const helper = as((await mint({ name: 'helper', can: dev })).secret)
+    const julians = (await julian('POST', '/messages', { channel: 'dev', text: 'mine' })).body.message
+    const eves = (await eve('POST', '/messages', { channel: 'dev', text: 'on it' })).body.message
+    expect((await eve('POST', `/messages/${julians.id}/edit`, { text: 'not yours' })).status).toBe(403)
+    expect((await eve('POST', `/messages/${julians.id}/delete`, {})).status).toBe(403)
+    // Another token that pins the same profile is the same author: a renewed one picks up where it left off.
+    expect((await renewed('POST', `/messages/${eves.id}/edit`, { text: 'on it, round two' })).status).toBe(200)
+    // One that pins no profile writes as its minter, and changes what they wrote.
+    expect((await helper('POST', `/messages/${julians.id}/edit`, { text: 'mine, edited' })).status).toBe(200)
+    expect((await julian('GET', `/messages/${julians.id}`)).body.message.text).toBe('mine, edited')
+  })
+
+  it('cancels only schedules made as the profile it pins', async () => {
+    const queue = fakeQueue()
+    const { julian, as, mint } = await setUp({ scheduler: queue.scheduler })
+    const eve = as((await mint({ name: 'eve-1956', profile: 'clever-lemur', can: { 'dev/': ['read', 'post'] } })).secret)
+    const standup = (await julian('POST', '/schedules', { channel: 'dev', text: 'standup', every: '1d' })).body.schedule
+    const reminder = (await eve('POST', '/schedules', { channel: 'dev', text: 'check CI', every: '1d' })).body.schedule
+    expect((await eve('POST', `/schedules/${standup.id}/cancel`, {})).status).toBe(403)
+    expect((await eve('POST', `/schedules/${reminder.id}/cancel`, {})).body).toMatchObject({ canceled: true })
+  })
+
   it("cancels a schedule made with it once it's revoked", async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const queue = fakeQueue()

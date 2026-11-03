@@ -73,6 +73,16 @@ export type Pinned = {
 export type Granted = Principal & { access: Access }
 
 /**
+ * Whether a caller wrote what `by` says, as far as changing it goes (editing, deleting, canceling a
+ * schedule): its principal did, and when a board token pins the profile it writes as, as that
+ * profile. A token acts as its minter, so the principal alone would let one agent's token change
+ * what its minter or another agent wrote. Another token that pins the same profile writes as the
+ * same author, so a renewed one picks up where the last left off.
+ */
+export const wroteAs = (caller: { principal: Pick<Principal, 'id' | 'pinned'>; actor: { id: string } }, by: { principal: string; actor: string }) =>
+  by.principal === caller.principal.id && ((caller.principal.pinned?.profile ?? null) === null || by.actor === caller.actor.id)
+
+/**
  * Principal IDs a board authenticates: its people, deployments, workflows, and its own code. No
  * platform actor sync writes as may have one, or an import could pass for someone signed in.
  */

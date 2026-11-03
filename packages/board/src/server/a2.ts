@@ -17,7 +17,7 @@ import { authenticates, type Granted } from './auth.ts'
 import { actorSeen } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
-import { attachmentBody, attachmentNotFound, finishUpload, readUpload, startUpload, writeUpload, type BlobStore } from './blob.ts'
+import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, personView, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
@@ -333,8 +333,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
    * Whether `principal` may have a file: one it uploaded, or one a message it
    * can read carries. A deleted message drops its files, so it no longer counts.
    */
-  async function attachmentReadable(principal: Granted, id: string, uploadedBy: string | null) {
-    if (principal.access.readsAll || uploadedBy === principal.id) return true
+  async function attachmentReadable(principal: Granted, id: string, uploader: Uploader) {
+    if (principal.access.readsAll || ownUpload(uploader, principal)) return true
     await reads.ensure()
     return (await reads.tables.withAttachment(id)).some((message) => principal.access.readable(message.channel))
   }
@@ -371,8 +371,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
   const attachmentsFor = (principal: Granted, ids: readonly string[] | undefined) =>
     Promise.all(
       [...new Set(ids ?? [])].map(async (id) => {
-        const { attachment, uploadedBy } = await readUpload(blob, id)
-        if (!(await attachmentReadable(principal, id, uploadedBy))) throw attachmentNotFound(id)
+        const { attachment, ...uploader } = await readUpload(blob, id)
+        if (!(await attachmentReadable(principal, id, uploader))) throw attachmentNotFound(id)
         return attachment
       }),
     )
@@ -587,13 +587,13 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     },
     async edit(caller, { id, text, revision }) {
       const identity = await identityOf(caller)
-      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
+      const authorized = await authorizeOwn(writes, identity, messageAt(id), 'edit')
       const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, revision })
       return { ok: true as const, ...(unknownMentions ? { unknownMentions } : {}) }
     },
     async delete(caller, { id, revision }) {
       const identity = (await identityOf(caller))
-      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'delete')
+      const authorized = await authorizeOwn(writes, identity, messageAt(id), 'delete')
       await writeDelete(writes, { identity, authorized, revision })
       return { ok: true }
     },
@@ -624,7 +624,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
         const at = messageAt(query.re)
         root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
       }
-      const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
+      const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, { principal, actor })
       return { schedules: (await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
     },
     async cancelSchedule(caller, { id }) {
@@ -644,21 +644,21 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
       // Sync's own imports are fetched in this process, with no request to fit under, so they may be bigger.
       const max = ownSync(caller) ? IMPORT_BYTES_MAX : ATTACHMENT_BYTES_MAX
-      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }, max) }
+      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id, uploadedWith: await access.chain(principal) }, max) }
     },
     async uploadStart(caller, { name, type, size }) {
       const { principal } = (await identityOf(caller))
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
-      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id })
+      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id, uploadedWith: await access.chain(principal) })
     },
     async uploadFinish(caller, { id }) {
       const { principal } = (await identityOf(caller))
-      return { attachment: await finishUpload(blob, id, principal.id) }
+      return { attachment: await finishUpload(blob, id, principal) }
     },
     async attachment(caller, { id }) {
       const { principal } = (await identityOf(caller))
-      const { attachment, uploadedBy } = await readUpload(blob, id)
-      if (!(await attachmentReadable(principal, attachment.id, uploadedBy))) throw attachmentNotFound(attachment.id)
+      const { attachment, ...uploader } = await readUpload(blob, id)
+      if (!(await attachmentReadable(principal, attachment.id, uploader))) throw attachmentNotFound(attachment.id)
       return { attachment, data: await attachmentBody(blob, attachment.id) }
     },
     async watchers(caller) {

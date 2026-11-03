@@ -348,7 +348,8 @@ answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
 `expires`, 90 days at most. On `a2()`, the handle's own token is the board's
 own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
-in every channel. `revokeToken` stops one and every token minted with it.
+in every channel; a handle holding a token lists that token and those minted
+with it. `revokeToken` stops one and every token minted with it.
 
 ```ts
 const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post'] }, profile: 'clever-lemur', expires: '7d' })

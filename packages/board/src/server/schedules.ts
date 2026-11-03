@@ -10,7 +10,7 @@ import {
 } from '../contract/contract.ts'
 import { actorKind, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { authorize, type Access } from './access.ts'
-import type { Granted, Known, Principal } from './auth.ts'
+import { wroteAs, type Granted, type Known, type Principal } from './auth.ts'
 import { actorsReducer } from '../contract/reducers.ts'
 import type { ActorsState } from '../contract/folds.ts'
 import { replaceMentions } from '../contract/mentions.ts'
@@ -141,11 +141,12 @@ export function nextSend(schedule: Pick<Schedule, 'every' | 'until' | 'times'>, 
  * needs `post` there now, as it would to create it. Where it can't read, the
  * schedule is its own only if it was created without reading too, so a
  * principal ID shared with a caller that reads doesn't reach that caller's.
+ * A board token that pins a profile owns only what was scheduled as it (`wroteAs`).
  */
-export const createdBy = (schedule: Schedule, principal: Pick<Granted, 'id' | 'access'>) =>
-  schedule.as.principal.id === principal.id &&
-  principal.access.can('post', schedule.channel) &&
-  (schedule.blind || principal.access.readable(schedule.channel))
+export const createdBy = (schedule: Schedule, identity: { principal: Pick<Granted, 'id' | 'access' | 'pinned'>; actor: { id: string } }) =>
+  wroteAs(identity, { principal: schedule.as.principal.id, actor: schedule.as.actor.id }) &&
+  identity.principal.access.can('post', schedule.channel) &&
+  (schedule.blind || identity.principal.access.readable(schedule.channel))
 
 export const scheduleView = (schedule: Schedule, actors: ActorsState): ScheduleView => {
   const author = actors.byId[schedule.as.actor.id] ?? schedule.as.actor
@@ -475,7 +476,7 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       const schedule = state.byId[id]
       const missing = () => notFound(`schedule not found: s${id}`, 'schedule_not_found')
       if (!schedule) throw missing()
-      if (!createdBy(schedule, identity.principal)) authorize(identity.principal.access, 'manage', schedule.channel, missing)
+      if (!createdBy(schedule, identity)) authorize(identity.principal.access, 'manage', schedule.channel, missing)
       const canceled = schedule.next !== null
       if (canceled) await session.append({ type: 'schedule.canceled', payload: { id, by: identity.author, reason: 'canceled' } })
       const { state: after } = await session.state(schedulesReducer)

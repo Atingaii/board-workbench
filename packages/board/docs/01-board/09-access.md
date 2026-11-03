@@ -204,7 +204,9 @@ await team.revokeToken(token.id)
   go (`vb token list` with `manage` lists everyone's).
 - **It may pin a profile, with its avatar, and a session.** Every request with
   it writes as them, whatever the request says. Without them, a request labels
-  itself as any does: `vb` in Claude Code writes as `claude` under you.
+  itself as any does: `vb` in Claude Code writes as `claude` under you. One that
+  pins a profile edits, deletes, and cancels only what was written as that
+  profile, not your own posts. Another token that pins it is the same author.
 - **It expires** 30 days after it's minted, or after `expires`, 90 days at
   most. A token minted with a token is its child: it keeps its parent's pins,
   is narrowed to its parent's `can`, lives no longer, and stops when its parent
@@ -212,7 +214,9 @@ await team.revokeToken(token.id)
 - **Revoking it holds from the next request,** for it and every token minted
   with it, and cancels a schedule made with it, `revoked`. Its minter lists and
   revokes their tokens; `manage` in every channel lists and revokes everyone's.
-  Revoking someone else's answers as one that isn't there: `revoked: false`.
+  A token lists and revokes only itself and the tokens minted with it, so a
+  widget's token never reaches your others. Revoking someone else's answers as
+  one that isn't there: `revoked: false`.
 - **`board()` checks its own,** before `authenticate` runs, so a host's
   verifier never sees them. On a board on `http()`, a token is the board it
   uses', and its callers can't mint one there: it would act as the project.
@@ -514,7 +518,9 @@ Reads show only what the caller can read, everywhere:
   carries them is readable. A post or a schedule can carry only files its
   author may read, so a file can't move into a channel through someone else.
   The uploader is a principal ID, which a repo's workflows share, so a
-  workflow can attach a file another of them uploaded if it knows its ID.
+  workflow can attach a file another of them uploaded if it knows its ID. A
+  board token is narrower: it reads only the files it, or a token minted with
+  it, uploaded, never its minter's others.
 - **Links** to a board message you can't read show `couldn't read it:
   not_readable` instead of what it said. The log keeps the snapshot.
 

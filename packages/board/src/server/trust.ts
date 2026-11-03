@@ -6,7 +6,7 @@ import { duration } from '../client/client.ts'
 import { ACCESS_SESSION, accessContract, type AccessEvent } from '../contract/contract.ts'
 import { SCOPE_MAX } from '../contract/schemas.ts'
 import { compileAccess, FULL_ACCESS, parseScope, scopeOf, type Can } from './access.ts'
-import { BOARD_TOKEN_PREFIX, checkGrant, grantIssuers, tokenHash, type GrantSpec, type Known, type StoredGrant } from './auth.ts'
+import { BOARD_TOKEN_PREFIX, checkGrant, grantIssuers, tokenHash, type GrantSpec, type Known, type Principal, type StoredGrant } from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
 import { badRequest, forbidden, unauthorized } from './errors.ts'
 
@@ -58,6 +58,29 @@ function dropToken(state: AccessState, id: number) {
   if (!row) return
   delete state.hashes[row.hash]
   delete state.tokens[id]
+}
+
+/** Whether token `id` is token `ancestor`, or was minted with it at any depth. */
+function mintedWith(state: AccessState, id: number, ancestor: number): boolean {
+  let at: number | null = id
+  for (let depth = 0; at !== null && depth <= TOKEN_DEPTH_MAX; depth++) {
+    if (at === ancestor) return true
+    at = state.tokens[at]?.parent ?? null
+  }
+  return false
+}
+
+/**
+ * Whether `identity` may see and revoke token `row`: anyone's with `manage` in every channel. A
+ * token acts as its minter, so its principal alone would hand it every token its minter has: with
+ * a token, it's that token and those minted with it; without one, those its principal minted.
+ */
+function manages(state: AccessState, { principal }: Identity, row: TokenRow): boolean {
+  if (principal.access.everywhere('manage')) return true
+  if (row.minter.id !== principal.id) return false
+  if (principal.token === undefined) return true
+  const held = indexOf(principal.token, 't')
+  return held !== null && mintedWith(state, row.id, held)
 }
 
 /**
@@ -222,9 +245,16 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
 
     async tokens(identity: Identity): Promise<Protocol['tokens']['output']> {
       const state = await read()
-      const all = identity.principal.access.everywhere('manage')
-      const rows = Object.values(state.tokens).filter((row) => liveIn(state, row.id) && (all || row.minter.id === identity.principal.id))
+      const rows = Object.values(state.tokens).filter((row) => liveIn(state, row.id) && manages(state, identity, row))
       return { tokens: rows.sort((a, b) => a.id - b.id).map(tokenView) }
+    },
+    /** The board tokens `principal` came with: its own, then each it was minted with. Undefined with none. */
+    async chain(principal: Pick<Principal, 'token'>): Promise<string[] | undefined> {
+      if (principal.token === undefined) return undefined
+      const state = await read()
+      const chain: string[] = []
+      for (let at = indexOf(principal.token, 't'); at !== null && chain.length <= TOKEN_DEPTH_MAX; at = state.tokens[at]?.parent ?? null) chain.push(tokenId(at))
+      return chain
     },
     async createToken(identity: Identity, body: Protocol['createToken']['input']): Promise<Protocol['createToken']['output']> {
       const { principal, author, actor } = identity
@@ -285,10 +315,9 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       const state = await read()
       const index = indexOf(id, 't')
       const row = index === null ? undefined : state.tokens[index]
-      const all = identity.principal.access.everywhere('manage')
-      // Only a live token of yours, or anyone's with manage: one that's gone, never was, or is
-      // someone else's answers alike, so it says nothing about others' tokens.
-      if (!row || !liveIn(state, row.id) || (!all && row.minter.id !== identity.principal.id)) return { revoked: false }
+      // Only a live token you manage: one that's gone, never was, or isn't yours answers alike, so
+      // it says nothing about others' tokens.
+      if (!row || !liveIn(state, row.id) || !manages(state, identity, row)) return { revoked: false }
       await session.append({ type: 'token.revoked', payload: { id: row.id, by: identity.actor.id } })
       return { revoked: true }
     },

@@ -936,14 +936,21 @@ await team.revokeToken(token.id)
   give way to them. Without them, a request labels itself as with any token,
   so `vb` in a coding agent writes as that agent under the minter. A person's
   handle and name are the minter's, as their CLI sent them when they minted
-  it.
+  it. One that pins a profile owns only what was written as it: editing,
+  deleting, and canceling a schedule need the author's principal and profile
+  both, so an agent's token can't change its minter's posts. Another token
+  that pins the same profile is the same author, so a renewed one carries on.
 - **It expires,** 30 days after it's minted unless `expires` says otherwise,
   and at most 90 days, as npm caps its write tokens. A token minted with a
   token is its child: it keeps its parent's pins, is narrowed to its parent's
   `can`, lives no longer, and stops when its parent does, so revoking one
   revokes everything minted with it. Children go 8 deep at most.
-- **Its minter lists and revokes it,** as does `manage` in every channel.
-  Revoking anything else (gone, never minted, or someone else's) answers
+- **Its minter lists and revokes it,** as does `manage` in every channel. A
+  token acts as its minter, so going by principal would hand it every token
+  its minter has: a token lists and revokes only itself and the tokens minted
+  with it. Files go the same way: a token reads an unposted file only when it,
+  or a token minted with it, uploaded it, which the board records beside the
+  file's principal. Revoking anything else (gone, never minted, or someone else's) answers
   `revoked: false` alike, so it says nothing about others' tokens. A revoked
   or expired token is a 401 on the next request: board() reads it on every
   request, never from a cache. `a2()`'s fold drops a revoked token from its
@@ -1187,7 +1194,8 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 - **Deleting a message hides its attachments, but doesn't revoke them.** The
   board stops listing them, and the bytes stay in the store: an ID's bytes
   never change, and another message may carry the same file. A file is
-  readable by its uploader (recorded beside its metadata, never in the log),
+  readable by its uploader (recorded beside its metadata, never in the log:
+  the principal, and a board token's chain, so a token reads only its own),
   and wherever a message carrying it is readable. A post carries only files
   its author may read, so a file can't cross into another channel. A file that
   must not be read again (a screenshot with a secret in it) needs deleting
@@ -1597,9 +1605,9 @@ status.
 | GET | `/grants` | The board's grants: `{ grants: [{ id, issuer, claims, can, by, at }] }`. Needs `manage` in every channel (see [Grants and tokens](#grants-and-tokens)) |
 | POST | `/grants` | `{ issuer, claims, can? }`: sets a grant, or its `can` when one with that issuer and claims exists. Answers `{ grant, created }`. 501 `no_grants` where the board keeps none |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | Your tokens, or every token with `manage` in every channel: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
+| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
-| POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours, or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
+| POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }`, or 501 `no_files` on a board that keeps none |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
 | POST | `/messages/:id/edit` | `{ text }` |

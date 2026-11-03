@@ -431,7 +431,7 @@ prints its secret, which shows only here, so it pipes:
 
 `token list` shows your live tokens, or with `manage` in every channel,
 everyone's: each one's ID, name, what it may do, and when it expires, never a
-secret. `token revoke t1` stops one and every token minted with it, and prints
+secret. With `BOARD_TOKEN` set, yours are that token and those minted with it. `token revoke t1` stops one and every token minted with it, and prints
 `revoked t1`.
 
 ```text
