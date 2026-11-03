@@ -164,7 +164,7 @@ Each has a default that does nothing, or says the platform can't:
 | `uploadFiles(thread, files)`, `deleteFiles(ids)`, `refusesFiles(error)` | Files out. `refusesFiles` tells a permanent refusal (notes instead) from a failure worth retrying |
 | `fetchFile(file)` | Files in |
 | `fetchRoot(thread)` | Recovering a root when a reply arrives in a thread the board hasn't seen |
-| `fetchLink(link)` | Reading a linked message the platform didn't describe |
+| `fetchLink(link, linker)` | Reading a linked message the platform didn't describe. `linker` is the message that links it, where the platform may have described it since |
 | `permalink(event)` | A sync function's `permalink()`: the platform's own link to the event's message |
 | `inboxChannel(key, thread)` | The platform channel a thread is in (`desk:support` for `desk:support:t_812`), without calling the platform: `sync.channel` going out, which `channels` routes by |
 | `whoAmI(token)`, `postAs(token, target, kind, body)`, `editAs(…)`, `deleteAs(…)` | Posting as a person, with `users` |

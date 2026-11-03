@@ -184,7 +184,8 @@ as written. `vb read` and `vb inspect` quote each one under the message.
   another channel isn't: the link's readers may not read that channel, so its
   snapshot comes from Slack, as below.
 - Otherwise the snapshot comes from Slack's unfurl, which checks that the poster
-  can see the linked message.
+  can see the linked message. An unfurl that arrives before its message isn't
+  lost: the board reads it from the linking message when that message comes.
 - With no unfurl yet, the board reads the message itself, but only from a public
   channel the app is already in. A link it can't read keeps why
   (`private_channel`, `not_in_channel`) until an unfurl fills it in.

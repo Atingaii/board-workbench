@@ -114,9 +114,9 @@ describe('slack message links', () => {
     await webhook(linking(id, permalink('C9')))
     await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(2))
     const linker = async () => (await messages(julian)).find((message) => message.text.includes(permalink('C9')))!
-    // Nothing of security's message, and no pointer to it: Slack read nothing either, since C9 is private.
+    // Nothing of security's message, and no pointer to it: the app read nothing of C9 either, since it's private.
     expect((await linker()).links).toEqual([{ url: permalink('C9'), message: null, snapshot: null, unavailable: 'private_channel' }])
-    expect(web.conversations.replies).not.toHaveBeenCalled()
+    expect(web.conversations.replies).not.toHaveBeenCalledWith(expect.objectContaining({ channel: 'C9' }))
     // Slack's unfurl, which it checked against who posted the link, comes a moment later as a links-only edit.
     const text = `see <${permalink('C9')}>`
     await webhook({ type: 'event_callback', event: {
@@ -191,6 +191,28 @@ describe('slack message links', () => {
     expect(events.map((e) => e.type)).toEqual(['message.posted', 'message.linked'])
   })
 
+  it("keeps Slack's unfurl when it arrives before the message it unfurls", async () => {
+    const id = '1791322999.000010'
+    const text = `see <${permalink('C9')}>`
+    const unfurl = { is_msg_unfurl: true, channel_id: 'C9', ts: TS, author_name: 'Ada', text: 'what Slack shows the channel' }
+    // Slack has the unfurl on the linking message by now; the app isn't in C9, so it can't read the linked one.
+    const replies = vi.fn(async ({ channel, ts }: { channel: string; ts: string }) =>
+      ({ messages: channel === 'C1' && ts === id ? [{ ts: id, user: 'U_JB', text, attachments: [unfurl] }] : [] }))
+    const { board, webhook } = setup({ replies, info: async ({ channel }) => ({ channel: { id: channel, is_member: channel === 'C1' } }) })
+    const julian = caller(board.fetch, await personToken())
+    await webhook({ type: 'event_callback', event: {
+      type: 'message', subtype: 'message_changed', channel: 'C1',
+      message: { type: 'message', ts: id, user: 'U_JB', text, attachments: [unfurl] },
+      previous_message: { type: 'message', ts: id, user: 'U_JB', text },
+    } })
+    await webhook(linking(id, permalink('C9')))
+    await vi.waitFor(async () => expect(await messages(julian)).toHaveLength(1))
+    expect((await messages(julian))[0]!.links).toEqual([
+      { url: permalink('C9'), message: null, unavailable: null, snapshot: expect.objectContaining({ author: 'Ada', text: 'what Slack shows the channel' }) },
+    ])
+    expect(replies).not.toHaveBeenCalledWith(expect.objectContaining({ channel: 'C9' }))
+  })
+
   it("never reads a private channel, a DM, or a channel it isn't in with the app's token: only Slack's unfurl can", async () => {
     const channels: Record<string, object> = {
       CPRIV: { id: 'CPRIV', is_private: true, is_member: true },
@@ -209,7 +231,7 @@ describe('slack message links', () => {
       { url: permalink('D0DM'), message: null, snapshot: null, unavailable: 'private_channel' },
       { url: permalink('COUT'), message: null, snapshot: null, unavailable: 'not_in_channel' },
     ])
-    expect(replies).not.toHaveBeenCalled()
+    for (const channel of Object.keys(channels)) expect(replies).not.toHaveBeenCalledWith(expect.objectContaining({ channel }))
   })
 
   it('keeps the links Slack did not unfurl when it unfurls the others', async () => {
