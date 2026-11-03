@@ -8,7 +8,7 @@ import { SCOPE_MAX } from '../contract/schemas.ts'
 import { compileAccess, FULL_ACCESS, parseScope, scopeOf, type Can } from './access.ts'
 import { BOARD_TOKEN_PREFIX, checkGrant, grantIssuers, tokenHash, type GrantSpec, type Known, type StoredGrant } from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
-import { badRequest, forbidden, notFound, unauthorized } from './errors.ts'
+import { badRequest, forbidden, unauthorized } from './errors.ts'
 
 /** How long a token lives when its minter doesn't say, and at most: npm caps its write tokens at 90 days. */
 export const TOKEN_DEFAULT_MS = 30 * 24 * 3600_000
@@ -31,28 +31,56 @@ type TokenRow = {
   parent: number | null
   by: string
   at: number
-  revoked: boolean
 }
-/** Grants by their issuer and claims, which make one grant; tokens by ID, and their IDs by hash. */
-type AccessState = { grants: Record<string, GrantRow>; grantKeys: Record<string, string>; tokens: Record<string, TokenRow>; hashes: Record<string, number> }
+/**
+ * Grants by their issuer and claims, which make one grant; live tokens by ID, and their IDs by
+ * hash. A revoked token leaves the state at once, and an expired one with the first event of the
+ * day after it expires: its token IDs wait in `expiring`, by that day. The log keeps every event.
+ */
+export type AccessState = {
+  grants: Record<string, GrantRow>
+  grantKeys: Record<string, string>
+  tokens: Record<string, TokenRow>
+  hashes: Record<string, number>
+  expiring: Record<string, number[]>
+  /** The first day not yet pruned: the day of the first event, until then. */
+  pruned: number | null
+}
+
+const DAY_MS = 24 * 3600_000
 
 /** What makes two grants one: the issuer, and the claims with their names sorted. */
 const grantKey = (issuer: string, claims: Record<string, string | string[]>) =>
   JSON.stringify([issuer, Object.keys(claims).sort().map((name) => [name, claims[name]])])
 
-export const accessReducer = reducer({
-  contract: accessContract,
-  name: 'board.access.v1',
-  initialState: { grants: {}, grantKeys: {}, tokens: {}, hashes: {} } as AccessState,
-}).fold((state, event: AccessEvent) => {
+function dropToken(state: AccessState, id: number) {
+  const row = state.tokens[id]
+  if (!row) return
+  delete state.hashes[row.hash]
+  delete state.tokens[id]
+}
+
+/**
+ * The access session's fold. It prunes by the events' own times, so every instance folds the same
+ * state, and each event costs a day's expired tokens at most. A child whose parent is gone counts
+ * as dead (`liveIn`), and lives no longer than its parent, so pruning never brings one back.
+ */
+export function foldAccess(state: AccessState, event: AccessEvent): AccessState {
+  const at = new Date(event.createdAt).getTime()
+  const day = Math.floor(at / DAY_MS)
+  if (state.pruned === null) state.pruned = day
+  for (; state.pruned < day; state.pruned++) {
+    for (const id of state.expiring[state.pruned] ?? []) dropToken(state, id)
+    delete state.expiring[state.pruned]
+  }
   switch (event.type) {
     case 'grant.set': {
       const { issuer, claims, can, by } = event.payload
       const key = grantKey(issuer, claims)
       const existing = state.grants[key]
-      if (existing) Object.assign(existing, { can, by, at: new Date(event.createdAt).getTime() })
+      if (existing) Object.assign(existing, { can, by, at })
       else {
-        state.grants[key] = { id: event.index, issuer, claims, can: can as Can, by, at: new Date(event.createdAt).getTime() }
+        state.grants[key] = { id: event.index, issuer, claims, can: can as Can, by, at }
         state.grantKeys[event.index] = key
       }
       break
@@ -68,18 +96,23 @@ export const accessReducer = reducer({
     case 'token.minted': {
       const { payload } = event
       if (state.hashes[payload.hash] !== undefined) break
-      state.tokens[event.index] = { id: event.index, ...payload, minter: payload.minter as Known, at: new Date(event.createdAt).getTime(), revoked: false }
+      state.tokens[event.index] = { id: event.index, ...payload, minter: payload.minter as Known, at }
       state.hashes[payload.hash] = event.index
+      ;(state.expiring[Math.floor(payload.expiresAt / DAY_MS)] ??= []).push(event.index)
       break
     }
-    case 'token.revoked': {
-      const token = state.tokens[event.payload.id]
-      if (token) token.revoked = true
+    case 'token.revoked':
+      dropToken(state, event.payload.id)
       break
-    }
   }
   return state
-})
+}
+
+export const accessReducer = reducer({
+  contract: accessContract,
+  name: 'board.access.v1',
+  initialState: { grants: {}, grantKeys: {}, tokens: {}, hashes: {}, expiring: {}, pruned: null } as AccessState,
+}).fold(foldAccess)
 
 const grantId = (id: number) => `g${id}`
 const tokenId = (id: number) => `t${id}`
@@ -134,7 +167,7 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
     let at: number | null = id
     for (let depth = 0; at !== null; depth++) {
       const row: TokenRow | undefined = state.tokens[at]
-      if (!row || row.revoked || row.expiresAt <= Date.now() || depth > TOKEN_DEPTH_MAX) return false
+      if (!row || row.expiresAt <= Date.now() || depth > TOKEN_DEPTH_MAX) return false
       at = row.parent
     }
     return true
@@ -253,9 +286,9 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       const index = indexOf(id, 't')
       const row = index === null ? undefined : state.tokens[index]
       const all = identity.principal.access.everywhere('manage')
-      // Someone else's token is as missing as one that isn't there.
-      if (!row || (!all && row.minter.id !== identity.principal.id)) throw notFound(`token not found: ${id}`, 'token_not_found')
-      if (row.revoked) return { revoked: false }
+      // Only a live token of yours, or anyone's with manage: one that's gone, never was, or is
+      // someone else's answers alike, so it says nothing about others' tokens.
+      if (!row || !liveIn(state, row.id) || (!all && row.minter.id !== identity.principal.id)) return { revoked: false }
       await session.append({ type: 'token.revoked', payload: { id: row.id, by: identity.actor.id } })
       return { revoked: true }
     },

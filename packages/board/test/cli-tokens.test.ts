@@ -24,7 +24,7 @@ describe('cli tokens and grants', () => {
     expect(listed.stdout).toMatch(/^t\d+ +feedback-widget +feedback\/=post +expires in 30d\n$/)
     const id = listed.stdout.split(' ')[0]!
     expect((await vb(['token', 'revoke', id])).stdout).toBe(`revoked ${id}\n`)
-    expect((await vb(['token', 'revoke', id])).stdout).toBe(`${id} is already revoked\n`)
+    expect((await vb(['token', 'revoke', id])).stdout).toBe(`${id} isn't a live token of yours\n`)
     const revoked = await vb(['post', 'feedback/web', 'again'], widget)
     expect(revoked).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: The board didn't accept your credentials\.\n {2}invalid token: revoked, expired, or not this board's\n[\s\S]*Pass a token it accepts in BOARD_TOKEN, or unset it/) })
     expect(revoked.stderr).not.toContain('vercel login')

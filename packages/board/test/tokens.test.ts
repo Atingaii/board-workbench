@@ -113,8 +113,10 @@ describe('tokens', () => {
     const everyone = (await julian('GET', '/tokens')).body.tokens
     expect(everyone.map((token: { name: string }) => token.name)).toEqual(['theirs', 'mine'])
     expect(JSON.stringify(everyone)).not.toContain(mine.secret)
-    // Someone else's token is as missing as one that isn't there.
-    expect((await workflow('POST', `/tokens/${mine.token.id}/revoke`, {})).status).toBe(404)
+    // Someone else's token answers as one that isn't there, and stays live.
+    expect((await workflow('POST', `/tokens/${mine.token.id}/revoke`, {})).body).toEqual({ revoked: false })
+    expect((await workflow('POST', '/tokens/t999999/revoke', {})).body).toEqual({ revoked: false })
+    expect((await as(mine.secret)('GET', '/me')).status).toBe(200)
     const pi = caller(board.fetch, await personToken('u_pi'))
     expect((await pi('POST', `/tokens/${theirs.token.id}/revoke`, {})).body).toEqual({ revoked: true })
   })

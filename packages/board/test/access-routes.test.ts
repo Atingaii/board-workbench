@@ -106,7 +106,7 @@ const WALK: Record<RouteName, Walk> = {
   // Anyone mints a token, which acts as them: it can't do more than they can.
   createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],
   tokens: () => [{ method: 'GET', path: '/tokens', status: 200, check: (body) => expect(body.tokens.map((token: any) => token.name)).not.toContain('keeper') }],
-  revokeToken: () => [{ method: 'POST', path: '/tokens/t999999/revoke', status: 404 }],
+  revokeToken: () => [{ method: 'POST', path: '/tokens/t999999/revoke', status: 200, check: (body) => expect(body).toEqual({ revoked: false }) }],
   attachment: ({ secret }) => [{ method: 'GET', path: `/attachments/${secret.file}`, status: 404 }],
   // Only your own post, by the client ID you gave it.
   posted: () => [

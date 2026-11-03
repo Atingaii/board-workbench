@@ -1073,7 +1073,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const id = trustId('token', rest[0])
         const { revoked } = await client().revokeToken(id)
         if (flags.json) result({ token: id, outcome: revoked ? 'revoked' : 'unchanged' })
-        else out(revoked ? `revoked ${id}` : `${id} is already revoked`)
+        else out(revoked ? `revoked ${id}` : `${id} isn't a live token of yours`)
         return 0
       }
       if (verb !== 'create') throw usage(`token takes create, list, or revoke${verb === undefined ? '' : `, and ${verb} isn't one`}.`, { reason: verb === undefined ? 'missing_arguments' : 'invalid_arguments' })

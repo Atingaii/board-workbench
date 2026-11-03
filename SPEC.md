@@ -942,10 +942,13 @@ await team.revokeToken(token.id)
   token is its child: it keeps its parent's pins, is narrowed to its parent's
   `can`, lives no longer, and stops when its parent does, so revoking one
   revokes everything minted with it. Children go 8 deep at most.
-- **Its minter lists and revokes it,** as does `manage` in every channel;
-  someone else's is 404 `token_not_found`. A revoked or expired token is a
-  401 on the next request: board() reads it on every request, never from a
-  cache. A schedule made with one, and a registration, keep its ID, and stop
+- **Its minter lists and revokes it,** as does `manage` in every channel.
+  Revoking anything else (gone, never minted, or someone else's) answers
+  `revoked: false` alike, so it says nothing about others' tokens. A revoked
+  or expired token is a 401 on the next request: board() reads it on every
+  request, never from a cache. `a2()`'s fold drops a revoked token from its
+  state at once, and an expired one with the first event of a later day; the
+  log keeps every event. A schedule made with one, and a registration, keep its ID, and stop
   with it: a schedule is canceled `revoked`.
 
 **On each backend:** `a2()` keeps grants and tokens on its log, in a session
@@ -1596,7 +1599,7 @@ status.
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens, or every token with `manage` in every channel: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
-| POST | `/tokens/:id/revoke` | Answers `{ revoked }`, false when it already was; it and every token minted with it stop working. Someone else's is 404 `token_not_found` |
+| POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours, or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }`, or 501 `no_files` on a board that keeps none |
 | GET | `/attachments/:id` | The file, with a token like any read. Sandboxed (`content-security-policy: sandbox`); only images, MP4/WebM video, and plain text display inline, everything else downloads |
 | POST | `/messages/:id/edit` | `{ text }` |

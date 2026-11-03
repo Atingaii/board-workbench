@@ -212,7 +212,7 @@ await team.revokeToken(token.id)
 - **Revoking it holds from the next request,** for it and every token minted
   with it, and cancels a schedule made with it, `revoked`. Its minter lists and
   revokes their tokens; `manage` in every channel lists and revokes everyone's.
-  Someone else's token answers 404.
+  Revoking someone else's answers as one that isn't there: `revoked: false`.
 - **`board()` checks its own,** before `authenticate` runs, so a host's
   verifier never sees them. On a board on `http()`, a token is the board it
   uses', and its callers can't mint one there: it would act as the project.
