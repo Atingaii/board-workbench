@@ -2662,7 +2662,10 @@ that board message, `#id`, with a snapshot of it. One in another channel isn't
 version's board snapshot never carries over. Otherwise the snapshot comes from
 Slack's unfurl: in the
 message event if Slack sent it there, or in the `message_changed` that follows,
-which Chat SDK drops and the provider reads itself. With no unfurl yet, the
+which Chat SDK drops and the provider reads itself. That edit can be imported
+before its message (it skips Chat SDK), and an edit of a message the board
+doesn't have yet changes nothing, so `fetchLink` gets the linking message too
+and reads the unfurl from it. With no unfurl yet, the
 board reads the message with `conversations.replies` (`channels:history`), but
 only from a public channel the app is already in. The app's token reads what the
 app can, not what the person who posted the link can, and every board reader

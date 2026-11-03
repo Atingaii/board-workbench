@@ -32,7 +32,7 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   markdown?(message: ChatMessage): string
   /** Platform messages a message links to, located under sync key `key`. */
   links?(key: string, message: ChatMessage): ExternalLink[]
-  fetchLink?(link: ExternalLink): Promise<FetchedLink>
+  fetchLink?(link: ExternalLink, linker: { thread: string; message: string }): Promise<FetchedLink>
   /** The message a URL of the platform's names, by its own IDs: `SyncProvider.locate`. */
   locate?(url: string): { thread: string; message: string | null } | null
   /** The platform's URL for a message, by its own IDs: `SyncProvider.url`. */
@@ -200,8 +200,8 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     const root = await this.transport.fetchRoot?.(thread)
     return root ? { ...root, raw: root.raw ?? null } : null
   }
-  override async fetchLink(link: ExternalLink): Promise<FetchedLink> {
-    return this.transport.fetchLink ? this.transport.fetchLink(link) : super.fetchLink(link)
+  override async fetchLink(link: ExternalLink, linker: { thread: string; message: string }): Promise<FetchedLink> {
+    return this.transport.fetchLink ? this.transport.fetchLink(link, linker) : super.fetchLink(link, linker)
   }
   override locate(url: string): { thread: string; message: string | null } | null {
     return this.transport.locate ? this.transport.locate(url) : super.locate(url)

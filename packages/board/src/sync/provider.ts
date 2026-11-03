@@ -118,8 +118,12 @@ export abstract class SyncProvider<E extends ProviderEvent = ProviderEvent> {
   async fetchFile(_file: ExternalFile): Promise<Uint8Array | null> { return null }
   /** The platform's own link to an event's message, or null when it has none. */
   async permalink(_event: E): Promise<string | null> { return null }
-  /** A linked message the platform didn't describe, read from the platform. */
-  async fetchLink(_link: ExternalLink): Promise<FetchedLink> { return { snapshot: null, unavailable: `${this.platform} can't read it` } }
+  /**
+   * A linked message the platform didn't describe, read from the platform. `linker` is the
+   * platform message that links it, by its own IDs: what the platform says about the link may be
+   * there by now.
+   */
+  async fetchLink(_link: ExternalLink, _linker: { thread: string; message: string }): Promise<FetchedLink> { return { snapshot: null, unavailable: `${this.platform} can't read it` } }
   /**
    * The message a URL of this platform's names, by its own thread and message IDs, or null for a
    * URL that isn't one. `message` is null for a link to a thread itself. It asks the platform
