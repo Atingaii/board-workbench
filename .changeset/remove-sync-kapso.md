@@ -2,4 +2,4 @@
 '@vercel/board': minor
 ---
 
-**Breaking:** `@vercel/board/sync-kapso` and `kapso()` are gone, with `numbers` and `WhatsAppEvent`. Sync WhatsApp through Kapso's adapter with `chatSdk({ adapter: createKapsoAdapter({ client }), singleReaction: true }, channels({ … }))` from `@vercel/board/sync-chat-sdk`: channel keys are then the adapter's own IDs (base64url-encoded), and typing goes through the adapter, which only knows the messages its own instance received.
+**Breaking:** `@vercel/board/sync-kapso` is gone, with `kapso()`, `numbers`, and `WhatsAppEvent`, and board no longer syncs WhatsApp. A board that syncs through `kapso()` stays on `@vercel/board@0.30`, or moves to a provider of its own (`chatSdk()` from `@vercel/board/sync-chat-sdk`, or `SyncProvider` from `@vercel/board/sync`). Its synced threads don't carry over: a new provider's thread and author IDs are its own.

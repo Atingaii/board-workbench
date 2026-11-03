@@ -104,7 +104,8 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     // SDK's own errors stay as it handles them.
     for (const name of ['processMessage', 'processMessageUpdated', 'processMessageDeleted', 'processReaction']) {
       const original = chat[name]
-      if (typeof original !== 'function') continue
+      // Loud, so a Chat SDK that renames one fails here rather than answering before it stores.
+      if (typeof original !== 'function') throw new Error(`Chat SDK has no ${name}: board can't wait for what it processes`)
       chat[name] = (...args: unknown[]) => {
         const task: unknown = original.apply(this.chat, args)
         if (task instanceof Promise) this.receiving.getStore()?.tasks.push(task.catch(() => {}))
