@@ -30,6 +30,8 @@ export const Ref = z.string().min(1).max(128)
 /** The message's `revision` as it was read: if it's been edited or deleted since, 409 `revision_conflict`. */
 const Revision = z.number().int().positive()
 const id = Ref
+/** A boolean query parameter: `true` or `1`, `false` or `0`. */
+const flag = z.enum(['true', 'false', '1', '0']).transform((value) => value === 'true' || value === '1')
 const repeated = z
   .union([z.string(), z.array(z.string())])
   .transform((value) => (Array.isArray(value) ? value : [value]))
@@ -79,7 +81,7 @@ export const ThreadsQuery = Filters.extend({
 export const EventsQuery = Filters.extend({
   after: Ref.optional(),
   wait: z.coerce.number().min(0).max(300).optional(),
-  all: z.coerce.boolean().optional(),
+  all: flag.optional(),
 })
 
 export const PostBody = z
@@ -169,7 +171,7 @@ export const SchedulesQuery = z.object({
   /** An actor ID or handle: the schedules it created. */
   by: z.string().optional(),
   /** Include done and canceled schedules. */
-  all: z.coerce.boolean().optional(),
+  all: flag.optional(),
 })
 
 export const SyncBody = z.object({ target: z.string().min(3).max(300) })
