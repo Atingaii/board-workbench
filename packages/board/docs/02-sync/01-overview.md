@@ -76,7 +76,8 @@ A Vercel Queues trigger makes that function private, which is why it can't share
 the board's public route. [Mounting](../01-board/01-mounting.md#the-scheduler-route)
 covers the store, the scheduler, and their routes. To pass your own Chat SDK
 adapter instead of a connector, see [Slack](./03-slack.md#your-own-adapter) and
-[GitHub](./04-github.md#setup).
+[GitHub](./04-github.md#setup). Any other Chat SDK adapter syncs through
+[`chatSdk()`](./06-providers.md#any-chat-sdk-adapter).
 
 ## Sync functions
 

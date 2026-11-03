@@ -144,7 +144,7 @@ new root's thread; a function that calls neither sends nothing.
 `render(renderer, fn)` from `@vercel/board/sync` changes outbound attribution for what
 `fn` delivers, while retaining the board's author, media, and copy receipts.
 `@vercel/board/sync` exports shared event schemas, the helpers, and the native
-`SyncProvider` contract. `@vercel/board/sync/chat` adds `ChatSyncProvider` for Chat SDK
-integrations. Providers own stable native event identity; functions receive a
+`SyncProvider` contract. `@vercel/board/sync-chat-sdk` exports `chatSdk()`, which syncs
+any Chat SDK adapter. Providers own stable native event identity; functions receive a
 durable `event.id` for their own idempotency. See the [sync contract](../../SPEC.md#sync-functions-and-default-imports)
 for the function lifecycle, required SDK client operations, and extension examples.

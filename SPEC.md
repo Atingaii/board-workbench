@@ -151,13 +151,13 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
+| `@vercel/board/sync-chat-sdk` | `chatSdk()`, which syncs any Chat SDK adapter, with hooks for what it can't read from the adapter | server |
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`), and `withUserTokens()` and `connectUserTokens()` | server |
-| `@vercel/board/sync/chat` | `ChatSyncProvider`, for a sync provider of your own on a Chat SDK adapter | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
 A backend's own pieces live under its path, and everything that works with any
 backend lives at the top. Sync adapters are named for the Chat SDK adapter they
-take: `sync-kapso` takes `@kapso/chat-adapter`, which leaves `sync-whatsapp` for
+take, and `sync-chat-sdk` takes any: `sync-kapso` takes `@kapso/chat-adapter`, which leaves `sync-whatsapp` for
 `@chat-adapter/whatsapp`, Meta's own, whose threads are contacts rather than
 conversations.
 
@@ -2527,14 +2527,25 @@ webhook: Connect's OIDC verifier, or the platform's own signature check.
 
 `@vercel/board/sync` exports `SyncProvider`, shared schemas, and the sync function's types and helpers.
 The engine calls the provider's methods; it does not access an SDK adapter or
-transport configuration. A provider can implement its own SDK integration or
-extend `ChatSyncProvider` from `@vercel/board/sync/chat`. Slack, GitHub, Kapso, and Linear
-share that bridge. Importing the native contract does not load Chat SDK.
+transport configuration. A provider can implement its own SDK integration, or
+`chatSdk()` from `@vercel/board/sync-chat-sdk` bridges any Chat SDK adapter. Slack, GitHub,
+Kapso, and Linear run on that bridge, with their platform's hooks. Importing the native
+contract does not load Chat SDK.
 
 ```ts
 import { SyncProvider, type Receive } from '@vercel/board/sync'
-import { ChatSyncProvider, type ChatInput } from '@vercel/board/sync/chat'
+import { channels, chatSdk } from '@vercel/board/sync-chat-sdk'
 ```
+
+`chatSdk({ adapter, ...hooks }, sync)` reads what it can from the adapter. Its platform
+is `adapter.name`, and its event schema `eventSchema(platform, 'message')`. A channel's
+name is its ID, the adapter's own without its `name:` prefix. A target is a thread when
+the adapter's `channelIdFromThreadId` reads it as one in another channel, and a channel
+otherwise, including when the adapter can't read it. A board root starts a thread only
+where the adapter has `postChannelMessage`. Each of those, and every other bridge hook
+(ID encodings, thread grouping, reading messages, links, mentions, files, typing,
+posting as a person, webhook events the adapter doesn't emit), is an option beside
+`adapter`. The bridge class itself isn't exported.
 
 The required methods are `receive(key, request, emit)`, `resolveChannel(key)`,
 `resolveTarget(target)`, `post(target, kind, body)`, and `event(context)`.
@@ -2548,11 +2559,14 @@ copy/file receipts. Intake failures answer 500 so the sender can retry.
 
 The provider supplies stable occurrence identity in `dedupe`. Repeated delivery
 of the same occurrence must keep its ID, while a later identical action must
-have a different one. The Chat bridge's `eventId(key, input)` can be overridden
-for native delivery IDs; its default handles messages, edits, and deletes.
-Providers receiving reactions must supply their occurrence identity. Slack uses
-`event_ts`; Kapso uses the reaction message's `id`. There is no current-time
-fallback. Existing built-in inbox and receipt ID schemes are retained.
+have a different one. The Chat bridge's default identity handles messages, edits,
+and deletes. A built-in provider that receives reactions supplies their occurrence
+identity: Slack uses `event_ts`; Kapso uses the reaction message's `id`. `chatSdk()`
+takes the platform's as `reactionId(reaction)`; without it, a reaction is known by its
+payload, a hash of its raw JSON with sorted keys, beside its thread, message, emoji,
+person, and direction. A redelivery keeps its ID, and a new occurrence, whose payload
+differs, gets another. There is no current-time fallback. Existing built-in inbox and
+receipt ID schemes are retained.
 
 Target resolution returns `{ target, channel, kind: 'channel' | 'thread' }`.
 The server records target kind in `thread.synced` and the resolved incoming
@@ -2567,8 +2581,8 @@ native mentions, email lookup, link snapshots (`fetchLink`), on-demand reads
 change/typing operations are no-ops. `uploadsFiles` declares upload support;
 otherwise files get board attachment notes. `refusesFiles` distinguishes a
 permanent upload refusal from a retryable failure. Providers also declare
-reaction cardinality. All of these operations can be overridden as class methods;
-Chat-specific hooks remain inside the bridge.
+reaction cardinality. A native provider overrides these as class methods;
+`chatSdk()` takes them as hooks.
 
 `SyncProvider` takes its sync function as its constructor's second argument, and
 the engine runs it for every event. Envelopes are projected, validated, and

@@ -97,9 +97,9 @@
       "types": "./dist/sync.d.mts",
       "default": "./dist/sync.mjs"
     },
-    "./sync/chat": {
-      "types": "./dist/sync.chat.d.mts",
-      "default": "./dist/sync.chat.mjs"
+    "./sync-chat-sdk": {
+      "types": "./dist/sync-chat-sdk.d.mts",
+      "default": "./dist/sync-chat-sdk.mjs"
     },
     "./sync-slack": {
       "types": "./dist/sync-slack.d.mts",

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { ChatSyncProvider, type ChatInput } from '../src/sync/chat-provider.ts'
+import { chatSdk } from '../src/sync/chat-sdk.ts'
 import { SyncProvider, type ProviderPost, type Receive, type ResolvedTarget, type SyncContext } from '../src/sync/provider.ts'
 import { channels, mirror, type SyncIn } from '../src/sync/fn.ts'
 import { envelope, eventSchema, type SyncResult } from '../src/sync/events.ts'
@@ -22,8 +23,8 @@ const resolve = (target: string): ResolvedTarget => ({
 const author = { id: 'opaque:tenant:sample:user:42', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
 
 type Inbound = (sync: SyncIn<Event>) => unknown
-/** `run` for what comes in, and a mirror of `tickets` for what goes out. */
-const routed = (run: Inbound) => channels<Event>({ inbox: (sync) => (sync.direction === 'in' ? run(sync) : mirror('tickets')(sync)) })
+/** `run` for what comes in, and a mirror of `tickets` for what goes out, on the channel named `inbox`. */
+const routed = (run: Inbound, inbox = 'inbox') => channels<Event>({ [inbox]: (sync) => (sync.direction === 'in' ? run(sync) : mirror('tickets')(sync)) })
 
 class NativeProvider extends SyncProvider<Event> {
   posts: Post[] = []
@@ -78,11 +79,26 @@ class OpaqueChatProvider extends ChatSyncProvider<Event> {
 
 function nativeFixture(run: Inbound, options: Options) {
   const provider = new NativeProvider(run, options)
-  return { provider, posts: provider.posts, payload: (input: Input) => input, attempts: () => provider.attempts }
+  return { provider, posts: provider.posts, payload: (input: Input) => input, attempts: () => provider.attempts, author: author.id }
 }
 
 function chatFixture(run: Inbound, options: Options) {
-  const fake = fakePlatform('opaque')
+  const fake = recording(fakePlatform('opaque'), options)
+  return { ...fake, provider: new OpaqueChatProvider(fake.adapter, run, options), author: author.id }
+}
+
+/** `chatSdk()` with no hooks, on an adapter that knows its own IDs, as a real one does. */
+function chatSdkFixture(run: Inbound, options: Options) {
+  const fake = recording(fakePlatform('opaque', (adapter) => {
+    adapter.channelIdFromThreadId = (id) => id.replace(/:conversation:\d+$/, '')
+  }), options)
+  // The adapter can post to a channel, so only a test that says it can't turns that off.
+  const provider = chatSdk({ adapter: fake.adapter, ...(options.starts === false ? { canStartThreads: false } : {}) }, routed(run, channel))
+  return { ...fake, provider, author: 'opaque:user:42' }
+}
+
+/** A fake platform that checks signatures, and records each post and delivery attempt. */
+function recording(fake: ReturnType<typeof fakePlatform>, options: Options) {
   const posts: Post[] = []
   let attempts = 0
   const post = fake.adapter.postMessage.bind(fake.adapter)
@@ -102,10 +118,10 @@ function chatFixture(run: Inbound, options: Options) {
   const payload = (input: Input) => input.kind === 'message'
     ? { type: 'message', threadId: `opaque:${thread}`, id: input.id, text: input.text, user: '42', raw: { delivery_id: input.id } }
     : { type: 'reaction', threadId: `opaque:${thread}`, messageId: 'root', emoji: 'eyes', added: input.added, user: '42', raw: { delivery_id: input.id } }
-  return { provider: new OpaqueChatProvider(fake.adapter, run, options), posts, payload, attempts: () => attempts }
+  return { adapter: fake.adapter, posts, payload, attempts: () => attempts }
 }
 
-function providerContract(name: string, fixture: typeof nativeFixture | typeof chatFixture) {
+function providerContract(name: string, fixture: typeof nativeFixture | typeof chatFixture | typeof chatSdkFixture) {
   describe(`provider contract: ${name}`, () => {
     async function setup(options: Options = {}) {
       const events: Event[] = []
@@ -179,7 +195,7 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
       await test.send({ id: 'r3', kind: 'reaction', added: true })
       await test.send({ id: 'r3', kind: 'reaction', added: true })
       await vi.waitFor(() => expect(test.events.map((event) => event.type)).toEqual(['message', 'reaction.added', 'reaction.removed', 'reaction.added']))
-      expect((await test.read())[0]?.reactions).toEqual({ eyes: [author.id] })
+      expect((await test.read())[0]?.reactions).toEqual({ eyes: [test.author] })
       expect(new Set(test.events.map((event) => event.id)).size).toBe(4)
     })
 
@@ -256,6 +272,7 @@ function providerContract(name: string, fixture: typeof nativeFixture | typeof c
 
 providerContract('native', nativeFixture)
 providerContract('Chat SDK bridge', chatFixture)
+providerContract('chatSdk() with no hooks', chatSdkFixture)
 
 describe('who a post is from', () => {
   it("gives a platform an agent's name and avatar to post under, and nothing for a person", async () => {

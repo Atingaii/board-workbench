@@ -21,8 +21,13 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   findByEmail?(email: string): Promise<ExternalAuthor | null>
   mention?(actor: Actor): string | null
   author?(author: ChatAuthor, raw: unknown): ExternalAuthor
-  resolveChannel(key: string): Promise<string>
-  resolveTarget(target: string): Promise<ResolvedTarget>
+  /** A channel's name as its native ID. Without it, a name is the ID. */
+  resolveChannel?(key: string): Promise<string>
+  /**
+   * A target's channel and kind, called on the provider. Without it, the adapter reads the target
+   * as a thread: one it reads as its own channel, or can't read, is a channel.
+   */
+  resolveTarget?(this: SyncProvider, target: string): Promise<ResolvedTarget>
   groupThread?(thread: string): string
   channelOf?(thread: string): string
   isRoot?(thread: string, message: string): boolean
@@ -192,8 +197,20 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     return this.transport.adapter
   }
 
-  override resolveChannel(key: string) { return this.transport.resolveChannel(key) }
-  override async resolveTarget(target: string) { return ResolvedTarget.parse(await this.transport.resolveTarget.call(this, target)) }
+  override async resolveChannel(key: string) { return this.transport.resolveChannel ? this.transport.resolveChannel(key) : key }
+  override async resolveTarget(target: string) {
+    return ResolvedTarget.parse(this.transport.resolveTarget ? await this.transport.resolveTarget.call(this, target) : this.targetOf(target))
+  }
+  /** A target as the adapter reads it: a thread in its channel, or a channel. */
+  private targetOf(target: string): ResolvedTarget {
+    let channel: string
+    try {
+      channel = this.transport.channelOf?.(target) ?? this.toNative(this.transport.adapter.channelIdFromThreadId(this.toChat(target)))
+    } catch {
+      return { target, channel: target, kind: 'channel' }
+    }
+    return { target, channel, kind: channel === target ? 'channel' : 'thread' }
+  }
   override async findByEmail(email: string) { return this.transport.findByEmail?.(email) ?? null }
   override mention(actor: Actor) { return this.transport.mention?.(actor) ?? null }
   override async fetchRoot(thread: string): Promise<SyncRoot | null> {
