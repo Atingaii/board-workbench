@@ -93,7 +93,7 @@ function chatSdkFixture(run: Inbound, options: Options) {
     adapter.channelIdFromThreadId = (id) => id.replace(/:conversation:\d+$/, '')
   }), options)
   // Its channels hold many threads, as Slack's do, so it opts in to starting them.
-  const provider = chatSdk({ adapter: fake.adapter, canStartThreads: options.starts ?? true }, routed(run, channel))
+  const provider = chatSdk({ adapter: fake.adapter, platform: 'opaque', canStartThreads: options.starts ?? true }, routed(run, channel))
   return { ...fake, provider, author: 'opaque:user:42' }
 }
 

@@ -72,6 +72,9 @@ export type ChatTransport = Omit<ProviderOptions, 'uploadsFiles'> & {
   whoAmI?(token: string): Promise<ExternalAuthor>
 }
 
+/** A webhook being handled: what it brought, and what Chat SDK claimed and started for it. */
+type Receiving = { key: string; emit: Receive; body: string; claims: string[]; failures: unknown[]; tasks: Promise<unknown>[] }
+
 const externalFile = (file: NonNullable<ChatMessage['attachments']>[number]): ExternalFile => ({
   type: file.type,
   ...(file.name ? { name: file.name.slice(0, 1000) } : {}),
@@ -85,7 +88,7 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   protected readonly transport: ChatTransport
   private readonly chat: Chat
   private readonly state: StateAdapter
-  private readonly receiving = new AsyncLocalStorage<{ key: string; emit: Receive; claims: string[]; failures: unknown[] }>()
+  private readonly receiving = new AsyncLocalStorage<Receiving>()
   private initialized: Promise<void> | undefined
 
   constructor(transport: ChatTransport, sync: SyncFn<E>) {
@@ -93,6 +96,21 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     this.transport = transport
     this.state = transport.state ?? ephemeralState()
     this.chat = createChat(transport.adapter, this.claiming(this.state))
+    // What Chat SDK processes while a webhook is handled finishes before it answers, so the board
+    // stores it first, even when the adapter doesn't hand it to `waitUntil` (Discord's forwarded
+    // reactions don't).
+    const chat = this.chat as unknown as Record<string, unknown>
+    // Waited on only: what the board couldn't store fails the webhook through `failures`, and Chat
+    // SDK's own errors stay as it handles them.
+    for (const name of ['processMessage', 'processMessageUpdated', 'processMessageDeleted', 'processReaction']) {
+      const original = chat[name]
+      if (typeof original !== 'function') continue
+      chat[name] = (...args: unknown[]) => {
+        const task: unknown = original.apply(this.chat, args)
+        if (task instanceof Promise) this.receiving.getStore()?.tasks.push(task.catch(() => {}))
+        return task
+      }
+    }
     const onMessage = async (_thread: unknown, message: ChatMessage) => this.emit({ kind: 'message', message })
     this.chat.onNewMessage(/[\s\S]*/, onMessage)
     this.chat.onNewMention(onMessage)
@@ -182,10 +200,16 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
     }
   }
 
+  /** The body of the webhook being handled, as the platform sent it: the same on a redelivery. */
+  protected delivery(): string | null {
+    return this.receiving.getStore()?.body ?? null
+  }
+
   override async receive(key: string, request: Request, emit: Receive): Promise<Response> {
     const claims: string[] = []
+    const body = await request.clone().text()
     try {
-      return await this.receiving.run({ key, emit, claims, failures: [] }, () => this.receiveRequest(key, request, emit))
+      return await this.receiving.run({ key, emit, body, claims, failures: [], tasks: [] }, () => this.receiveRequest(key, request, emit))
     } catch (error) {
       // The board couldn't store what came in, so the platform retries. Chat SDK and the adapter
       // claimed it as handled (a message's dedupe key, Telegram's update ID): give that back, or
@@ -213,17 +237,15 @@ export abstract class ChatSyncProvider<E extends ProviderEvent = ProviderEvent> 
   }
 
   private async receiveRequest(key: string, request: Request, emit: Receive): Promise<Response> {
-    const body = this.transport.intercept || this.transport.missed ? await request.clone().text() : null
-    const tasks: Promise<unknown>[] = []
+    const { body, tasks, failures } = this.receiving.getStore()!
     const webhooks = this.chat.webhooks as Record<string, (request: Request, options: { waitUntil(task: Promise<unknown>): void }) => Promise<Response>>
     const response = await webhooks[this.transport.adapter.name]!(request, { waitUntil: (task) => void tasks.push(task) })
     const results: PromiseSettledResult<unknown>[] = []
     while (tasks.length) results.push(...await Promise.allSettled(tasks.splice(0)))
-    const { failures } = this.receiving.getStore()!
     if (failures.length) throw failures[0]
     const failed = results.find((result) => result.status === 'rejected')
     if (failed) throw failed.reason
-    if (response.ok && body !== null) {
+    if (response.ok && (this.transport.intercept || this.transport.missed)) {
       for (const input of this.transport.missed?.(request.headers, body) ?? []) await emit(await this.normalize(key, input))
       for (const received of this.transport.intercept?.(key, request.headers, body) ?? []) await emit(received)
     }

@@ -52,7 +52,7 @@ hook, passed beside `adapter`:
 | Channels | The adapter's own channel IDs, without its `name:` prefix | `resolveChannel(name)` |
 | Targets | One the adapter reads as a thread is a thread in its channel; anything else is a channel | `resolveTarget(target)` |
 | New threads | Never: a new board root stays on the board, since on most platforms a chat is one conversation. Threads that came from the platform sync both ways. | `canStartThreads: true`, where a channel holds many threads (Discord, Teams) |
-| Reactions | Known by their payload: a redelivery is the same JSON, a new reaction is new JSON | `reactionId(reaction)` |
+| Reactions | Known by the webhook that brought them: a platform sends the same body again on a retry and a new one for each reaction, even where the reaction reads the same every time, as on Discord | `reactionId(reaction)` |
 | Reactions per person | Any number | `singleReaction` |
 
 A platform that gives each reaction an ID, or names its channels, says so:

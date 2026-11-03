@@ -2553,12 +2553,16 @@ The provider supplies stable occurrence identity in `dedupe`. Repeated delivery
 of the same occurrence must keep its ID, while a later identical action must
 have a different one. The Chat bridge's default identity handles messages, edits,
 and deletes. A built-in provider that receives reactions supplies their occurrence
-identity: Slack uses `event_ts`. `chatSdk()`
-takes the platform's as `reactionId(reaction)`; without it, a reaction is known by its
-payload, a hash of its raw JSON with sorted keys, beside its thread, message, emoji,
-person, and direction. A redelivery keeps its ID, and a new occurrence, whose payload
-differs, gets another. There is no current-time fallback. Existing built-in inbox and
-receipt ID schemes are retained.
+identity: Slack uses `event_ts`. `chatSdk()` takes the platform's as
+`reactionId(reaction)`. Without it, a reaction is known by the webhook that brought
+it: a hash of the request's body, beside its thread, message, emoji, person, and
+direction. Platforms send the same body again on a retry and a new one for each
+occurrence, even where the reaction's own payload reads the same every time:
+Discord's carries no timestamp or ID, and its gateway listener adds when it saw
+the event. A platform that changes the body on a retry imports the reaction twice,
+which leaves the board's reactions as they were; two occurrences in byte-identical
+bodies would be one, and nothing in them could tell them apart. There is no
+current-time fallback. Existing built-in inbox and receipt ID schemes are retained.
 
 Target resolution returns `{ target, channel, kind: 'channel' | 'thread' }`.
 The server records target kind in `thread.synced` and the resolved incoming
@@ -2607,6 +2611,11 @@ board configures every Chat instance itself:
   collide on `slack:`. board translates between Chat SDK IDs and its
   key-prefixed external IDs; a provider used under two keys takes each
   webhook's key from the request it's handling.
+- **A webhook answers once what it brought is stored.** Chat SDK hands its work to
+  the adapter's `waitUntil`, and some adapters pass none (Discord's forwarded
+  reactions). The bridge waits for everything Chat SDK starts while a webhook is
+  handled, so the board stores it before answering. Chat SDK's own errors stay
+  as it handles them; a store that failed fails the webhook.
 - **Chat state is ephemeral.** The board's inbox gives each platform event its
   durable identity, by the provider's `dedupe`, and the board's sync records
   hold sync state, on any backend. Chat SDK uses an in-memory state adapter for

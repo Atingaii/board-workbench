@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createDiscordAdapter } from '@chat-adapter/discord'
 import { createTelegramAdapter } from '@chat-adapter/telegram'
 import { createMockState } from '@chat-adapter/tests'
 import { chatSdk, channels, type ChatSdkEvent, type ChatSdkOptions } from '../src/sync/chat-sdk.ts'
@@ -100,7 +101,7 @@ describe('chatSdk() on a real adapter, with no hooks', () => {
     expect(api.sent()).toEqual([])
   })
 
-  it('knows a reaction by its payload: a redelivery is the same reaction, a re-add is another', async () => {
+  it('knows a reaction by its webhook: a redelivery is the same reaction, a re-add is another', async () => {
     const { board, say, react } = await setup({ [String(GROUP)]: 'support' })
     const julian = caller(board.fetch, await personToken())
     await say(10, 'export is broken')
@@ -113,7 +114,8 @@ describe('chatSdk() on a real adapter, with no hooks', () => {
     // Each delivery is stored before its webhook answers.
     const { body: inbox } = await julian('GET', '/inbox/telegram')
     const reactions = (inbox.events as { event: { kind: string; added: boolean } }[]).filter((record) => record.event.kind === 'reaction')
-    expect(reactions.map((record) => record.event.added)).toEqual([true, false, true])
+    // Two adds and a remove, in whatever order the inbox lists them.
+    expect(reactions.map((record) => record.event.added).sort()).toEqual([false, true, true])
     await vi.waitFor(async () => expect((await read(julian, 'support'))[0]!.reactions).toEqual({ thumbs_up: [`telegram:user:${ADA.id}`] }))
   })
 
@@ -130,6 +132,50 @@ describe('chatSdk() on a real adapter, with no hooks', () => {
     await expect(provider.receive('telegram', request(update, 7), emit)).rejects.toThrow('the board is down')
     expect((await provider.receive('telegram', request(update, 7), emit)).status).toBe(200)
     expect(stored.map((received) => received.event.kind)).toEqual(['message'])
+  })
+})
+
+describe('chatSdk() on Discord, whose reactions carry no ID', () => {
+  it('keeps add, remove, and add apart, and stores each before the webhook answers', async () => {
+    const adapter = createDiscordAdapter({ botToken: 'discord-token', publicKey: 'ab'.repeat(32), applicationId: '999' })
+    const board = testBoard({ sync: { discord: chatSdk({ adapter }, channels({ 'G1:C1': 'support' })) } })
+    const julian = caller(board.fetch, await personToken())
+    // What Discord says about the reaction is the same each time; the gateway listener adds when it saw it.
+    const data = { user_id: '42', channel_id: 'C1', message_id: 'M1', guild_id: 'G1', channel_type: 0, emoji: { id: null, name: '👍' }, user: { id: '42', username: 'ada' } }
+    const forward = (type: 'ADD' | 'REMOVE', timestamp: number) =>
+      board.fetch(new Request(`${BOARD_URL}/webhooks/discord`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-discord-gateway-token': 'discord-token' },
+        body: JSON.stringify({ type: `GATEWAY_MESSAGE_REACTION_${type}`, timestamp, data }),
+      }))
+
+    for (const [type, timestamp] of [['ADD', 1735689600000], ['REMOVE', 1735689660000], ['ADD', 1735689720000], ['ADD', 1735689720000]] as const) {
+      expect((await forward(type, timestamp)).status).toBe(200)
+    }
+    // The last is the one before it, delivered again.
+    const { body: inbox } = await julian('GET', '/inbox/discord')
+    const reactions = (inbox.events as { event: { kind: string; added: boolean } }[]).filter((record) => record.event.kind === 'reaction')
+    // Two adds and a remove, in whatever order the inbox lists them.
+    expect(reactions.map((record) => record.event.added).sort()).toEqual([false, true, true])
+  })
+
+  it("answers a forwarded reaction only once the board has stored it, though the adapter doesn't wait", async () => {
+    const adapter = createDiscordAdapter({ botToken: 'discord-token', publicKey: 'ab'.repeat(32), applicationId: '999' })
+    const provider = chatSdk({ adapter }, channels({ 'G1:C1': 'support' }))
+    const stored: ReceivedEvent[] = []
+    // A board that takes a moment to store what came in.
+    const emit = async (received: ReceivedEvent) => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      stored.push(received)
+    }
+    const data = { user_id: '42', channel_id: 'C1', message_id: 'M1', guild_id: 'G1', channel_type: 0, emoji: { id: null, name: '👍' }, user: { id: '42', username: 'ada' } }
+    const response = await provider.receive('discord', new Request(`${BOARD_URL}/webhooks/discord`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-discord-gateway-token': 'discord-token' },
+      body: JSON.stringify({ type: 'GATEWAY_MESSAGE_REACTION_ADD', timestamp: 1735689600000, data }),
+    }), emit)
+    expect(response.status).toBe(200)
+    expect(stored.map((received) => received.event.kind)).toEqual(['reaction'])
   })
 })
 

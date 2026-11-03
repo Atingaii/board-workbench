@@ -23,7 +23,7 @@ export type ChatSdkOptions<P extends string = string> = Omit<ChatTransport, 'pla
    * the board, and threads that came from the platform sync both ways.
    */
   canStartThreads?: boolean
-  /** The platform's ID for one reaction occurrence, the same on every redelivery. Without it, a reaction is known by its payload. */
+  /** The platform's ID for one reaction occurrence, the same on every redelivery. Without it, a reaction is known by the webhook that brought it. */
   reactionId?(reaction: ReactionEvent): string
 }
 
@@ -32,7 +32,9 @@ export type ChatSdkOptions<P extends string = string> = Omit<ChatTransport, 'pla
  * `channels({ '-1001234567890': 'support' })`. Channels are the adapter's own IDs, without its
  * prefix. Slack, GitHub, and Linear have entries of their own, with more than this reads.
  */
-export function chatSdk<P extends string = string>(options: ChatSdkOptions<P>, sync: SyncFn<ChatSdkEvent<P>>): SyncProvider<ChatSdkEvent<P>> {
+export function chatSdk<P extends string>(options: ChatSdkOptions<P> & { platform: P }, sync: SyncFn<ChatSdkEvent<P>>): SyncProvider<ChatSdkEvent<P>>
+export function chatSdk(options: ChatSdkOptions, sync: SyncFn<ChatSdkEvent>): SyncProvider<ChatSdkEvent>
+export function chatSdk(options: ChatSdkOptions, sync: SyncFn<ChatSdkEvent>): SyncProvider<ChatSdkEvent> {
   if (!options?.adapter?.name) throw new Error('chatSdk needs a Chat SDK adapter: chatSdk({ adapter }, channels({ … }))')
   return new ChatSdkProvider(options, sync)
 }
@@ -51,24 +53,23 @@ class ChatSdkProvider<P extends string> extends ChatSyncProvider<ChatSdkEvent<P>
   override eventId(key: string, input: ChatInput): string {
     if (input.kind !== 'reaction') return super.eventId(key, input)
     const reaction = input.reaction
-    const occurrence = this.reactionId?.(reaction) ?? digest(reaction.raw)
+    const occurrence = this.reactionId?.(reaction) ?? this.occurrence()
     return `reaction:${key}:${this.toNative(reaction.threadId)}|${reaction.messageId}|${reaction.rawEmoji}|${reaction.user.userId}|${reaction.added}|${occurrence}`
+  }
+
+  /**
+   * A reaction's occurrence, when the platform gives it no ID: the webhook that brought it. A
+   * platform redelivers the same body, and sends a new one for each occurrence, even where the
+   * payload has nothing that tells two apart (Discord's forwarded reactions carry a timestamp
+   * beside it).
+   */
+  private occurrence(): string {
+    const delivery = this.delivery()
+    if (delivery === null) throw new Error(`${this.platform}: a reaction outside a webhook has no identity; pass reactionId`)
+    return createHash('sha256').update(delivery).digest('base64url')
   }
 
   override event(context: SyncContext): ChatSdkEvent<P> {
     return this.schema.parse(envelope(this.platform, context.key, context.event, context.raw, context.id))
   }
-}
-
-/** A payload's identity: a redelivery is the same JSON, its keys in any order. */
-function digest(raw: unknown): string {
-  let json = ''
-  try {
-    json = JSON.stringify(raw, (_key, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : value) ?? ''
-  } catch {
-    // A payload that isn't JSON has no identity of its own: its reaction is known by the rest.
-  }
-  return createHash('sha256').update(json).digest('base64url')
 }
