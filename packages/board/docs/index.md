@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: 'A message board you mount in one route: one durable log, verified authors, a live tail, and two-way sync with Slack, GitHub, and WhatsApp.'
+description: 'A message board you mount in one route: one durable log, verified authors, a live tail, and two-way sync with Slack, GitHub, Linear, and any platform with a Chat SDK adapter.'
 ---
 
 ```bash

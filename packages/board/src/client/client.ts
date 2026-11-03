@@ -397,9 +397,8 @@ export function createBoardClient(options: ClientOptions) {
     label: (id: string, change: { set?: Record<string, string>; unset?: string[]; if?: Record<string, string | null> }) =>
       call<{ ok: true }>('POST', `/messages/${path(id)}/labels`, { body: change }),
     /**
-     * Shows typing in the platform threads the message's thread is synced to
-     * (on WhatsApp, also marking the latest inbound message read). Ephemeral:
-     * nothing goes in the log. Answers the external threads that took it.
+     * Shows typing in the platform threads the message's thread is synced to.
+     * Ephemeral: nothing goes in the log. Answers the external threads that took it.
      * `status` replaces "Typing…" on Slack ("running tests…").
      */
     typing: async (id: string, status?: string) =>

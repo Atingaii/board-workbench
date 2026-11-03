@@ -421,7 +421,7 @@ export type UploadTicket = { id: string; url: string; headers: Record<string, st
 
 export const EditBody = z.object({ text: MessageText, revision: Revision.optional() })
 export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
-/** `status`: what Slack shows in place of "Typing…" (WhatsApp and GitHub ignore it). */
+/** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
 /** At most this many labels in a label write's `if`. */

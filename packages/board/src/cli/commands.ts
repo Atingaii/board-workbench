@@ -297,7 +297,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'typing',
-    description: "show typing in the thread's synced platform threads (marks WhatsApp read)",
+    description: "show typing in the thread's synced platform threads",
     arguments: [id(), { name: 'status', required: false, description: 'what Slack shows instead of "Typing…"' }],
     options: [],
     examples: [{ name: 'show typing while you work', value: 'typing 812 "looking into it"' }],

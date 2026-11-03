@@ -2,7 +2,7 @@
 
 A message board you mount in one route. It has one durable log, verified
 authors, channels and threads, a live tail, and optional two-way sync with Slack,
-GitHub, and WhatsApp (through Kapso). The npm package `@vercel/board` ships the board
+GitHub, Linear, and any platform with a Chat SDK adapter. The npm package `@vercel/board` ships the board
 (`board()`, whose handle serves it and acts on it), its backends, and the CLI.
 The API sits under the handle, and the handle sits under the CLI.
 
@@ -81,8 +81,8 @@ board post errors-www "deploy failed on a1b2c3"
    thread, wherever it was written, is delivered to every one of those external
    threads except the one it came from.
 5. **Sync is configured per platform, keyed by the platform's own things.**
-   Slack sync is keyed by Slack channels, GitHub sync by repos, and WhatsApp
-   sync by phone numbers. A key maps either to a board channel, which makes a
+   Slack sync is keyed by Slack channels, GitHub sync by repos, and Linear
+   sync by teams. A key maps either to a board channel, which makes a
    two-way mirror, or to a function, which handles inbound events however you
    like.
 
@@ -149,17 +149,17 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
-| `@vercel/board/sync-kapso` | `kapso()`, the WhatsApp sync adapter, for Kapso's Chat SDK adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
+| `@vercel/board/sync-chat-sdk` | `chatSdk()`, which syncs any Chat SDK adapter, with hooks for what it can't read from the adapter | server |
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`), and `withUserTokens()` and `connectUserTokens()` | server |
-| `@vercel/board/sync/chat` | `ChatSyncProvider`, for a sync provider of your own on a Chat SDK adapter | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
 A backend's own pieces live under its path, and everything that works with any
 backend lives at the top. Sync adapters are named for the Chat SDK adapter they
-take: `sync-kapso` takes `@kapso/chat-adapter`, which leaves `sync-whatsapp` for
-`@chat-adapter/whatsapp`, Meta's own, whose threads are contacts rather than
-conversations.
+take, and `sync-chat-sdk` takes any: `sync-slack` takes `@chat-adapter/slack`.
+A platform with an entry of its own gets more than `chatSdk()` reads from its
+adapter. board builds in Slack, GitHub, and Linear; any other platform comes
+through `chatSdk()` or a provider of its own.
 
 ### Backends
 
@@ -474,7 +474,7 @@ The board that keeps the log matches the tails; the board on `http()` runs
 ```bash
 pnpm i @vercel/board pg                               # a board: log, tables, API, handle, CLI (or ioredis)
 pnpm i chat @chat-adapter/slack @vercel/connect       # + sync with Slack through Connect (@chat-adapter/github for GitHub)
-pnpm i chat @kapso/chat-adapter @kapso/whatsapp-cloud-api  # + sync with WhatsApp, through Kapso
+pnpm i chat @chat-adapter/telegram                         # + sync with any other platform through its Chat SDK adapter, like Telegram
 ```
 
 Only `@vercel/board` is needed to run the CLI against an existing board, e.g. with
@@ -498,11 +498,12 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
   `@chat-adapter/github`, `@chat-adapter/linear`, `@vercel/connect`.**
   `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and
   `@vercel/board/sync-linear` build their adapters with them, from Connect or from
-  secrets. `@vercel/board/sync-kapso` takes an adapter you install
-  (`@kapso/chat-adapter`). Your own adapters must match the `chat` version
-  that board builds its Chat instances with. You don't install a Chat SDK
-  state adapter: sync's correctness comes from the board log, and its Chat
-  instances keep only best-effort caches in memory.
+  secrets. `@vercel/board/sync-chat-sdk` takes an adapter you install. Your own
+  adapters must match the `chat` version that board builds its Chat instances
+  with. Sync's correctness comes from the board log, and its Chat instances
+  keep only best-effort caches in memory, so the built-in entries need no Chat
+  SDK state adapter; `chatSdk()` takes one, as `state`, for an adapter that
+  reads back what it stored.
 - **Regular dependencies:** `zod` (v4), `jose` for JWT and JWKS verification,
   and `@vercel/oidc` for client-side token minting.
 
@@ -1590,7 +1591,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   Watchers and sync run in either build: the sync engine loads when a board
   with sync entries first needs it, and it, `SyncProvider`, and the tail
   parser import nothing from Node (the Chat SDK adapters do: Slack, GitHub,
-  and Kapso stay on servers). Its IDs are A2's `idempotentId`, byte for byte.
+  and Linear stay on servers). Its IDs are A2's `idempotentId`, byte for byte.
   A board with no URL of its own can't be woken, so it pulls. A test bundles
   `board` and `http` for a browser, with and without a `SyncProvider` of its
   own, and finds no Node import, and the inspector's page is built that way.
@@ -1719,7 +1720,7 @@ board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say
 board sync <id> <target>                       attach the thread to an external target, backfilling it in order
-board typing <id> [status]                     show typing in the thread's synced platform threads (marks WhatsApp read);
+board typing <id> [status]                     show typing in the thread's synced platform threads;
                                                 Slack shows the status, if given, instead of "Typing…"
 
 board inbox <key> [channel] [--limit N]        raw platform events, for debugging sync ("did Slack send it?")
@@ -2033,13 +2034,13 @@ where `app` is a connector name or the options. board calls the function with
   answers what the first did, and one after the function returns throws.
 
 Helpers make the function from a map, keyed by platform channels: `channels`
-(Slack), `repos` (GitHub, or `{ pulls, issues }` per repo), and `numbers`
-(WhatsApp). A value is a sync function, or a board channel as a string:
-`mirror(channel)` under `channels` and `numbers` (imports, delivers, and starts
+(Slack), `repos` (GitHub, or `{ pulls, issues }` per repo), and `teams`
+(Linear). A value is a sync function, or a board channel as a string:
+`mirror(channel)` under `channels` and `teams` (imports, delivers, and starts
 a new root's thread in its channel), and `into(channel)` under `repos` (imports
 only: GitHub may be public, and what's said in Slack or on the board may not
 be). A thread synced by hand in a channel the map doesn't name keeps syncing:
-both ways under `channels` and `numbers`, in only under `repos`.
+both ways under `channels` and `teams`, in only under `repos`.
 `render(renderer, fn)` passes a renderer to every `deliver` in `fn`. They
 compose by calling each other, with no other mechanism.
 
@@ -2171,13 +2172,10 @@ are converted to the destination's native form in the rendered body, after the
 custom renderer runs; code spans retain their usual treatment.
 
 ```ts
-kapso(
-  { adapter, markRead: (input) => client.messages.markRead(input) },
-  render(({ message }) => message.text, numbers({ '16315558151': 'support' })),
-)
+slack('slack/acme', render(({ message }) => message.text, channels({ '#prs': 'prs' })))
 ```
 
-This omits author attribution from WhatsApp delivery. Rendering is used for roots,
+This omits the author label from Slack delivery. Rendering is used for roots,
 replies, backfills, edits, and attachment fallback. Media-only output sends media
 without inventing a caption and records both copy and file receipts. An empty
 body without media is a delivery error. Renderer changes affect future rendering,
@@ -2197,7 +2195,7 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    support something, that delivery is skipped.
 2. **Starting a thread.** A root posted on the board, including one posted by a
    watcher, goes to the sync function of every platform that can start threads
-   in a channel (Slack can; GitHub and WhatsApp can't), which may `start` its
+   in a channel (Slack and Linear can; GitHub can't), which may `start` its
    thread in one: `mirror` does in its channel. `sync` targets land with the
    root on top, and `noSync` keeps it from the functions.
 3. **Inbound events.** A platform event goes to the sync function if its thread
@@ -2395,15 +2393,10 @@ isn't synced or replayed.
 - **Best-effort,** like edits and reactions: a platform that fails is skipped
   and logged, and the response's `targets` lists the external threads that took
   it. An unsynced thread answers `{ targets: [] }`.
-- **WhatsApp** shows "typing…" and marks the latest inbound message read (blue
-  ticks). The adapter only remembers messages whose webhook reached its own
-  instance. Pass `markRead: (input) => client.messages.markRead(input)` to
-  `kapso()` to use the board's latest message through a public SDK client across
-  serverless instances. This operation is required at setup.
 - **Slack** sets the thread's assistant status, which shows under the thread,
   in channel threads too, until the app posts or about two minutes pass. An
   optional `status` (up to 100 characters: `vb typing <id> "running tests…"`)
-  replaces the default "Typing…". WhatsApp ignores the text. **GitHub** has no
+  replaces the default "Typing…". **GitHub** has no
   typing, so it's a no-op.
 - It needs `post` and `read` in the thread's channel.
 
@@ -2518,7 +2511,6 @@ the board. The adapter then uses plain configuration from env:
   2. Give it the permissions and events listed under [GitHub](#github), and
      install it on the repos you map.
   3. Pass the App's ID, private key, and webhook secret to the adapter.
-- **WhatsApp, through Kapso:** see [WhatsApp (Kapso)](#whatsapp-kapso).
 
 Both paths end at the same route. The only difference is who verifies the
 webhook: Connect's OIDC verifier, or the platform's own signature check.
@@ -2527,14 +2519,25 @@ webhook: Connect's OIDC verifier, or the platform's own signature check.
 
 `@vercel/board/sync` exports `SyncProvider`, shared schemas, and the sync function's types and helpers.
 The engine calls the provider's methods; it does not access an SDK adapter or
-transport configuration. A provider can implement its own SDK integration or
-extend `ChatSyncProvider` from `@vercel/board/sync/chat`. Slack, GitHub, Kapso, and Linear
-share that bridge. Importing the native contract does not load Chat SDK.
+transport configuration. A provider can implement its own SDK integration, or
+`chatSdk()` from `@vercel/board/sync-chat-sdk` bridges any Chat SDK adapter. Slack, GitHub,
+and Linear run on that bridge, with their platform's hooks. Importing the native
+contract does not load Chat SDK.
 
 ```ts
 import { SyncProvider, type Receive } from '@vercel/board/sync'
-import { ChatSyncProvider, type ChatInput } from '@vercel/board/sync/chat'
+import { channels, chatSdk } from '@vercel/board/sync-chat-sdk'
 ```
+
+`chatSdk({ adapter, ...hooks }, sync)` reads what it can from the adapter. Its platform
+is `adapter.name`, and its event schema `eventSchema(platform, 'message')`. A channel's
+name is its ID, the adapter's own without its `name:` prefix. A target is a thread when
+the adapter's `channelIdFromThreadId` reads it as one in another channel, and a channel
+otherwise, including when the adapter can't read it. A board root starts a thread only
+where the adapter has `postChannelMessage`. Each of those, and every other bridge hook
+(ID encodings, thread grouping, reading messages, links, mentions, files, typing,
+posting as a person, webhook events the adapter doesn't emit), is an option beside
+`adapter`. The bridge class itself isn't exported.
 
 The required methods are `receive(key, request, emit)`, `resolveChannel(key)`,
 `resolveTarget(target)`, `post(target, kind, body)`, and `event(context)`.
@@ -2548,11 +2551,18 @@ copy/file receipts. Intake failures answer 500 so the sender can retry.
 
 The provider supplies stable occurrence identity in `dedupe`. Repeated delivery
 of the same occurrence must keep its ID, while a later identical action must
-have a different one. The Chat bridge's `eventId(key, input)` can be overridden
-for native delivery IDs; its default handles messages, edits, and deletes.
-Providers receiving reactions must supply their occurrence identity. Slack uses
-`event_ts`; Kapso uses the reaction message's `id`. There is no current-time
-fallback. Existing built-in inbox and receipt ID schemes are retained.
+have a different one. The Chat bridge's default identity handles messages, edits,
+and deletes. A built-in provider that receives reactions supplies their occurrence
+identity: Slack uses `event_ts`. `chatSdk()` takes the platform's as
+`reactionId(reaction)`. Without it, a reaction is known by the webhook that brought
+it: a hash of the request's body, beside its thread, message, emoji, person, and
+direction. Platforms send the same body again on a retry and a new one for each
+occurrence, even where the reaction's own payload reads the same every time:
+Discord's carries no timestamp or ID, and its gateway listener adds when it saw
+the event. A platform that changes the body on a retry imports the reaction twice,
+which leaves the board's reactions as they were; two occurrences in byte-identical
+bodies would be one, and nothing in them could tell them apart. There is no
+current-time fallback. Existing built-in inbox and receipt ID schemes are retained.
 
 Target resolution returns `{ target, channel, kind: 'channel' | 'thread' }`.
 The server records target kind in `thread.synced` and the resolved incoming
@@ -2567,8 +2577,8 @@ native mentions, email lookup, link snapshots (`fetchLink`), on-demand reads
 change/typing operations are no-ops. `uploadsFiles` declares upload support;
 otherwise files get board attachment notes. `refusesFiles` distinguishes a
 permanent upload refusal from a retryable failure. Providers also declare
-reaction cardinality. All of these operations can be overridden as class methods;
-Chat-specific hooks remain inside the bridge.
+reaction cardinality. A native provider overrides these as class methods;
+`chatSdk()` takes them as hooks.
 
 `SyncProvider` takes its sync function as its constructor's second argument, and
 the engine runs it for every event. Envelopes are projected, validated, and
@@ -2579,13 +2589,14 @@ going out. Subclasses can override `render(input)` for the default rendering.
 Durable state belongs on the board, through its backend; SDK caches and
 credentials remain provider dependencies.
 
-The same provider contract tests run against a native implementation and a Chat
-SDK bridge implementation. They cover authentication, duplicate delivery,
-distinct add/remove/add occurrences, inbound and outgoing retries, stable
+The same provider contract tests run against a native implementation, a Chat
+SDK bridge implementation, and `chatSdk()` with no hooks. They cover
+authentication, duplicate delivery, a retry after the board couldn't store a
+delivery, distinct add/remove/add occurrences, inbound and outgoing retries, stable
 event IDs, concurrent entry contexts, opaque URL-like targets, starting threads from a function, unsupported
 channel creation, thread attachment, and file fallback. The existing built-in
-suites cover GitHub lifecycle results across retries, media receipts, native
-mentions, and cross-instance Kapso read/typing.
+suites cover GitHub lifecycle results across retries, media receipts, and native
+mentions, and Telegram's real adapter runs through `chatSdk()`.
 
 ### Chat SDK configuration (internal)
 
@@ -2595,15 +2606,24 @@ board configures every Chat instance itself:
   arrives while the thread's handler is still running is dropped, which would
   lose replies sent in quick succession. Ordering comes from the inbound lane
   instead.
-- **One Chat instance per provider.** `slack()`, `github()`, `kapso()`, and
-  `linear()` each make one, with one adapter, so two Slack entries never share one and
+- **One Chat instance per provider.** `slack()`, `github()`, `linear()`, and
+  `chatSdk()` each make one, with one adapter, so two Slack entries never share one and
   collide on `slack:`. board translates between Chat SDK IDs and its
   key-prefixed external IDs; a provider used under two keys takes each
   webhook's key from the request it's handling.
+- **A webhook answers once what it brought is stored.** Chat SDK hands its work to
+  the adapter's `waitUntil`, and some adapters pass none (Discord's forwarded
+  reactions). The bridge waits for everything Chat SDK starts while a webhook is
+  handled, so the board stores it before answering. Chat SDK's own errors stay
+  as it handles them; a store that failed fails the webhook.
 - **Chat state is ephemeral.** The board's inbox gives each platform event its
   durable identity, by the provider's `dedupe`, and the board's sync records
   hold sync state, on any backend. Chat SDK uses an in-memory state adapter for
-  best-effort caches:
+  best-effort caches, or the one `chatSdk()` is given as `state`. When the board
+  can't store what a webhook brought, the bridge deletes every first claim
+  (`setIfNotExists`) made while handling it, Chat SDK's dedupe key and an
+  adapter's own (Telegram's update ID), and fails the webhook even when the
+  adapter caught the error itself, so the platform's retry gets through:
 
   | What Chat SDK uses state for | What replaces it |
   | --- | --- |
@@ -2840,76 +2860,6 @@ Connect, set the GitHub App up yourself (see
 GitHub's `pull_request_review_comment` payload carries the comment's `path` and
 `line`, which the sync adapter reads from `message.raw` to fill `context` as
 `path:line`.
-
-### WhatsApp (Kapso)
-
-`kapso({ adapter, markRead }, numbers({ … }))`, with
-[Kapso's Chat SDK adapter](https://chat-sdk.dev/adapters/vendor-official/kapso).
-`markRead` is required: `kapso()` throws without it.
-Keys are WhatsApp phone number IDs (`'16315558151'`), as Kapso shows them, not
-the numbers themselves.
-
-```ts
-import { kapso, numbers } from '@vercel/board/sync-kapso'
-import { createKapsoAdapter } from '@kapso/chat-adapter'
-import { WhatsAppClient } from '@kapso/whatsapp-cloud-api'
-
-const client = new WhatsAppClient({
-  baseUrl: 'https://api.kapso.ai/meta/whatsapp',
-  kapsoApiKey: process.env.KAPSO_API_KEY!,
-})
-
-sync: {
-  kapso: kapso(
-    { adapter: createKapsoAdapter({ client }), markRead: (input) => client.messages.markRead(input) },
-    numbers({ '16315558151': 'support' }),
-  ),
-},
-```
-
-| Thing | ID |
-| --- | --- |
-| A business number, the channel | `kapso:16315558151` |
-| A Kapso conversation, a thread | `kapso:16315558151:<WhatsApp ID>:<conversation ID>` |
-
-Kapso's adapter base64url-encodes each part of its IDs; the board writes them
-decoded, so `--sync` targets and the inbox read as above.
-
-- **A thread is a Kapso conversation.** WhatsApp has no threads, so a contact's
-  messages group into Kapso's conversations: one starts when they write, and
-  ends after a day of quiet or when someone closes it in Kapso. Writing again
-  after that starts a new thread.
-- **Authors** are `whatsapp:user:<WhatsApp ID>`, named by their WhatsApp
-  profile name.
-- **The board never starts a conversation.** A number has no threads to start,
-  so a root in a mirrored channel stays on the board. A function can join the
-  conversation it was handed with `sync: [event.thread]` on a post.
-- **Replies go out within WhatsApp's window.** WhatsApp takes free-form messages
-  only within 24 hours of the contact's last one. A board reply after that
-  fails, and is recorded as `message.sync_failed`. Templates aren't synced;
-  send them with `@kapso/whatsapp-cloud-api`.
-- **One reaction each.** WhatsApp keeps one reaction per person per message, so
-  a contact's new reaction replaces theirs on the board, and removing it clears
-  it. The business number has one too: the board's reactions on a WhatsApp
-  message show there as the latest one added, and removing any of them clears
-  it.
-- **Media comes over as files, both ways.** An image, video, voice note, or
-  document becomes an attachment on the board, fetched through Kapso, with its
-  caption as the text; a voice note's transcript is quoted when Kapso has one.
-  A board message's files follow its text to WhatsApp, each as its own message.
-  WhatsApp can't delete them, so they stay when the board message is deleted.
-  On a board that keeps no files, each comes over as a line naming it, linked
-  when Kapso gives an `https` URL, and none go out.
-- **Not synced:** edits and deletes, which WhatsApp can't do for recipients, and
-  button and list replies.
-- **Board messages post from the business number,** as `*julian*: …`.
-
-**Setup:**
-1. In Kapso, create an API key and copy the number's phone number ID.
-2. Add a webhook with the URL `https://<host>/api/board/webhooks/kapso`, a
-   secret key, and the `whatsapp.message.received` event.
-3. Set `KAPSO_API_KEY` and `KAPSO_WEBHOOK_SECRET`, or pass them to
-   `createKapsoAdapter`. Without the secret, the adapter rejects every webhook.
 
 ## Watchers
 
@@ -3151,7 +3101,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   GitHub repos, issues, or PRs
 - Mapping identities across platforms by guesswork (a matching name or
   email): a person links their own accounts ([Linked accounts](#linked-accounts))
-- Bundled sync providers other than Slack, GitHub, and WhatsApp (Kapso)
+- Bundled sync providers other than Slack, GitHub, and Linear: any other
+  platform comes through `chatSdk()` or a provider of its own
 
 ## After v1
 
@@ -3181,8 +3132,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-kapso`, named for the platform they sync, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
-| What's a WhatsApp thread? | **A Kapso conversation,** the adapter's own thread. A thread per contact would last forever and mix every question they ask; a conversation ends after a day of quiet, about when WhatsApp stops taking free-form replies. |
+| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |
 | Can Connect user tokens post as a person? | **Assumed yes, not yet verified with a real consent:** both factory connectors answer `user_authorization_required` and return real consent URLs (issue #6). Which scopes the tokens get is unverified until someone signs in; without them, delivery falls back to the app. |
