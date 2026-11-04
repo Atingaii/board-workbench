@@ -704,7 +704,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     switch (change.type) {
       case 'message.posted':
         type = 'message.posted'
-        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: false, mentions: [], by, origin: null, from: null, attachments: message.attachments, links: [] }
+        payload = { channel, text: message.text, re: message.re, replyTo: message.replyTo, thread: message.thread, labels: message.labels, noSync: message.noSync, mentions: [], by, origin: message.origin, from: message.from, attachments: message.attachments, links: message.links }
         break
       case 'message.edited':
         type = 'message.edited'
