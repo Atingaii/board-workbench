@@ -7,6 +7,7 @@ import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
 import { a2, memoryBlob, type A2Options } from '../src/backend-a2/index.ts'
+import { local } from '../src/local/index.ts'
 import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
@@ -104,6 +105,24 @@ export function testBoard(options: MountOptions = {}) {
     clock.skip()
   }
   return Object.assign(created, { clock, skipHold })
+}
+
+/**
+ * A board as `local({ memory: true })` keeps one, with its scheduler in this process, whose tokens
+ * come from a local test issuer: what a test that needs only a board, end to end, runs against.
+ */
+export function localBoard(options: Omit<BoardOptions, 'backend' | 'fetch'> & { auth?: OidcTokensOptions } = {}) {
+  const { auth, url, ...rest } = options
+  const backend = local({ memory: true })
+  const created = board({
+    project: { id: PROJECT_ID, teamId: TEAM_ID },
+    ...rest,
+    backend,
+    authenticate: rest.authenticate ?? oidcTokens(auth ?? testAuth),
+    // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
+    ...('url' in options ? (url !== undefined ? { url } : {}) : { url: BOARD_URL }),
+  })
+  return Object.assign(created, { close: () => backend.close() })
 }
 
 async function sign(claims: Record<string, unknown>, issuer: string, audience = BOARD_URL) {

@@ -685,13 +685,19 @@ describe('cli', () => {
     } finally {
       await scheduled.close()
     }
-    // Without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
-    const partial = await vb(['conformance'])
-    expect(partial.code).toBe(0)
-    expect(partial.stdout).toContain(
-      '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
-    )
-    expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    // On a2() without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
+    const unscheduled = await serve(testBoard({ url: undefined }).fetch)
+    const plain = `${unscheduled.origin}/api/board`
+    try {
+      const partial = await vb(['conformance'], { BOARD_URL: plain, BOARD_TOKEN: await personToken('u_julian', plain) })
+      expect(partial.code).toBe(0)
+      expect(partial.stdout).toContain(
+        '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
+      )
+      expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    } finally {
+      await unscheduled.close()
+    }
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
   })
 

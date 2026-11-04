@@ -88,7 +88,7 @@ export type BoardBinding = {
   subscriptions: Record<string, Subscription>
   /**
    * Runs one subscription on an event. A throw is the backend's to retry; `attempt` counts tries
-   * from 1, and sync gives up on a delivery, and says so, before A2 would dead-letter it.
+   * from 1, and sync gives up on a delivery, and says so, before the backend stops trying it.
    */
   run(id: string, event: WatcherContext['event'], meta: { trigger: string; attempt: number }): Promise<void>
   /**

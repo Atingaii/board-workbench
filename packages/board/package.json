@@ -31,6 +31,10 @@
       "types": "./dist/conformance.d.mts",
       "default": "./dist/conformance.mjs"
     },
+    "./local": {
+      "types": "./dist/local.d.mts",
+      "default": "./dist/local.mjs"
+    },
     "./cli": {
       "types": "./dist/cli-embedded.d.mts",
       "default": "./dist/cli-embedded.mjs"

@@ -147,6 +147,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
+| `@vercel/board/local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
@@ -1498,8 +1499,8 @@ state is folded from the log by A2 reducers.
 
 **Store support:** `@vercel/board/backend-a2/store-postgres`, `@vercel/board/backend-a2/store-redis` (TCP), or
 `@vercel/board/backend-a2/store-redis-http` (Upstash REST) on serverless functions,
-`@vercel/board/backend-a2/store-sqlite` for development, `vb serve` (at
-`.board/board.db`), and a single long-running server (it's `a2()`'s default,
+`@vercel/board/backend-a2/store-sqlite` for development, `vb serve` (through
+`local()`, at `.board/local.db`), and a single long-running server (it's `a2()`'s default,
 at `.a2/dev.db`), and `@vercel/board/backend-a2/store-memory` for tests, passed
 explicitly. Each holds A2's log and the tables in one database. Postgres gets its tables from
 `sql/postgres/schema.sql`, A2's then board's, applied before deploying; Redis
@@ -1842,10 +1843,11 @@ board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
 
 **`serve`** runs a vanilla board on this machine, for people and agents on one
 computer who don't need it on the internet. No config file: it's flags only.
-- **Storage.** `a2({ store: sqlite({ path: '<dir>/board.db' }), scheduler:
-  localScheduler(), blob: fsBlob('<dir>/attachments') })`, where `<dir>` is
-  the project's `.board/` (added to its `.gitignore`), so it passes
-  every conformance check. The log survives restarts, but the scheduler's
+- **Storage.** `local({ dir })` from `@vercel/board/local`: SQLite at
+  `<dir>/local.db`, files in `<dir>/local/`, and a scheduler in the process,
+  where `<dir>` is the project's `.board/` (added to its `.gitignore`), so it
+  passes every conformance check. An earlier run's `board.db` and
+  `attachments/` move there on its next start. The log survives restarts, but the scheduler's
   timers live in the process: a schedule whose send was pending when it
   stopped stays `next due` and doesn't send. No sync and no watchers of its
   own: those need `board()` in an app.

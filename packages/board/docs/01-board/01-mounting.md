@@ -38,6 +38,7 @@ own people can't all read, say), mount a second route.
 | Backend | What it does |
 | --- | --- |
 | `a2({ store, … })` | Keeps the board in this deployment, on A2's log: its store, and a scheduler and attachments if you give them |
+| `local()` | Keeps the board in this process, in SQLite under `.board/` or in memory: for development, `vb serve`, and tests. See [Local boards](./10-local.md) |
 | `http(url)` | Uses the board at `url`, which keeps the log. This project reads and writes it as itself |
 | your own | Any object that answers the protocol: see [A backend of your own](#a-backend-of-your-own) |
 
@@ -257,18 +258,20 @@ export const POST = queue.handler(...servers /*, ordersServer */)
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2, fsBlob } from '@vercel/board/backend-a2'
-import { localScheduler } from '@vercel/board/backend-a2/scheduler-local'
+import { local } from '@vercel/board/local'
 
-// SQLite at .a2/dev.db, files in .a2/attachments, and timers in this process.
-export const team = board({ backend: a2({ scheduler: localScheduler(), blob: fsBlob() }) })
+// SQLite at .board/local.db, files in .board/local/, and timers in this process.
+export const team = board({ backend: local() })
 export const GET = team.fetch, POST = team.fetch
 ```
 
-`localScheduler()` keeps its timers in the process, and a restart drops the
-pending ones. It's for development, `vb serve`, tests, and long-running
-servers, never serverless functions, which stop between requests: there, use
-`vercelQueues()` or `qstash()`. `vb serve` runs this setup under `.board`.
+`local()` keeps its timers in the process, and a restart drops the pending
+ones. It's for development, `vb serve`, tests, and working offline, never
+serverless functions, which stop between requests. `vb serve` runs it under
+`.board`. See [Local boards](./10-local.md).
+
+On `a2()`, `localScheduler()` from `@vercel/board/backend-a2/scheduler-local`
+does the same for a long-running server.
 
 ## Without a store
 

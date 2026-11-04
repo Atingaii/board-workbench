@@ -43,6 +43,30 @@ describe('the published types', () => {
   })
 })
 
+/** Every declaration file `start` reaches through its relative imports, with its text. */
+function declarations(start: string): [string, string][] {
+  const seen = new Map<string, string>()
+  const stack = [resolve(root, start)]
+  while (stack.length > 0) {
+    const file = stack.pop()!
+    if (seen.has(file) || !existsSync(file)) continue
+    const text = readFileSync(file, 'utf8')
+    seen.set(file, text)
+    for (const [, from] of text.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g))
+      if (from!.startsWith('.')) stack.push(resolve(dirname(file), from!.replace(/\.mjs$/, '.d.mts')))
+  }
+  return [...seen].map(([file, text]) => [file.slice(root.length + 1), text])
+}
+
+describe("`@vercel/board/local`'s types", () => {
+  it('name nothing of A2: not its store, its scheduler, its options, or its name', () => {
+    const files = declarations('dist/local.d.mts')
+    expect(files.map(([file]) => file)).toContain('dist/local.d.mts')
+    const named = files.flatMap(([file, text]) => [...text.matchAll(/\b(A2\w*|BoardStore|experimental-a2)\b/g)].map((match) => `${file}: ${match[1]}`))
+    expect(named).toEqual([])
+  })
+})
+
 describe('A2, inlined', () => {
   it('is imported by no published file, code or types', () => {
     const files = readdirSync(resolve(root, 'dist')).filter((name) => /\.(mjs|d\.mts)$/.test(name))

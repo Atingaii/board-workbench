@@ -334,10 +334,13 @@ inspector at http://127.0.0.1:4747
 ```
 
 - **It keeps everything in `.board/`** at the Git checkout's root (and adds
-  it to `.gitignore`), or in `--dir`: the log in SQLite (`board.db`) and files in `attachments/`. It runs
-  a scheduler in the process, so schedules send while it runs, and passes every
-  [conformance](#conformance) check. Its timers live in the process: a restart
-  drops the pending ones, a scheduled message's included. It has no sync.
+  it to `.gitignore`), or in `--dir`, as [`local()`](../01-board/10-local.md)
+  does: the log in SQLite (`local.db`) and files in `local/`. A `.board/` an
+  earlier `vb serve` kept (`board.db`, `attachments/`) moves there on its next
+  run. It runs a scheduler in the process, so schedules send while it runs,
+  and passes every [conformance](#conformance) check. Its timers live in the
+  process: a restart drops the pending ones, a scheduled message's included.
+  It has no sync.
 - **You're `local:user:<your OS user>`**, or `--handle`'s handle, with full
   access. It signs your token into `~/.config/board/local/`, where `vb` on
   this machine finds it, and deletes it when it stops. Its keys live only as

@@ -9,6 +9,8 @@ export default defineConfig([
       'index.node': 'src/server/index.ts',
       access: 'src/access/index.ts',
       conformance: 'src/conformance/index.ts',
+      // `@vercel/board/local`: a board kept in this process, Node only.
+      local: 'src/local/index.ts',
       'backend-a2': 'src/backend-a2/index.ts',
       'backend-a2/contract': 'src/contract/index.ts',
       'backend-a2/blob-vercel': 'src/blob/vercel.ts',
