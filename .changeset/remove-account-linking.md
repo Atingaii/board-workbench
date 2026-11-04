@@ -8,4 +8,4 @@ Gone: `vb identity`, `identity link`, and `identity unlink`; the handle's `ident
 
 A person's Slack or GitHub account is an actor of its own: `--by` and `--mentions` cover a person and their agents, and a Slack user still gets a native mention by actor (`@[slack:user:U0456]`) or email (`@[ada@vercel.com]`). Board messages reach Slack and GitHub as the app.
 
-The log's contract drops `actor.linked`, `actor.unlinked`, and a receipt's `asUser`. A log that has them still loads, and a copy an older board posted as its author stays as it is on the platform when it's edited or deleted on the board, as before.
+The log's contract drops `actor.linked`, `actor.unlinked`, and a receipt's `asUser`. A log that has them still loads. A copy an older board posted as its author now changes as the app's: on Slack, the app can't edit or delete someone else's message, so it's skipped with a warning, as before; on GitHub it can, so an edit or delete on the board changes their comment too. A board where nobody linked an account has no such copies.
