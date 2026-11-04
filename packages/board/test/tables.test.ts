@@ -110,7 +110,7 @@ function history(seed: number, length: number): BoardEvent[] {
         // A root's receipt in a channel target says which platform thread it started.
         const to = r.pick(['slack:C1', 'github:o/r:7'])
         const external = target.re === null && to === 'slack:C1' ? `slack:C1:${target.id}` : to === 'slack:C1' ? `slack:C1:${target.re}` : to
-        push('message.synced', { id: target.id, thread: target.thread, target: to, external: { thread: external, message: `${target.id}.9`, ...(r.chance(0.2) ? { asUser: true } : {}) } })
+        push('message.synced', { id: target.id, thread: target.thread, target: to, external: { thread: external, message: `${target.id}.9` } })
       } else if (kind === 'files') push('message.files_synced', { id: target.id, thread: target.thread, target: r.pick(['slack:C1', 'slack:C9']), files: r.chance(0.2) ? null : ['F1'] })
       else {
         const to = r.pick(['slack:C1', 'github:o/r:7', 'slack:C1'])

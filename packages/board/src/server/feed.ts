@@ -19,7 +19,7 @@ export { concernedMessageId }
  * Bookkeeping events, shown only with `all`: who's who, delivery receipts, and the account links
  * boards kept before they stopped linking accounts.
  */
-const HIDDEN = new Set(['actor.seen', 'actor.linked', 'actor.unlinked', 'message.synced', 'message.files_synced'])
+const HIDDEN = new Set(['actor.seen', 'message.synced', 'message.files_synced'])
 
 export function actorView(actors: ActorsState, id: string): ActorView | null {
   const author = own(actors.byId, id)

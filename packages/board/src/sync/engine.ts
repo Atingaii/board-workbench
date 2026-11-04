@@ -790,7 +790,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
       kind: 'message',
       message: message.id,
       target,
-      external: { thread: copy.thread, message: copy.message, ...(copy.asUser ? { asUser: true as const } : {}) },
+      external: { thread: copy.thread, message: copy.message },
       ...(copy.files !== undefined ? { files: copy.files } : {}),
     })
   }
@@ -1040,11 +1040,6 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         await offer(keyOf(target), event, message, target, async (renderer) => {
           const platform = platformOf(keyOf(target))
           const thread = native(copy.thread)
-          // A copy older boards posted as its author is theirs to change, and the app can't.
-          if (copy.asUser && (event.type === 'message.edited' || event.type === 'message.deleted')) {
-            console.warn(`[board] skipped ${event.type} on ${target}: #${message.id} was posted as its author, which only they can change`)
-            return
-          }
           if (event.type === 'message.edited') await platform.edit(thread, copy.message, renderFor(target, message, actors, copy.files === null, renderer))
           else if (event.type === 'message.deleted') {
             await platform.delete(thread, copy.message)

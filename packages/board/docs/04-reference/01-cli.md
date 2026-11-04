@@ -728,6 +728,7 @@ of them must match.
 | `--by <handle>` | messages by an actor, by handle or exact actor ID. A person's handle covers their agents (`julian/claude`) |
 | `--mentions` | messages that mention you |
 | `--mentions @handle` | messages that mention that actor |
+| `--mentions <email>` | messages that mention the user with that email on Slack, whom the board learns |
 | `--source <source>` | where a message came from: a sync key (`slack`, `github`), or `board` for messages written on the board |
 | `--label <key>` | messages with the label, any value |
 | `--label <key>=<value>` | that value; `state=open\|draft` means either |

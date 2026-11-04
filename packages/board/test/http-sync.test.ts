@@ -485,7 +485,7 @@ describe('whose records are whose', () => {
     const registry = team.servers[3]!.session(REGISTRY_SESSION) as unknown as { append(event: { type: string; payload: unknown }): Promise<unknown> }
     await registry.append({
       type: 'watchers.registered',
-      payload: { owner: SUPPORT, principal: { id: SUPPORT, kind: 'deployment', handle: 'support' }, url: null, watch: {}, sync: [{ ...entry, signIn: false }], hash: 'before' },
+      payload: { owner: SUPPORT, principal: { id: SUPPORT, kind: 'deployment', handle: 'support' }, url: null, watch: {}, sync: [entry], hash: 'before' },
     })
     const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'deploy failed' })).body.message
     await vi.waitFor(async () => expect((await julian('GET', `/messages/${root.id}`)).body.message.undelivered).toEqual({}))

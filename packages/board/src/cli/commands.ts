@@ -56,7 +56,7 @@ export const options = {
   // Filters: what `read`, `tail`, and `wait` match, and a watcher's `tail`.
   re: { type: 'string', value: 'id', description: "in a thread: its root's ID" },
   by: { type: 'string', value: 'handle', description: 'by an author: a handle, me, or an actor ID' },
-  mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle, or you without one' },
+  mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle or email, or you without one' },
   label: { type: 'string', multiple: true, value: 'k[=v|w]', description: "with a label on the message or its thread's root" },
   source: { type: 'string', value: 'source', description: 'from a source: a sync key such as slack, or board' },
   text: { type: 'string', value: 'words', description: 'containing these words' },

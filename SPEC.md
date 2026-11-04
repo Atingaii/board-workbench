@@ -780,7 +780,7 @@ board({
   creator's scope, so a header longer than 4000 characters is `invalid_scope`
   on every request. A narrowed caller is never its principal's integration:
   registering, pulling, and acking watchers, and sync's records (imports,
-  receipts, the inbox, account links), answer 403. A narrowed pull would take
+  receipts, the inbox), answer 403. A narrowed pull would take
   the principal's matches, a narrowed register would replace its
   registration, and a platform thread a narrowed import claimed would bring
   that sync's later events into the narrowed caller's channels.
@@ -854,11 +854,10 @@ One person shows up as several actors: `vercel:user:u_abc123` on the board,
 (`…+claude`). The board doesn't link them. A person's `--by` and `--mentions`
 cover their own actor and their agents (`julian/claude`, by `by.principal`);
 their Slack or GitHub account is an actor of its own, named to cover it
-(`--by slack:user:U0456`). A person mentioned on the board reads as their name
+(`--by slack:user:U0456`, or `--mentions ada@vercel.com` for whoever has that
+email on Slack). A person mentioned on the board reads as their name
 on a platform; a platform user mentioned by actor or email
-(`@[ada@vercel.com]`) renders natively there (`<@U0456>`). Older boards linked
-accounts (`actor.linked`, `actor.unlinked`): those events still read, and the
-folds ignore them.
+(`@[ada@vercel.com]`) renders natively there (`<@U0456>`).
 
 ### Handles and mentions
 
@@ -1070,12 +1069,10 @@ export const boardContract = contract({
     'reaction.removed':  z.object({ id: MessageId, emoji: Emoji, by: Author }),
     'labels.changed':    z.object({ id: MessageId, set: Labels, unset: z.array(LabelKey), by: Author }),
     'thread.synced':     z.object({ target: ExternalTarget, cause: z.enum(['config', 'request']), kind: z.enum(['channel', 'thread']).optional(), by: Author }),
-    'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage, syncedBy: ActorId.optional() }), // (server) external: { thread, message, asUser? }
+    'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage, syncedBy: ActorId.optional() }), // (server) external: { thread, message }
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable(), syncedBy: ActorId.optional() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), host: z.literal(true).optional() }),
-    'actor.linked':      z.object({ actor: ActorId, to: ActorId, method: z.enum(['code', 'consent']), by: Author }), // older boards' account links: nothing writes them, folds ignore them
-    'actor.unlinked':    z.object({ actor: ActorId, by: Author }),                                                  // the same
   },
 })
 
@@ -1330,7 +1327,7 @@ state is folded from the log by A2 reducers.
 | Reducer | State | Used by |
 | --- | --- | --- |
 | `channels` | path → last index, message count, thread count | `channels`, the feed's start |
-| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs, and links | mention resolution, `actors`, rendering, `--by` and `--mentions` |
+| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | mention resolution, `actors`, rendering, `--by` and `--mentions` |
 
 - **Consistency:** a write answers once the tables hold it, so any later read
   includes it. A read that names a message ID waits until the tables reach it;
@@ -1442,7 +1439,11 @@ Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
 
 **Filters:**
 - `channel=www/` (with a trailing slash) matches a whole subtree.
-- `mentions=me` resolves to the caller's actor.
+- `mentions=me` resolves to the caller's actor. `mentions=ada@vercel.com`, on
+  the board that runs sync and for a caller that may read somewhere, resolves to
+  the user with that email on a synced platform that looks emails up (Slack),
+  whom the board learns, so their pings resolve from then on. Sync is asked once
+  per email every few minutes; an email it doesn't know matches nothing.
 - `label=status=open` may be repeated; repeated labels are combined with AND.
 - `after` and `before` take a cursor or a message ID, as opaque strings (see
   [IDs, cursors, and versions](#ids-cursors-and-versions)). A bad one is 400
@@ -1722,7 +1723,7 @@ it, and nothing is hosted.
   - On a reply, the reply isn't delivered to the thread's external threads.
   - Combining `--no-sync` with `--sync` is a usage error.
 
-**Shared filters:** `--re <id>`, `--mentions [@handle]` (mentions of me, or of them),
+**Shared filters:** `--re <id>`, `--mentions [@handle|email]` (mentions of me, or of them),
 `--by <handle>`, `--source <source>`, `--label <key>[=<value>[|<value>…]]`,
 `--text <words>`, and `--after <id>` (a message ID or a cursor). All of them
 must match.

@@ -200,7 +200,7 @@ export type ActorsState = {
   byHandle: Record<string, string[]>
 }
 
-/** Who's who: `actor.seen`. An older log's `actor.linked` and `actor.unlinked` change nothing. */
+/** Who's who: `actor.seen`. */
 export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
   if (event.type !== 'actor.seen') return state
   const { actor, kind, handle, name, avatar, host } = event.payload
@@ -220,9 +220,8 @@ export function foldActors(state: ActorsState, event: BoardEvent): ActorsState {
 
 /** A copy of a board message on a platform. */
 /** `files`: the platform's IDs for the message's files, or null when it refused them; unset until they're sent. */
-/** `asUser`: posted with its author's own token, so editing or deleting it needs that token too. */
 /** `by`: the principal of the sync elsewhere that recorded it, whose copy it is to change; none for the board's own sync's. */
-export type ExternalCopy = { thread: string; message: string; files?: string[] | null; asUser?: true; by?: string }
+export type ExternalCopy = { thread: string; message: string; files?: string[] | null; by?: string }
 
 export type SyncedThread = {
   root: number

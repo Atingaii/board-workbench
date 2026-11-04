@@ -345,7 +345,7 @@ export const SyncReceiptBody = z.discriminatedUnion('kind', [
     kind: z.literal('message'),
     message: Ref,
     target: ExternalTarget,
-    external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300), asUser: z.literal(true).optional() }),
+    external: z.object({ thread: ExternalTarget, message: z.string().min(1).max(300) }),
     /** Its files, when they went with it: the platform's IDs, or null when it refused them. */
     files: PlatformFiles.optional(),
   }),

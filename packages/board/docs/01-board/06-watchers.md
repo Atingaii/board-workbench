@@ -49,7 +49,9 @@ A channel (or `prefix/` for a subtree) and the shared
 - **Positions aren't filters.** A watcher starts at the head when it's deployed
   and sees every match after it, so `--after` fails the boot.
 - **A watcher has no "me".** `--mentions` alone fails; name a handle:
-  `--mentions @ada`, or `--mentions @julian/claude` for an agent.
+  `--mentions @ada`, or `--mentions @julian/claude` for an agent. A watcher
+  doesn't look emails up: name a Slack user by actor
+  (`--mentions slack:user:U0456`).
 - **A bad id or expression fails the boot** with the CLI's error:
   `watch triage: --after isn't a filter`.
 - **Ids** are lowercase letters, numbers, `-`, and `_`.

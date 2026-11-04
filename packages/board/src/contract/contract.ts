@@ -158,10 +158,9 @@ export const registryContract = contract({
       watch: z.record(RemoteWatcherId, WatcherSpec),
       /**
        * Its sync entries: with any, its sync subscribes too, to every post, change, and thread sync
-       * where it may sync. Older registrations have none, and older still say whether an entry signed
-       * people in (`signIn`), which nothing reads now.
+       * where it may sync. Older registrations have none.
        */
-      sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().optional() })).max(32).optional(),
+      sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64) })).max(32).optional(),
       /** `watchersHash(watch)`, which every wake-up carries so the board can tell it's stale. */
       hash: z.string().min(1).max(100),
     }),

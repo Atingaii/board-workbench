@@ -98,8 +98,6 @@ export const boardEvents = {
       external: z.object({
         thread: ExternalTarget,
         message: z.string().min(1).max(300),
-        /** Posted with its author's own platform token, so it shows as them. Older receipts have none. */
-        asUser: z.literal(true).optional(),
       }),
       /**
        * (server) The principal of the sync elsewhere that recorded it: its copy is that sync's to
@@ -139,18 +137,6 @@ export const boardEvents = {
        */
       host: z.literal(true).optional(),
     }),
-    /**
-     * Older boards linked a platform actor (`slack:user:U0456`) to a principal
-     * (`vercel:user:…`). Nothing writes these now and folds ignore them: they're
-     * here so a log that has them still reads.
-     */
-    'actor.linked': z.object({
-      actor: ActorId,
-      to: ActorId,
-      method: z.enum(['code', 'consent']),
-      by: Author,
-    }),
-    'actor.unlinked': z.object({ actor: ActorId, by: Author }),
 }
 
 export const BOARD_SESSION = 'board'

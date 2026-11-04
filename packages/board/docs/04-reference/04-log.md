@@ -61,9 +61,8 @@ A new root or reply.
 
 ### The rest
 
-Every event below but `actor.seen`, `actor.linked`, and `actor.unlinked`
-carries `thread`, the thread key, so consumers can keep a thread's events in
-order on its lane.
+Every event below but `actor.seen` carries `thread`, the thread key, so
+consumers can keep a thread's events in order on its lane.
 
 | Event | Payload | Written when |
 | --- | --- | --- |
@@ -78,8 +77,6 @@ order on its lane.
 | `message.files_synced` | `id`, `target`, `files`, `syncedBy` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files. Only the sync whose copy it is sets them |
 | `message.sync_failed` | `id`, `target`, `error` | (server) a delivery gave up after its retries |
 | `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host` | an actor writes for the first time or changes its display details, in the same batch as its write. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as. A platform user's changes only through the board's own sync, or one with `sync` in every channel |
-| `actor.linked` | `actor`, `to`, `method` (`code` or `consent`), `by` | older boards linked a platform account (`slack:user:U0456`) to a person. Nothing writes it now, and folds ignore it |
-| `actor.unlinked` | `actor`, `by` | older boards unlinked one. Nothing writes it now, and folds ignore it |
 
 - **`by`** is `{ actor, principal, profile, session }`: the actor ID
   (`vercel:user:u_abc123+claude`), the verified principal, the profile, and

@@ -52,6 +52,11 @@ import { VERSION } from '../version.ts'
 /** The methods whose answer is something new. */
 const CREATED = new Set<Method>(['post', 'schedule', 'upload', 'uploadFinish'])
 
+/** An email, as `--mentions` names one: sync looks its platform user up. */
+const EMAIL = /^[^\s@]+@[^\s@]+$/
+/** How long a filter's email lookup holds. */
+const EMAIL_TTL_MS = 5 * 60_000
+
 /** Shown inline only when a browser can't run it: everything else downloads. */
 const INLINE = /^(image\/(png|jpeg|gif|webp|avif)|video\/(mp4|webm)|text\/plain)$/
 
@@ -244,15 +249,39 @@ export async function createServe(context: BoardContext): Promise<Serve> {
    * board learns who they are; the rest stay plain text.
    */
   async function withEmails(text: string): Promise<string> {
-    // Each one sync finds, the board must know before a post can mention them; one it can't learn stays an email.
-    const find = engine
-      ? async (email: string) => {
-          const actor = await engine.findByEmail(email)
-          if (actor) await backend.syncImport(engine.caller, { op: 'seen', author: { ...actor, isBot: false } }, new AbortController().signal)
-          return actor
-        }
-      : undefined
-    return (await withEmailMentions(text, find)).text
+    return (await withEmailMentions(text, engine ? learnEmail : undefined)).text
+  }
+
+  /**
+   * The synced platform's user with this email, whom the board learns: a post can mention only
+   * an actor it knows, and a platform mention of them resolves only once it does.
+   */
+  async function learnEmail(email: string): Promise<Actor | null> {
+    const actor = await engine!.findByEmail(email)
+    if (actor) await backend.syncImport(engine!.caller, { op: 'seen', author: { ...actor, isBot: false } }, new AbortController().signal)
+    return actor
+  }
+
+  /** Emails filters named, as sync found them, for a few minutes: `tail` and `wait` ask at every page. */
+  const mentioned = new Map<string, { at: number; actor: Promise<Actor | null> }>()
+
+  /**
+   * `--mentions ada@vercel.com`: the synced platform's user with that email, for a caller that may
+   * read somewhere. Anything else, and an email sync doesn't know, goes on as it came.
+   */
+  async function withMentioned<Q extends { mentions?: string | undefined }>(caller: Caller, query: Q): Promise<Q> {
+    const email = query.mentions?.toLowerCase()
+    if (!engine || email === undefined || !EMAIL.test(email)) return query
+    const access = accessOf(caller)
+    if (access !== null && !access.anywhere('read')) return query
+    let found = mentioned.get(email)
+    if (!found || Date.now() - found.at > EMAIL_TTL_MS) {
+      if (mentioned.size >= 1000) mentioned.clear()
+      found = { at: Date.now(), actor: learnEmail(email).catch(() => null) }
+      mentioned.set(email, found)
+    }
+    const actor = await found.actor
+    return actor ? { ...query, mentions: actor.id } : query
   }
 
   /**
@@ -620,8 +649,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     return { message: await read(message!) }
   }
 
-  /** The protocol method `name`, as board() serves it: what it posts and edits with the emails they mention resolved. */
+  /** The protocol method `name`, as board() serves it: what it posts and edits, and the filters it reads by, with their emails resolved. */
   async function invoke(name: Method, caller: Caller, input: unknown, signal: AbortSignal): Promise<unknown> {
+    if (name === 'messages' || name === 'threads' || name === 'events') input = await withMentioned(caller, input as { mentions?: string })
     switch (name) {
       case 'post':
         return post(caller, input as Protocol['post']['input'], signal)
@@ -803,7 +833,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
 
       const input = await inputOf(target.name, request, url, match.params)
       if (target.name === 'events' && (request.headers.get('accept') ?? '').includes('text/event-stream'))
-        return await sse(caller, input as Protocol['events']['input'], request, asked ? () => callerOf(asked) : null)
+        return await sse(caller, await withMentioned(caller, input as Protocol['events']['input']), request, asked ? () => callerOf(asked) : null)
       const output = injected && 'platform' in injected ? await asPlatform(target.name, injected, input, request.signal) : await invoke(target.name, caller, input, request.signal)
       if (target.name === 'attachment') return attachmentResponse(output as Protocol['attachment']['output'])
       return json(output, CREATED.has(target.name) ? 201 : 200)
