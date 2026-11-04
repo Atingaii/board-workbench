@@ -33,6 +33,12 @@ const WALK: Record<RouteName, Walk> = {
   channels: () => [
     { method: 'GET', path: '/channels', status: 200, check: (body) => expect(body.channels.map((c: any) => c.path)).toEqual(['open']) },
   ],
+  // Its answer says whether the channel was there, so one it can't read is refused whether it is or not.
+  createChannel: () => [
+    { method: 'POST', path: '/channels', body: { path: 'secret' }, status: 403 },
+    { method: 'POST', path: '/channels', body: { path: 'secret/never-posted' }, status: 403 },
+    { method: 'POST', path: '/channels', body: { path: 'open' }, status: 403 },
+  ],
   actors: () => [
     { method: 'GET', path: '/actors', status: 200, check: (body) => expect(body.actors.map((a: any) => a.handle)).not.toContain('keeper') },
   ],
@@ -185,6 +191,8 @@ async function setup() {
   const reply = (await keeper('POST', '/messages', { re: root, text: 'still hush' })).body.message.id
   await keeper('POST', `/messages/${root}/reactions`, { emoji: 'eyes' })
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id
+  // A channel made before anything posted to it: an event that names no message.
+  expect((await keeper('POST', '/channels', { path: 'secret/empty' })).body).toMatchObject({ created: true })
   const openRoot = (await host('POST', '/messages', { channel: 'open', text: 'hello' })).body.message.id
   const openSchedule = (await host('POST', '/schedules', { re: openRoot, text: 'hello later', in: '1d' })).body.schedule.id
   const fixture: Fixture = { secret: { root, reply, schedule, file }, open: { root: openRoot, schedule: openSchedule } }

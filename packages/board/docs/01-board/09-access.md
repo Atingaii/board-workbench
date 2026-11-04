@@ -457,7 +457,7 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | Permission | Allows | Implies |
 | --- | --- | --- |
 | `read` | messages, threads, `/events` (tail, wait, poll), schedules, the channel in `vb channels`, attachments on readable messages | |
-| `post` | start a thread; edit and delete your own messages; upload; schedule a root | |
+| `post` | start a thread; create a channel, with `read`; edit and delete your own messages; upload; schedule a root | |
 | `react` | add and remove reactions | `read` |
 | `label` | set and unset labels, including labels on a post | `read` |
 | `sync` | attach a thread to a Slack or GitHub thread, including `--sync` on a post; speak for platform users there, through [sync's routes](../04-reference/03-http.md#syncs-routes); in every channel, the board's own inbox | `read` |

@@ -61,11 +61,12 @@ A new root or reply.
 
 ### The rest
 
-Every event below but `actor.seen` carries `thread`, the thread key, so
-consumers can keep a thread's events in order on its lane.
+Every event below but `channel.created` and `actor.seen` carries `thread`, the
+thread key, so consumers can keep a thread's events in order on its lane.
 
 | Event | Payload | Written when |
 | --- | --- | --- |
+| `channel.created` | `channel`, `by` | a channel is made before anything posts to it. A post makes one with no event of its own |
 | `message.edited` | `id`, `text`, `mentions` (server), `by`, `from` | a message's text changes, on the board or a platform |
 | `message.deleted` | `id`, `by`, `from` | a message is deleted. It becomes a tombstone and drops its reactions, files, and links |
 | `message.linked` | `id`, `links`, `by`, `from` | a platform edit or unfurl changes what a message links to |
@@ -87,9 +88,9 @@ consumers can keep a thread's events in order on its lane.
   `external` (a platform user).
 - **The event feed hides bookkeeping** by default: `actor.seen`,
   `thread.synced`, `message.synced`, and `message.files_synced` appear with
-  `all` (`vb tail --all`). Events that concern no message (`thread.synced` and
-  the `actor.` ones) appear only without filters, to a caller that reads every
-  channel. See [Reading](../01-board/05-reading.md).
+  `all` (`vb tail --all`). Events that concern no message (`channel.created`,
+  `thread.synced`, and the `actor.` ones) appear only without filters, to a
+  caller that reads every channel. See [Reading](../01-board/05-reading.md).
 
 ### Rules for values
 
@@ -178,7 +179,7 @@ as the tables keep it, for anyone reading the log themselves.
 
 | Reducer | A2 name | State | Used by |
 | --- | --- | --- | --- |
-| `channelsReducer` | `board.channels.v1` | path → `{ path, lastIndex, messages, threads }` | `channels` |
+| `channelsReducer` | `board.channels.v2` | path → `{ path, lastIndex, messages, threads }`, from posts and `channel.created` | `channels` |
 | `actorsReducer` | `board.actors.v2` | `byId`: actor ID → `{ id, kind, handle, name, avatar, host? }`; `byHandle`: lowercased handle → actor IDs | mention resolution, `actors`, rendering |
 | `messagesReducer` | `board.messages.v5` | `byId`: message ID → the message as it is now; `replies`: root → reply IDs, in log order | not the board: its tables hold the same messages |
 

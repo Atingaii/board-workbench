@@ -81,6 +81,7 @@ describe('vercel()', () => {
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
       'core: lists the channel and you in it': 'passed',
+      'core: creates a channel only once: one a post made is there already': 'passed',
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
@@ -192,6 +193,25 @@ describe('vercel()', () => {
     await team.post('ops', { text: 'three' })
     expect((await team.messages({ channel: 'dev/' })).messages.map((m) => m.text)).toEqual(['one', 'two'])
     expect((await team.threads({ channel: 'dev/', label: { state: 'open' } })).threads.map((t) => t.message.id)).toEqual([two.id])
+  })
+
+  it('makes a channel in the API before anything posts to it, once, and only for a caller that reads and posts there', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    expect(await team.createChannel('dev/alerts')).toEqual({ channel: { path: 'dev/alerts', lastIndex: 0, messages: 0, threads: 0 }, created: true })
+    expect(await team.createChannel('dev/alerts')).toMatchObject({ created: false })
+    // One a post made, or another handle, is there already.
+    await team.post('ops', { text: 'hi' })
+    expect(await team.createChannel('ops')).toMatchObject({ created: false })
+    expect(await handleOn(api, 'user:u_ada').createChannel('dev/alerts')).toMatchObject({ created: false })
+
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+    const signal = new AbortController().signal
+    await expect(backend.createChannel(verified({ 'feedback/': ['post'] }), { path: 'feedback/acme' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.createChannel(verified({ 'dev/': ['read'] }), { path: 'dev/web' }, signal)).rejects.toMatchObject({ status: 403 })
+    expect(await backend.createChannel(verified({ 'dev/': ['read', 'post'] }), { path: 'dev/web' }, signal)).toMatchObject({ created: true })
+    // What it refused never reached the API: the board's own general, and what it made.
+    expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'dev/web', 'general', 'ops'])
   })
 
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {

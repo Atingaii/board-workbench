@@ -391,6 +391,18 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    // It makes none of its own: a board keeps every channel, and a run leaves nothing behind.
+    name: 'creates a channel only once: one a post made is there already',
+    run: async (ctx) => {
+      needRoot(ctx)
+      const { channel, created } = await ctx.board.createChannel(ctx.channel)
+      same(created, false, `creating ${ctx.channel}, which this run posted to`)
+      same(channel.path, ctx.channel, "the channel's path")
+      await rejects(ctx.board.createChannel('Not A Channel'), 400, 'invalid_request', 'creating a malformed channel')
+    },
+  },
+  {
+    group: 'core',
     name: 'answers 404 for an ID that names nothing',
     run: async (ctx) => {
       await rejects(ctx.board.thread(`no-such-message-${ctx.labels.conformance}`), 404, 'message_not_found', 'reading a message that was never posted')

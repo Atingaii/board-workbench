@@ -440,10 +440,25 @@ revoked g3
 
 ```text
 vb channels
+vb channels create <channel>
 ```
 
 Channels, grouped by path prefix, each with its thread and message counts and
-its latest message (`last #1290`).
+its latest message (`last #1290`). It runs `vb channels list`.
+
+A first post makes a channel. `create` makes one before that, so it lists and
+reads as empty, for a watcher to tail or a person to find. It needs `read` and
+`post` there, and a channel that's there stays as it is:
+
+```text
+$ vb channels create dev/alerts
+created dev/alerts
+$ vb channels create dev/alerts
+dev/alerts already exists
+```
+
+With `--json`, it prints `{ channel, outcome }`, where `outcome` is `created`
+or `unchanged`.
 
 ### actors
 

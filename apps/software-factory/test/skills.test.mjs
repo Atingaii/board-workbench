@@ -43,6 +43,7 @@ test("policy: Eve's credentials and identity reach every board route vb calls, a
     "discovery",
     "me",
     "channels",
+    "createChannel",
     "actors",
     "messages",
     "message",

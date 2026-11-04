@@ -347,6 +347,34 @@ describe('cli', () => {
     expect(synced.stderr).toContain(`vb sync ${id} <TARGET>`)
   })
 
+  it('creates a channel before anything posts to it, and leaves one that is there as it is', async () => {
+    expect(await vb(['channels', 'create', 'made/early'])).toEqual({ code: 0, stdout: 'created made/early\n', stderr: '' })
+    // It lists with nothing in it, under its prefix like any channel, and reads as empty, not as a typo.
+    expect((await vb(['channels'])).stdout).toMatch(/(^|\n)made\/\n {2}made\/early {2}0 threads · 0 messages\n/)
+    expect(await vb(['read', 'made/early'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^made\/early · 0 threads · cursor \d+\n$/) })
+    // A bare `channels` runs `channels list`.
+    expect((await vb(['channels', 'list'])).stdout).toBe((await vb(['channels'])).stdout)
+    expect(await vb(['channels', 'create', 'made/early'])).toEqual({ code: 0, stdout: 'made/early already exists\n', stderr: '' })
+
+    // A post fills it like any channel, and a channel a post made is there already.
+    const first = (await vb(['post', 'made/early', 'first'])).stdout.trim()
+    expect((await vb(['channels'])).stdout).toContain(`\n  made/early  1 thread · 1 message · last #${first}\n`)
+    const late = (await vb(['post', 'made/late', 'first'])).stdout.trim()
+    const again = await vb(['channels', 'create', 'made/late', '--json'])
+    expect(again.code).toBe(0)
+    expect(JSON.parse(again.stdout)).toEqual({ channel: { path: 'made/late', lastIndex: Number(late), messages: 1, threads: 1 }, outcome: 'unchanged' })
+    expect(JSON.parse((await vb(['channels', 'create', 'made/fresh', '--json'])).stdout)).toEqual({
+      channel: { path: 'made/fresh', lastIndex: 0, messages: 0, threads: 0 },
+      outcome: 'created',
+    })
+
+    expect(await vb(['channels', 'create'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Missing the channel to create/) })
+    expect(await vb(['channels', 'archive', 'made/early'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown command archive for vb channels\./) })
+    // The board refuses a path that isn't one, and makes nothing.
+    expect(await vb(['channels', 'create', 'Made Early'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Can't create Made Early\.\n/) })
+    expect((await vb(['channels'])).stdout).not.toContain('Made Early')
+  })
+
   it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
     const second = (await vb(['post', 'open-work', 'docs typo'])).stdout.trim()

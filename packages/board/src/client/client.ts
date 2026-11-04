@@ -303,6 +303,11 @@ export function createBoardClient(options: ClientOptions) {
     discovery: () => call<Discovery>('GET', '/', { auth: false }),
     me: () => call<Me>('GET', '/me'),
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
+    /**
+     * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
+     * there. `created` is false when it was there already; it's left as it is.
+     */
+    createChannel: (path: string) => call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } }),
     actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>

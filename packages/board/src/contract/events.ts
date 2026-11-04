@@ -62,6 +62,11 @@ export const boardEvents = {
        */
       importedBy: ActorId.optional(),
     }),
+    /**
+     * A channel made before anything posted to it. A post makes one too, with no event of its own:
+     * this is only for one that's empty. It names no message, so it carries no `id`.
+     */
+    'channel.created': z.object({ channel: ChannelPath, by: Author }),
     /** A message's links changed: an edit linked something new, or the platform sent what a link says. */
     'message.linked': z.object({ id: MessageId, thread: ThreadKey, links: z.array(Link).max(LINKS_PER_MESSAGE_MAX), by: Author, from: From }),
     'message.edited': z.object({

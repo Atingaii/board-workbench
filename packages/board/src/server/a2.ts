@@ -28,7 +28,7 @@ import { ack, pull, pullInbox, queueReducer, type QueueSession } from './registe
 import { createRegistry, storedPrincipal, type Registration, type SyncEntrySpec } from './registry.ts'
 import { METHODS } from './routing.ts'
 import { publicPost, type Post } from './transport.ts'
-import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
+import { authorizeMessage, authorizeOwn, authorizePost, blindText, trusted, writeAttach, writeChannel, writeDelete, writeEdit, writeLabels, writeLinks, writePost, writeReaction, deploymentIdentity, landedFor, type Identity, type WriteContext } from './writes.ts'
 import type { WriteOrigin } from './origin.ts'
 import { isKeyIdOf } from '../client/ids.ts'
 import { DroppedError, MIDDLEWARE_ACTOR } from './middleware.ts'
@@ -484,6 +484,9 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
         .filter((channel) => principal.access.readable(channel.path))
         .sort((a, b) => a.path.localeCompare(b.path))
       return { channels, cursor: ref(index) }
+    },
+    async createChannel(caller, { path }) {
+      return writeChannel(writes, { identity: await identityOf(caller), path })
     },
     async actors(caller) {
       const { principal, actor } = (await identityOf(caller))
