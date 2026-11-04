@@ -373,7 +373,7 @@ describe('cli', () => {
     // The board refuses a path that isn't one, and makes nothing.
     expect(await vb(['channels', 'create', 'Made Early'])).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Can't create Made Early\.\n/) })
     expect((await vb(['channels'])).stdout).not.toContain('Made Early')
-  })
+  }, 20_000) // a dozen CLI runs, which a loaded CI runner can take past the default 5s
 
   it('reads a channel as thread summaries, counting threads, and says so when the channel does not exist', async () => {
     const first = (await vb(['post', 'open-work', 'flaky test in ci\nsecond line', '--label', 'state=open'])).stdout.trim()
