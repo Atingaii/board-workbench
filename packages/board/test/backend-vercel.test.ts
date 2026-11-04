@@ -83,14 +83,14 @@ describe('vercel()', () => {
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
-      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
+      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
       "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
       'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
-      'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      'sync: keeps noSync on a post and a reply, so sync sends neither': 'passed',
       'sync: finds no one for a platform account nobody linked': 'skipped',
     })
   }, 30_000)
@@ -406,7 +406,7 @@ describe('vercel()', () => {
       "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'passed',
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
-      'keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      'keeps noSync on a post and a reply, so sync sends neither': 'passed',
       'finds no one for a platform account nobody linked': 'passed',
     })
   }, 30_000)
