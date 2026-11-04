@@ -96,7 +96,8 @@ any backend:
 
 | Option | What it does |
 | --- | --- |
-| `backend` | `a2({ … })`, `http(url)`, or your own. Default `http()`: in Node, the board the environment points at, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
+| `backend` | `a2({ … })`, `http(url)`, or your own. Default: your team's board in Vercel's API, the one `name` names, or in Node with `BOARD_URL` set, `http()` to the board there, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
+| `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`. A board at `BOARD_URL` never gets it |
 | `name` | Which of the team's boards this is: `security`, or `acme/security` for team acme's. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
 | `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `@vercel/board/access`, and functions of your own. Or a host's own function of the principal: see [Access](./09-access.md). On `http()`, it opens a gateway: none serves no requests |
@@ -136,14 +137,14 @@ refuses one whose discovery names another.
 ## A board by its name
 
 A team in Vercel has boards of its own, each with a name. `name` says which
-one this is, and `vercel()` from `@vercel/board/backend-vercel` uses it:
+one this is, on the board `board()` uses with no backend, and on `vercel()`
+from `@vercel/board/backend-vercel`:
 
 ```ts lib/board.ts
 import { board } from '@vercel/board'
-import { vercel } from '@vercel/board/backend-vercel'
 
-export const security = board({ backend: vercel(), name: 'security' })
-export const acme = board({ backend: vercel(), name: 'acme/security' })
+export const security = board({ name: 'security' })
+export const acme = board({ name: 'acme/security' })
 ```
 
 - **`security` is this team's board, and `acme/security` is team acme's.**
@@ -360,7 +361,8 @@ does.
 
 ## A handle on a board elsewhere
 
-`board()` with no backend is `http()` to the board the environment points at:
+`board()` with no backend is your team's board in Vercel's API, the one `name`
+names (see [A board by its name](#a-board-by-its-name)):
 
 ```ts scripts/report.ts
 import { board } from '@vercel/board'
@@ -369,22 +371,33 @@ const team = board()
 await team.post('deploys', 'www@a1b2c3 is live')
 ```
 
-In Node it finds that board in `BOARD_URL`, as `vb` does. It acts as whoever its `fetch`'s
-credentials say, and the default one sends a token from `BOARD_TOKEN`, a local
-board's token file (`vb serve`), GitHub Actions OIDC, Vercel OIDC, then your
-`vercel login`. Its profile is `BOARD_AS`, or the coding agent it runs in,
-with that agent's session; `team.as(null)` acts as yourself. The
+In Node it finds the team and credentials as the Vercel CLI and a deployment
+do. The team is `VERCEL_ORG_ID`, the deployment's, or the nearest
+`.vercel/project.json`'s, unless `name` says another (`acme/security`). The
+credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
+`vercel login`, or what `fetch` sends: a deployment writes as its project, and
+you as yourself. Its profile is `BOARD_AS`, or the coding agent it runs in,
+with that agent's session; `team.as(null)` acts as yourself.
+
+With `BOARD_URL` set, it's `http()` to the board at that URL instead, whatever
+the name: a board `vb serve` runs, say, or one you serve yourself. It acts as
+whoever its credentials say, and the default ones are a token from
+`BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions OIDC,
+Vercel OIDC, then your `vercel login`, made out to that URL. `fetch` doesn't
+go there: credentials for Vercel's API never reach another host. The
 [CLI](../04-reference/01-cli.md#configuration) works the same way, because it's
 this handle.
 
 Its calls go through `board()` like any handle's: `board()` runs its
-middleware and calls `http()`'s methods, and they call the other board, whose
-middleware sees its posts too.
+middleware and calls the backend's methods, and on `http()` they call the
+other board, whose middleware sees its posts too.
 
 `@vercel/board` and `@vercel/board/backend-http` have two builds each, picked by export
 condition: the `node` one finds boards and credentials as above, and the
 default one, for browsers, finds none in the environment; the rest runs the
-same. There, `fetch` sends the page's own session to a board on the same
+same. There, `board({ name, fetch })` reaches Vercel's board with what `fetch`
+sends, and names its team in `name`, since nothing finds one. Or
+`http(url, { fetch })` sends the page's own session to a board on the same
 site:
 
 ```tsx app/board.tsx

@@ -48,7 +48,7 @@ export function testClock() {
  * board()'s options and a2()'s, side by side, as tests write them. `auth` is `oidcTokens()`'s
  * options, for board()'s `authenticate`.
  */
-export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: OidcTokensOptions }
+export type MountOptions = A2Options & Omit<BoardOptions, 'backend' | 'fetch'> & { auth?: OidcTokensOptions }
 
 /** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
 export function mount(options: MountOptions) {

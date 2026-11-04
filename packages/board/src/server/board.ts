@@ -12,13 +12,7 @@ import type { Watcher } from './watcher.ts'
  * `board()`'s options: where the board lives, who may use it and what its writes go through, and
  * what runs here. The backend keeps or reaches the log; the policy is the board's.
  */
-export type BoardOptions = PolicyOptions & {
-  /**
-   * Where the board lives: `a2({ … })` from `@vercel/board/backend-a2` keeps it here, `http(url)` from
-   * `@vercel/board/backend-http` uses another, or your own. By default, `http()`: in Node, the board the
-   * environment points at (`BOARD_URL`).
-   */
-  backend?: Backend
+export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
   /**
    * Which of the team's boards this is: `security` is this team's board named security, and
    * `acme/security` team acme's. Without one, the team's default board. A name is 1 to 64
@@ -69,10 +63,35 @@ export type Board = BoardClient & {
   as(profile: ProfileOption): Board
 }
 
+/** A board on a backend you pass, which says how it reaches the board itself. */
+type BackendOptions = {
+  /**
+   * Where the board lives: `a2({ … })` from `@vercel/board/backend-a2` keeps it here, `http(url)` from
+   * `@vercel/board/backend-http` uses another, or your own. By default, Vercel's board for your team,
+   * the one `name` names, or with `BOARD_URL` set (in Node), the board at that URL.
+   */
+  backend: Backend
+  fetch?: never
+}
+
+/** A board on the backend board() picks: Vercel's, or with `BOARD_URL` set, the board at that URL. */
+type DefaultOptions = {
+  backend?: undefined
+  /**
+   * How requests reach Vercel's API, with credentials it takes: a token for the team. In Node it
+   * defaults to `VERCEL_TOKEN`, the deployment's OIDC token, or your `vercel login`; elsewhere, a
+   * browser say, pass one. A board at `BOARD_URL` gets the credentials `vb` sends it instead.
+   */
+  fetch?: typeof fetch
+}
+
 /** What a build of board gives board(): Node's finds boards, tokens, and the board's project in the environment. */
 export type Runtime = {
-  /** The backend for a board() given none: `http()`, to the board the environment points at. */
-  http(): Backend
+  /**
+   * The backend for a board() given none: Vercel's board, through `fetch` when it's given, or in
+   * Node with `BOARD_URL` set, `http()` to that board.
+   */
+  backend(fetch: typeof globalThis.fetch | undefined): Backend
   /** Loads the sync engine, only for a board that syncs. */
   sync: () => Promise<typeof import('../sync/engine.ts')>
   /** Loads what the policy finds in the environment, the first time a board serves: null where nothing does, so pass `authenticate` and `project`. */
@@ -113,7 +132,7 @@ export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
 export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   if (options.name !== undefined && !isBoardName(options.name))
     throw new Error(`board: ${JSON.stringify(options.name)} isn't a board's name: one is 1 to 64 characters with no /, after its team and a / for another team's board (acme/security)`)
-  const backend = options.backend ?? runtime.http()
+  const backend = options.backend ?? runtime.backend(options.fetch)
   const policy = createPolicy(options, backend.keeps, runtime.serving, backend.trust ?? null)
   const watch = options.watch ?? {}
   const entries = options.sync ?? {}

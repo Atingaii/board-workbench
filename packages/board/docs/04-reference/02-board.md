@@ -21,7 +21,8 @@ where the board lives:
 
 | Backend | The handle acts as |
 | --- | --- |
-| none, or `http(url)` | Whoever its `fetch`'s credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
+| none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_AS` or the coding agent it runs in picks |
+| none with `BOARD_URL` set, or `http(url)` | Whoever its `fetch`'s credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
 | `a2()` | The board's own code: `board:client` |
 
 The short samples below act on that `team`, and on `msg`, the message
@@ -33,15 +34,20 @@ The short samples below act on that `team`, and on `msg`, the message
 | Build | Where | What it does |
 | --- | --- | --- |
 | `node` | Node 22.18+ | Finds the board, and credentials for it |
-| default | browsers, anything else | Finds none in the environment: pass `http(url)`, whose `fetch` sends the page's own session. The rest runs the same |
+| default | browsers, anything else | Finds none in the environment: pass `fetch`, which sends credentials Vercel's API takes, or `http(url)`, whose `fetch` sends the page's own session. The rest runs the same |
 
-In Node, `board()` with no backend is `http()` to the board the environment
-points at: `BOARD_URL`. Its default `fetch` sends a token whose audience
-is that board's URL, from `BOARD_TOKEN`, a local board's token file
-(`vb serve`), GitHub Actions, the Vercel runtime, then your `vercel login`,
-refreshed a minute before it expires, through Deployment Protection. The
-[CLI](./01-cli.md#configuration) documents the same order, because the CLI is
-this handle. See [Identity](../01-board/03-identity.md).
+In Node, `board()` with no backend is your team's board in Vercel's API, the
+one `name` names (`security`, or `acme/security` for team acme's), with
+`VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, or what
+`board({ fetch })` sends. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
+
+With `BOARD_URL` set, it's `http()` to the board at that URL instead. Its
+default `fetch` sends a token whose audience is that board's URL, from
+`BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the
+Vercel runtime, then your `vercel login`, refreshed a minute before it
+expires, through Deployment Protection. The [CLI](./01-cli.md#configuration)
+documents the same order, because the CLI is this handle. See
+[Identity](../01-board/03-identity.md).
 
 `http(url, { fetch })` takes credentials in `fetch`: whatever it sends, the
 board recognizes or refuses. In a browser, send the page's own session to a

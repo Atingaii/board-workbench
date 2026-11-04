@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { Attachment, ATTACHMENT_BYTES_MAX, DIRECT_UPLOAD_BYTES_MAX, type Attachment as AttachmentType } from '../contract/schemas.ts'
 import { badRequest, HttpError, notFound } from './errors.ts'
+import { fileName, mediaType } from '../contract/files.ts'
 
 /**
  * Where attachments' bytes live. The board writes each file once, under a key
@@ -57,18 +58,6 @@ const dataKey = (id: string) => `board/attachments/${id}`
 /** A direct upload the board signed, until it's finished: what it's called, and who may finish it. */
 const ticketKey = (id: string) => `board/uploads/${id}.json`
 const metaKey = (id: string) => `board/attachments/${id}.json`
-
-/** `shot.png`, as the board stores a name: no paths, no control characters. */
-export function fileName(name: string | null): string {
-  const base = (name ?? '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim()
-  return base.slice(0, 255) || 'file'
-}
-
-/** `image/png`, or `application/octet-stream` when the type isn't one. */
-export function mediaType(type: string | null): string {
-  const value = (type ?? '').split(';')[0]!.trim().toLowerCase()
-  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(value) && value.length <= 255 ? value : 'application/octet-stream'
-}
 
 /** A board without a blob store keeps no files: every file route says so. */
 const noBlob = () => new HttpError(501, 'no_files', 'this board keeps no files: pass `blob` to `a2()`')

@@ -84,6 +84,24 @@ describe('board() in a browser', () => {
     )
   }, 60_000)
 
+  it("bundles Vercel's board by its name, through a fetch of the page's own, with nothing from Node", async () => {
+    await bundle(
+      [
+        "import { board } from '@vercel/board'",
+        "export const team = board({ name: 'security', fetch: (input, init) => fetch(input, { ...init, credentials: 'include' }) })",
+        "export const posted = (text: string) => team.post('dev', text)",
+      ],
+      async (dir, files) => {
+        expect(await nodeImports(dir)).toEqual([])
+        const all = Object.values(files).join('\n')
+        // vercel()'s own default build: it finds no credentials or team in the environment.
+        expect(all).toContain('/v1/messageboard')
+        expect(all).not.toContain('VERCEL_OIDC_TOKEN')
+        expect(all).not.toContain('jwtVerify')
+      },
+    )
+  }, 60_000)
+
   it('bundles a board that syncs and watches, with a provider of its own, and nothing from Node', async () => {
     await bundle(
       [

@@ -1630,7 +1630,7 @@ act on it as the board's caller.
 import { readFile } from 'node:fs/promises'
 import { board } from '@vercel/board'
 
-const team = board()   // Node: http() to the board BOARD_URL names, token detected
+const team = board()   // Node: the team's board in Vercel's API, or with BOARD_URL, http() to that board
 
 const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
@@ -1664,14 +1664,18 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   `--human`. On `a2()` it's the board's own code, in-process, with no URL or
   token: `board:client`, and `board:client:<profile>` with `as(profile)`, so
   its writes wake watchers and sync like anyone's.
-- **`board()` with no backend is `http()` to the board the environment points
-  at.** The `node` export condition of `@vercel/board` and `@vercel/board/backend-http`
-  finds the URL in `BOARD_URL` (see [Configuration](#configuration)), and its
-  default `fetch` sends a token in the order in [Tokens](#tokens), through
-  Deployment Protection. The default
-  build, for browsers, finds nothing: `board({ backend: http(url) })`, whose
-  `fetch` sends the page's own session (a cookie, say), which the board's
-  `board({ authenticate })` recognizes. A browser never gets a token of the deployment's.
+- **`board()` with no backend is the team's board in Vercel's API,** the one
+  `name` names, on `vercel()`, with `board({ fetch })`'s credentials when it's
+  given. In Node they default to `VERCEL_TOKEN`, the deployment's OIDC token,
+  then your `vercel login`, and the team to `VERCEL_ORG_ID`, the
+  deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
+  it's `http()` to that board instead, whatever the name: its default `fetch`
+  sends a token in the order in [Tokens](#tokens), through Deployment
+  Protection, and `board({ fetch })` never goes there. The default build, for
+  browsers, finds nothing: `board({ name, fetch })`, or
+  `board({ backend: http(url) })`, whose `fetch` sends the page's own session
+  (a cookie, say), which the board's `board({ authenticate })` recognizes. A
+  browser never gets a token of the deployment's.
 - **Nothing on the way to a handle over HTTP needs Node.** `board()`'s
   pipeline (routing, validation, serving) runs in a browser, IDs hash with
   WebCrypto, and finding the board and its credentials lives in the `node`
@@ -1770,7 +1774,8 @@ Codex's, Pi's) is sent with each request and recorded on its writes.
 Git checkout's root). `--board` (or `BOARD_NAME`) names which of that team's
 boards, and `acme/security` names the team too. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
-reads `BOARD_URL` only. Nothing in a checkout names a host: a token or a
+reads `BOARD_URL`, and with none, uses the team's board in Vercel's API that
+its `name` names (`BOARD_NAME` is the CLI's alone). Nothing in a checkout names a host: a token or a
 Protection bypass goes only where the person or the environment said, never
 where a cloned repo's file points. The URL selects a board, not a channel.
 
