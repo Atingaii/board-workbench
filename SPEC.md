@@ -1855,10 +1855,10 @@ board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key 
 board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
-board tokens [list]                            yours, or with manage, everyone's (also: token, ls)
+board tokens [list]                            yours, or with manage, everyone's
 board tokens create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]   prints the secret, once
 board tokens revoke <token>                    e.g. t12; it and every token minted with it
-board grants [list]                            the board's grants; needs manage (also: grant, ls)
+board grants [list]                            the board's grants; needs manage
 board grants create <issuer> --claim <name=value>... [--can <scope>]   vercel, github, or an https URL; needs manage
 board grants revoke <grant>                    e.g. g3
 board edit <id> "<text>" [--if-revision N]   only if no one has edited or deleted it since revision N

@@ -42,13 +42,10 @@ describe('cli tokens and grants', () => {
     expect((await vb(['grants', 'list'])).stdout).toBe('no grants\n')
   }, 30_000)
 
-  it('lists with tokens or grants alone, and takes token, grant, and ls as other spellings', async () => {
-    expect((await vb(['token', 'create', 'ci-bot', '--can', 'ci/=post'])).code).toBe(0)
-    const tokens = await vb(['tokens'])
-    expect(tokens).toMatchObject({ code: 0, stdout: expect.stringMatching(/^t\d+ +ci-bot +ci\/=post +expires in 30d\n$/) })
-    expect((await vb(['token', 'ls'])).stdout).toBe(tokens.stdout)
+  it('lists with tokens or grants alone, and names a subcommand they lack', async () => {
+    expect((await vb(['tokens', 'create', 'ci-bot', '--can', 'ci/=post'])).code).toBe(0)
+    expect(await vb(['tokens'])).toMatchObject({ code: 0, stdout: expect.stringMatching(/^t\d+ +ci-bot +ci\/=post +expires in 30d\n$/) })
     expect((await vb(['grants'])).stdout).toBe('no grants\n')
-    expect((await vb(['grant', 'ls'])).stdout).toBe('no grants\n')
     expect(await vb(['tokens', 'mint', 'x'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown command mint for vb tokens\.\n/) })
   })
 

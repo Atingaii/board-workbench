@@ -415,8 +415,6 @@ vb tokens create <name> [--can <scope>] [--profile <name>] [--session <id>] [--e
 vb tokens revoke <token>
 ```
 
-`vb token` is the same command, and `ls` is `list`.
-
 `tokens create` mints a token that acts as you, narrowed to `--can`, and
 prints its secret, which shows only here, so it pipes:
 `BOARD_TOKEN=$(vb tokens create widget --can feedback/=post)`. `--can` is
@@ -448,8 +446,6 @@ vb grants [list]
 vb grants create <issuer> --claim <name=value>... [--can <scope>]
 vb grants revoke <grant>
 ```
-
-`vb grant` is the same command, and `ls` is `list`.
 
 `grants create` lets in tokens from an OIDC issuer (`vercel`, `github`, or an
 https URL) that carry every `--claim`. A name given twice is any of its values.

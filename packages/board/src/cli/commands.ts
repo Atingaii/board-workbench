@@ -153,7 +153,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'you',
     name: 'tokens',
-    aliases: ['token'],
     description: 'tokens that act as you, narrowed, for a widget, a sandbox, or a script',
     arguments: [],
     options: [],
@@ -162,7 +161,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     subcommands: [
       {
         name: 'list',
-        aliases: ['ls'],
         default: true,
         description: "your live tokens, or with manage, everyone's",
         arguments: [],
@@ -191,7 +189,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'grants',
-    aliases: ['grant'],
     description: "who the board lets in beside its code's rules: tokens from an OIDC issuer with these claims",
     arguments: [],
     options: [],
@@ -200,7 +197,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     subcommands: [
       {
         name: 'list',
-        aliases: ['ls'],
         default: true,
         description: "the board's grants",
         arguments: [],

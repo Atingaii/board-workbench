@@ -1033,7 +1033,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'grants': {
       const [verb, ...rest] = args
-      if (verb === undefined || verb === 'list' || verb === 'ls') {
+      if (verb === undefined || verb === 'list') {
         if (rest.length > 0) throw usage(`grants list takes no arguments: ${rest[0]} is one too many.`)
         const list = await client().grants()
         if (flags.json) return result({ grants: list }), 0
@@ -1062,7 +1062,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'tokens': {
       const [verb, ...rest] = args
-      if (verb === undefined || verb === 'list' || verb === 'ls') {
+      if (verb === undefined || verb === 'list') {
         if (rest.length > 0) throw usage(`tokens list takes no arguments: ${rest[0]} is one too many.`)
         const list = await client().tokens()
         if (flags.json) return result({ tokens: list }), 0

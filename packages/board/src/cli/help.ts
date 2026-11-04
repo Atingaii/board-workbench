@@ -90,8 +90,7 @@ export function commandHelp(name: string, path: readonly CliCommand[]): string {
   const options = shown(command.options)
   const subcommands = (command.subcommands ?? []).filter((sub) => !sub.hidden)
   const lines = [`usage: ${name} ${usage(path)}${options.length || command.filters ? ' [options]' : ''}`, '', ...wrap(command.description, COLUMNS)]
-  const parents = path.slice(0, -1).map((parent) => `${parent.name} `).join('')
-  if (command.aliases?.length) lines.push('', `also: ${command.aliases.map((alias) => `${name} ${parents}${alias}`).join(', ')}`)
+  if (command.aliases?.length) lines.push('', `also: ${command.aliases.map((alias) => `${name} ${alias}`).join(', ')}`)
   const section = (title: string, entries: readonly (readonly [string, string])[]) => {
     if (entries.length) lines.push('', `${title}:`, ...rows(entries))
   }
@@ -123,6 +122,6 @@ export function commandPath(words: readonly string[], all: readonly CliCommand[]
   const command = all.find((candidate) => candidate.name === words[0] || candidate.aliases?.includes(words[0]!))
   if (!command) return null
   const at = command.argumentsBeforeSubcommand ? command.arguments.length + 1 : 1
-  const sub = command.subcommands?.find((candidate) => candidate.name === words[at] || candidate.aliases?.includes(words[at]!))
+  const sub = command.subcommands?.find((candidate) => candidate.name === words[at])
   return sub ? [command, sub] : [command]
 }
