@@ -673,6 +673,19 @@ describe('vercel()', () => {
     expect(await pong.syncRoots('vercel:user:u_jb', Date.now() + 60_000)).toEqual([])
   })
 
+  it("answers the API's own sync refusals with the board's codes", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const ping = handleOn(api, 'project:prj_ping:production')
+    const julian = handleOn(api)
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'linear:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const event = { kind: 'message' as const, channel: 'linear:C1', thread: 'linear:C1:1', subthread: null, message: '1', isRoot: true, text: 'hi', context: null, author }
+    await expect(pong.inboxPush('slack', [{ id: 'e1', event, raw: null }])).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
+    await expect(ping.syncImport({ op: 'seen', author: { ...author, id: 'slack:user:U1' } })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    await expect(julian.register({ url: null, watch: {}, sync: [{ key: 'linear', platform: 'linear' }] })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+  })
+
   it('refuses sync to a caller it serves, which would sync as the project, and links to anyone but the person whose login it is', async () => {
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
     const signal = new AbortController().signal

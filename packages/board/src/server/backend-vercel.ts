@@ -152,6 +152,25 @@ const PAGE_MAX = 100
 const WAIT_MAX_S = 25
 /** The most recent inbox events the API lists at once. */
 const INBOX_LIST_MAX = 100
+const API_ONLY_CODES = new Set([
+  'consent_needs_sign_in',
+  'duplicate_sync_key',
+  'event_too_large',
+  'find_unsupported',
+  'foreign_author',
+  'invalid_account',
+  'invalid_find',
+  'invalid_import',
+  'invalid_inbox_event',
+  'invalid_receipt',
+  'links_need_person',
+  'message_not_owned',
+  'not_a_member',
+  'sync_key_not_owned',
+  'sync_needs_project',
+  'sync_not_found',
+])
+const BOARD_CODES: Record<number, string> = { 400: 'invalid_request', 403: 'forbidden', 404: 'not_found' }
 /** Pages a filtered read of one channel scans for matches before it answers with what it found. */
 const SCAN_PAGES = 10
 
@@ -290,7 +309,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     } catch {}
     if (response.ok) return body as T
     const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
-    throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
+    const code = error?.code ?? 'remote_error'
+    const boardCode = API_ONLY_CODES.has(code) ? (BOARD_CODES[response.status] ?? code) : code
+    throw new HttpError(response.status, boardCode, error?.message ?? `Vercel's API answered ${response.status}`)
   }
 
   /** Every page of a list, in order. */

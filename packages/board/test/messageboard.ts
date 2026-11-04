@@ -107,7 +107,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
   const schedules = new Map<string, Schedule>()
-  /** Sync, as api-messageboard keeps it: each key's owner, platform IDs to the board's, copies, bindings, inboxes, and links. */
+  /** Sync, as Vercel's API keeps it: each key's owner, platform IDs to the board's, copies, bindings, inboxes, and links. */
   const syncKeys = new Map<string, string>()
   const platformThreads = new Map<string, string>()
   const platformMessages = new Map<string, string>()
@@ -503,7 +503,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const ownedKeys = (actor: Actor) => new Set([...syncKeys].filter(([, owner]) => owner === principalId(actor.principal)).map(([key]) => key))
   const linkFor = (account: string) => links.get(account)
 
-  /** api-messageboard's sync routes, as they behave: undefined for a route that isn't one. */
+  /** Vercel's API's sync routes, as they behave: undefined for a route that isn't one. */
   function syncRoute(method: string, rest: string, actor: Actor, body: Record<string, any>, url: URL): unknown {
     const owner = principalId(actor.principal)
     let found: RegExpExecArray | null
