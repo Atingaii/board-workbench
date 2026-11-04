@@ -38,6 +38,7 @@ type Schedule = {
   threadId?: string
   text: string
   labels?: Record<string, string>
+  noSync?: boolean
   firstAt: number
   every?: number
   until?: number
@@ -280,7 +281,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return channel
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number }) {
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }) {
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
@@ -309,6 +310,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       reactions: new Map(),
       // A post's labels commit with it, so its event's message already has them.
       labels: { ...body.labels },
+      ...(body.noSync ? { noSync: true } : {}),
       feedSequence: 0,
       ...(files.length ? { attachments: files.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
       ...(body.schedule ? { schedule: body.schedule } : {}),
@@ -436,6 +438,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       ...(body.threadId !== undefined ? { threadId: body.threadId } : {}),
       text: body.text,
       ...(body.labels ? { labels: { ...body.labels } } : {}),
+      ...(body.noSync ? { noSync: true } : {}),
       firstAt: body.firstAt,
       ...(body.every !== undefined ? { every: body.every } : {}),
       ...(body.until !== undefined ? { until: body.until } : {}),
@@ -457,7 +460,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     const due = schedules.get(id)
     if (!due || due.state !== 'pending') throw new Error(`schedule ${id} has nothing due`)
     const n = due.sent
-    const body = { text: due.text, schedule: { id, n } }
+    const body = { text: due.text, schedule: { id, n }, ...(due.noSync ? { noSync: true } : {}) }
     let message: Message
     if (due.threadId !== undefined) message = post(due.createdBy, threadAt(due.threadId), body)
     else {
@@ -795,7 +798,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
       threads.set(thread.id, thread)
-      const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string>; attachments?: string[] })
+      const message = post(actor, thread, body as { text: string; clientId?: string; labels?: Record<string, string>; attachments?: string[]; noSync?: boolean })
       return { thread: showThread(thread), message: show(message) }
     }
     if ((found = /^\/messages\/([^/]+)$/.exec(rest)) && method === 'GET') {
@@ -886,7 +889,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       }
       const again = repeat(actor, body.clientId)
       if (again) return again
-      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[]; after?: number })) }
+      return { thread: showThread(thread), message: show(post(actor, thread, body as { text: string; replyTo?: number; clientId?: string; attachments?: string[]; after?: number; noSync?: boolean })) }
     }
     if ((found = /^\/threads\/([^/]+)\/messages\/(\d+)(\/delete|\/reactions|\/labels)?$/.exec(rest))) {
       const thread = threadAt(found[1]!)

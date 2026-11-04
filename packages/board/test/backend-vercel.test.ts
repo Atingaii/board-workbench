@@ -99,7 +99,7 @@ describe('vercel()', () => {
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
-      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
+      'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
       // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
       'grants: grants a project, lists it, takes the same grant again as one, and revokes it': 'failed',
       "grants: changes a grant's can when it's set again": 'failed',
@@ -113,7 +113,7 @@ describe('vercel()', () => {
       "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
       'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
-      'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      'sync: keeps noSync on a post and a reply, so sync sends neither': 'passed',
     })
   }, 30_000)
 
@@ -456,7 +456,7 @@ describe('vercel()', () => {
       "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'passed',
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
-      'keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      'keeps noSync on a post and a reply, so sync sends neither': 'passed',
     })
   }, 30_000)
 
