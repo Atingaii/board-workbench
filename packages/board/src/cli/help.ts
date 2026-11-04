@@ -48,9 +48,10 @@ export const flag = (option: CliOption): string =>
 
 const shown = (list: readonly CliOption[]) => list.filter((option) => !option.hidden)
 
-/** A command's rows in the list: itself, when it runs alone, and each of its subcommands. */
+/** A command's rows in the list: itself, when it runs alone and no subcommand is what it runs, and each of its subcommands. */
 function listed(command: CliCommand): [string, string][] {
-  const own: [string, string][] = !command.subcommands || command.runsWithoutSubcommand ? [[usage([command]), command.description]] : []
+  const alone = !command.subcommands || (command.runsWithoutSubcommand && !command.subcommands.some((sub) => sub.default))
+  const own: [string, string][] = alone ? [[usage([command]), command.description]] : []
   return [...own, ...(command.subcommands ?? []).filter((sub) => !sub.hidden).map((sub): [string, string] => [usage([command, sub]), sub.description])]
 }
 

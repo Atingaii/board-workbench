@@ -99,6 +99,14 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/${secret.schedule}/cancel`, status: 404 },
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
+  // Who the board trusts is its bookkeeping: manage in every channel.
+  grants: () => [{ method: 'GET', path: '/grants', status: 403 }],
+  createGrant: () => [{ method: 'POST', path: '/grants', body: { issuer: 'github', claims: { repository: 'acme/web' }, can: 'all' }, status: 403 }],
+  revokeGrant: () => [{ method: 'POST', path: '/grants/g1/revoke', status: 403 }],
+  // Anyone mints a token, which acts as them: it can't do more than they can.
+  createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],
+  tokens: () => [{ method: 'GET', path: '/tokens', status: 200, check: (body) => expect(body.tokens.map((token: any) => token.name)).not.toContain('keeper') }],
+  revokeToken: () => [{ method: 'POST', path: '/tokens/t999999/revoke', status: 200, check: (body) => expect(body).toEqual({ revoked: false }) }],
   attachment: ({ secret }) => [{ method: 'GET', path: `/attachments/${secret.file}`, status: 404 }],
   // Only your own post, by the client ID you gave it.
   posted: () => [

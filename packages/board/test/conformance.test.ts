@@ -15,6 +15,14 @@ const clientOf = async (fetch: Fetch) => clientAs(fetch, () => personToken())
 const clientAs = async (fetch: Fetch, token: () => Promise<string>) =>
   board({ backend: http(BOARD_URL, { fetch: bearer((input, init) => fetch(new Request(input, init)), token) }) }).as(null)
 
+/** A handle on the board behind `fetch`, with a board token's secret, as `vb conformance` opens one. */
+const withToken = (fetch: Fetch) => (secret: string) =>
+  board({ backend: http(BOARD_URL, { fetch: bearer((input, init) => fetch(new Request(input, init)), async () => secret) }) }).as(null)
+
+/** The tokens check that calls the board with a token's secret. */
+const tokenUse = (report: Awaited<ReturnType<typeof conformance>>) =>
+  report.checks.find((check) => check.group === 'tokens' && check.name.startsWith('lets a token do what its can says'))
+
 /** A board in front of `fetch` that rewrites what it answers, or what it's asked. */
 function broken(fetch: Fetch, change: { request?: (url: URL) => void; body?: (text: string) => string }): Fetch {
   return async (request) => {
@@ -71,19 +79,35 @@ describe('the conformance kit', () => {
   it('passes a board on a2(), checking the whole protocol, and deletes what it posted', async () => {
     const board = testBoard({ scheduler: fakeQueue().scheduler })
     const client = await clientOf(board.fetch)
-    const report = await conformance(client)
+    const report = await conformance(client, { withToken: withToken(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
+    expect(tokenUse(report)?.status).toBe('passed')
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
-    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'attachments', 'watchers', 'sync'])
+    expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'attachments', 'watchers', 'sync'])
     const { messages } = await client.messages({ channel: 'conformance', limit: 500 })
     expect(messages.filter((message) => !message.deleted)).toEqual([])
   })
 
   it("passes through a board's own handle, in-process", async () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
-    const report = await conformance(team)
+    const report = await conformance(team, { withToken: withToken(team.fetch) })
     expect(report.checks.filter((check) => check.status !== 'passed')).toEqual([])
     expect((await team.me()).actor).toBe('board:client')
+  })
+
+  it("fails a board whose tokens do more than their can says, and skips the check where it can't call the board with one", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // A board that takes a token for whoever minted it, unnarrowed.
+    const person = await personToken()
+    const unnarrowed: Fetch = (request) => {
+      if (!request.headers.get('authorization')?.startsWith('Bearer board_')) return board.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.set('authorization', `Bearer ${person}`)
+      return board.fetch(new Request(request, { headers }))
+    }
+    const report = await conformance(await clientOf(board.fetch), { withToken: withToken(unnarrowed) })
+    expect(tokenUse(report)).toMatchObject({ status: 'failed', detail: 'what a token that may only read says it may do: expected {"conformance":["read"]}, got {"*":["read","post","react","label","sync","manage"]}' })
+    expect(tokenUse(await conformance(await clientOf(board.fetch)))).toMatchObject({ status: 'skipped', detail: "this run can't call the board with a token's secret" })
   })
 
   it("leaves a token's registration as it was: one with watchers or a sync is skipped, and an empty one keeps its URL", async () => {
@@ -151,7 +175,8 @@ describe('the conformance kit', () => {
 
   it('reports schedules and files as not kept here on a board without a scheduler or a blob store', async () => {
     // A board on a2() with only its store answers 501 for each, and the kit reads that.
-    const report = await conformance(await clientOf(testBoard({ blob: undefined }).fetch))
+    const bare = testBoard({ blob: undefined })
+    const report = await conformance(await clientOf(bare.fetch), { withToken: withToken(bare.fetch) })
     expect(report.ok).toBe(true)
     expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.group, check.status, check.detail])).toEqual([
       ['schedules', 'skipped', 'not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later'],
