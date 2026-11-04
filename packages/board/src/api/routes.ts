@@ -664,7 +664,11 @@ export type InboxItem = {
   raw: unknown
 }
 
-export type ChannelView = Channel
+/**
+ * A channel, and what its board counts in it: its threads, its messages, and its last message's
+ * position. `a2()` keeps all three; Vercel's API keeps none, so a board on it leaves them out.
+ */
+export type ChannelView = { path: string } & Partial<Omit<Channel, 'path'>>
 export type MessagesPage = { messages: MessageView[]; cursor: string }
 /**
  * Where a message's thread is synced: each target, the platform thread it is there, and this

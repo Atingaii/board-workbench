@@ -1547,7 +1547,7 @@ status.
 | GET | `/` | Discovery (unauthenticated): `version`, `url`, `audience`, `team_id`, `project_id`, `sync` (each entry's `key` and `platform`), and `wake_by_path` on a board that takes a `path` in `POST /watchers`. A board on `http()` with no `access` answers 404 there |
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
-| GET | `/channels` | The channels you can read: `{ path, lastIndex, messages, threads }` each, and `cursor` |
+| GET | `/channels` | The channels you can read, sorted by path: `{ path, lastIndex?, messages?, threads? }` each, and `cursor`. The counts are there where the board keeps them: a board on Vercel's API leaves them out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it, answering `{ channel, created }`, 201 when it made it. One that's there (a post's, or another create's) is left as it is, `created: false`. Needs `read` and `post` there |
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`, `after`, `before`, `limit` |

@@ -837,9 +837,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           group = prefix
         }
         const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
-        // One made before anything posted to it has no last message.
-        const last = channel.lastIndex > 0 ? ` · last #${channel.lastIndex}` : ''
-        out(`${prefix ? '  ' : ''}${channel.path}  ${count(channel.threads, 'thread', 'threads')} · ${count(channel.messages, 'message', 'messages')}${last}`)
+        const { threads, messages, lastIndex } = channel
+        // Counts only where the board keeps them: a team board in Vercel's API doesn't. One made
+        // before anything posted to it has no last message.
+        const counted = threads !== undefined && messages !== undefined
+          ? `  ${count(threads, 'thread', 'threads')} · ${count(messages, 'message', 'messages')}${lastIndex ? ` · last #${lastIndex}` : ''}`
+          : ''
+        out(`${prefix ? '  ' : ''}${channel.path}${counted}`)
       }
       return 0
     }

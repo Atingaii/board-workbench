@@ -444,7 +444,9 @@ vb channels create <channel>
 ```
 
 Channels, grouped by path prefix, each with its thread and message counts and
-its latest message (`last #1290`). It runs `vb channels list`.
+its latest message (`last #1290`) where the board keeps them. A team board in
+Vercel's API doesn't, so it lists each channel by name alone. It runs
+`vb channels list`.
 
 A first post makes a channel. `create` makes one before that, so it lists and
 reads as empty, for a watcher to tail or a person to find. It needs `read` and

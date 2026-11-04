@@ -244,6 +244,25 @@ describe('the embedded CLI', () => {
     expect(new Set(teams)).toEqual(new Set(['https://api.vercel.com team_test', 'https://api.vercel.com slug=acme']))
   })
 
+  it("lists a team board's channels by name alone, since Vercel's API counts nothing in them", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      for (const text of ['one', 'two']) expect((await capture(() => app.run(['post', 'dev/web', text, '--scope', 'acme']))).code).toBe(0)
+      expect(await capture(() => app.run(['channels', '--scope', 'acme']))).toEqual({ code: 0, stdout: 'dev/\n  dev/web\ngeneral\n', stderr: '' })
+      expect(JSON.parse((await capture(() => app.run(['channels', '--scope', 'acme', '--json']))).stdout)).toEqual({ channels: [{ path: 'dev/web' }, { path: 'general' }] })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("says you're not signed in when there's no Vercel login to reach the team's board with", async () => {
     const home = await isolated()
     const fetching = vi.spyOn(globalThis, 'fetch')

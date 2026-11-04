@@ -1060,8 +1060,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async channels(caller) {
       const who = whoOf(caller)
-      // The API counts neither messages nor threads in a channel.
-      const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller))).map((channel) => ({ path: channel.name, lastIndex: 0, messages: 0, threads: 0 }))
+      // The API counts neither messages nor threads in a channel, so a view says nothing of them.
+      const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller)))
+        .map((channel) => ({ path: channel.name }))
+        .sort((a, b) => a.path.localeCompare(b.path))
       return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
     async createChannel(caller, { path }) {
@@ -1071,7 +1073,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       need(access, 'read', path)
       need(access, 'post', path)
       const { created } = await ensureChannel(whoOf(caller), path)
-      return { channel: { path, lastIndex: 0, messages: 0, threads: 0 }, created }
+      return { channel: { path }, created }
     },
     async actors(caller, _input, signal) {
       const who = whoOf(caller)

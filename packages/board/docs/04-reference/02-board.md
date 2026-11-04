@@ -417,7 +417,7 @@ that reply in it.
 ### channels, actors, me, discovery
 
 ```ts
-channels(): Promise<ChannelView[]>  // { path, lastIndex, messages, threads }
+channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
 createChannel(path: string): Promise<{ channel: ChannelView; created: boolean }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
@@ -429,6 +429,9 @@ session, expiresAt, can }`. `can` maps each channel pattern to what you
 may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
 'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
 you can read; see [Access](../01-board/09-access.md).
+
+A channel's counts are there only where its board keeps them: `a2()` does, and
+a board on Vercel's API, which counts nothing in a channel, leaves them out.
 
 `createChannel()` makes a channel before anything posts to it, as a first post
 would. It needs `read` and `post` there. `created` is false for one that's

@@ -195,10 +195,19 @@ describe('vercel()', () => {
     expect((await team.threads({ channel: 'dev/', label: { state: 'open' } })).threads.map((t) => t.message.id)).toEqual([two.id])
   })
 
+  it("lists channels by path, sorted, with none of the counts the API doesn't keep", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.post('ops', { text: 'one' })
+    await team.post('dev/web', { text: 'two' })
+    await team.reply((await team.post('dev/web', { text: 'three' })).id, { text: 'four' })
+    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+  })
+
   it('makes a channel in the API before anything posts to it, once, and only for a caller that reads and posts there', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
-    expect(await team.createChannel('dev/alerts')).toEqual({ channel: { path: 'dev/alerts', lastIndex: 0, messages: 0, threads: 0 }, created: true })
+    expect(await team.createChannel('dev/alerts')).toEqual({ channel: { path: 'dev/alerts' }, created: true })
     expect(await team.createChannel('dev/alerts')).toMatchObject({ created: false })
     // One a post made, or another handle, is there already.
     await team.post('ops', { text: 'hi' })

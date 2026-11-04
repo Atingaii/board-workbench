@@ -81,6 +81,13 @@ describe('the inspector store', () => {
     expect(store.shown(state, '3')!.author).toMatchObject({ name: 'Julian', avatar: 'https://example.com/a.png' })
   })
 
+  it("makes up no counts on a board that keeps none, as a team board in Vercel's API doesn't", () => {
+    let state: store.State = { ...start, channels: { general: { path: 'general' } } }
+    state = store.applyEvent(state, postedEvent(message(1, { channel: 'general' })))
+    state = store.applyEvent(state, postedEvent(message(2, { channel: 'dev/web' })))
+    expect(state.channels).toEqual({ general: { path: 'general' }, 'dev/web': { path: 'dev/web' } })
+  })
+
   it('lists a channel created while it is open, and keeps the counts of one a post made first', () => {
     const created = (channel: string, cursor: string): BoardEventView => ({
       cursor,

@@ -136,8 +136,14 @@ export function applyEvent(state: State, event: BoardEventView): State {
     if (post) next = { ...next, pending: next.pending.filter((p) => p !== post) }
     const { channel, re } = event.message
     const known = next.channels[channel]
+    // A board that counts nothing in its channels (Vercel's API) gets no counts made up here,
+    // for a channel a post shows first either.
+    const uncounted = known ? known.lastIndex === undefined : Object.values(next.channels).some((c) => c.lastIndex === undefined)
+    if (uncounted) {
+      if (!known) next = { ...next, channels: { ...next.channels, [channel]: { path: channel } } }
+    }
     // A new message's version is where it landed, as a channel's `lastIndex` is.
-    if (!known || known.lastIndex < event.message.version)
+    else if (!known || (known.lastIndex ?? 0) < event.message.version)
       next = {
         ...next,
         channels: {
