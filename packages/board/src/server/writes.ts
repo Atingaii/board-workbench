@@ -414,16 +414,25 @@ const LANDED_WAIT_MS = 10_000
  * anywhere on the board, moves it, and it looks again from there.
  */
 async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, events: Parameters<BoardSession['append']>) {
-  for (let attempt = 1; ; attempt++) {
+  return whileHeadMoves(async () => {
     await ctx.reads.ensure()
-    const position = await holds()
+    return appendIfLast(ctx.session, await holds(), events)
+  })
+}
+
+/**
+ * Runs `attempt`, a look and a conditional append, again each time the board moves on in
+ * between, up to `CONDITIONAL_TRIES` times: how every conditional write here looks again.
+ */
+async function whileHeadMoves<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries++) {
     try {
-      return await appendIfLast(ctx.session, position, events)
+      return await attempt()
     } catch (error) {
       if (!headMoved(error)) throw error
-      if (attempt === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
+      if (tries === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
       // Writers the same write moved on look again apart, so they don't keep meeting.
-      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * attempt))
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * tries))
     }
   }
 }
@@ -638,23 +647,15 @@ export async function writeChannel(ctx: WriteContext, input: { identity: Identit
     ...(seen ? [seen] : []),
     { type: 'channel.created', payload: { channel: input.path, by: input.identity.author } },
   ]
-  for (let attempt = 1; ; attempt++) {
+  const made = await whileHeadMoves<{ found: Channel } | { rows: Awaited<ReturnType<typeof appendIfLast>> }>(async () => {
     const { state, index } = await ctx.session.state(channelsReducer, { through: 'latest' })
     const found = own(state, input.path)
-    if (found) return { channel: found, created: false }
-    let rows: Awaited<ReturnType<typeof appendIfLast>>
-    try {
-      // Only while nothing has landed since it looked: a post or a create in between makes it look again.
-      rows = await appendIfLast(ctx.session, index, events)
-    } catch (error) {
-      if (!headMoved(error)) throw error
-      if (attempt === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
-      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * attempt))
-      continue
-    }
-    await untilApplied(ctx, rows)
-    return { channel: { path: input.path, lastIndex: 0, messages: 0, threads: 0 }, created: true }
-  }
+    // Only while nothing has landed since it looked: a post or a create in between makes it look again.
+    return found ? { found } : { rows: await appendIfLast(ctx.session, index, events) }
+  })
+  if ('found' in made) return { channel: made.found, created: false }
+  await untilApplied(ctx, made.rows)
+  return { channel: { path: input.path, lastIndex: 0, messages: 0, threads: 0 }, created: true }
 }
 
 /** The batch, only while `index` is still the session's last: A2's conditional append. */
