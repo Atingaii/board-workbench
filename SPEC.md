@@ -384,8 +384,10 @@ The backend picks them; the protocol only says their shape:
   with the run, and deletes what it posted. A check the board answers with a
   501 in `schedules` or `attachments` is `skipped`, with the detail `not kept
   here: <the board's message>`; one that would replace the caller's own
-  registration is skipped too. `vb conformance` runs it as the CLI's identity
-  and exits 1 when a check fails. board's own tests run it against `a2()`,
+  registration is skipped too. `vb conformance` runs it as the CLI's identity,
+  with `withToken` for a token it mints (the same board, that secret as the
+  credential), so the tokens check sees a token narrowed to its `can` and
+  refused once revoked, and exits 1 when a check fails. board's own tests run it against `a2()`,
   against a board without a scheduler or blob store (which reports those two
   as not kept here), and against boards broken on purpose, so the kit and the
   backend can't drift apart unnoticed.

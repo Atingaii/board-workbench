@@ -62,7 +62,8 @@ const verified = (can: Can, who: { id: string; kind: string; handle: string; nam
 
 describe('vercel()', () => {
   it("passes the conformance kit's core, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
-    const report = await conformance(handleOn(fakeMessageboard()))
+    const api = fakeMessageboard()
+    const report = await conformance(handleOn(api), { withToken: () => handleOn(api) })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -90,6 +91,7 @@ describe('vercel()', () => {
       "grants: grants a GitHub repository's workflows, and another team's project": 'failed',
       'grants: keeps two environments of one project as two grants, and revokes one without the other': 'failed',
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
+      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',

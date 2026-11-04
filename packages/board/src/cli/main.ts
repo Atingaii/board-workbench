@@ -662,7 +662,7 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   const team = flags.scope ?? flags.team
   const configured = url ?? (team === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel(team !== undefined ? { team } : {}) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -670,13 +670,25 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   // A team's board in Vercel's API (what `whoami` prints for one) is reached through the API, as `--scope` is.
   const onVercel = vercelBoard(at)
   if (onVercel) {
-    const board = boardAt({ backend: vercel(onVercel) })
+    const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token) }) })
     return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const handle = options.handle ?? flags.handle
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
+}
+
+/** For Vercel's API, `token` in place of your own credentials: a board token's secret. */
+function sending(token: string | undefined): { fetch?: typeof fetch } {
+  if (token === undefined) return {}
+  return {
+    fetch: (input, init) => {
+      const request = new Request(input, init)
+      request.headers.set('authorization', `Bearer ${token}`)
+      return globalThis.fetch(request)
+    },
+  }
 }
 
 /** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
@@ -863,7 +875,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'conformance': {
       if (args.length > 0) throw usage('conformance takes no arguments: pass its channel with --channel.')
-      const report = await conformance(client(), flags.channel ? { channel: flags.channel } : {})
+      // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
+      const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
+      const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken })
       if (flags.json) result(report)
       else out(formatConformance(report))
       return report.ok ? 0 : 1

@@ -31,6 +31,12 @@ export type ConformanceReport = {
 export type ConformanceOptions = {
   /** Where it posts. Default `conformance`. */
   channel?: string
+  /**
+   * The same board, with a board token's secret as the credential (as `BOARD_TOKEN` sends it):
+   * the tokens check calls it so to see that a token does only what its `can` says. Without it,
+   * that check is skipped.
+   */
+  withToken?: (secret: string) => Board
 }
 
 class Mismatch extends Error {}
@@ -55,6 +61,17 @@ async function rejects(attempt: Promise<unknown>, status: number, code: string, 
   throw new Mismatch(`${what}: expected ${status} ${code}, and it succeeded`)
 }
 
+/** That `attempt` is refused with `status`, whatever code the board gives it. */
+async function refused(attempt: Promise<unknown>, status: number, what: string) {
+  try {
+    await attempt
+  } catch (error) {
+    if (error instanceof BoardError && error.status === status) return
+    throw new Mismatch(`${what}: expected ${status}, got ${error instanceof BoardError ? `${error.status} ${error.code}` : String(error)}`)
+  }
+  throw new Mismatch(`${what}: expected ${status}, and it succeeded`)
+}
+
 /** Where a registration is woken, to put back after a check replaces it: its path (and branch) on a board that wakes by path, or its url. */
 function wokenAt(registered: RegistrationView | undefined): { url: string | null } | { path: string; branch?: string } {
   if (!registered?.path) return { url: registered?.url ?? null }
@@ -77,6 +94,7 @@ type Context = {
   root?: MessageView
   reply?: MessageView
   posted: string[]
+  withToken?: (secret: string) => Board
 }
 
 type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) => Promise<void | string> }
@@ -528,6 +546,33 @@ const CHECKS: Check[] = [
     },
   },
   {
+    group: 'tokens',
+    name: "lets a token do what its can says, as whoever minted it, and nothing once it's revoked",
+    run: async (ctx) => {
+      if (!ctx.withToken) return "this run can't call the board with a token's secret"
+      const { root } = needRoot(ctx)
+      const { token, secret } = await ctx.board.createToken({ name: `conformance-${ctx.labels.conformance}-reads`, can: { [ctx.channel]: ['read'] }, expires: '1h' })
+      const holder = ctx.withToken(secret)
+      try {
+        const me = await holder.me()
+        same(me.principal, ctx.me.principal, "a token's principal, its minter's")
+        const want = { [ctx.channel]: ['read'] }
+        check(show(me.can) === show(want), `what a token that may only read says it may do: expected ${show(want)}, got ${show(me.can)}`)
+        same((await holder.thread(root.id)).message.id, root.id, 'a thread read with a token that may read it')
+        const posting = holder.post(ctx.channel, { text: 'conformance: a token that may only read', labels: ctx.labels, noSync: true }).then((message) => {
+          ctx.posted.push(message.id)
+          return message
+        })
+        await refused(posting, 403, 'a post with a token that may only read')
+      } catch (error) {
+        await ctx.board.revokeToken(token.id).catch(() => {})
+        throw error
+      }
+      same((await ctx.board.revokeToken(token.id)).revoked, true, 'revoking it')
+      await refused(holder.me(), 401, 'a request with a revoked token')
+    },
+  },
+  {
     group: 'attachments',
     name: 'takes a file, posts it, and gives it back',
     run: async (ctx) => {
@@ -766,6 +811,7 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
     start: (await board.messages({ channel, limit: 1 })).cursor,
     me,
     posted: [],
+    ...(options.withToken ? { withToken: options.withToken } : {}),
   }
   try {
     for (const { group, name, run } of CHECKS) {
