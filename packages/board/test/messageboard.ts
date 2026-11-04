@@ -7,6 +7,7 @@ type Principal =
   | { type: 'user'; userId: string }
   | { type: 'app'; clientId: string }
   | { type: 'project'; projectId: string; environment: string }
+  | { type: 'external'; id: string; syncKey: string }
 type Actor = { id: string; principal: Principal; profile?: { name: string; avatar?: string }; session?: string }
 type Message = {
   id: string
@@ -26,6 +27,10 @@ type Message = {
   feedSequence: number
   attachments?: { id: string; name: string; type: string; size: number }[]
   schedule?: { id: string; n: number }
+  /** An import's sync key, and where it is on its platform. */
+  from?: string
+  origin?: Record<string, unknown>
+  noSync?: boolean
 }
 type Schedule = {
   id: string
@@ -58,7 +63,7 @@ type Thread = {
   messages: Message[]
 }
 type Change = Record<string, unknown> & { createdAt: number; messageId?: string }
-type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app'; handle: string; name?: string; lastSeenAt: number }
+type ActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'; handle: string; name?: string; avatar?: string; lastSeenAt: number }
 
 const EMOJI = /^[a-z0-9_+-]{1,64}$/
 const CHANNEL = /^[a-z0-9_-]+(\/[a-z0-9_-]+)*$/
@@ -96,16 +101,29 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const stored = new Map<string, Uint8Array<ArrayBuffer>>()
   const STORAGE = 'http://storage.test/'
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
-  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; hash: string }
+  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; sync: { key: string; platform: string; signIn?: boolean }[]; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
   const schedules = new Map<string, Schedule>()
+  /** Sync, as api-messageboard keeps it: each key's owner, platform IDs to the board's, copies, bindings, inboxes, and links. */
+  const syncKeys = new Map<string, string>()
+  const platformThreads = new Map<string, string>()
+  const platformMessages = new Map<string, string>()
+  const importIds = new Map<string, string>()
+  const bindings = new Map<string, { target: string; targetKind: 'channel' | 'thread'; cause: string }[]>()
+  const copies = new Map<string, Record<string, { thread: string; message: string; files?: string[] | null; asUser?: true }>>()
+  const failures = new Map<string, Record<string, string>>()
+  type InboxEntry = { id: string; eventId: string; thread: string; event?: unknown; raw?: unknown; pushedAt: number; attempts: number; lease?: string; leaseUntil?: number; done?: boolean }
+  const inboxes = new Map<string, InboxEntry[]>()
+  const codes = new Map<string, { person: string; key: string; usedBy?: string; expiresAt: number }>()
+  const links = new Map<string, { person: string; method: 'code' | 'consent'; at: number; handle: string; name: string }>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
 
-  const principalId = (p: Principal) => (p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`)
+  const principalId = (p: Principal) =>
+    p.type === 'external' ? p.id : p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`
   const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
 
   function actorOf(request: Request): Actor {
@@ -129,13 +147,18 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   /** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
   function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
     const p = actor.principal
+    if (p.type === 'external') return { id: actor.id, kind: 'external', handle: p.id }
     const account = p.type === 'user' ? accounts[p.userId] : undefined
     const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
     if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
     if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
     return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
   }
-  const seen = (actor: Actor) => actors.set(actor.id, { ...viewOf(actor), lastSeenAt: now() })
+  const seen = (actor: Actor) => {
+    // A platform user is named by what its sync last said of them.
+    if (actor.principal.type === 'external') return
+    actors.set(actor.id, { ...viewOf(actor), lastSeenAt: now() })
+  }
 
   /** A channel's feed position, as the API's `c1.` cursor carries it: shared by its messages and its events. */
   const cursorAt = (channelId: string, position: number) => `c1.${position}.${channelId}`
@@ -166,6 +189,9 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     ...(Object.keys(m.labels).length ? { labels: { ...m.labels } } : {}),
     ...(m.attachments?.length ? { attachments: m.attachments } : {}),
     ...(m.schedule ? { schedule: m.schedule } : {}),
+    ...(m.from !== undefined ? { from: m.from } : {}),
+    ...(m.origin ? { origin: m.origin } : {}),
+    ...(m.noSync ? { noSync: true } : {}),
   })
   const showThread = (t: Thread) => {
     const { messages, ...rest } = t
@@ -204,6 +230,13 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       (filter.authors === undefined || filter.authors.includes(message.createdBy.id) || filter.authors.includes(principalId(message.createdBy.principal))) &&
       (filter.text === undefined || message.text.toLowerCase().includes(filter.text.toLowerCase())) &&
       (filter.labels ?? []).every((label) => hasLabel(message.labels, label) || hasLabel(rootLabels, label))
+    for (const registration of registrations.values())
+      // A sync gets every message change on the board as a match of its watcher `@sync`.
+      if (registration.sync.length > 0) {
+        const lane = queued.get(registration.owner) ?? []
+        queued.set(registration.owner, lane)
+        lane.push({ id: `mat_${randomUUID()}`, watcher: '@sync', threadId: message.threadId, change, attempts: 0 })
+      }
     for (const registration of registrations.values())
       for (const [watcher, spec] of Object.entries(registration.watch)) {
         if ((change.actor as Actor).id === `${registration.owner}+${watcher.toLowerCase()}` || !sees(spec.filter)) continue
@@ -296,13 +329,13 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
 
   async function watchers(method: string, rest: string, actor: Actor, parsed: Record<string, any>, url: URL): Promise<unknown> {
     const owner = principalId(actor.principal)
-    const view = (r: Registration) => ({ owner: r.owner, url: r.url, ...(r.path ? { path: r.path, ...(r.branch ? { branch: r.branch } : {}) } : {}), watch: r.watch, hash: r.hash })
+    const view = (r: Registration) => ({ owner: r.owner, url: r.url, ...(r.path ? { path: r.path, ...(r.branch ? { branch: r.branch } : {}) } : {}), watch: r.watch, ...(r.sync.length ? { sync: r.sync } : {}), hash: r.hash })
     if (method === 'GET' && rest === '/watchers') {
       const found = registrations.get(owner)
       return { watchers: found ? [view(found)] : [] }
     }
     if (method === 'PUT' && rest === '/watchers') {
-      const body = parsed as { url?: string | null; path?: string; branch?: string; watch: Registration['watch']; tag?: string }
+      const body = parsed as { url?: string | null; path?: string; branch?: string; watch: Registration['watch']; tag?: string; sync?: Registration['sync'] }
       // A URL, or a path on the caller's own project (a preview's with its branch), as api-messageboard checks one.
       if (body.url !== undefined && body.path !== undefined) throw new Refused(400, 'bad_request', 'A url or a path, not both.')
       if (body.branch !== undefined && body.path === undefined) throw new Refused(400, 'bad_request', 'A branch goes with a path.')
@@ -316,7 +349,13 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       for (const [id, spec] of Object.entries(body.watch))
         if (spec.when === 'enters' && Object.keys(spec.filter).length === 0) throw new Refused(400, 'bad_watcher', `watch ${id}: \`when: enters\` needs a filter to enter`)
       const where = body.path !== undefined ? { url: null, path: body.path.replace(/(.)\/+$/, '$1'), ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }
-      const made: Registration = { owner, ...where, watch: body.watch, hash: body.tag ?? randomUUID().replaceAll('-', '') }
+      const sync = body.sync ?? []
+      // Only a project's own token syncs, and a key is one registrant's on the board.
+      if (sync.length > 0 && principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+      for (const { key } of sync) if ((syncKeys.get(key) ?? owner) !== owner) throw new Refused(409, 'sync_key_taken')
+      for (const [key, holder] of syncKeys) if (holder === owner && !sync.some((entry) => entry.key === key)) syncKeys.delete(key)
+      for (const { key } of sync) syncKeys.set(key, owner)
+      const made: Registration = { owner, ...where, watch: body.watch, sync, hash: body.tag ?? randomUUID().replaceAll('-', '') }
       registrations.set(owner, made)
       return view(made)
     }
@@ -454,6 +493,261 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return undefined
   }
 
+
+  const prefixOf = (id: string) => id.slice(0, id.indexOf(':'))
+  /** Only a project's own token syncs, through the keys it registered. */
+  function requireKey(actor: Actor, key: string) {
+    if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+    if (syncKeys.get(key) !== principalId(actor.principal)) throw new Refused(403, 'sync_key_not_owned')
+  }
+  const ownedKeys = (actor: Actor) => new Set([...syncKeys].filter(([, owner]) => owner === principalId(actor.principal)).map(([key]) => key))
+  const linkFor = (account: string) => links.get(account)
+
+  /** api-messageboard's sync routes, as they behave: undefined for a route that isn't one. */
+  function syncRoute(method: string, rest: string, actor: Actor, body: Record<string, any>, url: URL): unknown {
+    const owner = principalId(actor.principal)
+    let found: RegExpExecArray | null
+    if (method === 'POST' && rest === '/sync/imports') {
+      const key: string = body.from ?? (body.origin?.thread ? prefixOf(body.origin.thread) : prefixOf(body.author.id))
+      requireKey(actor, key)
+      if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(400, 'invalid_import')
+      const author: Actor = { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
+      actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), lastSeenAt: now() })
+      if (body.op === 'seen') return { message: null }
+      if (body.op === 'post') {
+        const landed = body.id !== undefined ? importIds.get(`${owner}|${body.id}`) : undefined
+        if (landed) return { message: landed }
+        const origin = body.origin as { thread: string; message: string } | null | undefined
+        if (origin && body.channelId !== undefined && platformThreads.has(`${key}|${origin.thread}`)) throw new Refused(409, 'already_synced')
+        let thread: Thread
+        if (body.channelId !== undefined) {
+          const channel = channelAt(body.channelId)
+          const createdAt = now()
+          thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: author, messages: [] }
+          threads.set(thread.id, thread)
+        } else if (body.re !== undefined) {
+          const to = messageNamed(body.re)
+          if (!to) throw new Refused(404, 'message_not_found')
+          thread = threadAt(to.threadId)
+        } else throw new Refused(400, 'invalid_import')
+        const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.after !== undefined ? { after: body.after } : {}) })
+        if (body.from !== undefined && body.from !== null) message.from = body.from
+        if (origin) message.origin = origin
+        if (body.noSync) message.noSync = true
+        if (origin) {
+          if (body.channelId !== undefined) platformThreads.set(`${key}|${origin.thread}`, thread.id)
+          platformMessages.set(`${key}|${origin.thread}|${origin.message}`, message.id)
+        }
+        if (body.id !== undefined) importIds.set(`${owner}|${body.id}`, message.id)
+        return { message: message.id }
+      }
+      const origin = body.origin as { thread: string; message?: string } | undefined
+      const id = origin
+        ? origin.message !== undefined
+          ? platformMessages.get(`${key}|${origin.thread}|${origin.message}`)
+          : platformThreads.has(`${key}|${origin.thread}`) ? `msg_${platformThreads.get(`${key}|${origin.thread}`)!.slice('thr_'.length)}_1` : undefined
+        : body.message
+      const message = id ? messageNamed(id) : undefined
+      if (!message) return { message: null }
+      const by = message.createdBy.principal
+      if (by.type !== 'external' || by.syncKey !== key) throw new Refused(403, 'message_not_owned')
+      if ((body.op === 'edit' || body.op === 'delete') && body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict')
+      const thread = threadAt(message.threadId)
+      const ref = { threadId: thread.id, message: message.sequence, messageId: message.id }
+      if (body.op === 'edit') {
+        message.text = body.text
+        message.revision++
+        message.editedAt = now()
+        message.changes++
+        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision }, author)
+      } else if (body.op === 'delete') {
+        message.deletedAt = now()
+        message.revision++
+        message.changes++
+        emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, author)
+      } else if (body.op === 'labels') {
+        for (const [label, value] of Object.entries(body.if ?? {})) if ((message.labels[label] ?? null) !== value) throw new Refused(409, 'label_conflict')
+        for (const label of body.unset ?? []) delete message.labels[label]
+        Object.assign(message.labels, body.set ?? {})
+        message.changes++
+      }
+      return { message: message.id }
+    }
+    if (method === 'POST' && rest === '/sync/receipts') {
+      const message = messageNamed(body.message)
+      if (!message) throw new Refused(404, 'message_not_found')
+      requireKey(actor, prefixOf(body.target))
+      if (body.kind === 'thread') {
+        const list = bindings.get(message.threadId) ?? []
+        bindings.set(message.threadId, list)
+        if (list.some((bound) => bound.target === body.target)) return { ok: true, attached: false }
+        if (body.targetKind === 'thread') {
+          const at = platformThreads.get(`${prefixOf(body.target)}|${body.target}`)
+          if (at && at !== message.threadId) throw new Refused(409, 'already_synced')
+          platformThreads.set(`${prefixOf(body.target)}|${body.target}`, message.threadId)
+        }
+        list.push({ target: body.target, targetKind: body.targetKind, cause: body.cause })
+        return { ok: true, attached: true }
+      }
+      const mine = copies.get(message.id) ?? {}
+      copies.set(message.id, mine)
+      if (body.kind === 'message') {
+        mine[body.target] ??= { thread: body.external.thread, message: body.external.message, ...(body.external.asUser ? { asUser: true as const } : {}), ...(body.files !== undefined ? { files: body.files } : {}) }
+        platformMessages.set(`${prefixOf(body.target)}|${body.external.thread}|${body.external.message}`, message.id)
+        delete failures.get(message.id)?.[body.target]
+      } else if (body.kind === 'files') {
+        if (mine[body.target]) mine[body.target]!.files = body.files
+      } else {
+        const failed = failures.get(message.id) ?? {}
+        failures.set(message.id, failed)
+        failed[body.target] = body.error
+      }
+      return { ok: true }
+    }
+    if (method === 'GET' && rest === '/sync/find') {
+      if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+      const owned = ownedKeys(actor)
+      const query = Object.fromEntries(url.searchParams)
+      let thread: string | null = null
+      let message: string | null = null
+      if (query.post !== undefined) message = importIds.get(`${owner}|${query.post}`) ?? null
+      if (query.thread !== undefined && owned.has(prefixOf(query.thread))) {
+        thread = platformThreads.get(`${prefixOf(query.thread)}|${query.thread}`) ?? null
+        if (query.message !== undefined) message = platformMessages.get(`${prefixOf(query.thread)}|${query.thread}|${query.message}`) ?? message
+      }
+      const link = query.account !== undefined && owned.has(prefixOf(query.account)) ? linkFor(query.account) : undefined
+      const code = query.code !== undefined ? codes.get(query.code) : undefined
+      return {
+        thread,
+        message,
+        person: link ? { id: link.person, method: link.method } : null,
+        accounts: query.person === undefined ? [] : [...links].filter(([account, l]) => l.person === query.person && owned.has(prefixOf(account))).map(([id, l]) => ({ id, method: l.method })),
+        holder: code && !code.usedBy && code.expiresAt >= Date.now() && owned.has(code.key) ? code.person : null,
+      }
+    }
+    if ((found = /^\/sync\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') {
+      if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+      const thread = threadAt(decodeURIComponent(found[1]!))
+      const owned = ownedKeys(actor)
+      const targets = (bindings.get(thread.id) ?? []).filter((bound) => owned.has(prefixOf(bound.target))).map((bound) => bound.target)
+      return { thread: thread.id, root: thread.messages[0]!.id, channel: thread.channelId, targets, external: Object.fromEntries(targets.map((target) => [target, target])) }
+    }
+    if (method === 'GET' && rest === '/sync/copies') {
+      if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+      const owned = ownedKeys(actor)
+      return { copies: Object.fromEntries(url.searchParams.getAll('message').map((id) => [id, Object.fromEntries(Object.entries(copies.get(id) ?? {}).filter(([target]) => owned.has(prefixOf(target))))])) }
+    }
+    if ((found = /^\/messages\/([^/]+)\/synced$/.exec(rest)) && method === 'GET') {
+      const message = messageNamed(decodeURIComponent(found[1]!))
+      if (!message) throw new Refused(404, 'message_not_found')
+      const mine = copies.get(message.id) ?? {}
+      return {
+        targets: (bindings.get(message.threadId) ?? []).map(({ target }) => ({
+          target,
+          key: prefixOf(target),
+          thread: mine[target]?.thread ?? null,
+          message: mine[target]?.message ?? null,
+          undelivered: failures.get(message.id)?.[target] ?? null,
+        })),
+      }
+    }
+    if (method === 'GET' && rest === '/sync/linked') {
+      const thread = url.searchParams.get('thread') ?? ''
+      const named = url.searchParams.get('message')
+      const id = named !== null ? platformMessages.get(`${prefixOf(thread)}|${thread}|${named}`) : platformThreads.has(`${prefixOf(thread)}|${thread}`) ? `msg_${platformThreads.get(`${prefixOf(thread)}|${thread}`)!.slice('thr_'.length)}_1` : undefined
+      const message = id ? messageNamed(id) : undefined
+      if (!message) throw new Refused(404, 'message_not_found')
+      return { thread: message.threadId, message: message.id }
+    }
+    if ((found = /^\/sync\/inbox\/([^/]+)(\/next|\/([^/]+)\/ack)?$/.exec(rest))) {
+      const key = decodeURIComponent(found[1]!)
+      requireKey(actor, key)
+      const inbox = inboxes.get(key) ?? []
+      inboxes.set(key, inbox)
+      if (method === 'POST' && found[2] === undefined) {
+        let queued = 0
+        for (const event of body.events as { id: string; thread: string; event?: unknown; raw?: unknown }[]) {
+          if (!event.thread.startsWith(`${key}:`)) throw new Refused(400, 'invalid_inbox_event')
+          if (inbox.some((entry) => entry.eventId === event.id)) continue
+          inbox.push({ id: `inb_${randomUUID()}`, eventId: event.id, thread: event.thread, event: event.event, raw: event.raw, pushedAt: now(), attempts: 0 })
+          queued++
+        }
+        return { ok: true, queued }
+      }
+      if (method === 'GET' && found[2] === '/next') {
+        const limit = Number(url.searchParams.get('limit') ?? 10)
+        const items: unknown[] = []
+        for (const thread of new Set(inbox.filter((entry) => !entry.done).map((entry) => entry.thread))) {
+          if (items.length >= limit) break
+          const head = inbox.find((entry) => !entry.done && entry.thread === thread)!
+          if (head.lease && head.leaseUntil! > Date.now()) continue
+          if (head.lease) head.attempts++
+          head.lease = randomUUID()
+          head.leaseUntil = Date.now() + 5 * 60_000
+          items.push({ id: head.id, key, thread: head.thread, lease: head.lease, attempt: head.attempts, ...(head.event !== undefined ? { event: head.event } : {}), ...(head.raw !== undefined ? { raw: head.raw } : {}) })
+        }
+        return { items }
+      }
+      if (method === 'POST' && found[3] !== undefined) {
+        const entry = inbox.find((one) => one.id === decodeURIComponent(found![3]!) && !one.done)
+        if (!entry) throw new Refused(404, 'no_item')
+        if (entry.lease !== body.lease) throw new Refused(409, 'stale_lease')
+        if (body.error !== undefined) {
+          entry.attempts++
+          delete entry.lease
+          delete entry.leaseUntil
+        } else entry.done = true
+        return { ok: true }
+      }
+      if (method === 'GET' && found[2] === undefined) {
+        const limit = Number(url.searchParams.get('limit') ?? 50)
+        return { events: [...inbox].reverse().slice(0, limit).map((entry) => ({ id: entry.eventId, thread: entry.thread, createdAt: new Date(entry.pushedAt).toISOString(), ...(entry.event !== undefined ? { event: entry.event } : {}), ...(entry.raw !== undefined ? { raw: entry.raw } : {}) })) }
+      }
+    }
+    if (method === 'GET' && rest === '/sync/roots') {
+      if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
+      const by = url.searchParams.get('by') ?? ''
+      const since = Number(url.searchParams.get('since') ?? 0)
+      const roots = [...threads.values()].map((thread) => thread.messages[0]!).filter((root) => root && principalId(root.createdBy.principal) === by && root.createdAt >= since && root.deletedAt === undefined)
+      return { roots: roots.sort((a, b) => a.createdAt - b.createdAt).map(show) }
+    }
+    if (method === 'POST' && rest === '/sync/codes') {
+      if (actor.principal.type !== 'user' || actor.profile) throw new Refused(403, 'not_a_person')
+      if (!syncKeys.has(body.sync)) throw new Refused(404, 'not_synced_here')
+      const code = `vb-${randomUUID().slice(0, 4).toUpperCase()}-${randomUUID().slice(0, 4).toUpperCase()}`
+      const expiresAt = Date.now() + 10 * 60_000
+      codes.set(code, { person: owner, key: body.sync, expiresAt })
+      return { code, expiresAt: new Date(expiresAt).toISOString() }
+    }
+    if (method === 'POST' && rest === '/sync/accounts') {
+      requireKey(actor, body.sync)
+      const code = codes.get(body.code)
+      if (!code || code.key !== body.sync || code.expiresAt < Date.now() || (code.usedBy !== undefined && code.usedBy !== body.account.id)) throw new Refused(404, 'bad_code')
+      if (!String(body.account.id).startsWith(`${body.sync}:`)) throw new Refused(400, 'invalid_account')
+      code.usedBy = body.account.id
+      const link = { person: code.person, method: (body.method ?? 'code') as 'code' | 'consent', at: now(), handle: body.account.handle, name: body.account.name }
+      links.set(body.account.id, link)
+      return { person: link.person, link: { actor: body.account.id, handle: link.handle, name: link.name, method: link.method, at: new Date(link.at).toISOString() } }
+    }
+    if (method === 'POST' && rest === '/sync/accounts/unlink') {
+      const link = linkFor(body.account)
+      const mine = link && (link.person === owner || ownedKeys(actor).has(prefixOf(body.account)))
+      if (!mine) throw new Refused(404, 'not_linked')
+      links.delete(body.account)
+      return { ok: true }
+    }
+    if (method === 'GET' && rest === '/sync/accounts') {
+      if (actor.principal.type !== 'user') throw new Refused(403, 'not_a_person')
+      const mine = [...links].filter(([, link]) => link.person === owner)
+      return {
+        principal: owner,
+        links: mine.map(([account, link]) => ({ actor: account, handle: link.handle, name: link.name, method: link.method, at: new Date(link.at).toISOString() })),
+        unlinked: [...syncKeys.keys()].filter((key) => !mine.some(([account]) => prefixOf(account) === key)),
+      }
+    }
+    return undefined
+  }
+
   async function route(request: Request): Promise<unknown> {
     const url = new URL(request.url)
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
@@ -465,7 +759,8 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     // Completing an upload takes no body.
     const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
-    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    // Sync's routes take none either, but imports.
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(actor) }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
     if (method === 'POST' && path === '/boards/default') {
@@ -529,6 +824,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       return again
     }
     if (rest === '/watchers' || rest.startsWith('/watchers/')) return watchers(method, rest, actor, body, url)
+    if (rest.startsWith('/sync/') || /^\/messages\/[^/]+\/synced$/.test(rest)) {
+      const answered = syncRoute(method, rest, actor, body, url)
+      if (answered !== undefined) return answered
+    }
     if (rest === '/schedules' || rest.startsWith('/schedules/')) {
       const answered = schedulesRoute(method, rest, actor, body, url)
       if (answered !== undefined) return answered
@@ -556,7 +855,15 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         return { attachment, url: `${STORAGE}${attachment.id}`, expiresAt: now() + 60_000 }
       }
     }
-    if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
+    if (method === 'GET' && rest === '/actors') {
+      const personOf = (id: string) => {
+        const link = links.get(id)
+        if (!link) return {}
+        const userId = link.person.replace(/^vercel:user:/, '')
+        return { person: { id: link.person, handle: accounts[userId]?.username ?? userId, ...(accounts[userId] ? { name: accounts[userId].name } : {}) } }
+      }
+      return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt).map((actor) => ({ ...actor, ...personOf(actor.id) })), cursor: null }
+    }
     if (method === 'GET' && rest === '/messages') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)

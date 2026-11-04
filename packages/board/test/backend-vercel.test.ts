@@ -61,7 +61,7 @@ const verified = (can: Can, who: { id: string; kind: string; handle: string; nam
   }) as unknown as Caller
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
+  it("passes the conformance kit's core, attachments, and watchers, and skips sync for a person, whom Vercel's API lets sync nowhere", async () => {
     const report = await conformance(handleOn(fakeMessageboard()))
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
@@ -87,11 +87,11 @@ describe('vercel()', () => {
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
-      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'failed',
-      "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'failed',
-      'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
+      "sync: keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'skipped',
+      "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
+      'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
-      'sync: finds no one for a platform account nobody linked': 'failed',
+      'sync: finds no one for a platform account nobody linked': 'skipped',
     })
   }, 30_000)
 
@@ -400,6 +400,17 @@ describe('vercel()', () => {
     expect(registered()).toBe(before)
   })
 
+  it("passes the conformance kit's sync as a project, through Vercel's API's sync routes", async () => {
+    const report = await conformance(handleOn(fakeMessageboard(), 'project:prj_pong:production'))
+    expect(Object.fromEntries(report.checks.filter((check) => check.group === 'sync').map((check) => [check.name, check.status]))).toEqual({
+      "keeps sync's records: an import as a platform author, its lookups by platform ID, a receipt, and where it's synced": 'passed',
+      "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
+      'hands a sync each message change as a match of its @sync watcher': 'passed',
+      'keeps noSync on a post and a reply, so sync sends neither': 'failed',
+      'finds no one for a platform account nobody linked': 'passed',
+    })
+  }, 30_000)
+
   it("passes the conformance kit's watchers as a project too, registering a path on its own project", async () => {
     const report = await conformance(handleOn(fakeMessageboard(), 'project:prj_pong:production'))
     expect(report.checks.filter((check) => check.group === 'watchers').map((check) => check.status)).toEqual(['passed', 'passed'])
@@ -630,6 +641,46 @@ describe('vercel()', () => {
     await expect(pong.schedule('memory/notes', { text: 'and this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
     expect(api.schedules.size).toBe(2)
     expect(screened).toEqual(['post dev root', 'post dev check in', 'post dev check later', 'post memory/notes remember this', 'post memory/notes and this'])
+  })
+
+  it('links a platform account to the person a code was issued to, through the sync that owns its key, and unlinks it', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const julian = handleOn(api)
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const { code } = await julian.syncCode('slack')
+    const account = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    await expect(pong.syncAccount({ sync: 'slack', account, code })).resolves.toMatchObject({ person: 'vercel:user:u_jb', link: { actor: 'slack:user:U1', method: 'code' } })
+    expect((await julian.identity()).links.map((link) => link.actor)).toEqual(['slack:user:U1'])
+    await expect(pong.syncFind({ account: 'slack:user:U1' })).resolves.toMatchObject({ person: { id: 'vercel:user:u_jb', method: 'code' } })
+    await pong.syncImport({ op: 'post', author: account, from: 'slack', channel: 'general', text: 'from slack', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    expect((await pong.actors()).find((actor) => actor.id === 'slack:user:U1')).toMatchObject({ kind: 'external', person: { id: 'vercel:user:u_jb', handle: 'julian' } })
+    await expect(pong.syncAccount({ sync: 'slack', account: { ...account, id: 'slack:user:U2' }, code })).rejects.toMatchObject({ status: 404, code: 'bad_code' })
+    await julian.unlinkAccount('slack:user:U1')
+    expect((await julian.identity()).links).toEqual([])
+    await expect(pong.syncFind({ account: 'slack:user:U1' })).resolves.toMatchObject({ person: null })
+  })
+
+  it("hands a sync a person's roots since a time, each in its channel", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const julian = handleOn(api)
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const mine = await julian.post('dev', { text: 'mine' })
+    await julian.reply(mine.id, { text: 'a reply' })
+    await pong.post('dev', { text: 'not mine' })
+    expect((await pong.syncRoots('vercel:user:u_jb', 0)).map((root) => [root.id, root.channel, root.text])).toEqual([[mine.id, 'dev', 'mine']])
+    expect(await pong.syncRoots('vercel:user:u_jb', Date.now() + 60_000)).toEqual([])
+  })
+
+  it('refuses sync to a caller it serves, which would sync as the project, and links to anyone but the person whose login it is', async () => {
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'project:prj_pong:production') })
+    const signal = new AbortController().signal
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    await expect(backend.syncImport(verified('all'), { op: 'seen', author } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.inboxPush(verified('all'), { key: 'slack', events: [] } as never, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.syncCode(verified('all'), { sync: 'slack' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.identity(verified('all'), {}, signal)).rejects.toMatchObject({ status: 403 })
   })
 
   it('refuses watchers for a caller it serves, which would replace the deployment\'s own', async () => {
