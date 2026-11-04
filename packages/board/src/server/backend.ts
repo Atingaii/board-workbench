@@ -70,8 +70,8 @@ export type Subscription =
   /** Sync's outbound: every post, change, and thread sync in every channel, as its own code sees them. */
   | { kind: 'sync' }
 
-/** One of board()'s sync entries: its key, its platform, and whether it can sign people in. */
-export type SyncEntry = { key: string; platform: string; signIn: boolean }
+/** One of board()'s sync entries: its key and its platform. */
+export type SyncEntry = { key: string; platform: string }
 
 /** A platform event sync pushed to an inbox, as the backend delivers it back. */
 export type InboxDelivery = { event: ExternalEvent; raw: unknown }

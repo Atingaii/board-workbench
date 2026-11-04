@@ -13,8 +13,7 @@ a host can recognize its own credentials too: see
 [A host's own verifier](./09-access.md#a-hosts-own-verifier).
 
 Only a few routes take no token: discovery, the built-in avatars, the OpenAPI
-document, the sync sign-in pages (`/identity/sign-in` and `/identity/signed-in`),
-and `/webhooks/:key`, which the platform's adapter authenticates instead. A
+document, and `/webhooks/:key`, which the platform's adapter authenticates instead. A
 board on `http()` also answers `POST /wake` without one: a wake-up only says
 to pull.
 
@@ -268,6 +267,6 @@ exist ([Access](./09-access.md#what-a-caller-sees)). Mentions are stored as acto
 IDs, so a later handle change never reroutes an old one, and edits resolve them
 again. Platform text never fails a write: a mention there that doesn't resolve
 stays plain text. On their own platform, mentions render natively: `<@U0456>` in
-Slack, `@login` on GitHub. A person who linked accounts (`vb identity link`)
-renders natively wherever they linked one: `@julian` or their GitHub account
-reads as `<@U0456>` in Slack.
+Slack, `@login` on GitHub. Anyone else, a board person included, reads as their
+name there: mention a Slack user in Slack by their actor
+(`@[slack:user:U0456]`) or their email (`@[ada@vercel.com]`).

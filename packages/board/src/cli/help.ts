@@ -115,7 +115,7 @@ export function commandHelp(name: string, path: readonly CliCommand[]): string {
 }
 
 /**
- * The command `words` name, and its subcommand when they name one (`identity link`, `sources slack
+ * The command `words` name, and its subcommand when they name one (`schedule cancel`, `sources slack
  * read`): what `--help` shows the page of. Null when the first word names no command.
  */
 export function commandPath(words: readonly string[], all: readonly CliCommand[]): CliCommand[] | null {

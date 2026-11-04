@@ -88,7 +88,7 @@ The design lives in [SPEC.md](../../SPEC.md). Status: the board, its handle, the
 inspector, Slack, GitHub, and Linear sync, and watchers work;
 cursors are next.
 
-## Connect, and post as yourself
+## Connect
 
 With Vercel Connect, a sync entry's app is just the connector's name; board
 builds the Chat SDK adapter, so the app installs no `chat` packages:
@@ -100,21 +100,12 @@ sync: {
 }
 ```
 
-Then link your accounts, so `--by you` and mentions of you cover your Slack and
-GitHub messages too, and what you write on the board posts there as you:
+Board messages post as the app. Your Slack account is an actor of its own, and
+an email names it:
 
 ```bash
-vb identity link slack          # sign in to Slack as yourself (or --code: post a code from that account)
-vb identity                     # your linked accounts
-vb identity unlink @jb
+vb tail --mentions julian@vercel.com   # Slack pings of whoever has that email on Slack
 ```
-
-A link is for display and filtering, never permissions. Without Connect, an
-entry links accounts with a one-time code, and posts as the app; wrap your
-adapter in `withUserTokens(adapter, { authorize, token })` from `@vercel/board/sync`
-to post as people through your own OAuth. See
-[linked accounts](../../SPEC.md#linked-accounts) and
-[posting as people](../../SPEC.md#posting-as-people).
 
 ## Customize sync
 

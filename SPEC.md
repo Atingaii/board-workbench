@@ -151,7 +151,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
 | `@vercel/board/sync-chat-sdk` | `chatSdk()`, which syncs any Chat SDK adapter, with hooks for what it can't read from the adapter | server |
-| `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`), and `withUserTokens()` and `connectUserTokens()` | server |
+| `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`) | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
 A backend's own pieces live under its path, and everything that works with any
@@ -228,15 +228,14 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   `typing(messages, status)`, what only board()'s sync can do, which a backend
   answers those methods through; `accessNow(principal)`, board()'s policy for
   a principal the backend stored (a schedule's creator at each send, a
-  registrant at each event and pull, the syncs that link accounts), null once
+  registrant at each event and pull, the syncs discovery lists), null once
   it may do nothing; `project()`, the board's Vercel project; `handle(caller)`,
   a handle through board(), as a verified caller (a schedule's creator, whose
   posts keep their IDs) or its own code, so what a backend writes for someone
   goes through the middleware; and `url()`, the board's own URL once it's
   known.
 - **Sync runs in `board()`,** on every backend (see [Sync](#sync)). Sync's
-  adapters, webhooks (`/webhooks/:key`, no token), `/messages/:id/sync`,
-  `/identity/sign-in` and `/signed-in` (no token), and `/identity/unlink` are
+  adapters, webhooks (`/webhooks/:key`, no token), and `/messages/:id/sync` are
   `board()`'s routes; sync reads and writes only through the protocol, as its
   own caller. `readSource` and `typing` are protocol methods: a2() answers
   them through the binding, so they work from the CLI against the board that
@@ -263,7 +262,7 @@ The backends board ships:
   `board()` verified, and what it does outside requests that needs the policy,
   it asks `board()` through the binding: each event's access for registered
   watchers, each pull's, a schedule's send-time re-check and revocation, and
-  which registered syncs may still link accounts. A schedule's send goes
+  which registered syncs discovery still lists. A schedule's send goes
   through `board()`, as its creator, on the binding's handle, so the
   middleware sees it. A verified caller writes as its actor; `{ self }` writes as `board:client` from the handle,
   `board:client:<profile>` from `as(profile)`, `board:watch:<id>` from a
@@ -314,7 +313,7 @@ The backends board ships:
   another's), so the same `id` never posts
   twice and no one can post with one first (and `posted`, a retry's lookup,
   asks for the same). Without an `access` on its board, it answers only
-  wake-ups and webhooks, and its sync's sign-ins: a request, discovery
+  wake-ups and webhooks: a request, discovery
   included, answers 404 `<url> answers only wake-ups and webhooks`, and none is
   verified. Its `discovery` for its own handle reads the other board's. With
   one, its board is a gateway: it verifies and limits its own callers, and
@@ -324,7 +323,7 @@ The backends board ships:
   watcher's own writes never wake it) and its access as `x-board-scope`, so
   the other board grants only what both allow. A caller's post IDs are under
   its own principal, `me` is answered here, and what's the project's own there
-  by principal answers 403: `identity`, `edit`, `delete`, `schedule`,
+  by principal answers 403: `edit`, `delete`, `schedule`,
   `cancelSchedule`, `upload` (a file is its uploader's, the project's there,
   to read and attach until a message carries it), the registration's methods,
   and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
@@ -333,15 +332,14 @@ The backends board ships:
   registers its own there, as the protocol's does), and `registerWatchers()`
   registers this board's now. Its watchers run here, on what the other board matches for them
   (below), and so does its sync: it registers its sync entries (`sync: [{ key,
-  platform, signIn }]`), pulls what to deliver as matches of watcher `@sync`,
+  platform }]`), pulls what to deliver as matches of watcher `@sync`,
   and pulls back what it pushed to its inbox after each webhook and when it's
   woken. Sync's own calls go as the deployment itself, which the other board
   must let `sync`, and wait for that registration. The other board lists the
-  registered entries in its discovery and links accounts on them, while their
-  registrant may still sync: a key its own sync has is its own (registering it
-  is 409 `sync_key_taken`, and one registered before the board's own sync took
-  it holds nothing under it), and a key two registered syncs claim signs no one
-  in (a code still links by posting it). A key names its sync's platform
+  registered entries in its discovery while their registrant may still sync: a
+  key its own sync has is its own (registering it is 409 `sync_key_taken`, and
+  one registered before the board's own sync took it holds nothing under it).
+  A key names its sync's platform
   locations, so each sync sees and changes only the copies it recorded
   (`importedBy` and `syncedBy` on its events), and two that claim one key share
   its platform threads on the board: give each key one sync. People and
@@ -372,7 +370,7 @@ The backend picks them; the protocol only says their shape:
 ### The protocol and conformance
 
 - **Every board answers the whole protocol:** discovery, `/me`, `/channels`,
-  `/actors`, `/identity`, `/messages`, `/threads`, posting, editing, deleting,
+  `/actors`, `/messages`, `/threads`, posting, editing, deleting,
   reacting, labeling, typing, source reads, schedules, attachments, registered
   watchers, sync's records, and `/events`. There are no optional groups, and
   discovery lists none. A board on `a2()` may keep no schedules or no files
@@ -784,7 +782,7 @@ board({
   creator's scope, so a header longer than 4000 characters is `invalid_scope`
   on every request. A narrowed caller is never its principal's integration:
   registering, pulling, and acking watchers, and sync's records (imports,
-  receipts, the inbox, account links), answer 403. A narrowed pull would take
+  receipts, the inbox), answer 403. A narrowed pull would take
   the principal's matches, a narrowed register would replace its
   registration, and a platform thread a narrowed import claimed would bring
   that sync's later events into the narrowed caller's channels.
@@ -938,8 +936,8 @@ await team.revokeToken(token.id)
   grant's default, read, post, react, and label everywhere, so a token has
   `sync` or `manage` only when its `can` says so. A token always has a
   scope, `*=all` narrowed by its `can`, so it's never its principal's
-  integration: registering watchers, sync's records, and linking or unlinking
-  accounts answer 403, as for any narrowed caller. A person's tokens outlive
+  integration: registering watchers and sync's records answer 403, as for any
+  narrowed caller. A person's tokens outlive
   their access to the board's project, as their schedules do, since the board
   can't tell they left: `manage` lists and revokes everyone's.
 - **It may pin a profile (with its avatar) and a session,** which every
@@ -974,8 +972,7 @@ await team.revokeToken(token.id)
   its `can`, not the most it could.
 
 **On each backend:** `a2()` keeps grants and tokens on its log, in a session
-of their own, `access`, beside `board`, as it keeps schedules and identity
-codes, so none reaches the message tables, `/events`, watchers, or sync. A
+of their own, `access`, beside `board`, as it keeps schedules, so none reaches the message tables, `/events`, watchers, or sync. A
 grant's or token's ID is the index of the event that made it (`g3`, `t12`). `http()`
 forwards them to the board it uses: they're that board's, and its callers
 can't create them there (403), since they'd act as its project. `vercel()`
@@ -985,66 +982,17 @@ adapts nothing: what the API doesn't keep yet, it answers, so a board on
 `vercel()` fails the conformance kit's `grants` and `tokens` groups until it
 does.
 
-### Linked accounts
+### One person, several actors
 
 One person shows up as several actors: `vercel:user:u_abc123` on the board,
 `slack:user:U0456` in Slack, `github:user:583231` on GitHub, and their agents
-(`…+claude`). `actor.linked { actor, to, method, by }` says a platform actor
-*is* a principal. It's for display, filtering, and mentions, **never for
-permissions**: a linked Slack account can't do anything its Slack messages
-couldn't already, and history keeps every message's original actor.
-`actor.unlinked { actor, by }` undoes it. Only people link (`vb identity`), and
-only their own accounts.
-
-- **Proof, never a matching name or email.** An account is linked when it shows
-  it's yours, one of two ways:
-  1. **A one-time code.** `vb identity link slack --code` prints a code
-     (`vb-7KQ2-M9XD`, ten minutes, single use). Post it from that account,
-     as a whole message, anywhere the board syncs through that entry. The
-     webhook that delivers it is already verified, so the board knows which
-     account sent the code you asked for. The board links them, reacts with ✅
-     there, and doesn't import the message. Only a hash of the code is kept, in
-     the side session `identity` (`board-identity`). If two accounts post it,
-     the first one the log takes wins. An expired, used, or other entry's code is
-     just a message.
-  2. **Signing in.** When an entry can sign people in (a Connect connector, or
-     an adapter with `withUserTokens`, see [Posting as people](#posting-as-people)),
-     `vb identity link slack` prints a sign-in URL for your principal: the
-     `signIn` that `POST /sync/codes` answers with the code, on the board that
-     runs the entry's sync (`/identity/sign-in?sync&code`). Only you should open
-     it: whoever completes it binds *their* account to you. Once you approve,
-     the board asks for your token, asks the platform whose it is (Slack's
-     `auth.test`, GitHub's `GET /user`), and at `/identity/signed-in` links that
-     account (`method: 'consent'`) by the code. The CLI watches `GET /identity`
-     for the link.
-- **Codes, only for people, each for themselves, from the board that keeps the
-  log.** `POST /sync/codes` issues one to the person asking, and nothing names
-  someone else: a sync can only redeem `{ account, code }` with a code a person
-  handed it, by posting it or by carrying it through a sign-in. On a board
-  whose sync runs elsewhere (a project on `http()`), the board that keeps the
-  log knows the entry from the project's registration, issues the code, and
-  for a sign-in names the project's `/identity/sign-in?sync&code` as its
-  `signIn`. The board's own entries sign in at its own, the same way. Which
-  entries a person hasn't linked, `GET /identity` says (`unlinked`), from the
-  same list.
-  The project looks up whose code it is (`syncFind`'s `code`), sends them to the
-  platform as them, and at `/identity/signed-in` redeems the code with the
-  account they approved.
-- **What follows the link:**
-  - **`--by <person>`** matches everyone they are: their own actor, their
-    agents (`julian/claude`, by `by.principal`), and every linked account. A
-    linked account's handle (`--by jb`) names the whole person too. An agent, or
-    an unlinked platform actor, is just itself.
-  - **`--mentions <person>`** and `mentions=me` include mentions of their linked
-    accounts, so a Slack `<@U0456>` reaches the person's `--mentions me`.
-  - **Outbound mentions:** a person mentioned on the board renders natively on
-    a platform where they've linked an account (`<@U0456>` in Slack), and so
-    does a mention of any account they linked: their GitHub account reads as
-    `<@U0456>` in Slack. Renderers get the same lookup as `mentionOf` (see
-    [Outgoing presentation](#outgoing-presentation)).
-  - **Views:** a linked account's author view (`author`, `/actors`) carries
-    `person: { id, handle, name, avatar }`, and the CLI shows
-    **Julian Benegas (julian)**.
+(`…+claude`). The board doesn't link them. A person's `--by` and `--mentions`
+cover their own actor and their agents (`julian/claude`, by `by.principal`);
+their Slack or GitHub account is an actor of its own, named to cover it
+(`--by slack:user:U0456`, or `--mentions ada@vercel.com` for whoever has that
+email on Slack). A person mentioned on the board reads as their name
+on a platform; a platform user mentioned by actor or email
+(`@[ada@vercel.com]`) renders natively there (`<@U0456>`).
 
 ### Handles and mentions
 
@@ -1257,21 +1205,10 @@ export const boardContract = contract({
     'reaction.removed':  z.object({ id: MessageId, emoji: Emoji, by: Author }),
     'labels.changed':    z.object({ id: MessageId, set: Labels, unset: z.array(LabelKey), by: Author }),
     'thread.synced':     z.object({ target: ExternalTarget, cause: z.enum(['config', 'request']), kind: z.enum(['channel', 'thread']).optional(), by: Author }),
-    'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage, syncedBy: ActorId.optional() }), // (server) external: { thread, message, asUser? }
+    'message.synced':    z.object({ id: MessageId, target: ExternalTarget, external: ExternalMessage, syncedBy: ActorId.optional() }), // (server) external: { thread, message }
     'message.files_synced': z.object({ id: MessageId, target: ExternalTarget, files: z.array(z.string()).nullable(), syncedBy: ActorId.optional() }), // (server) null: the platform refused files
     'message.sync_failed': z.object({ id: MessageId, target: ExternalTarget, error: z.string() }),      // (server)
     'actor.seen':        z.object({ actor: ActorId, kind: SeenActorKind, handle: Handle, name: z.string(), avatar: z.string().url().nullable(), host: z.literal(true).optional() }),
-    'actor.linked':      z.object({ actor: ActorId, to: ActorId, method: z.enum(['code', 'consent']), by: Author }), // (server) see Linked accounts
-    'actor.unlinked':    z.object({ actor: ActorId, by: Author }),
-  },
-})
-
-// Linking codes, hashed, in session `identity`.
-export const identityContract = contract({
-  name: 'board-identity',
-  events: {
-    'identity.code_issued': z.object({ hash, principal: ActorId, sync: z.string(), expiresAt: z.string() }), // (server)
-    'identity.code_used':   z.object({ hash, actor: ActorId, message: z.string().optional() }),              // (server) the first wins; only a retry of its message claims it again
   },
 })
 
@@ -1324,9 +1261,8 @@ export const schedulesContract = contract({
 - **The board log holds only board facts.** Bookkeeping lives in side
   contracts: raw platform events in `board-inbox`, watcher matches and their
   leases in `board-watch` (see [Watchers](#watchers)), registrations in
-  `board-registry`, scheduled messages in `board-schedules` (see
-  [Scheduled messages](#scheduled-messages)), and linking codes in
-  `board-identity`. Read cursors would go in `board-cursors`, which isn't
+  `board-registry`, and scheduled messages in `board-schedules` (see
+  [Scheduled messages](#scheduled-messages)). Read cursors would go in `board-cursors`, which isn't
   built (see [Cursors](#cursors)).
 - **A reply can be conditional.** `after` names a message in its thread that
   must still be the newest, or the reply is 409 `newer_message` and nothing is
@@ -1527,7 +1463,7 @@ state is folded from the log by A2 reducers.
 | Reducer | State | Used by |
 | --- | --- | --- |
 | `channels` | path → last index, message count, thread count | `channels`, the feed's start |
-| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs, and links | mention resolution, `actors`, rendering, `--by` and `--mentions` |
+| `actors` | actor → handle, name, avatar, kind; plus a `byHandle` index of lowercased handle → actor IDs | mention resolution, `actors`, rendering, `--by` and `--mentions` |
 
 - **Consistency:** a write answers once the tables hold it, so any later read
   includes it. A read that names a message ID waits until the tables reach it;
@@ -1635,10 +1571,6 @@ status.
 | GET | `/inbox/:key` | Raw platform events for a sync entry, newest first. Filters: `channel`, `limit`. Needs `sync` in every channel for the board's own inbox |
 | GET | `/sources/:key/read` | `?target&limit`: a platform channel, thread, or permalink read on demand through sync entry `key`, on the board that runs it (404 `not_synced_here` elsewhere). Needs `manage` in every channel |
 | POST | `/sources/:key/join` | `{ target }`: adds sync entry `key`'s app to a public channel (`#name`, an ID, or a link into it) so `/sources/:key/read` can read it, where the entry opted in with `join` (403 `join_disabled` otherwise), on the board that runs it (404 `not_synced_here` elsewhere). Answers `{ channel, name, joined }`. Needs `manage` in every channel |
-| GET | `/identity` | Your linked platform accounts and the sync entries you haven't linked: `{ principal, links: [{ actor, handle, name, method, at }], unlinked, cursor }` |
-| GET | `/identity/sign-in` | `?sync&code`: on the board that runs the entry's sync, sends a person to the platform's sign-in for it, carrying a code the board that keeps the log issued (`POST /sync/codes` names it as `signIn`). Takes no board token |
-| GET | `/identity/signed-in` | `?sync&code`: where that sign-in comes back; links the account it authorized to whoever the code was issued to. Takes no board token |
-| POST | `/identity/unlink` | `{ actor }`: an actor ID or handle among your linked accounts |
 | POST | `/webhooks/:name` | Platform ingress for the sync entry `name` (e.g. `/webhooks/slack`). Takes no board token; the adapter authenticates the request |
 | GET | `/openapi.json` | Generated from the route table |
 
@@ -1649,7 +1581,11 @@ Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
 
 **Filters:**
 - `channel=www/` (with a trailing slash) matches a whole subtree.
-- `mentions=me` resolves to the caller's actor.
+- `mentions=me` resolves to the caller's actor. `mentions=ada@vercel.com`, on
+  the board that runs sync and for a caller that may read somewhere, resolves to
+  the user with that email on a synced platform that looks emails up (Slack),
+  whom the board learns, so their pings resolve from then on. Sync is asked once
+  per email every few minutes; an email it doesn't know matches nothing.
 - `label=status=open` may be repeated; repeated labels are combined with AND.
 - `after` and `before` take a cursor or a message ID, as opaque strings (see
   [IDs, cursors, and versions](#ids-cursors-and-versions)). A bad one is 400
@@ -1846,9 +1782,6 @@ board hooks uninstall [agent]...               remove an earlier board's turn-en
 
 board channels                                 channels, grouped by path prefix
 board actors                                   actors and their handles
-board identity                                 your linked Slack and GitHub accounts, and the sync entries you haven't linked
-board identity link <key> [--code] [--no-wait] link your account on sync entry <key>: sign in, or post the code it prints from that account
-board identity unlink <account>                unlink one, by handle or actor ID
 
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
@@ -1938,7 +1871,7 @@ it, and nothing is hosted.
   - On a reply, the reply isn't delivered to the thread's external threads.
   - Combining `--no-sync` with `--sync` is a usage error.
 
-**Shared filters:** `--re <id>`, `--mentions [@handle]` (mentions of me, or of them),
+**Shared filters:** `--re <id>`, `--mentions [@handle|email]` (mentions of me, or of them),
 `--by <handle>`, `--source <source>`, `--label <key>[=<value>[|<value>…]]`,
 `--text <words>`, and `--after <id>` (a message ID or a cursor). All of them
 must match.
@@ -1987,8 +1920,7 @@ $ board read 812
     thanks, fixing the env now
 ```
 
-A platform user shows by name; once they link the account, with whose it is
-(`Ada Lovelace (ada)`).
+A platform user shows by name (`Ada Lovelace`).
 
 ```
 $ board post errors-www "@ada the rollback is live"
@@ -2132,15 +2064,13 @@ unlinking their own account:
 | `syncImport` | `POST /sync/imports` | a platform's write as its platform author, with its origin and sync key (null for a sync function's own): `post` (idempotent by an ID derived from the platform event), or `edit`, `delete`, `react`, `labels`, `links` on the message the backend finds from its platform IDs or that it names by board ID, or `seen` (a platform user to know, for `@[email]`) |
 | `syncReceipt` | `POST /sync/receipts` | `message.synced` (with `message.files_synced`), `message.files_synced`, `message.sync_failed`, or `thread.synced` with its `cause` |
 | `syncThread` | `GET /sync/threads/:thread` | a thread's root, channel, targets, and external threads |
-| `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, the post an import made with a client ID, who an account is linked to and how, a person's accounts, whose a live code is |
+| `syncFind` | `GET /sync/find` | the board thread and message for platform IDs, and the post an import made with a client ID |
 | `syncCopies` | `GET /sync/copies` | messages' copies the caller's sync recorded, by target |
-| `syncRoots` | `GET /sync/roots` | a person's recent roots, for the echo check |
 | `inboxPush`, `inboxNext`, `inboxAck`, `inbox` | `/inbox/:key…` | platform events, deduplicated by platform ID, leased one platform thread at a time and in order; `inbox` lists them |
-| `syncCode`, `syncAccount`, `syncUnlink` | `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink` | one-time codes, only for people, each for themselves; account links, only by a code; unlinking your own, or anyone's with `sync` in every channel |
 
 Only these take provenance (an author, an origin) from a body, and only from a
 caller with `sync` where it lands: `sync` says this project may speak for
-platform users there. An author, or an account it links, is a user of a
+platform users there. An author is a user of a
 platform the caller syncs (its own sync's entries, or those it registered),
 never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`,
 `local:`, `board:`), nor a host's principal the board has seen register or
@@ -2480,55 +2410,7 @@ dead-letters and holds up its thread's lane.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, the adapter needs the app's bot user ID to
   recognize its own comments, or it replies to itself in a loop; with a
-  connector, board looks it up (below), and `botUserId` pins it. A copy posted as a person comes back as theirs, so it's
-  recognized by its receipt instead; one that arrives before its receipt is
-  held back, for up to 5 tries while the board message is under a minute old,
-  rather than imported twice. That
-  includes a new thread they started, whose platform thread the board learns
-  only from the receipt: a message from them in that channel waits while one of
-  their roots there is still pending.
-
-### Posting as people
-
-A board message a person writes reaches Slack or GitHub *as them*: their name,
-their avatar, no "via" label, and the platform's own notifications. It takes
-their own platform token, which they grant by signing in (`vb identity link
-<key>`), and the same sign-in links the account (see
-[Linked accounts](#linked-accounts)).
-
-```ts
-type UserTokens = {
-  authorize(principal: string, options?: { callback?: string }): Promise<string> // a sign-in URL binding whoever completes it to `principal`, back to `callback`
-  token(principal: string): Promise<string | null>    // their token, or null when they haven't signed in
-}
-```
-
-- **Where tokens come from:** a connector name uses Vercel Connect's user
-  tokens (`startAuthorization` / `getToken` with `subject: { type: 'user', id:
-  principal }`). Your own OAuth is `withUserTokens(adapter, { authorize, token })`.
-- **The board never stores a token.** It asks for one at each delivery. No
-  token (never signed in, revoked, expired), an error getting one, or a
-  platform that refuses the post (a missing scope) delivers as the app, as
-  before: posting as a person never fails a delivery.
-- **Only once the account they signed in with is linked** (`method: 'consent'` on
-  that platform): a token alone isn't enough. So their copy's echo is
-  recognized as theirs, and `vb identity unlink` stops posting as them even
-  though the platform still has the token. Edits and deletes of copies already
-  posted as them still use the token.
-- **Only what they wrote on the board themselves.** Their agents
-  (`claude via julian`) keep posting as the app, so you can tell them apart.
-  Imported messages go out as the app, never as anyone, and so do messages
-  from anyone who isn't a Vercel user (`vercel:user:`).
-- **The text is theirs:** no name in front, and no custom `render`. Files still
-  upload as the app.
-- **Edits and deletes of a copy posted as them use their token too**
-  (`message.synced` records `asUser: true`): the app can't change their
-  message. Without their token, they're skipped.
-- **Slack** posts through the adapter with the person's token
-  (`withBotToken(token, …)`): the user scope `chat:write`. **GitHub** posts
-  through its REST API with the person's token, not the adapter, which would
-  learn the person as its own bot user. The GitHub App needs user authorization
-  turned on, with Issues and Pull requests write.
+  connector, board looks it up (below), and `botUserId` pins it.
 
 ### Typing
 
@@ -2564,23 +2446,17 @@ adapter: createSlackAdapter({
   botToken: process.env.SLACK_BOT_TOKEN!,
   signingSecret: process.env.SLACK_SIGNING_SECRET!,
 }),
-
-// plain Chat SDK, posting as people through your own OAuth
-adapter: withUserTokens(createSlackAdapter({ ... }), { authorize, token }),
 ```
 
 - **A connector name** makes board build the adapter
-  (`createSlackAdapter({ ...connectSlackAdapter(name) })`), Slack's Web API
-  `client` resolver, and people's sign-in through the same connector (see
-  [Posting as people](#posting-as-people)). `chat`, `@chat-adapter/slack`,
+  (`createSlackAdapter({ ...connectSlackAdapter(name) })`) and Slack's Web API
+  `client` resolver. `chat`, `@chat-adapter/slack`,
   `@chat-adapter/github`, and `@vercel/connect` are board's own dependencies,
   so the app installs none of them. On GitHub, Chat SDK can't detect the
   app's bot user from Connect's installation token (REST's `/user` refuses it),
   so board asks GraphQL's `viewer`, which answers for that token, once per
   instance. `botUserId` skips the call.
-- **An adapter** is used as given. It posts as the app unless it's wrapped in
-  `withUserTokens` (from `@vercel/board/sync-slack`, `@vercel/board/sync-github`, or
-  `@vercel/board/sync`).
+- **An adapter** is used as given, and posts as the app.
 
 With a Slack adapter of your own whose bot token is async (Connect's
 credentials passed to `createSlackAdapter`, say), `slack()` needs a public
@@ -2618,9 +2494,7 @@ board                 the board     sync's engine in board(), on any backend; Ch
 
 board never stores platform credentials: it asks for a token at each call.
 Webhooks skip the board's token check, because platform requests can't carry a
-board token; the adapter authenticates them instead. Sync's sign-in pages
-(`/identity/sign-in`, `/identity/signed-in`) skip it too: a browser opens them
-with only a code.
+board token; the adapter authenticates them instead.
 
 ### Setting up webhooks
 
@@ -2721,8 +2595,7 @@ rejected when `canStartThreads` is false; existing thread attachment still works
 
 Optional methods provide missing-root recovery, file downloads and uploads,
 native mentions, email lookup, link snapshots (`fetchLink`), on-demand reads
-(`read`), permalinks, posting as a person (`whoAmI`, `postAs`, `editAs`,
-`deleteAs`), edits, deletes, reactions, and typing. Defaults for absent
+(`read`), permalinks, edits, deletes, reactions, and typing. Defaults for absent
 change/typing operations are no-ops. `uploadsFiles` declares upload support;
 otherwise files get board attachment notes. `refusesFiles` distinguishes a
 permanent upload refusal from a retryable failure. Providers also declare
@@ -3248,8 +3121,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   [Typing](#typing)); read receipts that follow cursors are not yet
 - Creating external containers: the board never creates Slack channels or
   GitHub repos, issues, or PRs
-- Mapping identities across platforms by guesswork (a matching name or
-  email): a person links their own accounts ([Linked accounts](#linked-accounts))
+- Mapping identities across platforms: a person's Slack and GitHub accounts
+  are actors of their own ([One person, several actors](#one-person-several-actors))
 - Bundled sync providers other than Slack, GitHub, and Linear: any other
   platform comes through `chatSdk()` or a provider of its own
 
@@ -3283,8 +3156,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
 | What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
-| How does someone prove a platform account is theirs? | **A one-time code posted from it, or the platform's own sign-in** (board thread #676, issue #6). Never a matching name or email: a link changes who `--by` and mentions mean. Links are per board, and only for display and filtering. |
-| Can Connect user tokens post as a person? | **Assumed yes, not yet verified with a real consent:** both factory connectors answer `user_authorization_required` and return real consent URLs (issue #6). Which scopes the tokens get is unverified until someone signs in; without them, delivery falls back to the app. |
+| Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a board on `http()` registers the tails of the watchers it deployed, and its own `https` URL, which the board wakes with no event and no credential (see [Watchers over `http()`](#watchers-over-http)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release

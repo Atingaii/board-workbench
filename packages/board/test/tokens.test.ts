@@ -83,13 +83,13 @@ describe('tokens', () => {
     expect(late).toMatchObject({ status: 400, body: { error: { code: 'token_expires_first' } } })
   })
 
-  it("is never its minter's integration, even with nothing narrowed: no watchers, sync records, or account links", async () => {
+  it("is never its minter's integration, even with nothing narrowed: no watchers or sync records", async () => {
     const { as, mint } = await setUp()
     const { secret } = await mint({ name: 'everything', can: 'all' })
     const full = as(secret)
     expect((await full('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
     expect((await full('POST', '/watchers', { url: null, watch: { tail: { tail: 'dev' } } })).status).toBe(403)
-    expect((await full('POST', '/sync/codes', { sync: 'slack' })).status).toBe(403)
+    expect((await full('GET', '/inbox/slack/next')).status).toBe(403)
   })
 
   it('narrows further, never wider, with x-board-scope', async () => {

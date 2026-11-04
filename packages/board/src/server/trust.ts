@@ -299,8 +299,7 @@ export function createTrust(options: {
         expiresAt = Math.min(expiresAt, parent.expiresAt)
       }
       // What it may do at most: its minter's scope, narrowed by its own `can`. It always has one, so
-      // a token is never its principal's integration: no registering watchers, no sync's records, no
-      // linking accounts to its minter.
+      // a token is never its principal's integration: no registering watchers, no sync's records.
       let can: ReturnType<typeof compileAccess>
       try {
         can = compileAccess((body.can ?? DEFAULT_CAN) as Can)

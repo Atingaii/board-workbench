@@ -11,14 +11,12 @@ import type {
   GrantBody,
   GrantView,
   EventsQuery,
-  IdentityView,
   InboxAckBody,
   InboxEntry,
   InboxItem,
   InboxNextQuery,
   InboxPushBody,
   InboxQuery,
-  LinkedAccount,
   LinkedQuery,
   LabelBody,
   MatchesQuery,
@@ -27,7 +25,6 @@ import type {
   MessagesPage,
   MessagesQuery,
   MessageView,
-  PersonView,
   PostBody,
   ReactBody,
   RegisterBody,
@@ -40,18 +37,13 @@ import type {
   SourceRead,
   SourceReadQuery,
   ThreadsPage,
-  SyncAccountBody,
-  SyncCodeBody,
-  SyncCodeView,
   SyncCopiesQuery,
   SyncCopiesView,
   SyncFindQuery,
   SyncFindView,
   SyncImportBody,
   SyncReceiptBody,
-  SyncRootsQuery,
   SyncThreadView,
-  SyncUnlinkBody,
   SyncedView,
   ThreadsQuery,
   ThreadView,
@@ -76,8 +68,7 @@ export type Protocol = {
   discovery: { input: Nothing; output: Discovery }
   me: { input: Nothing; output: Me }
   channels: { input: Nothing; output: { channels: ChannelView[]; cursor: string } }
-  actors: { input: Nothing; output: { actors: (Actor & { person?: PersonView })[]; cursor: string } }
-  identity: { input: Nothing; output: IdentityView }
+  actors: { input: Nothing; output: { actors: Actor[]; cursor: string } }
   messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
   message: { input: Id; output: ThreadView }
@@ -142,7 +133,6 @@ export type Protocol = {
   syncFind: { input: Input<typeof SyncFindQuery>; output: SyncFindView }
   /** Messages' copies on platforms that the caller's sync recorded, by target: another sync's never show. */
   syncCopies: { input: Input<typeof SyncCopiesQuery>; output: SyncCopiesView }
-  syncRoots: { input: Input<typeof SyncRootsQuery>; output: { roots: MessageView[] } }
   /** Platform events into the caller's inbox, deduplicated by their platform IDs. */
   inboxPush: { input: Key & Input<typeof InboxPushBody>; output: { ok: true } }
   /** The caller's next inbox events, leased, one platform thread at a time and in order. */
@@ -150,11 +140,6 @@ export type Protocol = {
   inboxAck: { input: Key & Id & Input<typeof InboxAckBody>; output: { ok: true } }
   /** Raw platform events, newest first, for debugging sync. */
   inbox: { input: Key & Input<typeof InboxQuery>; output: { events: InboxEntry[] } }
-  /** A code for linking the caller's account, and the sign-in that carries it when the entry signs people in. */
-  syncCode: { input: Input<typeof SyncCodeBody>; output: SyncCodeView }
-  /** 404 `bad_code` for a code that isn't live. */
-  syncAccount: { input: Input<typeof SyncAccountBody>; output: { person: string; link: LinkedAccount } }
-  syncUnlink: { input: Input<typeof SyncUnlinkBody>; output: { ok: true } }
 }
 
 export type Method = keyof Protocol

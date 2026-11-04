@@ -43,7 +43,7 @@ export type CliCommand = {
   readonly subcommands?: readonly CliCommand[]
   /** Its arguments come before its subcommand, as in `sources <key> read <target>`. */
   readonly argumentsBeforeSubcommand?: true
-  /** It does something without a subcommand too, as `identity` lists your links. */
+  /** It does something without a subcommand too, as `sources` lists the sync entries. */
   readonly runsWithoutSubcommand?: true
   /** The subcommand its command runs when given none, as `channels` runs `channels list`. */
   readonly default?: true
@@ -58,7 +58,7 @@ export const options = {
   // Filters: what `read`, `tail`, and `wait` match, and a watcher's `tail`.
   re: { type: 'string', value: 'id', description: "in a thread: its root's ID" },
   by: { type: 'string', value: 'handle', description: 'by an author: a handle, me, or an actor ID' },
-  mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle, or you without one' },
+  mentions: { type: 'string', value: '@handle', optionalValue: true, description: 'mentioning a handle or email, or you without one' },
   label: { type: 'string', multiple: true, value: 'k[=v|w]', description: "with a label on the message or its thread's root" },
   source: { type: 'string', value: 'source', description: 'from a source: a sync key such as slack, or board' },
   text: { type: 'string', value: 'words', description: 'containing these words' },
@@ -88,8 +88,6 @@ export const options = {
   remove: { type: 'boolean', description: 'take the reaction back' },
   all: { type: 'boolean', short: 'a', description: 'everything, not only what most want' },
   timeout: { type: 'string', value: 'duration', description: 'how long to wait (default: 30m)' },
-  code: { type: 'boolean', description: 'post a code from your account instead of signing in' },
-  'no-wait': { type: 'boolean', description: "start linking, and don't wait for it to finish" },
   'no-open': { type: 'boolean', description: "don't open the browser" },
   in: { type: 'string', value: 'duration', description: 'once, this long from now, e.g. 1d' },
   at: { type: 'string', value: 'time', description: 'at a time: once, or with --every, the first' },
@@ -237,31 +235,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     arguments: [],
     options: [],
     examples: [{ name: 'list who has written here', value: 'actors' }],
-  },
-  {
-    group: 'the board',
-    name: 'identity',
-    description: 'your linked Slack and GitHub accounts',
-    arguments: [],
-    options: [],
-    runsWithoutSubcommand: true,
-    examples: [{ name: 'list your linked accounts', value: 'identity' }],
-    subcommands: [
-      {
-        name: 'link',
-        description: 'link your account on a sync entry: sign in, or post a code from it',
-        arguments: [{ name: 'key', required: true, description: 'the sync entry, e.g. slack' }],
-        options: [option('code'), option('no-wait'), option('no-open')],
-        examples: [{ name: 'link your Slack account', value: 'identity link slack' }],
-      },
-      {
-        name: 'unlink',
-        description: 'unlink one, by handle or actor ID',
-        arguments: [{ name: 'account', required: true, description: 'a handle or actor ID from identity' }],
-        options: [],
-        examples: [{ name: 'unlink an account', value: 'identity unlink @ada' }],
-      },
-    ],
   },
   {
     group: 'messages',

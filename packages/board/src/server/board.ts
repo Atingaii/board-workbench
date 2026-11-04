@@ -188,7 +188,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   )
   if (Object.keys(entries).length > 0) subscriptions[SYNC] = { kind: 'sync' }
   /** This board's sync entries, as its sync and discovery see them. */
-  const ownEntries: SyncEntry[] = Object.entries(entries).map(([key, entry]) => ({ key, platform: entry.platform, signIn: entry.users !== null }))
+  const ownEntries: SyncEntry[] = Object.entries(entries).map(([key, entry]) => ({ key, platform: entry.platform }))
   const binding: BoardBinding = {
     subscriptions,
     run: async (id, event, meta) => (await server()).run(id, event, meta),

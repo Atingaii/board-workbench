@@ -203,9 +203,8 @@ await team.revokeToken(token.id)
   everywhere. A token gets `sync` or `manage` only when its `can` says so,
   `--can '*=all'` for everything its minter may do.
 - **It's never its minter's integration,** even with `*=all`: like any
-  [narrowed](#narrowing-a-token) caller, it can't register watchers, write
-  sync's records, or link and unlink accounts, which take the minter's own
-  credential.
+  [narrowed](#narrowing-a-token) caller, it can't register watchers or write
+  sync's records, which take the minter's own credential.
 - **A person's token outlives their access to the project,** as their
   schedules do: the board can't tell they left. Revoke their tokens when they
   go (`vb tokens` with `manage` lists everyone's).
@@ -233,7 +232,7 @@ await team.revokeToken(token.id)
 ## A board on `http()`
 
 A board on `http()` keeps no log, and with no `access` of its own it serves no
-requests but its wake-ups, webhooks, and its sync's sign-ins. With one, it
+requests but its wake-ups and webhooks. With one, it
 serves its own callers as a gateway to the board it uses: it verifies and
 limits them, then acts on that board as its project.
 
@@ -569,8 +568,8 @@ than 4000 characters, is a 400 with `invalid_scope`, and the message says what
 to write.
 
 A narrowed caller is never its principal's integration. Registering,
-pulling, and acking watchers, and sync's records (imports, receipts, the
-inbox, and linking accounts), answer 403: they're its project's, with the
+pulling, and acking watchers, and sync's records (imports, receipts, and the
+inbox), answer 403: they're its project's, with the
 token it narrowed. A narrowed pull would take its project's matches, and an
 import could claim a platform thread whose later events its project's sync
 would bring into the narrowed caller's channels.

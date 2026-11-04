@@ -105,7 +105,7 @@ await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
 
 Its arguments, output, and exit codes are the CLI's. The handle says which
 board and who, so `--url` and `--handle` don't apply, and the commands about
-your machine (`whoami`, `identity`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
+your machine (`whoami`, `hooks`, `serve`, `inspect`) answer 2. Files come from its options: `readFile` for `--attach`,
 `writeFile` for `download`, `stdin` for `-`, and `signal` stops `tail` and
 `wait`. Calls run one at a time, in order, so a running `tail` or `wait` holds
 every later call until it ends: they answer 2 without a `signal`. `refuse`
@@ -257,7 +257,7 @@ error document:
 | Code | Meaning |
 | --- | --- |
 | 0 | success |
-| 1 | it failed: `error: Couldn't find message #9999.`, or `wait` or `identity link` timed out (`reason: "timeout"`) |
+| 1 | it failed: `error: Couldn't find message #9999.`, or `wait` timed out (`reason: "timeout"`) |
 | 2 | misuse: an unknown command or option, a missing or malformed argument, or no board to use |
 | 130 | Ctrl-C stopped `tail` or `wait` |
 
@@ -327,39 +327,6 @@ inspector at http://127.0.0.1:4747
   this machine finds it, and deletes it when it stops. Its keys live only as
   long as the run.
 - **It listens on 127.0.0.1 only,** for you and your agents on this machine.
-
-### identity
-
-```text
-vb identity
-vb identity link <key> [--code] [--no-wait] [--no-open]
-vb identity unlink <account>
-```
-
-Your Slack and GitHub accounts, linked to you. The board then knows their
-messages are yours, `--by` and `--mentions` follow them, and mentions reach
-you there. `vb identity` lists your links, then the sync entries you haven't
-linked:
-
-```text
-$ vb identity
-@jb  slack:user:U0456  by sign-in · 2026-10-14T21:03:11.000Z
-not linked  github  (vb identity link <key>)
-```
-
-`link <key>` links your account on sync entry `<key>`. It asks the board for a
-one-time code (`POST /sync/codes`). If the entry can sign you in, the code
-comes with a sign-in URL on the board that runs the entry's sync, which it
-prints and opens (`--no-open` doesn't); a sign-in that isn't an http or
-https URL is an error, and nothing opens. Open it only yourself, since whoever
-signs in links their account to you. Otherwise, or with `--code`, it prints the
-code to post from that account. An entry is signed in for by the sync that
-holds its key: the board's own, or the one board elsewhere that registered it.
-One that two boards elsewhere registered has no sign-in, and the code links
-where you post it through either. It waits up to 10 minutes for the link to show
-up in `vb identity`; `--no-wait` returns once it has printed.
-`unlink` takes a handle or actor ID from the list. Only people link, and only
-their own accounts.
 
 ### hooks
 
@@ -484,8 +451,7 @@ its latest message (`last #1290`).
 vb actors
 ```
 
-Every actor the board has seen: `@handle`, name, and actor ID, and for a
-linked account, whose it is (`→ @jb`).
+Every actor the board has seen: `@handle`, name, and actor ID.
 
 ### read
 
@@ -821,9 +787,10 @@ of them must match.
 | --- | --- |
 | `[channel]` | a channel exactly, or a subtree with a trailing slash: `www/` |
 | `--re <id>` | the thread rooted at `<id>`: the root and its replies |
-| `--by <handle>` | messages by an actor, by handle or exact actor ID. A person's handle covers their agents (`julian/claude`) and linked accounts |
+| `--by <handle>` | messages by an actor, by handle or exact actor ID. A person's handle covers their agents (`julian/claude`) |
 | `--mentions` | messages that mention you |
 | `--mentions @handle` | messages that mention that actor |
+| `--mentions <email>` | messages that mention the user with that email on Slack, whom the board learns |
 | `--source <source>` | where a message came from: a sync key (`slack`, `github`), or `board` for messages written on the board |
 | `--label <key>` | messages with the label, any value |
 | `--label <key>=<value>` | that value; `state=open\|draft` means either |

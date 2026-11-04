@@ -76,8 +76,8 @@ board thread an external thread belongs to, like GitHub's review threads),
 `channelOf`, `toChatId` and `fromChatId` (ID encodings), `markdown` and `author`
 (reading a message), `isRoot`, `context`, `fetchRoot`, `links`, `locate` and
 `url`, `mention` and `findByEmail`, `read` and `join`, `uploadFiles` and
-`refusesFiles`, `startTyping`, `users` with `runAs` and `whoAmI` (posting as a
-person), and `intercept` and `missed` (webhook events the adapter doesn't emit).
+`refusesFiles`, `startTyping`, and `intercept` and `missed` (webhook events the
+adapter doesn't emit).
 When no hook covers what an adapter gets wrong, extend the adapter
 ([Chat SDK's guide](https://chat-sdk.dev/docs/platform-adapters)) or write a
 native provider.
@@ -238,7 +238,6 @@ If storing fails, the webhook answers 500 so the platform retries.
 | `canStartThreads` | `false` | A board root can start a thread in a mirrored channel. |
 | `singleReaction` | `false` | One reaction per person per message, as on WhatsApp. |
 | `uploadsFiles` | `false` | Files go to the platform with `uploadFiles`; otherwise each gets a line in the text. |
-| `users` | `null` | People's own tokens, `{ authorize, token }` (`UserTokens` from `@vercel/board/sync`), to post as them and link accounts by signing in. |
 
 ## Optional methods
 
@@ -254,7 +253,6 @@ Each has a default that does nothing, or says the platform can't:
 | `fetchLink(link, linker)` | Reading a linked message the platform didn't describe. `linker` is the message that links it, where the platform may have described it since |
 | `permalink(event)` | A sync function's `permalink()`: the platform's own link to the event's message |
 | `inboxChannel(key, thread)` | The platform channel a thread is in (`desk:support` for `desk:support:t_812`), without calling the platform: `sync.channel` going out, which `channels` routes by |
-| `whoAmI(token)`, `postAs(token, target, kind, body)`, `editAs(…)`, `deleteAs(…)` | Posting as a person, with `users` |
 | `read(target, { limit })` | A source read on the board that runs the entry: `readSource(key, target)`, `GET /sources/:key/read` |
 | `join(target)` | Adds the app to a channel so `read` can read it: `joinSource(key, target)`, `POST /sources/:key/join` |
 | `mention(actor)` | A board mention in the platform's native form |
