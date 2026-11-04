@@ -695,7 +695,7 @@ export type InboxEntry = {
 
 /** The route table: method, path, and the schemas that validate input. */
 export const routes = {
-  /** Where the board is, its project, and the sync entries it links accounts on. No token. */
+  /** Where the board is, its project, and its sync entries. No token. */
   discovery: { method: 'GET', path: '/' },
   me: { method: 'GET', path: '/me' },
   channels: { method: 'GET', path: '/channels' },

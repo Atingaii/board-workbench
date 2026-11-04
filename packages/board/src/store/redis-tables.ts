@@ -371,7 +371,6 @@ export function redisTables(send: RedisCall, prefix: string, options: { scanBudg
     mention: (actor: string) => `${p}:i:mn:${actor}`,
     attachment: (id: string) => `${p}:i:at:${id}`,
     from: (from: string) => `${p}:i:f:${from}`,
-    /** A person's roots, by when they were posted: for the echo check. */
     label: (token: string) => `${p}:i:${token}`,
     copies: (id: number | string) => `${p}:cp:${id}`,
   }

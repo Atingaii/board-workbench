@@ -228,7 +228,7 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   `typing(messages, status)`, what only board()'s sync can do, which a backend
   answers those methods through; `accessNow(principal)`, board()'s policy for
   a principal the backend stored (a schedule's creator at each send, a
-  registrant at each event and pull, the syncs that link accounts), null once
+  registrant at each event and pull, the syncs discovery lists), null once
   it may do nothing; `project()`, the board's Vercel project; `handle(caller)`,
   a handle through board(), as a verified caller (a schedule's creator, whose
   posts keep their IDs) or its own code, so what a backend writes for someone
@@ -262,7 +262,7 @@ The backends board ships:
   `board()` verified, and what it does outside requests that needs the policy,
   it asks `board()` through the binding: each event's access for registered
   watchers, each pull's, a schedule's send-time re-check and revocation, and
-  which registered syncs may still link accounts. A schedule's send goes
+  which registered syncs discovery still lists. A schedule's send goes
   through `board()`, as its creator, on the binding's handle, so the
   middleware sees it. A verified caller writes as its actor; `{ self }` writes as `board:client` from the handle,
   `board:client:<profile>` from `as(profile)`, `board:watch:<id>` from a

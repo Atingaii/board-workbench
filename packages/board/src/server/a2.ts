@@ -633,7 +633,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       // A registered watcher sees only what its registrant may read.
       if (!principal.access.anywhere('read'))
         throw forbidden("this token can't read anywhere, so a watcher it registers would see nothing")
-      // A sync's entries are where the board links people's accounts, its sign-in included: only for one that may sync.
+      // A sync's entries speak for platform users, and discovery lists them: only for one that may sync.
       if ((body.sync?.length ?? 0) > 0 && !principal.access.anywhere('sync')) throw forbidden("this token can't register a sync: it needs sync somewhere")
       // A key names one sync's platform locations: this board's own sync's keys are its own.
       const taken = body.sync?.find((entry) => binding.sync.some((own) => own.key === entry.key))
