@@ -372,6 +372,81 @@ describe('vercel()', () => {
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
+  describe('a board by its name', () => {
+    /** A handle on the team's board named `name`, through vercel(), as `principal`. */
+    const named = (api: ReturnType<typeof fakeMessageboard>, name: string, principal = 'user:u_jb') =>
+      board({ name, backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
+    const lookups = (api: ReturnType<typeof fakeMessageboard>, request: string) => api.requests.filter((made) => made === request).length
+
+    it('uses the board with that name, whatever its case, apart from the default board, and looks it up once', async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+      const security = named(api, 'security')
+      await security.post('dev', { text: 'rotate the keys' })
+      await security.post('dev', { text: 'done' })
+      expect(lookups(api, 'GET /boards')).toBe(1)
+      expect((await named(api, 'SECURITY').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages).toEqual([])
+      expect(await security.discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_sec?teamId=team_test` })
+      // The default board is named General, so its name finds it too.
+      expect(await named(api, 'general').discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
+    })
+
+    it('makes the board the first time its project uses it, granted to that project in its environment', async () => {
+      const api = fakeMessageboard()
+      await named(api, 'security', 'project:prj_pong:production').post('dev', { text: 'from pong' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // Another process of the project finds it, and makes nothing.
+      await named(api, 'security', 'project:prj_pong:production').post('dev', { text: 'again' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // It's the team's: a person reads it.
+      expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from pong', 'again'])
+      // The project's preview isn't granted it, and is told what fixes that.
+      await expect(named(api, 'security', 'project:prj_pong:preview').post('dev', { text: 'from a preview' })).rejects.toMatchObject({
+        status: 403,
+        code: 'board_not_granted',
+        origin: 'handle',
+        hint: expect.stringContaining('grant it to this project'),
+      })
+    })
+
+    it('tells a person there is no board with that name, and makes none', async () => {
+      const api = fakeMessageboard()
+      await expect(named(api, 'security').post('dev', { text: 'hi' })).rejects.toMatchObject({ status: 404, code: 'no_board', origin: 'handle' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+      await expect(named(api, 'security', 'project:prj_pong:production').messages({ channel: 'dev' })).resolves.toMatchObject({ messages: [] })
+    })
+
+    it('picks none of the boards an older name is shared by, and names them', async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'general', id: 'brd_old', granted: ['prj_pong:production'] }] })
+      for (const principal of ['user:u_jb', 'project:prj_pong:production'])
+        await expect(named(api, 'General', principal).post('dev', { text: 'hi' })).rejects.toMatchObject({
+          status: 409,
+          code: 'ambiguous_board_name',
+          origin: 'handle',
+          message: expect.stringMatching(/brd_test, brd_old|brd_old, brd_test/),
+        })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+    })
+
+    it("takes another team's board by acme/security, and names the team once", async () => {
+      const api = fakeMessageboard({ slug: 'acme', boards: [{ name: 'security' }] })
+      const teams: (string | null)[] = []
+      const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { searchParams } = new URL(String(input instanceof Request ? input.url : input))
+        teams.push(searchParams.get('slug') ?? searchParams.get('teamId'))
+        return as(api, 'user:u_jb')(input, init)
+      }) as typeof globalThis.fetch
+      const acme = board({ name: 'acme/security', backend: vercel({ api: API, fetch }) })
+      await acme.post('dev', { text: 'for acme' })
+      expect(new Set(teams)).toEqual(new Set(['acme']))
+      expect(() => board({ name: 'acme/security', backend: vercel({ team: 'team_test', api: API, fetch }) })).toThrow('name the team once')
+      // Its own board ID wins over the name, as the CLI's URL form passes it.
+      await handleOn(api).post('dev', { text: 'on the default board' })
+      const byId = board({ name: 'acme/nope', backend: vercel({ board: 'brd_test', team: 'acme', api: API, fetch }) })
+      expect((await byId.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['on the default board'])
+    })
+  })
+
   it("says the team's ID in its discovery, though it's named by its slug", async () => {
     const api = fakeMessageboard({ slug: 'acme' })
     const team = board({ backend: vercel({ team: 'acme', api: API, fetch: as(api, 'user:u_jb') }) })

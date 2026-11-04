@@ -119,6 +119,17 @@ describe('board() and its backend', () => {
     expect(calls.at(-1)!.caller).toEqual({ self: 'deploys', profile: 'deploys', origin: { via: { kind: 'client', name: 'deploys' } } })
   })
 
+  it("hands a backend of your own the board's name once, when it binds, and refuses a name that isn't one", () => {
+    const bound: (string | null)[] = []
+    const mine = () => ({ routes: [], keeps: true, bind: (binding: { name: string | null }) => void bound.push(binding.name) }) as unknown as Backend
+    board({ backend: mine(), name: 'acme/security', url: BOARD_URL })
+    board({ backend: mine(), url: BOARD_URL })
+    expect(bound).toEqual(['acme/security', null])
+    for (const name of ['', 'a/b/c', '/security', 'acme/', 'x'.repeat(65)])
+      expect(() => board({ backend: mine(), name, url: BOARD_URL }), name).toThrow("isn't a board's name")
+    expect(bound).toHaveLength(2)
+  })
+
   it('takes a backend made from another, with one method changed', async () => {
     const kept = a2({ store: memory() })
     const backend: Backend = {

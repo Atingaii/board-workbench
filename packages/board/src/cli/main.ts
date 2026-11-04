@@ -9,6 +9,7 @@ import { boardUrl, connect, handFetch, handLogin, vercelProjectFile } from '../c
 import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
+import { isBoardName } from '../server/board.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
@@ -48,6 +49,10 @@ function rerun(...extra: string[]): string[] {
   const at = typed.indexOf('--')
   return [...cli(), ...(at === -1 ? [...typed, ...extra] : [...typed.slice(0, at), ...extra, ...typed.slice(at)])]
 }
+
+/** A command line without its `--board` and that option's value. */
+const withoutBoard = (argv: string[]): string[] =>
+  argv.filter((arg, at) => arg !== '--board' && argv[at - 1] !== '--board' && !arg.startsWith('--board='))
 
 /** What the parser accepts: every option, by name (`commands.ts`). */
 const OPTIONS = options
@@ -545,6 +550,13 @@ function failureOf(error: unknown): Failure {
         return own('auth', 'token_unavailable')
       case 'no_board':
         return own('not_found', 'board_not_found')
+      case 'board_not_granted':
+        return own('permission', 'board_not_granted')
+      case 'ambiguous_board_name':
+        // The CLI picks one by its URL, which names its ID, in place of the name.
+        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: withoutBoard(rerun('--url', 'https://api.vercel.com/v1/messageboard/boards/<ID>')) }])
+      case 'invalid_board_name':
+        return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
         return own('network', 'network_error')
       case 'invalid_duration':
@@ -659,9 +671,11 @@ function profileFlag(): ProfileOption | undefined {
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
-  const configured = url ?? (team === undefined ? configuredUrl() : null)
+  const name = boardNameFlag(url, team)
+  // --board names a team's board as --scope does, so it goes before BOARD_URL too.
+  const configured = url ?? (team === undefined && flags.board === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }), ...(name !== undefined ? { name } : {}) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -676,6 +690,21 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
+}
+
+/**
+ * The team's board this run names: `--board`, or `BOARD_NAME`, with `--scope`'s team or the one the
+ * environment finds, unless the name says its own (`acme/security`). A URL names a board itself.
+ */
+function boardNameFlag(url: string | undefined, team: string | undefined): string | undefined {
+  if (flags.board !== undefined && flags.url !== undefined)
+    throw usage("--board names a team's board, and --url a board by its URL: pass one of them.", { reason: 'conflicting_options' })
+  const given = flags.board ?? (process.env.BOARD_NAME || undefined)
+  if (given === undefined || url !== undefined) return undefined
+  const from = flags.board !== undefined ? '--board' : 'BOARD_NAME'
+  if (!isBoardName(given)) throw usage(`${from} ${given} isn't a board's name, such as security or acme/security.`)
+  if (team !== undefined && given.includes('/')) throw usage(`${from} ${given} names its team: leave out --scope.`, { reason: 'conflicting_options' })
+  return given
 }
 
 /** For Vercel's API, `token` in place of your own credentials: a board token's secret. */
@@ -1335,8 +1364,8 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     const command = canonical(word)
     current = { command, args }
     if (io.board) {
-      if (flags.url || flags.handle)
-        throw usage(`--${flags.url ? 'url' : 'handle'} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
+      const given = flags.url ? 'url' : flags.board !== undefined ? 'board' : flags.handle ? 'handle' : null
+      if (given) throw usage(`--${given} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
       if (command !== undefined && MACHINE.has(command))
         throw usage(`${command} isn't available in-process: it's about the machine ${named()} runs on.`, { reason: 'not_available', next: [] })
     }

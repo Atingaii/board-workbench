@@ -78,6 +78,12 @@ export type InboxDelivery = { event: ExternalEvent; raw: unknown }
 
 /** What a backend gets from the board it serves: once, in memory, when board() is created. */
 export type BoardBinding = {
+  /**
+   * Which of the team's boards this is, as `board({ name })` says it: `security`, `acme/security`
+   * for another team's, or null for the team's default board. A backend that keeps one board,
+   * or reaches one by its URL, may leave it unread.
+   */
+  name: string | null
   /** What runs on this board's events, by ID: this project's watchers, and sync's outbound at `SYNC` when it syncs. */
   subscriptions: Record<string, Subscription>
   /**

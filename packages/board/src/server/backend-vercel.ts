@@ -104,9 +104,15 @@ type ApiRegistration = { owner: string; url: string | null; path?: string; branc
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
 export type VercelOptions = {
-  /** The team whose board it is: its ID (`team_…`) or its slug. In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
+  /**
+   * The team whose board it is: its ID (`team_…`) or its slug. By default the one `board({ name })`
+   * names (`acme/security`), or in Node your deployment's, or `VERCEL_ORG_ID`.
+   */
   team?: string
-  /** The board's ID. By default the team's board, which `GET /boards` names. */
+  /**
+   * The board's ID, which wins over `board({ name })`. By default the board that name names, or
+   * the team's default board, which `GET /boards` names.
+   */
   board?: string
   /** Vercel's API, `https://api.vercel.com` by default. */
   api?: string
@@ -231,8 +237,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** This board's own code's names, which a caller here never takes as its profile. */
   const own = new Set<string>()
 
+  /** The board `board({ name })` names, and its team when it's another's (`acme/security`): null for the team's default board. */
+  const boardName = (): { team: string | null; board: string } | null => {
+    const name = options.board ? null : (binding?.name ?? null)
+    if (name === null) return null
+    const slash = name.indexOf('/')
+    return slash === -1 ? { team: null, board: name } : { team: name.slice(0, slash), board: name.slice(slash + 1) }
+  }
+
   let team: Promise<string | null> | null = null
-  const teamId = () => (team ??= options.team ? Promise.resolve(options.team) : (environment?.team() ?? Promise.resolve(null)))
+  const teamId = () => {
+    const given = options.team ?? boardName()?.team
+    return (team ??= given ? Promise.resolve(given) : (environment?.team() ?? Promise.resolve(null)))
+  }
 
   /** One request to the API, as `who`. Its errors are the API's own, with its status and code. */
   async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | undefined>; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
@@ -280,22 +297,62 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return out
   }
 
+  /**
+   * The board named `name` in the team: the one the API lists for it. Where it lists none, this
+   * project's own code makes it (granted to the project, in its environment), and a person is
+   * told there's none to use. Older boards can share a name, and then none is picked.
+   */
+  async function boardNamed(who: Who, name: string): Promise<string> {
+    if (!/^[^/]{1,64}$/.test(name))
+      throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(name)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
+    // One answer holds every board with the name, whatever its case.
+    const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
+    if (boards.length > 1) {
+      // Their IDs as the API gave them, where they look like IDs: what picks one.
+      const ids = boards.map((found) => found.id).filter((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id))
+      throw new HttpError(409, 'ambiguous_board_name', `This team has ${boards.length} boards named ${name}${ids.length === boards.length ? `: ${ids.join(', ')}` : ''}.`, {
+        hint: "Pick one by its ID, with vercel({ board: '<id>' }).",
+        origin: 'handle',
+      })
+    }
+    if (boards[0]) return boards[0].id
+    if ((await self(who)).actor.principal.type !== 'project')
+      throw new HttpError(404, 'no_board', `There's no board named ${name} on this team that you can use.`, {
+        hint: 'Check the name, or run the project that uses it: it makes the board.',
+        origin: 'handle',
+      })
+    try {
+      const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
+      return made.id
+    } catch (error) {
+      if (error instanceof HttpError && error.code === 'board_not_granted')
+        throw new HttpError(403, 'board_not_granted', `This project isn't granted the board named ${name}.`, {
+          hint: 'Ask someone on the team to grant it to this project in this environment.',
+          origin: 'handle',
+        })
+      throw error
+    }
+  }
+
   let board: Promise<string> | null = null
   /**
-   * The board's ID: the one given, or the team's, which the API names only to those it lets in. A
-   * team with none gets one the first time a person uses it, as the API asks of its clients; a
-   * project can't make it, and needs a person to grant it the board anyway.
+   * The board's ID: the one given, the one `board({ name })` names, or the team's, which the API
+   * names only to those it lets in. A team with none gets one the first time a person uses it, as
+   * the API asks of its clients; a project can't make it, and needs a person to grant it the board
+   * anyway. Each is asked for once.
    */
   const boardId = (who: Who) =>
     (board ??= options.board
       ? Promise.resolve(options.board)
-      : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
-          if (defaultBoardId) return defaultBoardId
-          if ((await self(who)).actor.principal.type === 'project')
-            throw new HttpError(404, 'no_board', "Vercel's API names no board this project may use: ask someone on the team to grant it the team's board, or pass `board`")
-          const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
-          return made.id
-        })).catch((error: unknown) => {
+      : boardName()
+        ? boardNamed(who, boardName()!.board)
+        : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
+            if (defaultBoardId) return defaultBoardId
+            if ((await self(who)).actor.principal.type === 'project')
+              throw new HttpError(404, 'no_board', "Vercel's API names no board this project may use: ask someone on the team to grant it the team's board, or pass `board`")
+            const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
+            return made.id
+          })).catch((error: unknown) => {
       board = null
       throw error
     })
@@ -1514,6 +1571,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
       const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
       if (kinds.includes('sync')) throw new Error("vercel: Vercel's boards don't run sync yet: leave `sync` out")
+      // A name with its team says the team, as `team` does: one of them is enough.
+      if (!options.board && options.team && next.name?.includes('/'))
+        throw new Error(`vercel: the board's name ${next.name} says its team, and so does team ${options.team}: name the team once`)
       for (const id of Object.keys(next.subscriptions)) own.add(id)
       tails = Object.fromEntries(
         Object.entries(next.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),

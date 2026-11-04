@@ -20,6 +20,14 @@ export type BoardOptions = PolicyOptions & {
    */
   backend?: Backend
   /**
+   * Which of the team's boards this is: `security` is this team's board named security, and
+   * `acme/security` team acme's. Without one, the team's default board. A name is 1 to 64
+   * characters with no `/`, and matches whatever its case. The backend reads it when board()
+   * binds it: `vercel()` finds that board, a board on `http()` is the one at its URL, whatever its
+   * name.
+   */
+  name?: string
+  /**
    * Runs on every post and edit before it reaches the backend, whatever it came from: requests (a
    * board on `http()` using this one included), watchers, schedules, the handle, and sync's imports.
    * Each calls `next()` to pass the write on; one that doesn't drops it.
@@ -90,6 +98,12 @@ export type BoardContext = {
 /** How long a handle's live events wait for the next, in seconds, before asking again. */
 const EVENTS_WAIT_S = 25
 
+/** A board's name, after its team's and a `/` for another team's: 1 to 64 characters, no `/`. */
+const BOARD_NAME = /^(?:[^/]+\/)?[^/]{1,64}$/
+
+/** Whether `name` is a board's name: `security`, or `acme/security` for team acme's. */
+export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
+
 /**
  * A board for this project, on `backend`: `a2({ store, … })` keeps it in this deployment, and
  * `http(url)` uses another board that speaks the protocol. What it returns is the handle: its
@@ -97,6 +111,8 @@ const EVENTS_WAIT_S = 25
  * at module scope, or one per tenant for a host.
  */
 export function createBoard(options: BoardOptions, runtime: Runtime): Board {
+  if (options.name !== undefined && !isBoardName(options.name))
+    throw new Error(`board: ${JSON.stringify(options.name)} isn't a board's name: one is 1 to 64 characters with no /, after its team and a / for another team's board (acme/security)`)
   const backend = options.backend ?? runtime.http()
   const policy = createPolicy(options, backend.keeps, runtime.serving, backend.trust ?? null)
   const watch = options.watch ?? {}
@@ -190,6 +206,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   /** This board's sync entries, as its sync and discovery see them. */
   const ownEntries: SyncEntry[] = Object.entries(entries).map(([key, entry]) => ({ key, platform: entry.platform }))
   const binding: BoardBinding = {
+    name: options.name ?? null,
     subscriptions,
     run: async (id, event, meta) => (await server()).run(id, event, meta),
     receive: async (key, item, meta) => (await server()).receive(key, item, meta),
