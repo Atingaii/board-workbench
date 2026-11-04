@@ -18,7 +18,7 @@ import { ExternalAuthor, ExternalEvent, ExternalTarget, Link as LinkSchema, LINK
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link } from '../contract/external.ts'
 import type { Actor, Channel, ExternalCopy, Message } from '../contract/folds.ts'
-import type { AccessSummary } from '../server/access.ts'
+import type { AccessSummary, Can as AccessCan } from '../server/access.ts'
 
 /**
  * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
@@ -172,6 +172,29 @@ export const SchedulesQuery = z.object({
   by: z.string().optional(),
   /** Include done and canceled schedules. */
   all: flag.optional(),
+})
+
+const CanGrant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
+/** What a grant or token lets do: `'all'`, a list for every channel, or a map from channel pattern to one. board() checks the patterns. */
+const Can = z.union([CanGrant, z.record(z.string().min(1).max(300), CanGrant)])
+const ClaimValue = z.string().min(1).max(1000)
+
+/** Who a grant lets in: an issuer (`vercel`, `github`, or an https URL) and the claims its tokens carry, exactly. */
+export const GrantBody = z.object({
+  issuer: z.string().min(1).max(1000),
+  claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])),
+  can: Can.optional(),
+})
+
+/** A token acting as the caller: what it may do, and the profile and session every request with it writes as. */
+export const TokenBody = z.object({
+  name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, 'a token name is up to 64 letters, numbers, and ._-'),
+  can: Can.optional(),
+  profile: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,31}$/, 'a profile is up to 32 letters, numbers, and hyphens').optional(),
+  avatar: z.string().url().max(2048).optional(),
+  session: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/, 'a session is up to 128 letters, numbers, and _.:-').optional(),
+  /** How long it lives: `30d` by default, at most `90d`. */
+  expires: Duration.optional(),
 })
 
 export const SyncBody = z.object({ target: z.string().min(3).max(300) })
@@ -430,6 +453,10 @@ export type PostInput = z.input<typeof PostBody>
 export type ScheduleInput = z.input<typeof ScheduleBody>
 export type ScheduleBodyOutput = z.output<typeof ScheduleBody>
 export type SchedulesQueryInput = z.input<typeof SchedulesQuery>
+/** What `grant` takes: `can` as `access` writes it. */
+export type GrantInput = Omit<z.input<typeof GrantBody>, 'can'> & { can?: AccessCan }
+/** What `token` takes: `can` as `access` writes it. */
+export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan }
 export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */
@@ -458,6 +485,33 @@ export type ScheduleView = {
   by: { actor: string; principal: string; profile: string | null; session: string | null }
   author: ActorView
   createdAt: string
+}
+
+/** A grant: who it lets in, what it lets them do, and who set it when. */
+export type GrantView = {
+  id: string
+  issuer: string
+  claims: Record<string, string | string[]>
+  can: AccessSummary
+  /** The actor that last set it. */
+  by: string
+  at: string
+}
+
+/** A token, as its minter and `manage` see it: never its secret. */
+export type TokenView = {
+  id: string
+  name: string
+  /** What it may do now: its minter's access, as the board's rules and grants give it, narrowed by the token's `can`. `{}` once its minter may do nothing. */
+  can: AccessSummary
+  profile: string | null
+  session: string | null
+  /** The actor that minted it, and when. */
+  by: string
+  at: string
+  expiresAt: string
+  /** The token it was minted with, which it stops with. */
+  parent: string | null
 }
 
 /** `kind` says who wrote it: a `person` or a platform user (`external`), an agent (`profile`), or a deployment or workflow. */
@@ -722,6 +776,14 @@ export const routes = {
   schedules: { method: 'GET', path: '/schedules', query: SchedulesQuery },
   /** Its creator, or manage in its channel, may cancel a schedule. Canceling one that's done is a no-op. */
   cancelSchedule: { method: 'POST', path: '/schedules/:id/cancel' },
+  /** Grants need manage in every channel. Setting one with the same issuer and claims changes its `can`. */
+  grants: { method: 'GET', path: '/grants' },
+  createGrant: { method: 'POST', path: '/grants', body: GrantBody },
+  revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
+  /** Your tokens, or every one with manage in every channel. A token acts as whoever minted it. */
+  tokens: { method: 'GET', path: '/tokens' },
+  createToken: { method: 'POST', path: '/tokens', body: TokenBody },
+  revokeToken: { method: 'POST', path: '/tokens/:id/revoke' },
   /** The caller's own post with the client ID it gave: what `POST /messages` answered, for telling a retry before posting. */
   posted: { method: 'GET', path: '/posts/:id' },
   /** Raw platform events in a sync key's inbox, newest first: the caller's own, and the board's with `sync` everywhere. */

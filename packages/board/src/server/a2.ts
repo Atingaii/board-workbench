@@ -5,6 +5,7 @@ import { A2Error, idempotentId, reducer } from 'experimental-a2'
 import { consumer, createServer, type A2Scheduler, type ConsumerContext } from 'experimental-a2/server'
 import { boardContract, inboxContract, INBOXES_SESSION, inboxSession, SCHEDULES_SESSION, type InboxEvent } from '../contract/contract.ts'
 import { BOARD_SESSION, type BoardEvent, type BoardEvents } from '../contract/events.ts'
+import { createTrust } from './trust.ts'
 import type { ExternalAuthor, Link, Origin } from '../contract/external.ts'
 import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
 import { type Actor, type ExternalCopy, type Message } from '../contract/folds.ts'
@@ -14,9 +15,9 @@ import type { Protocol } from '../api/protocol.ts'
 import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
 import { actorSeen } from './actors.ts'
-import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller } from './backend.ts'
+import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
 import { BoardError } from '../client/client.ts'
-import { attachmentBody, attachmentNotFound, finishUpload, readUpload, startUpload, writeUpload, type BlobStore } from './blob.ts'
+import { attachmentBody, attachmentNotFound, finishUpload, ownUpload, readUpload, startUpload, writeUpload, type BlobStore, type Uploader } from './blob.ts'
 import { badRequest, forbidden, HttpError, notFound, toErrorResponse } from './errors.ts'
 import { eventView, foldEvent, indexOf, loadBefore, OWN_CODE, pollFeed, readableFilter, ref, toMessageFilter, view, viewedBy, viewLinkedIds } from './feed.ts'
 import { createReads, tablesConsumer } from './reads.ts'
@@ -303,6 +304,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers: [inbound],
   })
+  // Who the board trusts beside its code's rules: grants, and the tokens it issued.
+  const access = createTrust({ store: log, issuers: () => binding.issuers(), accessNow: (principal) => binding.accessNow(principal) })
   const inboxes = inboxServer.session(INBOXES_SESSION)
   /** The inboxes this instance knows have an `inbox.opened`, so most pushes write nothing more. */
   const opened = new Set<string>()
@@ -316,8 +319,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
    * Whether `principal` may have a file: one it uploaded, or one a message it
    * can read carries. A deleted message drops its files, so it no longer counts.
    */
-  async function attachmentReadable(principal: Granted, id: string, uploadedBy: string | null) {
-    if (principal.access.readsAll || uploadedBy === principal.id) return true
+  async function attachmentReadable(principal: Granted, id: string, uploader: Uploader) {
+    if (principal.access.readsAll || ownUpload(uploader, principal)) return true
     await reads.ensure()
     return (await reads.tables.withAttachment(id)).some((message) => principal.access.readable(message.channel))
   }
@@ -354,8 +357,8 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
   const attachmentsFor = (principal: Granted, ids: readonly string[] | undefined) =>
     Promise.all(
       [...new Set(ids ?? [])].map(async (id) => {
-        const { attachment, uploadedBy } = await readUpload(blob, id)
-        if (!(await attachmentReadable(principal, id, uploadedBy))) throw attachmentNotFound(id)
+        const { attachment, ...uploader } = await readUpload(blob, id)
+        if (!(await attachmentReadable(principal, id, uploader))) throw attachmentNotFound(id)
         return attachment
       }),
     )
@@ -551,13 +554,13 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     },
     async edit(caller, { id, text, revision }) {
       const identity = await identityOf(caller)
-      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'edit')
+      const authorized = await authorizeOwn(writes, identity, messageAt(id), 'edit')
       const { unknownMentions } = await writeEdit(writes, { identity, authorized, text, revision })
       return { ok: true as const, ...(unknownMentions ? { unknownMentions } : {}) }
     },
     async delete(caller, { id, revision }) {
       const identity = (await identityOf(caller))
-      const authorized = await authorizeOwn(writes, identity.principal, messageAt(id), 'delete')
+      const authorized = await authorizeOwn(writes, identity, messageAt(id), 'delete')
       await writeDelete(writes, { identity, authorized, revision })
       return { ok: true }
     },
@@ -588,7 +591,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
         const at = messageAt(query.re)
         root = (await authorizeMessage(writes, principal.access, 'read', at)).message.re ?? at
       }
-      const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, principal)
+      const visible = (schedule: Schedule) => principal.access.readable(schedule.channel) || createdBy(schedule, { principal, actor })
       return { schedules: (await schedules.list({ ...query, ...(root !== undefined ? { root } : {}) }, visible)).map((schedule) => blindSchedule(schedule, principal.access, actor.id)) }
     },
     async cancelSchedule(caller, { id }) {
@@ -596,27 +599,33 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
       const answer = await schedules.cancel(identity, scheduleAt(id))
       return { ...answer, schedule: blindSchedule(answer.schedule, identity.principal.access, identity.actor.id) }
     },
+    grants: async (caller) => access.grants(await identityOf(caller)),
+    createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
+    revokeGrant: async (caller, input) => access.revokeGrant(await identityOf(caller), input),
+    tokens: async (caller) => access.tokens(await identityOf(caller)),
+    createToken: async (caller, body) => access.createToken(await identityOf(caller), body),
+    revokeToken: async (caller, input) => access.revokeToken(await identityOf(caller), input),
     async upload(caller, { data, name, type }) {
       const { principal } = (await identityOf(caller))
       // A file is no use until a post or an import carries it, so uploading needs `post` or `sync` somewhere.
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
       // Sync's own imports are fetched in this process, with no request to fit under, so they may be bigger.
       const max = ownSync(caller) ? IMPORT_BYTES_MAX : ATTACHMENT_BYTES_MAX
-      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id }, max) }
+      return { attachment: await writeUpload(blob, { data, name, type, uploadedBy: principal.id, uploadedWith: await access.chain(principal) }, max) }
     },
     async uploadStart(caller, { name, type, size }) {
       const { principal } = (await identityOf(caller))
       if (!principal.access.anywhere('post') && !principal.access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
-      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id })
+      return startUpload(blob, { name: name ?? null, type: type ?? null, size, uploadedBy: principal.id, uploadedWith: await access.chain(principal) })
     },
     async uploadFinish(caller, { id }) {
       const { principal } = (await identityOf(caller))
-      return { attachment: await finishUpload(blob, id, principal.id) }
+      return { attachment: await finishUpload(blob, id, principal) }
     },
     async attachment(caller, { id }) {
       const { principal } = (await identityOf(caller))
-      const { attachment, uploadedBy } = await readUpload(blob, id)
-      if (!(await attachmentReadable(principal, attachment.id, uploadedBy))) throw attachmentNotFound(attachment.id)
+      const { attachment, ...uploader } = await readUpload(blob, id)
+      if (!(await attachmentReadable(principal, attachment.id, uploader))) throw attachmentNotFound(attachment.id)
       return { attachment, data: await attachmentBody(blob, attachment.id) }
     },
     async watchers(caller) {
@@ -1225,6 +1234,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
   return {
     methods,
     schedules,
+    trust: access.trust,
     /** The scheduler's callback, for every A2 server behind the board. */
     scheduler: options.scheduler
       ? options.scheduler.handler(...servers)
@@ -1278,6 +1288,12 @@ export function a2(options: A2Options = {}) {
     routes: [] as BackendRoute[],
     // The board lives here: board() lets its people and own deployments in by default.
     keeps: true,
+    // Its grants and tokens, in its log: board() checks requests against them.
+    trust: {
+      grants: async () => (await ready()).trust.grants(),
+      token: async (hash: string) => (await ready()).trust.token(hash),
+      live: async (id: string) => (await ready()).trust.live(id),
+    } satisfies Trust,
     bind(given: BoardBinding) {
       if (binding) throw new Error('a2: this backend already serves a board: create one a2() per board()')
       binding = given

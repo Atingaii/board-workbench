@@ -8,6 +8,8 @@ import type {
   DeleteBody,
   EditBody,
   EventsPage,
+  GrantBody,
+  GrantView,
   EventsQuery,
   InboxAckBody,
   InboxEntry,
@@ -45,6 +47,8 @@ import type {
   SyncedView,
   ThreadsQuery,
   ThreadView,
+  TokenBody,
+  TokenView,
   TypingBody,
   UploadStartBody,
   UploadTicket,
@@ -78,6 +82,18 @@ export type Protocol = {
   schedule: { input: Input<typeof ScheduleBody>; output: { schedule: ScheduleView; unknownMentions?: string[] } }
   schedules: { input: Input<typeof SchedulesQuery>; output: { schedules: ScheduleView[] } }
   cancelSchedule: { input: Id; output: { schedule: ScheduleView; canceled: boolean } }
+  /** The board's grants: needs `manage` in every channel. 501 `no_grants` where the board keeps none. */
+  grants: { input: Nothing; output: { grants: GrantView[] } }
+  /** Sets a grant, or the `can` of the one with its issuer and claims: `created` is false for that. */
+  createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView; created: boolean } }
+  /** `revoked` is false when it was already gone. */
+  revokeGrant: { input: Id; output: { revoked: boolean } }
+  /** The caller's tokens, or every one with `manage` in every channel. 501 `no_tokens` where the board issues none. */
+  tokens: { input: Nothing; output: { tokens: TokenView[] } }
+  /** A token acting as the caller, narrowed: the only time its secret shows. */
+  createToken: { input: Input<typeof TokenBody>; output: { token: TokenView; secret: string } }
+  /** It and every token minted with it stop. `revoked` is false when it was already gone. */
+  revokeToken: { input: Id; output: { revoked: boolean } }
   upload: { input: { data: Uint8Array; name: string | null; type: string | null }; output: { attachment: Attachment } }
   attachment: { input: Id; output: { attachment: Attachment; data: Uint8Array | ReadableStream<Uint8Array> } }
   /** A direct upload's ticket: where to `PUT` a file too big for `upload`. 501 `no_direct_uploads` when the blob store can't sign one. */

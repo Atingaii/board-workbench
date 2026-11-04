@@ -15,6 +15,8 @@ import {
   Ref,
   RegisterBody,
   ScheduleBody,
+  GrantBody,
+  TokenBody,
   SchedulesQuery,
   SourceJoinBody,
   SourceReadQuery,
@@ -91,11 +93,15 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'channels':
     case 'actors':
     case 'watchers':
+    case 'grants':
+    case 'tokens':
       return {}
     case 'message':
     case 'posted':
     case 'synced':
     case 'cancelSchedule':
+    case 'revokeGrant':
+    case 'revokeToken':
     case 'attachment':
     case 'uploadFinish':
       return { id }
@@ -118,6 +124,10 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return PostBody.parse(await body())
     case 'schedule':
       return ScheduleBody.parse(await body())
+    case 'createGrant':
+      return GrantBody.parse(await body())
+    case 'createToken':
+      return TokenBody.parse(await body())
     case 'register':
       return RegisterBody.parse(await body())
     case 'edit':
@@ -664,6 +674,12 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       }
       case 'syncImport':
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
+      case 'grants':
+      case 'createGrant':
+      case 'revokeGrant':
+        // A board whose `access` is one function decides alone: a grant it kept would never apply.
+        if (backend.keeps && !policy.takesGrants) throw new HttpError(501, 'no_grants', "this board's access is one function, which decides alone: it keeps no grants")
+        return (backend[name] as (caller: Caller, input: unknown, signal: AbortSignal) => Promise<unknown>).call(backend, caller, input, signal)
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
         const schedule = (made: Protocol['schedule']['input']) => (backend.sendsSchedulesHere === false ? screenSchedule(caller, made, signal) : backend.schedule(caller, made, signal))

@@ -13,7 +13,8 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { actorName, formatAccess, formatConformance, formatEvent, formatSchedule, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { parseScope } from '../server/access.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
@@ -358,6 +359,34 @@ function scheduleId(value: string | undefined): string {
   return value
 }
 
+/** A grant's or token's ID as the board gave it: `g3`, `t12`, or another board's own. */
+function trustId(what: 'grant' | 'token', value: string | undefined): string {
+  const like = what === 'grant' ? 'g3' : 't12'
+  if (value === undefined) throw usage(`Missing the ${what} ID, like ${like}.`, { reason: 'missing_arguments' })
+  if (!/^[^\s/]+$/.test(value)) throw usage(`${value} isn't a ${what} ID like ${like}.`)
+  return value
+}
+
+/** `--can`, as `x-board-scope` writes it: `dev/=read,post;ci/=read`. */
+function canFlag(value: string) {
+  try {
+    return parseScope(value)
+  } catch (error) {
+    throw usage(`${(error as Error).message.replace(/x-board-scope/g, '--can')}.`)
+  }
+}
+
+/** `--claim k=v`, each again: the same name twice is any of its values. */
+function claimPairs(values: string[] | undefined): Record<string, string | string[]> {
+  const claims: Record<string, string[]> = {}
+  for (const value of values ?? []) {
+    const at = value.indexOf('=')
+    if (at <= 0 || at === value.length - 1) throw usage(`Claims look like name=value, and ${value} isn't one.`)
+    ;(claims[value.slice(0, at)] ??= []).push(value.slice(at + 1))
+  }
+  return Object.fromEntries(Object.entries(claims).map(([name, list]) => [name, list.length === 1 ? list[0]! : list]))
+}
+
 /** A time flag: anything `Date` reads, as ISO. */
 function instant(flag: string, value: string): string {
   const time = new Date(value)
@@ -442,6 +471,10 @@ function doing(): string {
     case 'channels':
     case 'actors':
       return `list ${command}`
+    case 'grants':
+      return a === 'create' ? `grant ${b ?? 'an issuer'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
+    case 'tokens':
+      return a === 'create' ? `mint token ${b ?? ''}`.trimEnd() : a === 'revoke' ? `revoke token ${b}` : 'list tokens'
     case 'sources':
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
     case 'download':
@@ -472,6 +505,7 @@ function missing(): string | undefined {
   if (command === 'read' && /^https?:\/\//i.test(a)) return "that link's message on this board"
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
+  if ((command === 'grants' || command === 'tokens') && a === 'revoke' && b !== undefined) return `${command === 'grants' ? 'grant' : 'token'} ${b}`
   if (command === 'download') return `attachment ${a}`
   return undefined
 }
@@ -547,7 +581,13 @@ function failureOf(error: unknown): Failure {
   // What the board said is what to fix: an ambiguous mention names whom it could be.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
-    return theirs('auth', 'login_required', "The board didn't accept your credentials.", [{ instruction: 'Log in again', argv: ['vercel', 'login'] }])
+    return theirs(
+      'auth',
+      'login_required',
+      "The board didn't accept your credentials.",
+      // A token you passed is yours to replace: logging in changes nothing while BOARD_TOKEN is set.
+      process.env.BOARD_TOKEN ? [{ instruction: 'Pass a token it accepts in BOARD_TOKEN, or unset it' }] : [{ instruction: 'Log in again', argv: ['vercel', 'login'] }],
+    )
   if (status === 403) return theirs('permission', 'permission_denied', `You can't ${doing()}.`)
   if (status === 404) {
     const thing = missing()
@@ -620,7 +660,7 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   const team = flags.scope ?? flags.team
   const configured = url ?? (team === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel(team !== undefined ? { team } : {}) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -628,13 +668,25 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   // A team's board in Vercel's API (what `whoami` prints for one) is reached through the API, as `--scope` is.
   const onVercel = vercelBoard(at)
   if (onVercel) {
-    const board = boardAt({ backend: vercel(onVercel) })
+    const board = boardAt({ backend: vercel({ ...onVercel, ...sending(options.token) }) })
     return { url: at as string | null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const handle = options.handle ?? flags.handle
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
+}
+
+/** For Vercel's API, `token` in place of your own credentials: a board token's secret. */
+function sending(token: string | undefined): { fetch?: typeof fetch } {
+  if (token === undefined) return {}
+  return {
+    fetch: (input, init) => {
+      const request = new Request(input, init)
+      request.headers.set('authorization', `Bearer ${token}`)
+      return globalThis.fetch(request)
+    },
+  }
 }
 
 /** A handle on the board this command talks to: `vb()`'s, as `--as` says, or the one `connection()` finds. */
@@ -752,7 +804,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'conformance': {
       if (args.length > 0) throw usage('conformance takes no arguments: pass its channel with --channel.')
-      const report = await conformance(client(), flags.channel ? { channel: flags.channel } : {})
+      // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
+      const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
+      const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken })
       if (flags.json) result(report)
       else out(formatConformance(report))
       return report.ok ? 0 : 1
@@ -914,6 +968,68 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       warnUnknownMentions(schedule.unknownMentions)
       if (flags.json) result({ schedule, outcome: 'scheduled' })
       else out(formatSchedule(schedule))
+      return 0
+    }
+
+    case 'grants': {
+      const [verb, ...rest] = args
+      if (verb === undefined || verb === 'list') {
+        if (rest.length > 0) throw usage(`grants list takes no arguments: ${rest[0]} is one too many.`)
+        const list = await client().grants()
+        if (flags.json) return result({ grants: list }), 0
+        out(list.length === 0 ? 'no grants' : formatGrants(list))
+        return 0
+      }
+      if (verb === 'revoke') {
+        const id = trustId('grant', rest[0])
+        const { revoked } = await client().revokeGrant(id)
+        if (flags.json) result({ grant: id, outcome: revoked ? 'revoked' : 'unchanged' })
+        else out(revoked ? `revoked ${id}` : `${id} is already gone`)
+        return 0
+      }
+      if (verb !== 'create') throw usage(`Unknown command ${verb} for ${named()} grants.`, { reason: 'unknown_command' })
+      const [issuer, extra] = rest
+      if (!issuer) throw usage('Missing the issuer to grant: vercel, github, or an https URL.', { reason: 'missing_arguments' })
+      if (extra !== undefined) throw usage(`grants create takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
+      const claims = claimPairs(flags.claim)
+      if (Object.keys(claims).length === 0)
+        throw usage(`Missing the claims ${issuer}'s tokens must carry: pass --claim name=value.`, { reason: 'missing_arguments' })
+      const { grant, created } = await client().createGrant({ issuer, claims, ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}) })
+      if (flags.json) result({ grant, outcome: created ? 'granted' : 'updated' })
+      else out(`${created ? 'granted' : 'updated'} ${grant.id}`)
+      return 0
+    }
+
+    case 'tokens': {
+      const [verb, ...rest] = args
+      if (verb === undefined || verb === 'list') {
+        if (rest.length > 0) throw usage(`tokens list takes no arguments: ${rest[0]} is one too many.`)
+        const list = await client().tokens()
+        if (flags.json) return result({ tokens: list }), 0
+        out(list.length === 0 ? 'no tokens' : formatTokens(list))
+        return 0
+      }
+      if (verb === 'revoke') {
+        const id = trustId('token', rest[0])
+        const { revoked } = await client().revokeToken(id)
+        if (flags.json) result({ token: id, outcome: revoked ? 'revoked' : 'unchanged' })
+        else out(revoked ? `revoked ${id}` : `${id} isn't a live token of yours`)
+        return 0
+      }
+      if (verb !== 'create') throw usage(`Unknown command ${verb} for ${named()} tokens.`, { reason: 'unknown_command' })
+      const [name, extra] = rest
+      if (!name) throw usage('Missing a name for the token, like feedback-widget.', { reason: 'missing_arguments' })
+      if (extra !== undefined) throw usage(`tokens create takes one name: ${extra} is one too many.`)
+      const { token, secret } = await client().createToken({
+        name,
+        ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}),
+        ...(flags.profile !== undefined ? { profile: flags.profile } : {}),
+        ...(flags.session !== undefined ? { session: flags.session } : {}),
+        ...(flags.expires !== undefined ? { expires: flags.expires } : {}),
+      })
+      // The secret alone, so it pipes: BOARD_TOKEN=$(vb tokens create widget --can feedback/=post).
+      if (flags.json) result({ token, secret })
+      else out(secret)
       return 0
     }
 

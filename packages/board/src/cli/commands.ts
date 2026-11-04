@@ -45,6 +45,8 @@ export type CliCommand = {
   readonly argumentsBeforeSubcommand?: true
   /** It does something without a subcommand too, as `sources` lists the sync entries. */
   readonly runsWithoutSubcommand?: true
+  /** The subcommand its command runs when given none, as `channels` runs `channels list`. */
+  readonly default?: true
   /** Out of help: it still runs, for what calls it. */
   readonly hidden?: true
 }
@@ -93,6 +95,11 @@ export const options = {
   until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
+  can: { type: 'string', value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
+  claim: { type: 'string', multiple: true, value: 'k=v', description: 'a claim its tokens carry; the same name again is any of them' },
+  profile: { type: 'string', value: 'name', description: 'the profile every request with it writes as' },
+  session: { type: 'string', value: 'id', description: 'the session every request with it writes from' },
+  expires: { type: 'string', value: 'duration', description: 'how long it lives (default: 30d, at most 90d)' },
   port: { type: 'string', value: 'N', description: 'the port to listen on' },
   dir: { type: 'string', value: 'dir', description: 'where the board keeps its log (default: .board/)' },
   'no-inspect': { type: 'boolean', description: "don't start the inspector" },
@@ -140,6 +147,78 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     arguments: [],
     options: [],
     examples: [{ name: 'see who you are on the board', value: 'whoami' }],
+  },
+  {
+    group: 'you',
+    name: 'tokens',
+    description: 'tokens that act as you, narrowed, for a widget, a sandbox, or a script',
+    arguments: [],
+    options: [],
+    runsWithoutSubcommand: true,
+    examples: [{ name: 'list your tokens', value: 'tokens' }],
+    subcommands: [
+      {
+        name: 'list',
+        default: true,
+        description: "your live tokens, or with manage, everyone's",
+        arguments: [],
+        options: [],
+        examples: [{ name: 'list your tokens', value: 'tokens list' }],
+      },
+      {
+        name: 'create',
+        description: 'mint one, and print its secret once',
+        arguments: [{ name: 'name', required: true, description: 'what it is for, e.g. feedback-widget' }],
+        options: [option('can'), option('profile'), option('session'), option('expires')],
+        examples: [
+          { name: 'a token that only posts feedback', value: 'tokens create feedback-widget --can feedback/=post' },
+          { name: "a week's token for a sandbox agent", value: 'tokens create sandbox-7 --can dev/=read,post,react --profile lemur --expires 7d' },
+        ],
+      },
+      {
+        name: 'revoke',
+        description: 'stop one, and every token minted with it',
+        arguments: [{ name: 'token', required: true, description: 'its ID, as tokens shows it (t12)' }],
+        options: [],
+        examples: [{ name: 'revoke a token', value: 'tokens revoke t12' }],
+      },
+    ],
+  },
+  {
+    group: 'the board',
+    name: 'grants',
+    description: "who the board lets in beside its code's rules: tokens from an OIDC issuer with these claims",
+    arguments: [],
+    options: [],
+    runsWithoutSubcommand: true,
+    examples: [{ name: 'list the grants', value: 'grants' }],
+    subcommands: [
+      {
+        name: 'list',
+        default: true,
+        description: "the board's grants",
+        arguments: [],
+        options: [],
+        examples: [{ name: 'list the grants', value: 'grants list' }],
+      },
+      {
+        name: 'create',
+        description: 'let them in, or change what they may do',
+        arguments: [{ name: 'issuer', required: true, description: 'vercel, github, or an https URL' }],
+        options: [option('claim'), option('can')],
+        examples: [
+          { name: 'let a workflow post in ci/', value: 'grants create github --claim repository=acme/web --can ci/=read,post' },
+          { name: "let a project's production post feedback", value: 'grants create vercel --claim project_id=prj_123 --claim environment=production --can feedback/=post' },
+        ],
+      },
+      {
+        name: 'revoke',
+        description: 'stop letting them in',
+        arguments: [{ name: 'grant', required: true, description: 'its ID, as grants shows it (g3)' }],
+        options: [],
+        examples: [{ name: 'revoke a grant', value: 'grants revoke g3' }],
+      },
+    ],
   },
   {
     group: 'the board',

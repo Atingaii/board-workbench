@@ -132,6 +132,8 @@ export const StoredPrincipal = z.object({
     })
     .optional(),
   scope: z.string().max(SCOPE_MAX).optional(),
+  /** The board token it came with: what it stores stops when the token does. */
+  token: z.string().min(1).max(64).optional(),
 })
 
 /** A watcher as a board on `http()` registers it: its tail, and when it runs. */
@@ -244,3 +246,49 @@ export const schedulesContract = contract({
 export type ScheduleEvents = typeof schedulesContract.events
 export type ScheduleEvent = ContractEvent<ScheduleEvents>
 export const SCHEDULES_SESSION = 'schedules'
+
+const Grant = z.union([z.literal('all'), z.array(z.string().min(1).max(16)).max(8)])
+/** A `can`, as config writes it: board() checks it before it's kept. */
+const Can = z.union([Grant, z.record(z.string().min(1).max(300), Grant)])
+const ClaimValue = z.string().min(1).max(1000)
+
+/**
+ * Who the board trusts beside its code's rules, outside the board log: grants, and the tokens it
+ * issued, of which only a hash is kept. Session `access`. A grant's and a token's ID is the index
+ * of the event that made it.
+ */
+export const accessContract = contract({
+  name: 'board-access',
+  events: {
+    /** A grant, or a new `can` for the grant with this issuer and claims. */
+    'grant.set': z.object({
+      issuer: z.string().min(1).max(1000),
+      claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])),
+      can: Can,
+      by: ActorId,
+    }),
+    'grant.revoked': z.object({ id: z.number().int().positive(), by: ActorId }),
+    'token.minted': z.object({
+      /** The secret's SHA-256, hex. */
+      hash: z.string().regex(/^[0-9a-f]{64}$/),
+      name: z.string().min(1).max(64),
+      /** Who it acts as, its scope narrowed to what the token may do. */
+      minter: StoredPrincipal,
+      profile: z.string().min(1).max(32).nullable(),
+      avatar: z.string().max(2048).nullable(),
+      session: z.string().min(1).max(128).nullable(),
+      /** A person's handle and name when they minted it. */
+      handle: Handle.nullable(),
+      personName: z.string().min(1).max(128).nullable(),
+      expiresAt: Millis,
+      /** The token it was minted with, which it stops with. */
+      parent: z.number().int().positive().nullable(),
+      by: ActorId,
+    }),
+    'token.revoked': z.object({ id: z.number().int().positive(), by: ActorId }),
+  },
+})
+
+export type AccessEvents = typeof accessContract.events
+export type AccessEvent = ContractEvent<AccessEvents>
+export const ACCESS_SESSION = 'access'
