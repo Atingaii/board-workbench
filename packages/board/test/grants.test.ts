@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { githubActions, oidc, vercelProject, type Known } from '../src/server/auth.ts'
-import { caller, deploymentToken, oidcToken, OIDC_ISS, personToken, PROJECT_ID, testBoard, workflowToken } from './harness.ts'
+import { caller, deploymentToken, oidcToken, OIDC_ISS, personToken, PROJECT_ID, testBoard, testKeys, workflowToken } from './harness.ts'
 
 /** A person, and a caller with `token`, on one board: the person sets grants, the caller tries the board. */
 async function setUp(options: Parameters<typeof testBoard>[0] = {}) {
@@ -77,6 +77,48 @@ describe('grants', () => {
     expect((await gitlab('POST', '/messages', { channel: 'ci', text: 'from gitlab' })).status).toBe(201)
     const another = await as(oidcToken({ project_path: 'acme/other', sub: 'project_path:acme/other' }))
     expect((await another('POST', '/messages', { channel: 'ci', text: 'not granted' })).status).toBe(403)
+  })
+
+  it("finds a grant's issuer's keys by OIDC discovery, never by a redirect or on the board's own network", async () => {
+    const ISS = 'https://idp.acme.dev'
+    const DISCOVERY = `${ISS}/.well-known/openid-configuration`
+    const { person, as } = await setUp()
+    await person('POST', '/grants', { issuer: ISS, claims: { project_path: 'acme/api' }, can: { 'ci/': ['read'] } })
+    const me = async () => (await (await as(oidcToken({}, ISS)))('GET', '/me')).status
+    // The network as fetch sees it: a redirect is followed unless the request says otherwise.
+    const asked: string[] = []
+    let routes: Record<string, () => Response> = {}
+    const network = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = input instanceof Request ? input.url : String(input)
+      asked.push(url)
+      const response = routes[url]?.() ?? new Response('not found', { status: 404 })
+      const location = response.headers.get('location')
+      if (location && response.status >= 300 && response.status < 400) {
+        const mode = init?.redirect ?? (input instanceof Request ? input.redirect : 'follow')
+        if (mode === 'error') throw new TypeError('redirected')
+        if (mode === 'follow') return network(new URL(location, url).href, init)
+      }
+      return response
+    }
+    vi.stubGlobal('fetch', network)
+    try {
+      const refused = {
+        'a redirect to the metadata service': [{ [DISCOVERY]: () => new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' } }) }, 'http://169.254.169.254/latest/meta-data/'],
+        'keys on its own network': [{ [DISCOVERY]: () => Response.json({ issuer: ISS, jwks_uri: 'https://keys.internal/jwks' }) }, 'https://keys.internal/jwks'],
+        'keys over plain http': [{ [DISCOVERY]: () => Response.json({ issuer: ISS, jwks_uri: 'http://idp.acme.dev/jwks' }) }, 'http://idp.acme.dev/jwks'],
+        'a document for another issuer': [{ [DISCOVERY]: () => Response.json({ issuer: 'https://evil.example', jwks_uri: `${ISS}/jwks` }) }, `${ISS}/jwks`],
+      } as const
+      for (const [why, [served, never]] of Object.entries(refused)) {
+        routes = served
+        expect([why, await me()]).toEqual([why, 401])
+        expect([why, asked.includes(never)]).toEqual([why, false])
+      }
+      // Its own document, naming it and its keys, is how it's let in.
+      routes = { [DISCOVERY]: () => Response.json({ issuer: ISS, jwks_uri: `${ISS}/jwks` }), [`${ISS}/jwks`]: () => Response.json(testKeys) }
+      expect(await me()).toBe(200)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('is one grant per issuer and claims: setting it again changes its can', async () => {

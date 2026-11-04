@@ -907,7 +907,10 @@ await team.revokeToken(token.id)
   grants for it. A grant's issuer is an https URL on the internet: no IP
   literal, no single-label host, and none of the private suffixes (`.local`,
   `.internal`, and the like), so a grant can't point the board's key fetches
-  at its own network. One that would name the same principals as an issuer
+  at its own network. Its keys come by OIDC Discovery 1.0: the document under
+  it names it as `issuer` (§4.3) and an https `jwks_uri` (§3), held to the
+  same rule, and neither fetch follows a redirect (jose's own key fetch
+  doesn't). One that would name the same principals as an issuer
   the rules or another grant trust (`https://ci.test/a` and
   `https://ci.test/a/`) is `invalid_grant`.
 

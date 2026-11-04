@@ -342,7 +342,7 @@ const GRANT_VALUE_MAX = 1000
 const invalidGrant = (message: string) => badRequest(message, 'invalid_grant')
 
 /** Whether `host` names something on the board's own network rather than on the internet. */
-function privateHost(host: string): boolean {
+export function privateHost(host: string): boolean {
   const name = host.toLowerCase().replace(/\.$/, '')
   if (name.startsWith('[') || /^\d+(\.\d+){3}$/.test(name) || /^\d+$/.test(name)) return true
   if (!name.includes('.') || name === 'localhost') return true

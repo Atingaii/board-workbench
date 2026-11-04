@@ -135,7 +135,9 @@ revoked g1
 
 - **A grant is an issuer, the claims its tokens carry, and `can`.** `vercel`
   and `github` name those issuers; any other is an https URL on the internet,
-  and the board fetches its keys once a grant names it. Every claim must match
+  and the board fetches its keys once a grant names it, by OIDC discovery: its
+  `/.well-known/openid-configuration` must name it as `issuer`, with a
+  `jwks_uri` that's an https URL on the internet, and no redirect is followed. Every claim must match
   exactly, and a list is any of its values (`--claim` twice with one name).
 - **It names who it lets in.** A Vercel grant names `project_id` and
   `environment`, since a preview runs any branch's code, and a GitHub grant
