@@ -21,7 +21,7 @@ disk it can write: a serverless function can't keep one.
   board with a `name` gets a file named for it: `board({ backend: local(),
   name: 'security' })` is `.board/security.db`, whatever the name's case. Any
   other name, `acme/security` say, gets letters and dashes and a short hash
-  (`acme-security-1f3a9c2e.db`), so no two names share a file.
+  (`acme-security-87c045ee.db`), so no two names share a file.
 - **Attachments live beside it,** in a folder named like the file:
   `.board/local/`, `.board/security/`. The folder appears with the first file.
 - **A scheduler runs in the process.** Scheduled messages send, and watchers
