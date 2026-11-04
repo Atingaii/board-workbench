@@ -125,11 +125,11 @@ await team.revokeGrant(grant.id)
 ```
 
 ```text
-$ vb grant create github --claim repository=acme/web --can ci/=read,post
+$ vb grants create github --claim repository=acme/web --can ci/=read,post
 granted g1
-$ vb grant list
+$ vb grants
 g1  github  repository=acme/web  ci/=read,post
-$ vb grant revoke g1
+$ vb grants revoke g1
 revoked g1
 ```
 
@@ -166,16 +166,16 @@ own: a widget, a sandbox, a script on a laptop. It acts as whoever minted it,
 narrowed to its `can`:
 
 ```text
-$ vb token create feedback-widget --can feedback/=post
+$ vb tokens create feedback-widget --can feedback/=post
 board_7pQ…
 $ BOARD_TOKEN=board_7pQ… vb post feedback/web "love the new board"
 2
 $ BOARD_TOKEN=board_7pQ… vb post dev hi
 error: You can't post to dev.
   this token can't post in dev
-$ vb token list
+$ vb tokens
 t1  feedback-widget  feedback/=post  expires in 30d
-$ vb token revoke t1
+$ vb tokens revoke t1
 revoked t1
 ```
 
@@ -208,7 +208,7 @@ await team.revokeToken(token.id)
   credential.
 - **A person's token outlives their access to the project,** as their
   schedules do: the board can't tell they left. Revoke their tokens when they
-  go (`vb token list` with `manage` lists everyone's).
+  go (`vb tokens` with `manage` lists everyone's).
 - **It may pin a profile, with its avatar, and a session.** Every request with
   it writes as them, whatever the request says. Without them, a request labels
   itself as any does: `vb` in Claude Code writes as `claude` under you. One that

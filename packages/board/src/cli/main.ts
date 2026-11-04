@@ -471,10 +471,10 @@ function doing(): string {
     case 'channels':
     case 'actors':
       return `list ${command}`
-    case 'grant':
-      return a === 'list' ? 'list grants' : a === 'revoke' ? `revoke grant ${b}` : `grant ${b ?? 'an issuer'}`
-    case 'token':
-      return a === 'list' ? 'list tokens' : a === 'revoke' ? `revoke token ${b}` : `mint token ${b ?? ''}`.trimEnd()
+    case 'grants':
+      return a === 'create' ? `grant ${b ?? 'an issuer'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
+    case 'tokens':
+      return a === 'create' ? `mint token ${b ?? ''}`.trimEnd() : a === 'revoke' ? `revoke token ${b}` : 'list tokens'
     case 'sources':
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
     case 'identity':
@@ -507,7 +507,7 @@ function missing(): string | undefined {
   if (command === 'read' && /^https?:\/\//i.test(a)) return "that link's message on this board"
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
-  if ((command === 'grant' || command === 'token') && a === 'revoke' && b !== undefined) return `${command} ${b}`
+  if ((command === 'grants' || command === 'tokens') && a === 'revoke' && b !== undefined) return `${command === 'grants' ? 'grant' : 'token'} ${b}`
   if (command === 'download') return `attachment ${a}`
   return undefined
 }
@@ -1031,10 +1031,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'grant': {
+    case 'grants': {
       const [verb, ...rest] = args
-      if (verb === 'list') {
-        if (rest.length > 0) throw usage(`grant list takes no arguments: ${rest[0]} is one too many.`)
+      if (verb === undefined || verb === 'list' || verb === 'ls') {
+        if (rest.length > 0) throw usage(`grants list takes no arguments: ${rest[0]} is one too many.`)
         const list = await client().grants()
         if (flags.json) return result({ grants: list }), 0
         out(list.length === 0 ? 'no grants' : formatGrants(list))
@@ -1047,10 +1047,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         else out(revoked ? `revoked ${id}` : `${id} is already gone`)
         return 0
       }
-      if (verb !== 'create') throw usage(`grant takes create, list, or revoke${verb === undefined ? '' : `, and ${verb} isn't one`}.`, { reason: verb === undefined ? 'missing_arguments' : 'invalid_arguments' })
+      if (verb !== 'create') throw usage(`Unknown command ${verb} for ${named()} grants.`, { reason: 'unknown_command' })
       const [issuer, extra] = rest
       if (!issuer) throw usage('Missing the issuer to grant: vercel, github, or an https URL.', { reason: 'missing_arguments' })
-      if (extra !== undefined) throw usage(`grant create takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
+      if (extra !== undefined) throw usage(`grants create takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
       const claims = claimPairs(flags.claim)
       if (Object.keys(claims).length === 0)
         throw usage(`Missing the claims ${issuer}'s tokens must carry: pass --claim name=value.`, { reason: 'missing_arguments' })
@@ -1060,10 +1060,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       return 0
     }
 
-    case 'token': {
+    case 'tokens': {
       const [verb, ...rest] = args
-      if (verb === 'list') {
-        if (rest.length > 0) throw usage(`token list takes no arguments: ${rest[0]} is one too many.`)
+      if (verb === undefined || verb === 'list' || verb === 'ls') {
+        if (rest.length > 0) throw usage(`tokens list takes no arguments: ${rest[0]} is one too many.`)
         const list = await client().tokens()
         if (flags.json) return result({ tokens: list }), 0
         out(list.length === 0 ? 'no tokens' : formatTokens(list))
@@ -1076,10 +1076,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         else out(revoked ? `revoked ${id}` : `${id} isn't a live token of yours`)
         return 0
       }
-      if (verb !== 'create') throw usage(`token takes create, list, or revoke${verb === undefined ? '' : `, and ${verb} isn't one`}.`, { reason: verb === undefined ? 'missing_arguments' : 'invalid_arguments' })
+      if (verb !== 'create') throw usage(`Unknown command ${verb} for ${named()} tokens.`, { reason: 'unknown_command' })
       const [name, extra] = rest
       if (!name) throw usage('Missing a name for the token, like feedback-widget.', { reason: 'missing_arguments' })
-      if (extra !== undefined) throw usage(`token create takes one name: ${extra} is one too many.`)
+      if (extra !== undefined) throw usage(`tokens create takes one name: ${extra} is one too many.`)
       const { token, secret } = await client().createToken({
         name,
         ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}),
@@ -1087,7 +1087,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         ...(flags.session !== undefined ? { session: flags.session } : {}),
         ...(flags.expires !== undefined ? { expires: flags.expires } : {}),
       })
-      // The secret alone, so it pipes: BOARD_TOKEN=$(vb token create widget --can feedback/=post).
+      // The secret alone, so it pipes: BOARD_TOKEN=$(vb tokens create widget --can feedback/=post).
       if (flags.json) result({ token, secret })
       else out(secret)
       return 0

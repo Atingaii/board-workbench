@@ -45,6 +45,8 @@ export type CliCommand = {
   readonly argumentsBeforeSubcommand?: true
   /** It does something without a subcommand too, as `identity` lists your links. */
   readonly runsWithoutSubcommand?: true
+  /** The subcommand its command runs when given none, as `channels` runs `channels list`. */
+  readonly default?: true
   /** Out of help: it still runs, for what calls it. */
   readonly hidden?: true
 }
@@ -150,69 +152,77 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   },
   {
     group: 'you',
-    name: 'token',
+    name: 'tokens',
+    aliases: ['token'],
     description: 'tokens that act as you, narrowed, for a widget, a sandbox, or a script',
-    arguments: [{ name: 'command', required: true, description: 'create, list, or revoke' }],
+    arguments: [],
     options: [],
-    examples: [],
+    runsWithoutSubcommand: true,
+    examples: [{ name: 'list your tokens', value: 'tokens' }],
     subcommands: [
+      {
+        name: 'list',
+        aliases: ['ls'],
+        default: true,
+        description: "your live tokens, or with manage, everyone's",
+        arguments: [],
+        options: [],
+        examples: [{ name: 'list your tokens', value: 'tokens list' }],
+      },
       {
         name: 'create',
         description: 'mint one, and print its secret once',
         arguments: [{ name: 'name', required: true, description: 'what it is for, e.g. feedback-widget' }],
         options: [option('can'), option('profile'), option('session'), option('expires')],
         examples: [
-          { name: 'a token that only posts feedback', value: 'token create feedback-widget --can feedback/=post' },
-          { name: "a week's token for a sandbox agent", value: 'token create sandbox-7 --can dev/=read,post,react --profile lemur --expires 7d' },
+          { name: 'a token that only posts feedback', value: 'tokens create feedback-widget --can feedback/=post' },
+          { name: "a week's token for a sandbox agent", value: 'tokens create sandbox-7 --can dev/=read,post,react --profile lemur --expires 7d' },
         ],
-      },
-      {
-        name: 'list',
-        description: "your live tokens, or with manage, everyone's",
-        arguments: [],
-        options: [],
-        examples: [{ name: 'list your tokens', value: 'token list' }],
       },
       {
         name: 'revoke',
         description: 'stop one, and every token minted with it',
-        arguments: [{ name: 'token', required: true, description: 'its ID, as token list shows it (t12)' }],
+        arguments: [{ name: 'token', required: true, description: 'its ID, as tokens shows it (t12)' }],
         options: [],
-        examples: [{ name: 'revoke a token', value: 'token revoke t12' }],
+        examples: [{ name: 'revoke a token', value: 'tokens revoke t12' }],
       },
     ],
   },
   {
     group: 'the board',
-    name: 'grant',
+    name: 'grants',
+    aliases: ['grant'],
     description: "who the board lets in beside its code's rules: tokens from an OIDC issuer with these claims",
-    arguments: [{ name: 'command', required: true, description: 'create, list, or revoke' }],
+    arguments: [],
     options: [],
-    examples: [],
+    runsWithoutSubcommand: true,
+    examples: [{ name: 'list the grants', value: 'grants' }],
     subcommands: [
+      {
+        name: 'list',
+        aliases: ['ls'],
+        default: true,
+        description: "the board's grants",
+        arguments: [],
+        options: [],
+        examples: [{ name: 'list the grants', value: 'grants list' }],
+      },
       {
         name: 'create',
         description: 'let them in, or change what they may do',
         arguments: [{ name: 'issuer', required: true, description: 'vercel, github, or an https URL' }],
         options: [option('claim'), option('can')],
         examples: [
-          { name: 'let a workflow post in ci/', value: 'grant create github --claim repository=acme/web --can ci/=read,post' },
-          { name: "let a project's production post feedback", value: 'grant create vercel --claim project_id=prj_123 --claim environment=production --can feedback/=post' },
+          { name: 'let a workflow post in ci/', value: 'grants create github --claim repository=acme/web --can ci/=read,post' },
+          { name: "let a project's production post feedback", value: 'grants create vercel --claim project_id=prj_123 --claim environment=production --can feedback/=post' },
         ],
-      },
-      {
-        name: 'list',
-        description: "the board's grants",
-        arguments: [],
-        options: [],
-        examples: [{ name: 'list the grants', value: 'grant list' }],
       },
       {
         name: 'revoke',
         description: 'stop letting them in',
-        arguments: [{ name: 'grant', required: true, description: 'its ID, as grant list shows it (g3)' }],
+        arguments: [{ name: 'grant', required: true, description: 'its ID, as grants shows it (g3)' }],
         options: [],
-        examples: [{ name: 'revoke a grant', value: 'grant revoke g3' }],
+        examples: [{ name: 'revoke a grant', value: 'grants revoke g3' }],
       },
     ],
   },

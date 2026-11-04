@@ -407,17 +407,19 @@ options every command takes: board help
 
 ## Access
 
-### token
+### tokens
 
 ```text
-vb token create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]
-vb token list
-vb token revoke <token>
+vb tokens [list]
+vb tokens create <name> [--can <scope>] [--profile <name>] [--session <id>] [--expires 30d]
+vb tokens revoke <token>
 ```
 
-`token create` mints a token that acts as you, narrowed to `--can`, and
+`vb token` is the same command, and `ls` is `list`.
+
+`tokens create` mints a token that acts as you, narrowed to `--can`, and
 prints its secret, which shows only here, so it pipes:
-`BOARD_TOKEN=$(vb token create widget --can feedback/=post)`. `--can` is
+`BOARD_TOKEN=$(vb tokens create widget --can feedback/=post)`. `--can` is
 `x-board-scope`'s syntax (`dev/=read,post;ci/=read`). `--profile` and
 `--session` pin what every request with it writes as. It lives 30 days, or
 `--expires`, 90 days at most. See [Tokens](../01-board/09-access.md#tokens).
@@ -429,41 +431,43 @@ prints its secret, which shows only here, so it pipes:
 | `--session <id>` | the session every request with it writes from |
 | `--expires <duration>` | how long it lives: `1h`, `7d`, up to `90d` |
 
-`token list` shows your live tokens, or with `manage` in every channel,
+`vb tokens` lists your live tokens, or with `manage` in every channel,
 everyone's: each one's ID, name, what it may do now, and when it expires, never a
-secret. With `BOARD_TOKEN` set, yours are that token and those minted with it. `token revoke t1` stops one and every token minted with it, and prints
+secret. With `BOARD_TOKEN` set, yours are that token and those minted with it. `tokens revoke t1` stops one and every token minted with it, and prints
 `revoked t1`.
 
 ```text
-$ vb token list
+$ vb tokens
 t1  feedback-widget  feedback/=post  expires in 30d
 ```
 
-### grant
+### grants
 
 ```text
-vb grant create <issuer> --claim <name=value>... [--can <scope>]
-vb grant list
-vb grant revoke <grant>
+vb grants [list]
+vb grants create <issuer> --claim <name=value>... [--can <scope>]
+vb grants revoke <grant>
 ```
 
-`grant create` lets in tokens from an OIDC issuer (`vercel`, `github`, or an
+`vb grant` is the same command, and `ls` is `list`.
+
+`grants create` lets in tokens from an OIDC issuer (`vercel`, `github`, or an
 https URL) that carry every `--claim`. A name given twice is any of its values.
 Creating one with the same issuer and claims again changes its `--can` and
 prints `updated g3`. `--can` left out is read, post, react, and label
-everywhere. `grant list` shows each one's ID, issuer, claims, and what it lets
+everywhere. `vb grants` lists each one's ID, issuer, claims, and what it lets
 them do. All three need `manage` in every channel. See
 [Grants](../01-board/09-access.md#grants).
 
 ```text
-$ vb grant create github --claim repository=acme/web --can ci/=read,post
+$ vb grants create github --claim repository=acme/web --can ci/=read,post
 granted g3
-$ vb grant create vercel --claim project_id=prj_front --claim environment=production --can feedback/=post
+$ vb grants create vercel --claim project_id=prj_front --claim environment=production --can feedback/=post
 granted g4
-$ vb grant list
+$ vb grants
 g3  github  repository=acme/web                          ci/=read,post
 g4  vercel  environment=production project_id=prj_front  feedback/=post
-$ vb grant revoke g3
+$ vb grants revoke g3
 revoked g3
 ```
 
