@@ -81,7 +81,7 @@ uses the target's own.
 | Permission | Routes |
 | --- | --- |
 | `read` | `GET /messages`, `/threads`, `/messages/:id`, `/events`, `/channels`, `/actors`, `/schedules`, `/attachments/:id` show only what it covers; `POST /watchers` needs it somewhere, and a registered watcher sees only what it covers |
-| `post` | `POST /messages` (a reply also needs `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it, or `sync`, somewhere |
+| `post` | `POST /messages` (a reply also needs `read`), `/channels` (with `read`), `/messages/:id/edit` and `/messages/:id/delete` (your own), `/messages/:id/typing` (with `read`), `/schedules`; `/attachments` needs it, or `sync`, somewhere |
 | `react` | `POST /messages/:id/reactions` |
 | `label` | `POST /messages/:id/labels`, and a post or schedule with `labels` |
 | `sync` | `POST /messages/:id/sync`, a post with `sync` targets, and [sync's routes](#syncs-routes); in every channel, `GET /inbox/:key` for the board's own inbox |
@@ -98,7 +98,8 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | --- | --- | --- |
 | GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board on `http()` with no `access` of its own has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
-| GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex, messages, threads }`, sorted by path |
+| GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
+| POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |

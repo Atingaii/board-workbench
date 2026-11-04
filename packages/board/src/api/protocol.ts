@@ -4,6 +4,7 @@ import type { Attachment } from '../contract/schemas.ts'
 import type {
   AckBody,
   ChannelView,
+  CreateChannelBody,
   Discovery,
   DeleteBody,
   EditBody,
@@ -68,6 +69,8 @@ export type Protocol = {
   discovery: { input: Nothing; output: Discovery }
   me: { input: Nothing; output: Me }
   channels: { input: Nothing; output: { channels: ChannelView[]; cursor: string } }
+  /** `created` is false for a channel that was there already, made by a post or another create. */
+  createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
   actors: { input: Nothing; output: { actors: Actor[]; cursor: string } }
   messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }

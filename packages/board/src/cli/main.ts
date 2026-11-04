@@ -467,8 +467,9 @@ function doing(): string {
       return b === undefined ? `list where ${ref(a)} is synced` : `sync ${ref(a)} with ${b}`
     case 'schedule':
       return a === 'cancel' ? `cancel schedule ${b}` : `schedule a message in ${message ? ref(a) : (a ?? 'a channel')}`
-    case 'schedules':
     case 'channels':
+      return a === 'create' ? `create ${b ?? 'the channel'}` : 'list channels'
+    case 'schedules':
     case 'actors':
       return `list ${command}`
     case 'grants':
@@ -813,6 +814,18 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     }
 
     case 'channels': {
+      const [sub, ...rest] = args
+      if (sub === 'create') {
+        const [path, extra] = rest
+        if (!path) throw usage('Missing the channel to create, such as dev/alerts.', { reason: 'missing_arguments' })
+        if (extra !== undefined) throw usage(`channels create takes one channel: ${extra} is one too many.`)
+        const { channel, created } = await client().createChannel(path)
+        if (flags.json) result({ channel, outcome: created ? 'created' : 'unchanged' })
+        else out(created ? `created ${channel.path}` : `${channel.path} already exists`)
+        return 0
+      }
+      if (sub !== undefined && sub !== 'list') throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
+      if (rest.length > 0) throw usage(`channels list takes no arguments: ${rest[0]} is one too many.`)
       const channels = await client().channels()
       if (flags.json) return result({ channels }), 0
       if (channels.length === 0) return out('no channels yet'), 0
@@ -824,7 +837,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           group = prefix
         }
         const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
-        out(`${prefix ? '  ' : ''}${channel.path}  ${count(channel.threads, 'thread', 'threads')} · ${count(channel.messages, 'message', 'messages')} · last #${channel.lastIndex}`)
+        const { threads, messages, lastIndex } = channel
+        // Counts only where the board keeps them: a team board in Vercel's API doesn't. One made
+        // before anything posted to it has no last message.
+        const counted = threads !== undefined && messages !== undefined
+          ? `  ${count(threads, 'thread', 'threads')} · ${count(messages, 'message', 'messages')}${lastIndex ? ` · last #${lastIndex}` : ''}`
+          : ''
+        out(`${prefix ? '  ' : ''}${channel.path}${counted}`)
       }
       return 0
     }

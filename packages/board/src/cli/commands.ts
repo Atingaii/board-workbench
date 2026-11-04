@@ -223,10 +223,28 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'channels',
-    description: 'channels, grouped by path prefix',
+    description: 'channels, grouped by path prefix: a first post makes one, and so does create',
     arguments: [],
     options: [],
+    runsWithoutSubcommand: true,
     examples: [{ name: 'list the channels', value: 'channels' }],
+    subcommands: [
+      {
+        name: 'list',
+        default: true,
+        description: 'channels, grouped by path prefix',
+        arguments: [],
+        options: [],
+        examples: [{ name: 'list the channels', value: 'channels list' }],
+      },
+      {
+        name: 'create',
+        description: 'a channel, before anything posts to it (one that exists stays as it is)',
+        arguments: [{ name: 'channel', required: true, description: 'its path, such as dev/alerts' }],
+        options: [],
+        examples: [{ name: 'make a channel for alerts', value: 'channels create dev/alerts' }],
+      },
+    ],
   },
   {
     group: 'the board',

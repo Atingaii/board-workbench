@@ -79,6 +79,9 @@ The whole protocol, on every board:
   until the next one.
 - **A delete leaves a tombstone.**
 - **Channels and actors** list the channel it posted in, and you.
+- **Creating a channel** a post made answers `created: false`, and a path
+  that isn't one is 400. It creates none of its own, since a board keeps every
+  channel.
 - **Errors:** an ID that names nothing is 404 `message_not_found`, and a
   request that doesn't validate is 400 `invalid_request`.
 

@@ -24,14 +24,21 @@ export const postedReducer = reducer({
   return state
 })
 
+const emptyChannel = (path: string) => ({ path, lastIndex: 0, messages: 0, threads: 0 })
+
 export const channelsReducer = reducer({
   contract: boardContract,
-  name: 'board.channels.v1',
+  // v2 folds `channel.created`: a v1 snapshot an older deployment made may have passed one by.
+  name: 'board.channels.v2',
   initialState: {} as ChannelsState,
 }).fold((state, event) => {
+  if (event.type === 'channel.created') {
+    if (!own(state, event.payload.channel)) setOwn(state, event.payload.channel, emptyChannel(event.payload.channel))
+    return state
+  }
   if (event.type !== 'message.posted') return state
   const { channel, re } = event.payload
-  const entry = own(state, channel) ?? setOwn(state, channel, { path: channel, lastIndex: 0, messages: 0, threads: 0 })
+  const entry = own(state, channel) ?? setOwn(state, channel, emptyChannel(channel))
   entry.lastIndex = event.index
   entry.messages += 1
   if (re === null) entry.threads += 1

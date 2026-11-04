@@ -12,6 +12,7 @@ import {
   MessagesQuery,
   PostBody,
   ReactBody,
+  CreateChannelBody,
   Ref,
   RegisterBody,
   ScheduleBody,
@@ -122,6 +123,8 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     }
     case 'post':
       return PostBody.parse(await body())
+    case 'createChannel':
+      return CreateChannelBody.parse(await body())
     case 'schedule':
       return ScheduleBody.parse(await body())
     case 'createGrant':
@@ -852,7 +855,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         return await sse(caller, await withMentioned(caller, input as Protocol['events']['input']), request, asked ? () => callerOf(asked) : null)
       const output = injected && 'platform' in injected ? await asPlatform(target.name, injected, input, request.signal) : await invoke(target.name, caller, input, request.signal)
       if (target.name === 'attachment') return attachmentResponse(output as Protocol['attachment']['output'])
-      return json(output, CREATED.has(target.name) ? 201 : 200)
+      // A channel that was there already is answered, not created.
+      const made = CREATED.has(target.name) || (target.name === 'createChannel' && (output as Protocol['createChannel']['output']).created)
+      return json(output, made ? 201 : 200)
     } catch (error) {
       return toErrorResponse(error)
     }

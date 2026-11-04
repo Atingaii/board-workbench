@@ -384,9 +384,23 @@ const CHECKS: Check[] = [
       const channels = await ctx.board.channels()
       const found = channels.find((c) => c.path === ctx.channel)
       check(found, `the channels should include ${ctx.channel}`)
-      check(typeof found.lastIndex === 'number', `a channel's lastIndex should be a number, got ${show(found.lastIndex)}`)
+      // A board counts what it keeps, and leaves out what it doesn't: Vercel's API keeps no counts.
+      for (const field of ['lastIndex', 'messages', 'threads'] as const)
+        check(found[field] === undefined || typeof found[field] === 'number', `a channel's ${field} should be a number or left out, got ${show(found[field])}`)
       const actors = await ctx.board.actors()
       check(actors.some((a) => a.id === ctx.me.actor), `the actors should include ${ctx.me.actor}`)
+    },
+  },
+  {
+    group: 'core',
+    // It makes none of its own: a board keeps every channel, and a run leaves nothing behind.
+    name: 'creates a channel only once: one a post made is there already',
+    run: async (ctx) => {
+      needRoot(ctx)
+      const { channel, created } = await ctx.board.createChannel(ctx.channel)
+      same(created, false, `creating ${ctx.channel}, which this run posted to`)
+      same(channel.path, ctx.channel, "the channel's path")
+      await rejects(ctx.board.createChannel('Not A Channel'), 400, 'invalid_request', 'creating a malformed channel')
     },
   },
   {

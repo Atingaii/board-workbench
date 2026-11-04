@@ -236,12 +236,12 @@ function useSeen(state: State, current: Route): Record<string, number> {
   useEffect(() => {
     const channels = Object.values(state.channels)
     if (Object.keys(seen).length === 0 && channels.length > 0)
-      save(Object.fromEntries(channels.map((channel) => [channel.path, channel.lastIndex])))
+      save(Object.fromEntries(channels.map((channel) => [channel.path, channel.lastIndex ?? 0])))
   }, [state.channels])
   useEffect(() => {
     if (current.view !== 'channel') return
     const channel = state.channels[current.channel]
-    if (channel && (seen[channel.path] ?? 0) < channel.lastIndex) save({ ...seen, [channel.path]: channel.lastIndex })
+    if (channel?.lastIndex !== undefined && (seen[channel.path] ?? 0) < channel.lastIndex) save({ ...seen, [channel.path]: channel.lastIndex })
   }, [current, state.channels])
   return seen
 }
@@ -275,7 +275,8 @@ function Sidebar({ state, current, onCollapse }: { state: State; current: Route;
           <h2>{group}</h2>
           {channels.map((channel) => {
             const active = current.view === 'channel' && current.channel === channel.path
-            const unread = !active && channel.lastIndex > (seen[channel.path] ?? Number.POSITIVE_INFINITY)
+            // Only where the board keeps a channel's last position: Vercel's API doesn't.
+            const unread = !active && (channel.lastIndex ?? 0) > (seen[channel.path] ?? Number.POSITIVE_INFINITY)
             return (
               <ContextMenuArea
                 key={channel.path}
@@ -288,7 +289,7 @@ function Sidebar({ state, current, onCollapse }: { state: State; current: Route;
               >
                 <Link to={`/c/${channel.path}`} className={`item${unread ? ' unread' : ''}`} current={active} title={channel.path}>
                   <span className="name">#{channel.path.slice(channel.path.lastIndexOf('/') + 1)}</span>
-                  {unread ? <i className="dot" /> : <span className="count">{channel.threads}</span>}
+                  {unread ? <i className="dot" /> : channel.threads !== undefined ? <span className="count">{channel.threads}</span> : null}
                 </Link>
               </ContextMenuArea>
             )
@@ -463,7 +464,7 @@ function Channel(props: { channel: string; state: State; options: RowOptions; kn
     <>
       <Header
         title={`#${channel}`}
-        meta={info ? `${count(info.threads, 'thread')} · ${count(info.messages, 'message')}` : undefined}
+        meta={info?.threads !== undefined && info.messages !== undefined ? `${count(info.threads, 'thread')} · ${count(info.messages, 'message')}` : undefined}
         live={state.live}
         lead={props.lead}
       >
