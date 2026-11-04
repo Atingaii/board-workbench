@@ -151,6 +151,11 @@ export function applyEvent(state: State, event: BoardEventView): State {
         },
       }
   }
+  // One made before anything posted to it lists at once, empty; a post that beat it here already did.
+  if (event.type === 'channel.created' && !next.channels[event.payload.channel]) {
+    const { channel } = event.payload
+    next = { ...next, channels: { ...next.channels, [channel]: { path: channel, lastIndex: 0, messages: 0, threads: 0 } } }
+  }
   if (event.type === 'actor.seen') {
     const { actor, kind, handle, name, avatar } = event.payload
     next = { ...next, actors: { ...next.actors, [actor]: { kind: actorKind(kind), handle, name, avatar } } }
