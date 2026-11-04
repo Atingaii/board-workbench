@@ -424,13 +424,13 @@ prints its secret, which shows only here, so it pipes:
 
 | Flag | Effect |
 | --- | --- |
-| `--can <scope>` | what it may do at most: `feedback/=post`, `dev/=read,post;ci/=read`, or `*=all` |
+| `--can <scope>` | what it may do at most: `feedback/=post`, `dev/=read,post;ci/=read`, or `*=all`. Without it, read, post, react, and label everywhere |
 | `--profile <name>` | the profile every request with it writes as |
 | `--session <id>` | the session every request with it writes from |
 | `--expires <duration>` | how long it lives: `1h`, `7d`, up to `90d` |
 
 `token list` shows your live tokens, or with `manage` in every channel,
-everyone's: each one's ID, name, what it may do, and when it expires, never a
+everyone's: each one's ID, name, what it may do now, and when it expires, never a
 secret. With `BOARD_TOKEN` set, yours are that token and those minted with it. `token revoke t1` stops one and every token minted with it, and prints
 `revoked t1`.
 

@@ -147,10 +147,12 @@ revoked g1
   another grant.
 - **`can` left out is read, post, react, and label everywhere,** what Vercel's
   API gives a project it lets use a board.
-- **The rules come first.** A principal a rule matches gets what the rule
-  gives. Anyone else gets what every grant that matches gives, added up. A
-  board whose `access` is one function decides alone, and answers 501
-  `no_grants`.
+- **Grants add to the rules.** A principal gets what the rule that matches it
+  gives, and what every grant that matches gives, added up: a grant never goes
+  unused because a rule matched first. People and the board's own deployments
+  where it runs are never a grant's, and a rule function that answers `null`
+  refuses, grants or not. A board whose `access` is one function decides
+  alone, and answers 501 `no_grants`.
 - **Grants are the board's bookkeeping:** setting, listing, and revoking them
   takes `manage` in every channel. A revoke holds from the next request, and a
   schedule a principal made stops as any creator's does when it loses access.
@@ -195,7 +197,10 @@ await team.revokeToken(token.id)
   grants as they are then, and narrowed to its `can`, so it never does more
   than its minter could at that moment. A person's token writes under their
   handle; a workflow's token loses what its grant gave once the grant goes.
-- **It's never its minter's integration,** even with no `can`: like any
+- **`can` left out is a grant's default:** read, post, react, and label
+  everywhere. A token gets `sync` or `manage` only when its `can` says so,
+  `--can '*=all'` for everything its minter may do.
+- **It's never its minter's integration,** even with `*=all`: like any
   [narrowed](#narrowing-a-token) caller, it can't register watchers, write
   sync's records, or link and unlink accounts, which take the minter's own
   credential.
@@ -212,7 +217,9 @@ await team.revokeToken(token.id)
   is narrowed to its parent's `can`, lives no longer, and stops when its parent
   does.
 - **Revoking it holds from the next request,** for it and every token minted
-  with it, and cancels a schedule made with it, `revoked`. Its minter lists and
+  with it, and cancels a schedule made with it, `revoked`. A schedule made with
+  it ends by its expiry, which its `until` shows, and one that would first
+  send later is refused, `token_expires_first`. Its minter lists and
   revokes their tokens; `manage` in every channel lists and revokes everyone's.
   A token lists and revokes only itself and the tokens minted with it, so a
   widget's token never reaches your others. Revoking someone else's answers as

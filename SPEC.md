@@ -890,11 +890,13 @@ await team.revokeToken(token.id)
   and answers `created: false`; claims that differ (another environment) are
   another grant. `can` left out is `{ '*': ['read', 'post', 'react', 'label'] }`,
   what Vercel's API gives a project it lets use a board.
-- **The rules come first.** A principal the code's rules match gets what they
-  give, and the defaults (people, the board's own deployments in its
-  environment, its own code) are never a grant's. Anyone else gets what every
-  grant that matches gives, combined: grants only add. A board whose `access`
-  is one function decides alone and keeps no grants (501 `no_grants`).
+- **Grants add to the rules.** A principal gets what the first rule that
+  matches it gives, and what every grant that matches gives, combined: grants
+  only add, so none goes unused because a rule matched first. The defaults
+  (people, the board's own deployments in its environment, its own code) are
+  never a grant's, and a rule function that answers `null` refuses, grants or
+  not. A board whose `access` is one function decides alone and keeps no
+  grants (501 `no_grants`).
 - **Setting, revoking, and listing need `manage` in every channel.** Grants
   say who the board trusts, so they're the board's bookkeeping. Each records
   who set it and when. Revoking one holds from the next request, and a
@@ -917,7 +919,8 @@ await team.revokeToken(token.id)
   (`BOARD_TOKEN` for `vb`), and board() recognizes its own before
   `authenticate` runs, so a host's verifier never sees one. On Vercel, a
   client holding one sends its deployment's OIDC token to the edge instead,
-  since Trusted Sources take OIDC tokens only.
+  since Trusted Sources take OIDC tokens only, or none where the deployment has
+  none, which a board without Deployment Protection takes.
 - **It acts as whoever minted it,** narrowed: any principal the board
   verified (a person, a deployment, a workflow, an `oidc` principal, a host's)
   or, from the handle on `a2()`, the board's own code. The board keeps what a
@@ -925,7 +928,9 @@ await team.revokeToken(token.id)
   narrowed by the token's `can`) and works its access out again on every
   request, under the rules and grants as they are then. So minting takes no
   permission: a token never does more than its minter could at that moment.
-  A request's own `x-board-scope` narrows it further. A token always has a
+  A request's own `x-board-scope` narrows it further. `can` left out is a
+  grant's default, read, post, react, and label everywhere, so a token has
+  `sync` or `manage` only when its `can` says so. A token always has a
   scope, `*=all` narrowed by its `can`, so it's never its principal's
   integration: registering watchers, sync's records, and linking or unlinking
   accounts answer 403, as for any narrowed caller. A person's tokens outlive
@@ -956,7 +961,11 @@ await team.revokeToken(token.id)
   request, never from a cache. `a2()`'s fold drops a revoked token from its
   state at once, and an expired one with the first event of a later day; the
   log keeps every event. A schedule made with one, and a registration, keep its ID, and stop
-  with it: a schedule is canceled `revoked`.
+  with it: a schedule is canceled `revoked`. A schedule made with one ends by
+  its expiry, which its `until` shows, and one whose first send is later is
+  400 `token_expires_first`: a schedule that lasts needs a credential that does.
+  A token's listing shows what it may do now, its minter's access narrowed by
+  its `can`, not the most it could.
 
 **On each backend:** `a2()` keeps grants and tokens on its log, in a session
 of their own, `access`, beside `board`, as it keeps schedules and identity
@@ -1605,7 +1614,7 @@ status.
 | GET | `/grants` | The board's grants: `{ grants: [{ id, issuer, claims, can, by, at }] }`. Needs `manage` in every channel (see [Grants and tokens](#grants-and-tokens)) |
 | POST | `/grants` | `{ issuer, claims, can? }`: sets a grant, or its `can` when one with that issuer and claims exists. Answers `{ grant, created }`. 501 `no_grants` where the board keeps none |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
+| GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
 | POST | `/attachments` | Upload one file: the body is the file, `content-type` its type, `x-board-filename` its name (URI-encoded). At most 4 MB. Answers `{ attachment: { id, name, type, size } }`, or 501 `no_files` on a board that keeps none |

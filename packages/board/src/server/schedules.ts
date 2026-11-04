@@ -415,7 +415,13 @@ export function createSchedules(options: { store?: A2Store | undefined; schedule
       if (every !== null && every > MAX_AHEAD_MS) throw badRequest('`every` is at most a year')
       const first = body.at !== undefined ? Date.parse(body.at) : now + duration(body.in ?? body.every!)
       if (first < now - 60_000) throw badRequest('`at` is in the past')
-      const until = body.until !== undefined ? Date.parse(body.until) : body.for !== undefined ? first + duration(body.for) : null
+      const asked = body.until !== undefined ? Date.parse(body.until) : body.for !== undefined ? first + duration(body.for) : null
+      // One made with a board token stops when the token does, so it ends by the token's expiry,
+      // and its `until` says so.
+      const expires = identity.principal.token !== undefined ? (identity.principal.expiresAt?.getTime() ?? null) : null
+      if (expires !== null && first > expires)
+        throw badRequest(`this token expires ${new Date(expires).toISOString()}, before the schedule's first send: schedule it with a credential that lasts`, 'token_expires_first')
+      const until = expires !== null && (asked === null || asked > expires) ? expires : asked
       if (until !== null && until < first) throw badRequest('the schedule stops before its first send')
       if (first > now + MAX_AHEAD_MS || (until !== null && until > now + MAX_AHEAD_MS))
         throw badRequest('a schedule reaches at most a year out: its first send and its stop')

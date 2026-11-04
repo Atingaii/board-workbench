@@ -95,7 +95,7 @@ export const options = {
   until: { type: 'string', short: 'u', value: 'time', description: 'repeating until a time' },
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
-  can: { type: 'string', value: 'scope', description: 'what it may do: dev/=read,post;ci/=read, or *=all' },
+  can: { type: 'string', value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
   claim: { type: 'string', multiple: true, value: 'k=v', description: 'a claim its tokens carry; the same name again is any of them' },
   profile: { type: 'string', value: 'name', description: 'the profile every request with it writes as' },
   session: { type: 'string', value: 'id', description: 'the session every request with it writes from' },

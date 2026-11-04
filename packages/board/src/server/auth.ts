@@ -333,8 +333,8 @@ export async function tokenHash(secret: string): Promise<string> {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-/** What a grant left without `can` gives: what Vercel's API gives a project it lets use a board. */
-export const GRANT_DEFAULT: Can = { '*': ['read', 'post', 'react', 'label'] }
+/** What a grant or a token left without `can` gives: what Vercel's API gives a project it lets use a board. */
+export const DEFAULT_CAN: Can = { '*': ['read', 'post', 'react', 'label'] }
 const GRANT_CLAIMS_MAX = 32
 const GRANT_VALUES_MAX = 32
 const GRANT_VALUE_MAX = 1000
@@ -391,7 +391,7 @@ export function checkGrant(spec: GrantSpec, trusted: readonly string[]): { issue
     throw invalidGrant('a Vercel grant names project_id and environment: a preview runs any branch, so it says outright whether they get in')
   if (issuer === 'github' && claims.repository === undefined && claims.repository_id === undefined)
     throw invalidGrant('a GitHub grant names repository or repository_id: GitHub signs tokens for every repository')
-  const can = spec.can ?? GRANT_DEFAULT
+  const can = spec.can ?? DEFAULT_CAN
   try {
     compileAccess(can)
   } catch (error) {
@@ -418,9 +418,9 @@ export const grantIssuers = (grants: readonly Pick<StoredGrant, 'issuer'>[]) =>
 
 /**
  * What principals may do, under a board's rules: `vercelProject()`, `githubActions()`, `oidc()`,
- * and functions of your own, the first that matches deciding, past the defaults (people, and the
- * board's own deployments in its environment, may do everything). Or a host's own function of the
- * principal.
+ * and functions of your own, the first that matches deciding, with the board's grants adding to it,
+ * past the defaults (people, and the board's own deployments in its environment, may do
+ * everything). Or a host's own function of the principal.
  */
 export function createAuthority(options: {
   access: readonly (AccessRule | RuleFunction)[] | AccessFunction
@@ -428,7 +428,7 @@ export function createAuthority(options: {
   hosts: boolean
   /** The board's own Vercel project and team. */
   project: () => Promise<{ id: string | null; teamId: string | null }>
-  /** The grants the board keeps, as they are now: what a principal no rule matches may do. Null where it keeps none. */
+  /** The grants the board keeps, as they are now: what they add to the rules for a principal. Null where it keeps none. */
   grants?: (() => Promise<readonly StoredGrant[]>) | null
 }) {
   const rules = typeof options.access === 'function' ? [] : options.access
@@ -437,9 +437,11 @@ export function createAuthority(options: {
 
   /**
    * What the rules give a principal, in order: a token's rule when its facts match, a function when
-   * it answers. The board's own deployments in its environment get everything unless a token's rule
-   * says otherwise, and no function is asked about them. A 401 or 403 that says which rule would let
-   * it in, when none does.
+   * it answers. Every grant that matches its token adds to that, so a grant never goes unused
+   * because a rule matched first. The board's own deployments in its environment get everything
+   * unless a token's rule says otherwise, no function is asked about them, and no grant is theirs;
+   * a function that answers null refuses, grants or not. A 401 or 403 that says which rule would
+   * let it in, when nothing does.
    */
   async function byRules(principal: Known, facts: TokenFacts | null): Promise<Access> {
     if (facts?.issuer === 'host') throw forbidden("this token can't use this board: its board no longer takes a host's principals")
@@ -452,6 +454,7 @@ export function createAuthority(options: {
     const here = boardEnvironment()
     const ownDeployment = own !== null && own.id !== null && claims.project_id === own.id
     const ownHere = ownDeployment && here !== null && environment === here
+    let ruled: Access | null = null
     for (const rule of rules) {
       if (typeof rule === 'function') {
         // A function never takes the default of everything away: only a token's rule replaces it.
@@ -459,16 +462,24 @@ export function createAuthority(options: {
         const can = await rule(principal)
         if (can === undefined) continue
         if (can === null) throw forbidden("this token can't use this board")
-        return compileAccess(can)
+        ruled = compileAccess(can)
+        break
       }
-      if (facts && rule.issuer === facts.issuer && (rule.issuer !== 'oidc' || rule.url === facts.iss) && rule.matches(claims, context)) return rule.access
+      if (facts && rule.issuer === facts.issuer && (rule.issuer !== 'oidc' || rule.url === facts.iss) && rule.matches(claims, context)) {
+        ruled = rule.access
+        break
+      }
     }
-    if (ownHere) return FULL_ACCESS
-    if (!facts) throw forbidden("this token can't use this board")
-    // No rule matches, so the board's grants decide, all that match adding up: they only let more in.
+    if (ownHere) return ruled ?? FULL_ACCESS
+    if (!facts) {
+      if (ruled) return ruled
+      throw forbidden("this token can't use this board")
+    }
+    // The board's grants add to what a rule gives, all that match adding up: they only let more in.
     const grants = options.grants ? await options.grants() : []
-    const granted = grants.filter((grant) => grantMatches(grant, facts))
-    if (granted.length > 0) return union(granted.map((grant) => compileAccess(grant.can)))
+    const granted = grants.filter((grant) => grantMatches(grant, facts)).map((grant) => compileAccess(grant.can))
+    if (ruled) return granted.length > 0 ? union([ruled, ...granted]) : ruled
+    if (granted.length > 0) return union(granted)
     // An issuer a grant names is trusted: its token just isn't one the grant lets in.
     if (facts.issuer === 'oidc' && !oidcIssuers.has(facts.iss) && !grants.some((grant) => grant.issuer === facts.iss)) throw unauthorized(`untrusted issuer: ${facts.iss}`)
     if (facts.issuer === 'oidc' && !oidcIssuers.has(facts.iss)) throw forbidden("this token can't use this board: no grant lets in its claims")

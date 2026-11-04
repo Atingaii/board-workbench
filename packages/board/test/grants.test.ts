@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { githubActions, oidc } from '../src/server/auth.ts'
-import { caller, deploymentToken, oidcToken, OIDC_ISS, personToken, testBoard, workflowToken } from './harness.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { githubActions, oidc, vercelProject, type Known } from '../src/server/auth.ts'
+import { caller, deploymentToken, oidcToken, OIDC_ISS, personToken, PROJECT_ID, testBoard, workflowToken } from './harness.ts'
 
 /** A person, and a caller with `token`, on one board: the person sets grants, the caller tries the board. */
 async function setUp(options: Parameters<typeof testBoard>[0] = {}) {
@@ -44,11 +44,29 @@ describe('grants', () => {
     expect(me.body.can).toEqual({ '*': ['read', 'post', 'react', 'label'] })
   })
 
-  it("comes after the code's rules: a principal a rule matches gets what the rule gives", async () => {
+  it("adds to what the code's rules give: a principal a rule matches gets the rule's and every matching grant's", async () => {
     const { person, as } = await setUp({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read'] } })] })
-    await person('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: 'all' })
-    const me = await (await as(workflowToken()))('GET', '/me')
-    expect(me.body.can).toEqual({ 'ci/': ['read'] })
+    const workflow = await as(workflowToken())
+    const { body } = await person('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'deploys/': ['post'] } })
+    expect((await workflow('GET', '/me')).body.can).toEqual({ 'ci/': ['read'], 'deploys/': ['post'] })
+    // Revoking it leaves what the rule gives.
+    await person('POST', `/grants/${body.grant.id}/revoke`, {})
+    expect((await workflow('GET', '/me')).body.can).toEqual({ 'ci/': ['read'] })
+  })
+
+  it("never adds to the board's own deployments where it runs, or past a rule that refuses", async () => {
+    vi.stubEnv('VERCEL_TARGET_ENV', '')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    try {
+      const refuse = (principal: Known) => (principal.id.startsWith('github:') ? null : undefined)
+      const { person, as } = await setUp({ access: [vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }), refuse] })
+      await person('POST', '/grants', { issuer: 'vercel', claims: { project_id: PROJECT_ID, environment: 'preview' }, can: 'all' })
+      await person('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: 'all' })
+      expect((await (await as(deploymentToken('board', PROJECT_ID, 'preview')))('GET', '/me')).body.can).toEqual({ 'dev/': ['read'] })
+      expect((await (await as(workflowToken()))('GET', '/me')).status).toBe(403)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('trusts an issuer once a grant names it, and only for tokens with its claims', async () => {

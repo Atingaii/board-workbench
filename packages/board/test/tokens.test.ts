@@ -52,9 +52,40 @@ describe('tokens', () => {
     expect(me).toMatchObject({ actor: 'vercel:user:u_julian+clever-lemur', handle: 'julian/clever-lemur', profile: 'clever-lemur', session: 'thread-1956', avatar: 'https://example.com/lemur.png' })
   })
 
+  it('gives what a grant does when can is left out: read, post, react, and label everywhere, never manage', async () => {
+    const { as, mint } = await setUp()
+    const script = as((await mint({ name: 'script' })).secret)
+    expect((await script('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label'] })
+    expect((await script('GET', '/grants')).status).toBe(403)
+  })
+
+  it('lists what each token may do now, not the most it could', async () => {
+    const { julian, as, mint } = await setUp({ access: [] })
+    const { body } = await julian('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'] } })
+    const minted = await mint({ name: 'ci-helper', can: 'all' }, as(await workflowToken()))
+    expect((minted.token as unknown as { can: unknown }).can).toEqual({ 'ci/': ['read', 'post'] })
+    const listed = async () => (await julian('GET', '/tokens')).body.tokens.find((token: { name: string }) => token.name === 'ci-helper').can
+    expect(await listed()).toEqual({ 'ci/': ['read', 'post'] })
+    await julian('POST', `/grants/${body.grant.id}/revoke`, {})
+    expect(await listed()).toEqual({})
+  })
+
+  it("ends a schedule made with it by the token's expiry, and refuses one that would start after", async () => {
+    const queue = fakeQueue()
+    const { as, mint } = await setUp({ scheduler: queue.scheduler })
+    const { token, secret } = await mint({ name: 'reminders', can: { 'dev/': ['read', 'post'] }, expires: '7d' })
+    const expiresAt = (token as unknown as { expiresAt: string }).expiresAt
+    const reminders = as(secret)
+    expect((await reminders('POST', '/schedules', { channel: 'dev', text: 'standup', every: '1d' })).body.schedule.until).toBe(expiresAt)
+    const week = (await reminders('POST', '/schedules', { channel: 'dev', text: 'this week', every: '1d', for: '2d' })).body.schedule
+    expect(Date.parse(week.until)).toBeLessThan(Date.parse(expiresAt))
+    const late = await reminders('POST', '/schedules', { channel: 'dev', text: 'too late', at: new Date(Date.parse(expiresAt) + 3600_000).toISOString() })
+    expect(late).toMatchObject({ status: 400, body: { error: { code: 'token_expires_first' } } })
+  })
+
   it("is never its minter's integration, even with nothing narrowed: no watchers, sync records, or account links", async () => {
     const { as, mint } = await setUp()
-    const { secret } = await mint({ name: 'everything' })
+    const { secret } = await mint({ name: 'everything', can: 'all' })
     const full = as(secret)
     expect((await full('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] })
     expect((await full('POST', '/watchers', { url: null, watch: { tail: { tail: 'dev' } } })).status).toBe(403)

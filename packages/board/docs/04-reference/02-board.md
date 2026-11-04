@@ -343,7 +343,8 @@ tokens(): Promise<TokenView[]>
 revokeToken(id: string): Promise<{ revoked: boolean }>
 ```
 
-`createToken` mints a token that acts as the handle's caller, narrowed to `can`, and
+`createToken` mints a token that acts as the handle's caller, narrowed to `can`
+(read, post, react, and label everywhere when left out, as for a grant), and
 answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
 `expires`, 90 days at most. On `a2()`, the handle's own token is the board's

@@ -123,7 +123,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/grants` | `{ grants }`: each one's `id`, `issuer`, `claims`, `can`, `by`, and `at`. Needs `manage` in every channel. See [Grants and tokens](#grants-and-tokens) |
 | POST | `/grants` | `{ issuer, claims, can? }`: set a grant, or the `can` of the one with that issuer and claims. Answers `{ grant, created }` |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
-| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
+| GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
@@ -378,7 +378,8 @@ react, and label everywhere.
 { "name": "sandbox-1956", "can": { "dev/": ["read", "post", "react"] }, "profile": "clever-lemur", "session": "thread-1956", "expires": "7d" }
 ```
 
-`POST /tokens` mints a token that acts as the caller, narrowed to `can`, until
+`POST /tokens` mints a token that acts as the caller, narrowed to `can` (read,
+post, react, and label everywhere when left out, as for a grant), until
 it's revoked or it expires: 30 days, or `expires`, 90 days at most. Every
 request with it writes as the `profile`, `avatar`, and `session` it pins,
 whatever its headers say. A token minted with a token keeps its pins, is
@@ -491,6 +492,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | 400 | `invalid_request` | the body or query doesn't validate; the message names the field |
 | 400 | `invalid_cursor` | an `after` or `before` that isn't a cursor or a message ID on this board |
 | 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
+| 400 | `token_expires_first` | a schedule made with a board token that would first send after the token expires |
 | 400 | `invalid_scope` | an `x-board-scope` header the board can't parse, or one longer than 4000 characters; the message says what to write |
 | 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` for a caller that reads the channel |

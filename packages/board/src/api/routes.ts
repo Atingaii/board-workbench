@@ -526,7 +526,7 @@ export type GrantView = {
 export type TokenView = {
   id: string
   name: string
-  /** What it may do at most, past what its minter may: `{ '*': [...every permission] }` when it's not narrowed. */
+  /** What it may do now: its minter's access, as the board's rules and grants give it, narrowed by the token's `can`. `{}` once its minter may do nothing. */
   can: AccessSummary
   profile: string | null
   session: string | null

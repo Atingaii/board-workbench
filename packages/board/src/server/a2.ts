@@ -317,7 +317,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     consumers: [inbound],
   })
   // Who the board trusts beside its code's rules: grants, and the tokens it issued.
-  const access = createTrust({ store: log, issuers: () => binding.issuers() })
+  const access = createTrust({ store: log, issuers: () => binding.issuers(), accessNow: (principal) => binding.accessNow(principal) })
   const identityServer = createServer({ contract: identityContract, store: log })
   const codes = identityServer.session(IDENTITY_SESSION)
   const inboxes = inboxServer.session(INBOXES_SESSION)

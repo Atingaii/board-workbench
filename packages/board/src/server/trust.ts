@@ -5,8 +5,8 @@ import type { GrantView, TokenView } from '../api/routes.ts'
 import { duration } from '../client/client.ts'
 import { ACCESS_SESSION, accessContract, type AccessEvent } from '../contract/contract.ts'
 import { SCOPE_MAX } from '../contract/schemas.ts'
-import { compileAccess, FULL_ACCESS, parseScope, scopeOf, type Can } from './access.ts'
-import { BOARD_TOKEN_PREFIX, checkGrant, grantIssuers, tokenHash, type GrantSpec, type Known, type Principal, type StoredGrant } from './auth.ts'
+import { compileAccess, FULL_ACCESS, parseScope, scopeOf, type Access, type Can } from './access.ts'
+import { BOARD_TOKEN_PREFIX, checkGrant, DEFAULT_CAN, grantIssuers, tokenHash, type GrantSpec, type Known, type Principal, type StoredGrant } from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
 import { badRequest, forbidden, unauthorized } from './errors.ts'
 
@@ -154,10 +154,11 @@ const grantView = (row: GrantRow): GrantView => ({
   at: new Date(row.at).toISOString(),
 })
 
-const tokenView = (row: TokenRow): TokenView => ({
+/** A token as the protocol shows it, with `can` what it may do now (`accessNow`'s, for its minter). */
+const tokenView = (row: TokenRow, can: Access | null): TokenView => ({
   id: tokenId(row.id),
   name: row.name,
-  can: (row.minter.scope === undefined ? FULL_ACCESS : compileAccess(parseScope(row.minter.scope))).summary() as TokenView['can'],
+  can: (can === null ? {} : can.summary()) as TokenView['can'],
   profile: row.profile,
   session: row.session,
   by: row.by,
@@ -179,11 +180,34 @@ const needsManage = (identity: Identity, what: string) => {
 /**
  * The board's grants and tokens, in session `access` of its log: what `a2()` answers for them, and
  * what board() checks requests against. `issuers`: the OIDC issuers the board's rules name, which no
- * grant's may share principals with.
+ * grant's may share principals with. `accessNow`: what a principal may do now, under board()'s
+ * rules and grants, which a token's listing shows.
  */
-export function createTrust(options: { store: Parameters<typeof createServer>[0]['store']; issuers: () => readonly string[] }) {
+export function createTrust(options: {
+  store: Parameters<typeof createServer>[0]['store']
+  issuers: () => readonly string[]
+  accessNow: (principal: Known) => Promise<Access | null>
+}) {
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
   const read = async () => (await session.state(accessReducer)).state
+
+  /**
+   * What each of `rows` may do now: its minter's access, narrowed by its scope. A minter's is worked
+   * out once, however many tokens it has.
+   */
+  async function viewsOf(rows: readonly TokenRow[]): Promise<TokenView[]> {
+    const minters = new Map<string, Promise<Access | null>>()
+    return Promise.all(
+      rows.map(async (row) => {
+        const { scope, ...minter } = row.minter
+        const key = JSON.stringify(minter)
+        let access = minters.get(key)
+        if (!access) minters.set(key, (access = options.accessNow(minter)))
+        const now = await access
+        return tokenView(row, now === null || scope === undefined ? now : now.narrow(parseScope(scope)))
+      }),
+    )
+  }
 
   /** Whether token `id` and every token it was minted with are live now. */
   function liveIn(state: AccessState, id: number): boolean {
@@ -246,7 +270,7 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
     async tokens(identity: Identity): Promise<Protocol['tokens']['output']> {
       const state = await read()
       const rows = Object.values(state.tokens).filter((row) => liveIn(state, row.id) && manages(state, identity, row))
-      return { tokens: rows.sort((a, b) => a.id - b.id).map(tokenView) }
+      return { tokens: await viewsOf(rows.sort((a, b) => a.id - b.id)) }
     },
     /** The board tokens `principal` came with: its own, then each it was minted with. Undefined with none. */
     async chain(principal: Pick<Principal, 'token'>): Promise<string[] | undefined> {
@@ -279,7 +303,7 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       // linking accounts to its minter.
       let can: ReturnType<typeof compileAccess>
       try {
-        can = body.can === undefined ? FULL_ACCESS : compileAccess(body.can as Can)
+        can = compileAccess((body.can ?? DEFAULT_CAN) as Can)
       } catch (error) {
         throw badRequest((error as Error).message, 'invalid_scope')
       }
@@ -309,7 +333,8 @@ export function createTrust(options: { store: Parameters<typeof createServer>[0]
       })
       const minted = row && (await read()).tokens[row.index]
       if (!minted) throw new Error('a token was minted but its log has no record of it')
-      return { token: tokenView(minted), secret }
+      const [view] = await viewsOf([minted])
+      return { token: view!, secret }
     },
     async revokeToken(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeToken']['output']> {
       const state = await read()
