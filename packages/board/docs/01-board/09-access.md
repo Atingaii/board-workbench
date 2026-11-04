@@ -106,7 +106,7 @@ export const { scheduler } = backend
 ## A board on `http()`
 
 A board on `http()` keeps no log, and with no `access` of its own it serves no
-requests but its wake-ups, webhooks, and its sync's sign-ins. With one, it
+requests but its wake-ups and webhooks. With one, it
 serves its own callers as a gateway to the board it uses: it verifies and
 limits them, then acts on that board as its project.
 
@@ -440,8 +440,8 @@ than 4000 characters, is a 400 with `invalid_scope`, and the message says what
 to write.
 
 A narrowed caller is never its principal's integration. Registering,
-pulling, and acking watchers, and sync's records (imports, receipts, the
-inbox, and linking accounts), answer 403: they're its project's, with the
+pulling, and acking watchers, and sync's records (imports, receipts, and the
+inbox), answer 403: they're its project's, with the
 token it narrowed. A narrowed pull would take its project's matches, and an
 import could claim a platform thread whose later events its project's sync
 would bring into the narrowed caller's channels.

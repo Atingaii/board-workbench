@@ -71,7 +71,7 @@ export type Subscription =
   | { kind: 'sync' }
 
 /** One of board()'s sync entries: its key, its platform, and whether it can sign people in. */
-export type SyncEntry = { key: string; platform: string; signIn: boolean }
+export type SyncEntry = { key: string; platform: string }
 
 /** A platform event sync pushed to an inbox, as the backend delivers it back. */
 export type InboxDelivery = { event: ExternalEvent; raw: unknown }

@@ -91,7 +91,6 @@ describe('vercel()', () => {
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'failed',
       'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
-      'sync: finds no one for a platform account nobody linked': 'failed',
     })
   }, 30_000)
 

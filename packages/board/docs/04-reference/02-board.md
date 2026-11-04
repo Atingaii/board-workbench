@@ -387,20 +387,6 @@ you can read; see [Access](../01-board/09-access.md).
 `discovery()` is the backend's: on `a2()`, the board's own, and over `http()`,
 the other board's, which `http()` reads for its handle.
 
-### identity
-
-```ts
-identity(): Promise<IdentityView>  // { principal, links, unlinked, cursor }
-unlinkAccount(account: string): Promise<{ ok: true; actor: string }>
-```
-
-`links` are the Slack and GitHub accounts linked to you. `unlinked` names the
-sync entries you haven't linked yet, such as `['github']`. Boards older than it
-leave it out. Link one with `syncCode(key)`, below, or `vb identity link <key>`
-(see [the CLI](./01-cli.md#identity)): `identity()` shows the link once it's
-made. `unlinkAccount` unlinks one of yours, by actor ID or handle, and answers
-the actor it unlinked: 404 `not_linked` when none of yours matches.
-
 ### inbox and readSource
 
 ```ts
@@ -426,23 +412,17 @@ it, on an entry that opted in (`slack({ join: true })`); it answers
 syncImport(body: SyncImportInput): Promise<{ message: string | null; dropped?: string[] }>
 syncReceipt(body: SyncReceiptInput): Promise<{ ok: true; attached?: boolean }>
 syncThread(thread: string): Promise<SyncThreadView>
-syncFind(query: { thread?: string; message?: string; account?: string; person?: string; code?: string; post?: string }): Promise<SyncFindView>
+syncFind(query: { thread?: string; message?: string; post?: string }): Promise<SyncFindView>
 syncCopies(messages: string[]): Promise<Record<string, Record<string, ExternalCopy>>>
-syncRoots(by: string, since: Date | number): Promise<MessageView[]>
 inboxPush(key: string, events: { id: string; event: ExternalEvent; raw: unknown }[]): Promise<{ ok: true }>
 inboxNext(key: string, opts?: { limit?: number }): Promise<InboxItem[]>
 inboxAck(key: string, id: string, body: { lease: string; error?: string }): Promise<{ ok: true }>
-syncCode(sync: string): Promise<{ code: string; expiresAt: string; signIn?: string }>
-syncAccount(body: SyncAccountInput): Promise<{ person: string; link: LinkedAccount }>
-syncUnlink(account: string): Promise<{ ok: true }>
 ```
 
 What a sync running somewhere else reads and writes on a board: the
 [sync routes](./03-http.md#syncs-routes), one method each. `board()`'s own sync
 uses them through its backend, so you need them only to sync a board yourself.
-Each needs [`sync`](./03-http.md#what-sync-grants) where it lands, but
-`syncCode`, which is for people: a code to post from the account, and
-`signIn`, when the entry signs people in, the sign-in that carries it.
+Each needs [`sync`](./03-http.md#what-sync-grants) where it lands.
 
 ### Registered watchers
 

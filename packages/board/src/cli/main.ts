@@ -188,7 +188,7 @@ let warnings: Warning[] = []
 /** The board this run reached by its URL, for a failure to name. */
 let reached: string | null = null
 
-/** The help `words` ask for: a command's page when they name one (`read`, `identity link`), or else every command. */
+/** The help `words` ask for: a command's page when they name one (`read`, `sources read`), or else every command. */
 function help(words: readonly string[] = []): string {
   const own = Object.values(app.commands).map((command) => command.spec)
   const path = commandPath(words, [...commands, ...own])
@@ -291,7 +291,7 @@ let io: Io = TERMINAL
 const out = (text: string) => io.write(`${terminalText(text)}\n`)
 /** `--json`'s result: one document, with what the run's writes warned about, indented at a terminal. */
 const result = (value: object) => io.write(`${JSON.stringify(warnings.length ? { ...value, warnings } : value, null, io.tty ? 2 : undefined)}\n`)
-/** One line of a JSON stream (`tail`, `identity link`): compact, wherever it goes. */
+/** One line of a JSON stream (`tail`): compact, wherever it goes. */
 const line = (value: object) => io.write(`${JSON.stringify(value)}\n`)
 
 /** A message's ID as you'd write it: `#812` or `812`. It's passed to the board as it is. */
@@ -444,8 +444,6 @@ function doing(): string {
       return `list ${command}`
     case 'sources':
       return b === undefined ? 'list sources' : `${b} ${c ?? 'it'} on ${a}`
-    case 'identity':
-      return a === 'link' ? `link your account on ${b}` : a === 'unlink' ? `unlink ${b}` : 'list your linked accounts'
     case 'download':
       return `download ${a ?? 'the attachment'}`
     case 'inbox':
@@ -719,75 +717,6 @@ function portFlag(): number | undefined {
   return port
 }
 
-/** How long `identity link` waits for the sign-in or the code. */
-const LINK_WAIT_MS = 10 * 60_000
-
-async function identity(args: string[]): Promise<number> {
-  const board = client()
-  const [sub, target] = args
-  if (sub === undefined) {
-    const view = await board.identity()
-    if (flags.json) return result(view), 0
-    if (view.links.length === 0) out('no linked accounts')
-    for (const link of view.links) out(`${link.handle ? `@${link.handle}  ` : ''}${link.actor}  by ${link.method === 'code' ? 'code' : 'sign-in'} · ${link.at}`)
-    if (view.unlinked?.length) out(`not linked  ${view.unlinked.join(', ')}  (${named()} identity link <key>)`)
-    return 0
-  }
-  if (sub === 'unlink') {
-    if (!target) throw usage(`Missing the account to unlink: a handle or actor ID from \`${named()} identity\`.`, { reason: 'missing_arguments' })
-    if (args.length !== 2) throw usage('identity unlink takes one account.')
-    const unlinked = await board.unlinkAccount(target)
-    if (flags.json) result({ ...unlinked, outcome: 'unlinked' })
-    else out(`unlinked ${unlinked.actor}`)
-    return 0
-  }
-  if (sub !== 'link') throw usage(`Unknown command ${sub} for ${named()} identity.`, { reason: 'unknown_command' })
-  if (!target) throw usage('Missing the sync entry to link your account on, such as slack.', { reason: 'missing_arguments' })
-  if (args.length !== 2) throw usage('identity link takes one sync entry.')
-  const before = new Set((await board.identity()).links.map((link) => `${link.actor}|${link.at}`))
-  // The entry's platform, as the board lists it: what the code is posted from, or the sign-in is for.
-  const platform = (await board.discovery().catch(() => null))?.sync.find((entry) => entry.key === target)?.platform ?? target
-  const { code, expiresAt, signIn } = await board.syncCode(target)
-  const consent = signIn !== undefined && !flags.code
-  // The board says where its sign-in is, and the CLI opens it: only a web page.
-  if (consent && browsable(signIn) === null)
-    throw new Failed({ class: 'platform', reason: 'invalid_sign_in', message: "The board's sign-in isn't an http or https URL.", details: [JSON.stringify(signIn)], data: { signIn } })
-  // A stream: the code comes first, to use while this waits, and the account it linked last.
-  if (flags.json) line({ type: 'code', sync: target, platform, code, expiresAt, ...(signIn !== undefined ? { signIn } : {}) })
-  const until = Date.now() + LINK_WAIT_MS
-  const sleep = () => new Promise((resolve) => setTimeout(resolve, 2000))
-  /** An account linked on that platform since this run began: where the code or the sign-in landed. */
-  const linkedSince = async () =>
-    (await board.identity()).links.find((link) => link.actor.startsWith(`${platform}:user:`) && !before.has(`${link.actor}|${link.at}`))
-  if (consent) {
-    if (!flags.json) {
-      out(`Sign in to ${platform} as yourself to link it (and to post as you there):\n\n  ${signIn}\n`)
-      out(`Only open it yourself: whoever completes it links their account to you.`)
-    }
-    if (!flags['no-open'] && !flags.json) openBrowser(signIn!)
-  } else if (!flags.json) {
-    const minutes = Math.round((Date.parse(expiresAt) - Date.now()) / 60_000)
-    out(`From your ${platform} account, post this as a message anywhere the board syncs, within ${minutes} minutes:\n\n  ${code}\n`)
-  }
-  if (flags['no-wait']) return 0
-  // The sign-in, or the code's post, links the account where the entry's sync runs: it shows up in your links.
-  while (Date.now() < Math.min(until, consent ? Infinity : Date.parse(expiresAt))) {
-    await sleep()
-    const linked = await linkedSince()
-    if (linked) {
-      if (flags.json) line({ type: 'linked', account: linked })
-      else out(`linked ${linked.handle ? `@${linked.handle} ` : ''}(${linked.actor})`)
-      return 0
-    }
-  }
-  throw new Failed({
-    class: 'timeout',
-    reason: 'timeout',
-    message: consent ? 'Nothing linked an account within 10 minutes.' : 'The code expired before a message carried it.',
-    next: [{ instruction: 'Try again', argv: [...cli(), 'identity', 'link', target] }],
-  })
-}
-
 async function run(command: string | undefined, args: string[]): Promise<number> {
   switch (command) {
     case undefined:
@@ -849,12 +778,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'actors': {
       const actors = await client().actors()
       if (flags.json) return result({ actors }), 0
-      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}${actor.person ? `  → @${actor.person.handle}` : ''}`)
+      for (const actor of actors) out(`@${actor.handle}  ${actor.name}  ${actor.id}`)
       return 0
     }
-
-    case 'identity':
-      return identity(args)
 
     case 'read': {
       const target = args[0]
@@ -1288,7 +1214,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
 }
 
 /** The commands about the machine the CLI runs on, not the board: none of them run in-process. */
-const MACHINE = new Set(['whoami', 'identity', 'hooks', 'hook', 'serve', 'inspect'])
+const MACHINE = new Set(['whoami', 'hooks', 'hook', 'serve', 'inspect'])
 
 /** `main()` with `io` in place of the terminal, for `vb()`. One run at a time, as `main()`'s. */
 export async function mainWith(argv: string[], options: App, with_: Io): Promise<number> {

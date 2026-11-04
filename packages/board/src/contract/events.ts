@@ -140,10 +140,9 @@ export const boardEvents = {
       host: z.literal(true).optional(),
     }),
     /**
-     * A platform actor (`slack:user:U0456`) is the same person as a principal
-     * (`vercel:user:…`): for display, `--by`, and mentions, never for permissions.
-     * `method` says how it was proved: a one-time code posted from that account,
-     * or the account's own sign-in (`consent`).
+     * Older boards linked a platform actor (`slack:user:U0456`) to a principal
+     * (`vercel:user:…`). Nothing writes these now and folds ignore them: they're
+     * here so a log that has them still reads.
      */
     'actor.linked': z.object({
       actor: ActorId,

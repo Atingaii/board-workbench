@@ -596,20 +596,6 @@ const CHECKS: Check[] = [
       same(thread.replies.find((m) => m.id === reply.id)?.noSync, true, "a reply's noSync, read back")
     },
   },
-  {
-    group: 'sync',
-    name: 'finds no one for a platform account nobody linked',
-    run: async (ctx) => {
-      let found
-      try {
-        found = await ctx.board.syncFind({ account: `${SYNC_KEY}:user:${ctx.labels.conformance}` })
-      } catch (error) {
-        if (error instanceof BoardError && error.status === 403) return "this token can't look up a sync here"
-        throw error
-      }
-      same(found.person, null, 'who an account nobody linked is')
-    },
-  },
 ]
 
 /** Runs the checks against `board`, in order, and reports each. It never throws for what the board answers. */

@@ -251,8 +251,8 @@ export const GET = team.fetch, POST = team.fetch
   for the next match to wake this board. A board that pulls on its own
   doesn't wait.
 - **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
-  same way,** with its entries in its registration (`sync: [{ key, platform,
-  signIn }]`): it gets every post, change, and thread sync in the channels its
-  deployment may `sync`, as matches of watcher `@sync`, and runs them here. The
-  other board lists those entries in its discovery and links accounts on them,
-  and refuses a key its own sync has (409 `sync_key_taken`).
+  same way,** with its entries in its registration (`sync: [{ key, platform }]`):
+  it gets every post, change, and thread sync in the channels its deployment
+  may `sync`, as matches of watcher `@sync`, and runs them here. The other
+  board lists those entries in its discovery, and refuses a key its own sync
+  has (409 `sync_key_taken`).

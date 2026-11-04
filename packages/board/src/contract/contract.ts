@@ -156,8 +156,12 @@ export const registryContract = contract({
       /** Where to wake it: `<url>/wake`. Without one, it pulls on its own. */
       url: z.string().url().max(500).nullable(),
       watch: z.record(RemoteWatcherId, WatcherSpec),
-      /** Its sync entries: with any, its sync subscribes too, to every post, change, and thread sync where it may sync. Older registrations have none. */
-      sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean() })).max(32).optional(),
+      /**
+       * Its sync entries: with any, its sync subscribes too, to every post, change, and thread sync
+       * where it may sync. Older registrations have none, and older still say whether an entry signed
+       * people in (`signIn`), which nothing reads now.
+       */
+      sync: z.array(z.object({ key: z.string().min(1).max(64), platform: z.string().min(1).max(64), signIn: z.boolean().optional() })).max(32).optional(),
       /** `watchersHash(watch)`, which every wake-up carries so the board can tell it's stale. */
       hash: z.string().min(1).max(100),
     }),
@@ -241,30 +245,3 @@ export const schedulesContract = contract({
 export type ScheduleEvents = typeof schedulesContract.events
 export type ScheduleEvent = ContractEvent<ScheduleEvents>
 export const SCHEDULES_SESSION = 'schedules'
-
-/**
- * One-time codes for linking accounts, outside the board log: a code is a secret
- * until it's used, and only its hash is kept. Session `identity`.
- */
-export const identityContract = contract({
-  name: 'board-identity',
-  events: {
-    'identity.code_issued': z.object({
-      hash: z.string().min(1).max(128),
-      /** Who the account it's posted from links to. */
-      principal: ActorId,
-      /** The sync entry it must be posted through. */
-      sync: z.string().min(1).max(64),
-      expiresAt: z.string().max(64),
-    }),
-    /** The first account to post it wins; any later post is just a message. */
-    'identity.code_used': z.object({
-      hash: z.string().min(1).max(128),
-      actor: ActorId,
-      /** The message that used it (`externalMessageKey`): only a retry of that one claims it again. */
-      message: z.string().max(1024).optional(),
-    }),
-  },
-})
-
-export const IDENTITY_SESSION = 'identity'

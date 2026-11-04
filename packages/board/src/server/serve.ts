@@ -3,7 +3,6 @@ import {
   DeleteBody,
   EditBody,
   EventsQuery,
-  IdentityUnlinkBody,
   InboxAckBody,
   InboxNextQuery,
   InboxPushBody,
@@ -17,20 +16,15 @@ import {
   RegisterBody,
   ScheduleBody,
   SchedulesQuery,
-  SignInQuery,
   SourceJoinBody,
   SourceReadQuery,
   LinkedQuery,
-  SyncAccountBody,
   SyncBody,
-  SyncCodeBody,
   SyncCopiesQuery,
   SyncFindQuery,
   SyncImportBody,
   UploadStartBody,
   SyncReceiptBody,
-  SyncRootsQuery,
-  SyncUnlinkBody,
   ThreadsQuery,
   TypingBody,
   type MessageView,
@@ -91,7 +85,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
     case 'me':
     case 'channels':
     case 'actors':
-    case 'identity':
     case 'watchers':
       return {}
     case 'message':
@@ -154,8 +147,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return SyncFindQuery.parse(queryObject(url))
     case 'syncCopies':
       return SyncCopiesQuery.parse(queryObject(url))
-    case 'syncRoots':
-      return SyncRootsQuery.parse(queryObject(url))
     case 'inboxPush':
       return { key, ...InboxPushBody.parse(await body()) }
     case 'inboxNext':
@@ -164,12 +155,6 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return { key, id, ...InboxAckBody.parse(await body()) }
     case 'inbox':
       return { key, ...InboxQuery.parse(queryObject(url)) }
-    case 'syncCode':
-      return SyncCodeBody.parse(await body())
-    case 'syncAccount':
-      return SyncAccountBody.parse(await body())
-    case 'syncUnlink':
-      return SyncUnlinkBody.parse(await body())
     case 'typing':
       return { id, ...(TypingBody.parse(await body()) ?? {}) }
     case 'readSource':
@@ -677,27 +662,6 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     }
   }
 
-  /**
-   * A sign-in that carries a code, where the entry's sync runs: a browser opens it with no token,
-   * so the code is all it has. `signIn` sends the person to the platform as whoever the code was
-   * issued to; `signedIn`, where the platform sends them back, links the account they approved.
-   */
-  async function signingIn(name: 'signIn' | 'signedIn', url: URL, signal: AbortSignal): Promise<Response> {
-    const { sync: key, code } = SignInQuery.parse(queryObject(url))
-    if (!engine || !entries[key]) throw notFound(`no sync entry named ${key}`)
-    const page = (status: number, text: string) => new Response(`${text}\n`, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
-    const { holder } = await backend.syncFind(engine.caller, { code }, signal)
-    if (holder === null) return page(404, "That link has expired or been used. Run `vb identity link` again for a new one.")
-    if (name === 'signIn') {
-      const back = ownUrl()
-      const at = await engine.signIn(key, holder, back ? `${back}/identity/signed-in?${new URLSearchParams({ sync: key, code })}` : undefined)
-      return new Response(null, { status: 302, headers: { location: at } })
-    }
-    const linked = await engine.redeemSignIn(key, holder, code)
-    if (!linked) return page(409, `${entries[key]!.platform} hasn't said you approved yet: finish signing in, then open this page again.`)
-    return page(200, `Linked ${linked.handle ? `@${linked.handle}` : linked.actor}. You can close this tab.`)
-  }
-
   /** board()'s own routes for a caller: sync's, which run where board() does. */
   async function serve(name: BoardRoute, caller: Caller, request: Request, url: URL, params: Record<string, string>): Promise<Response> {
     const signal = request.signal
@@ -716,17 +680,6 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         const target = await resolveTarget(body.target)
         const { attached } = await backend.syncReceipt(caller, { kind: 'thread', message: id, target: target.target, targetKind: target.kind, cause: 'request' }, signal)
         return json({ target: target.target, attached: attached ?? true })
-      }
-      case 'identityUnlink': {
-        // Who may unlink what is the backend's: it answers for the caller's own links.
-        const body = IdentityUnlinkBody.parse(await readJson(request))
-        const { links } = await backend.identity(caller, {}, signal)
-        const wanted = body.actor.replace(/^@/, '').toLowerCase()
-        const found = links.filter((link) => link.actor === body.actor || link.handle?.toLowerCase() === wanted).map((link) => link.actor)
-        if (found.length === 0) throw notFound(`${body.actor} isn't linked to you`, 'not_linked')
-        if (found.length > 1) throw badRequest(`${body.actor} names several of your accounts: use ${found.join(' or ')}`, 'ambiguous_actor')
-        await backend.syncUnlink(caller, { account: found[0]! }, signal)
-        return json({ ok: true, actor: found[0]! })
       }
       default:
         throw notFound(`no route: ${request.method} ${url.pathname}`)
@@ -826,7 +779,6 @@ export async function createServe(context: BoardContext): Promise<Serve> {
         if (!engine || !entries[match.params.key ?? '']) throw notFound(`no sync entry named ${match.params.key}`)
         return await engine.handleWebhook(match.params.key!, request)
       }
-      if (target.kind === 'board' && (target.name === 'signIn' || target.name === 'signedIn')) return await signingIn(target.name, url, request.signal)
       if (target.kind === 'board' && target.name === 'avatar') {
         const name = match.param ?? ''
         if (!(KNOWN_AGENTS as readonly string[]).includes(name)) throw notFound(`no avatar: ${name}`)

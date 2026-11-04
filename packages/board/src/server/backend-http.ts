@@ -44,9 +44,8 @@ const PROFILE_RULE = 'ids start with a letter and use up to 32 letters, numbers,
  * and attach until a message carries it), which the board it uses can't tell them apart for.
  */
 export const PROJECTS_OWN = new Set<Method>([
-  'identity', 'edit', 'delete', 'schedule', 'cancelSchedule', 'upload', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack',
-  'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'syncRoots', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
-  'syncCode', 'syncAccount', 'syncUnlink',
+  'edit', 'delete', 'schedule', 'cancelSchedule', 'upload', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack',
+  'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
 ])
 
 /**
