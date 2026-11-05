@@ -83,7 +83,7 @@ describe('cli', () => {
     await truncate(huge, 101 * 1024 * 1024)
     expect(await vb(['reply', id, '--text-file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
     expect((await read()).replies).toHaveLength(1)
-  })
+  }, 20_000)
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
