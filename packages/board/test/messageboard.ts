@@ -83,13 +83,28 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
 /** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
 type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
 
+/** A person's role on the team. */
+type Role = 'owner' | 'member' | 'developer' | 'viewer'
+
+/** Everything, in the protocol's order: what `GET /me` says an owner, member, or developer may do. */
+const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
+
 /**
- * `me`: what `GET /me` says each principal may do, by the bearer `as()` sends (`user:u_jb`). One it
- * doesn't list may read, post, react, and label everywhere, with no expiry. `false` says neither,
- * as Vercel's API answered before it sent them.
+ * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
+ * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
+ * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
+ * of some credentials, by the bearer `as()` sends (`user:u_jb`), as it will of board tokens.
+ * `me: false` says neither, as Vercel's API answered before it sent them.
  */
 export function fakeMessageboard(
-  options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }>; me?: Record<string, MeSays> | false } = {},
+  options: {
+    teamId?: string
+    slug?: string
+    boardId?: string | null
+    accounts?: Record<string, { username: string; name: string }>
+    roles?: Record<string, Role>
+    me?: Record<string, MeSays> | false
+  } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
@@ -479,7 +494,9 @@ export function fakeMessageboard(
     if (method === 'GET' && path === '/me') {
       if (options.me === false) return { teamId, actor, view: viewOf(actor) }
       const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-      const says = options.me?.[bearer] ?? { can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null }
+      const role = actor.principal.type === 'user' ? (options.roles?.[actor.principal.userId] ?? 'member') : null
+      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read'] : ALL
+      const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
       return { teamId, actor, view: viewOf(actor), can: says.can, expiresAt: says.expiresAt }
     }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
