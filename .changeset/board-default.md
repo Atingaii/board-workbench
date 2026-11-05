@@ -9,6 +9,7 @@ import { board } from '@vercel/board'
 
 const team = board()                          // the team's default board
 const security = board({ name: 'security' })  // its board named security
+const acme = board({ team: 'acme' })          // team acme's default board
 ```
 
 `board({ fetch })` sends the credentials Vercel's API takes in place of the environment's, so a browser reaches Vercel's board without importing `vercel()`. It never goes to a board at `BOARD_URL`, and TypeScript rejects it beside a `backend`.

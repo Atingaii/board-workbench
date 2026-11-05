@@ -119,15 +119,17 @@ describe('board() and its backend', () => {
     expect(calls.at(-1)!.caller).toEqual({ self: 'deploys', profile: 'deploys', origin: { via: { kind: 'client', name: 'deploys' } } })
   })
 
-  it("hands a backend of your own the board's name once, when it binds, and refuses a name that isn't one", () => {
-    const bound: (string | null)[] = []
-    const mine = () => ({ routes: [], keeps: true, bind: (binding: { name: string | null }) => void bound.push(binding.name) }) as unknown as Backend
-    board({ backend: mine(), name: 'acme/security', url: BOARD_URL })
+  it("hands a backend of your own the board's team and name once, when it binds, and refuses what isn't one", () => {
+    const bound: { team: string | null; name: string | null }[] = []
+    const mine = () => ({ routes: [], keeps: true, bind: ({ team, name }: { team: string | null; name: string | null }) => void bound.push({ team, name }) }) as unknown as Backend
+    board({ backend: mine(), team: 'acme', name: 'security', url: BOARD_URL })
+    board({ backend: mine(), team: 'team_acme', url: BOARD_URL })
     board({ backend: mine(), url: BOARD_URL })
-    expect(bound).toEqual(['acme/security', null])
-    for (const name of ['', 'a/b/c', '/security', 'acme/', 'x'.repeat(65)])
+    expect(bound).toEqual([{ team: 'acme', name: 'security' }, { team: 'team_acme', name: null }, { team: null, name: null }])
+    for (const name of ['', 'acme/security', '/security', 'x'.repeat(65)])
       expect(() => board({ backend: mine(), name, url: BOARD_URL }), name).toThrow("isn't a board's name")
-    expect(bound).toHaveLength(2)
+    for (const team of ['', 'acme/web', 'two words']) expect(() => board({ backend: mine(), team, url: BOARD_URL }), team).toThrow("isn't a team")
+    expect(bound).toHaveLength(3)
   })
 
   it('takes a backend made from another, with one method changed', async () => {

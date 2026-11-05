@@ -163,12 +163,12 @@ through `chatSdk()` or a provider of its own.
 
 ### Backends
 
-`board({ backend, name, authenticate, access, middleware, project, watch, sync, url,
+`board({ backend, name, team, authenticate, access, middleware, project, watch, sync, url,
 basePath, streamMaxMs })` mounts a board on a backend, which says where the
-board lives. `name` says which of the team's boards it is: `security`, or
-`acme/security` for team acme's, and none for the team's default board. A
-name is 1 to 64 characters with no `/`, after its team and a `/`, and
-`board()` throws on one that isn't. `board()` owns the HTTP and the policy on every backend: it routes
+board lives. `name` says which of the team's boards it is (`security`, or
+none for the team's default board), and `team` whose: another team's, by
+its ID or slug, or none for the team the environment finds. A name is 1 to
+64 characters with no `/`, and `board()` throws on one that isn't. `board()` owns the HTTP and the policy on every backend: it routes
 each request, validates it with the schemas in `src/api/routes.ts`, checks the
 shape of its `x-board-*` claims, verifies its caller with `authenticate`
 (`oidcTokens()` from `@vercel/board/access` by default), works out the actor (the
@@ -223,10 +223,10 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   none.
 - **`bind(binding)`** is called once, when `board()` is created, before any
   request, and does no I/O. It's what background work needs from the board:
-  `name`, `board({ name })`'s or null, which `vercel()` resolves to a board
-  (once: `GET /v1/messageboard/boards?name=`, then `POST …/boards/ensure` for
-  the project's own credentials, never a person's, which get 404 `no_board`)
-  and `http()` and `a2()` leave unread;
+  `name` and `team`, `board({ name, team })`'s or null, which `vercel()`
+  resolves to a board on that team (once: `GET /v1/messageboard/boards?name=`,
+  then `POST …/boards/ensure` for the project's own credentials, never a
+  person's, which get 404 `no_board`) and `http()` and `a2()` leave unread;
   `subscriptions` (each watcher's tail, and sync's at `@sync`, which gets every
   post, change, and thread sync) with `run(id, event, { trigger, attempt })`;
   sync's inbound, `receive(key, event, { id, attempt })` for a backend that
@@ -1665,14 +1665,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   token: `board:client`, and `board:client:<profile>` with `as(profile)`, so
   its writes wake watchers and sync like anyone's.
 - **`board()` with no backend is the team's board in Vercel's API,** the one
-  `name` names, on `vercel()`, with `board({ fetch })`'s credentials when it's
-  given. In Node they default to `VERCEL_TOKEN`, the deployment's OIDC token,
-  then your `vercel login`, and the team to `VERCEL_ORG_ID`, the
-  deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
+  `name` names on the team `team` names, on `vercel()`, with
+  `board({ fetch })`'s credentials when it's given. In Node they default to
+  `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, and
+  the team to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
   it's `http()` to that board instead, whatever the name: its default `fetch`
   sends a token in the order in [Tokens](#tokens), through Deployment
   Protection, and `board({ fetch })` never goes there. The default build, for
-  browsers, finds nothing: `board({ name, fetch })`, or
+  browsers, finds nothing: `board({ team, name, fetch })`, or
   `board({ backend: http(url) })`, whose `fetch` sends the page's own session
   (a cookie, say), which the board's `board({ authenticate })` recognizes. A
   browser never gets a token of the deployment's.
@@ -1772,7 +1772,7 @@ Codex's, Pi's) is sent with each request and recorded on its writes.
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
 (`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
 Git checkout's root). `--name` (or `BOARD_NAME`) names which of that team's
-boards, and `acme/security` names the team too. With none, the CLI says how to point it at one; a CLI
+boards, a name alone: another team's is `--scope`'s. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
 reads `BOARD_URL`, and with none, uses the team's board in Vercel's API that
 its `name` names (`BOARD_NAME` is the CLI's alone). Nothing in a checkout names a host: a token or a
