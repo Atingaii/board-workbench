@@ -5,6 +5,8 @@ import { createBoardClient } from '../src/client/client.ts'
 import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
 import { conformance } from '../src/conformance/index.ts'
+import { boardEvents } from '../src/contract/events.ts'
+import { watchersHash } from '../src/server/registry.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
 import type { Middleware } from '../src/server/middleware.ts'
@@ -47,6 +49,18 @@ function gateway(api: ReturnType<typeof fakeMessageboard>, middleware: Middlewar
   const client = (name: keyof typeof callers) =>
     createBoardClient({ url: 'https://pong.example/api/board', token: name, fetch: ((input, init) => pong.fetch(new Request(input, init))) as typeof fetch, storeFetch: api.files })
   return { pong, via, client }
+}
+
+/** Every match a handle's registration has, each acked as it's pulled: a thread's next waits for the ack before it. */
+async function drain(handle: ReturnType<typeof handleOn>) {
+  const all: Awaited<ReturnType<typeof handle.matches>> = []
+  for (let pulled = await handle.matches({}); pulled.length > 0; pulled = await handle.matches({})) {
+    for (const match of pulled) {
+      await handle.ack(match.id, { lease: match.lease })
+    }
+    all.push(...pulled)
+  }
+  return all
 }
 
 /** A caller board() verified, with `can`: what a board with an `access` passes its backend. Ada by default. */
@@ -689,6 +703,96 @@ describe('vercel()', () => {
     await expect(pong.inboxPush('slack', [{ id: 'e1', event, raw: null }])).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
     await expect(ping.syncImport({ op: 'seen', author: { ...author, id: 'slack:user:U1' } })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
     await expect(julian.register({ url: null, watch: {}, sync: [{ key: 'linear', platform: 'linear' }] })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    // A conflict or a write too big, on sync's routes and nowhere else.
+    const refusing = (path: RegExp, status: number, code: string) =>
+      handleOn({ ...api, fetch: async (input: RequestInfo | URL, init?: RequestInit) => (path.test(new URL(new Request(input, init).url).pathname) ? Response.json({ error: { code, message: code } }, { status }) : api.fetch(input, init)) }, 'project:prj_pong:production')
+    const origin = { thread: 'slack:C1:1', subthread: null, message: '1', context: null }
+    await expect(refusing(/\/sync\/imports$/, 413, 'mutation_too_large').syncImport({ op: 'post', author: { ...author, id: 'slack:user:U1' }, from: 'slack', channel: 'general', text: 'hi', origin })).rejects.toMatchObject({ status: 413, code: 'too_large' })
+    await expect(refusing(/\/sync\/receipts$/, 409, 'operation_conflict').syncReceipt({ kind: 'thread', message: 'msg_00000000-0000-0000-0000-000000000000_1', target: 'slack:C1', targetKind: 'channel', cause: 'request' })).rejects.toMatchObject({ status: 409, code: 'conflict' })
+    await expect(refusing(/\/threads$/, 403, 'not_a_member').post('general', { text: 'hi' })).rejects.toMatchObject({ status: 403, code: 'not_a_member' })
+  })
+
+  it("names the sync a platform user's edit, delete, or reaction came through as its from", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const origin = { thread: 'slack:C1:1', subthread: null, message: '1', context: null }
+    const { message } = await pong.syncImport({ op: 'post', author, from: 'slack', channel: 'general', text: 'from slack', origin })
+    await pong.syncImport({ op: 'edit', author, from: 'slack', origin, text: 'edited on slack' })
+    await pong.syncImport({ op: 'react', author, from: 'slack', origin, emoji: 'eyes' })
+    await handleOn(api).react(message!, 'tada')
+    await pong.syncImport({ op: 'delete', author, from: 'slack', origin })
+    expect((await drain(pong)).map((match) => [match.event.type, (match.event.payload as { from: string | null }).from])).toEqual([
+      ['message.posted', 'slack'],
+      ['message.edited', 'slack'],
+      ['reaction.added', 'slack'],
+      ['reaction.added', null],
+      ['message.deleted', 'slack'],
+    ])
+  })
+
+  it("hands a thread's new target to the sync that owns its key as thread.synced, about the thread's root", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const ping = handleOn(api, 'project:prj_ping:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    await ping.register({ url: null, watch: {}, sync: [{ key: 'linear', platform: 'linear' }] })
+    const root = await pong.post('general', { text: 'sync me' })
+    await pong.reply(root.id, { text: 'a reply' })
+    await pong.syncReceipt({ kind: 'thread', message: root.id, target: 'slack:C1', targetKind: 'channel', cause: 'request' })
+    const synced = (await drain(pong)).filter((match) => match.event.type === 'thread.synced')
+    expect(synced.map((match) => [match.watcher, match.event.message?.id])).toEqual([['@sync', root.id]])
+    const payload = boardEvents['thread.synced'].parse(synced[0]!.event.payload)
+    expect(payload).toMatchObject({ thread: root.thread, target: 'slack:C1', kind: 'channel', cause: 'request', by: { actor: 'vercel:project:prj_pong:production' } })
+    expect((await drain(ping)).filter((match) => match.event.type === 'thread.synced')).toEqual([])
+  })
+
+  it('filters its config watchers by --source, which the API can’t match, and a read by where its messages came from', async () => {
+    const api = fakeMessageboard()
+    const ran: string[] = []
+    const run = (watcher: string) => async ({ event }: { event: { message?: { text: string } | null } }) => {
+      ran.push(`${watcher}: ${event.message!.text}`)
+    }
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') }),
+      url: 'https://pong.example/api/board',
+      basePath: '/api/board',
+      watch: { imported: { tail: 'general --source slack', run: run('imported') }, written: { tail: 'general --source board', run: run('written') } },
+    })
+    await pong.me()
+    while (!api.registrations.has('vercel:project:prj_pong:production')) await new Promise((resolve) => setTimeout(resolve, 5))
+    const ping = handleOn(api, 'project:prj_ping:production')
+    await ping.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    await ping.syncImport({ op: 'post', author, from: 'slack', channel: 'general', text: 'from slack', origin: { thread: 'slack:C1:1', subthread: null, message: '1', context: null } })
+    await handleOn(api).post('general', { text: 'on the board' })
+    await pong.fetch(new Request('https://pong.example/api/board/wake', { method: 'POST' }))
+    expect(ran.sort()).toEqual(['imported: from slack', 'written: on the board'])
+    const read = async (from: string) => (await handleOn(api).messages({ channel: 'general', from })).messages.map((message) => message.text)
+    expect(await read('slack')).toEqual(['from slack'])
+    expect(await read('board')).toEqual(['on the board'])
+  })
+
+  it("reads one channel's inbox events from as many as the API lists, so another channel's newer ones don't crowd them out", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
+    const author = { id: 'slack:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
+    const pushed = (channel: string, message: string) => ({ id: `${channel}/${message}`, event: { kind: 'message' as const, channel, thread: `${channel}:1`, subthread: null, message, isRoot: true, text: 'hi', context: null, author }, raw: null })
+    await pong.inboxPush('slack', [pushed('slack:C1', '1'), pushed('slack:C2', '1'), pushed('slack:C2', '2')])
+    expect((await pong.inbox('slack', { channel: 'slack:C1', limit: 1 })).map((entry) => entry.id)).toEqual(['slack:C1/1'])
+    expect((await pong.inbox('slack', { limit: 2 })).map((entry) => entry.id)).toEqual(['slack:C2/2', 'slack:C2/1'])
+  })
+
+  it('hashes a registration with its sync entries, as a board on http() does', async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const watch = { w: { tail: 'general', when: 'matches' as const } }
+    await pong.register({ url: null, watch })
+    expect(api.registrations.get('vercel:project:prj_pong:production')!.hash).toBe(watchersHash(watch))
+    await pong.register({ url: null, watch, sync: [{ key: 'slack', platform: 'slack' }] })
+    expect(api.registrations.get('vercel:project:prj_pong:production')!.hash).toBe(watchersHash(watch, [{ key: 'slack', platform: 'slack' }]))
   })
 
   it('refuses sync to a caller it serves, which would sync as the project', async () => {

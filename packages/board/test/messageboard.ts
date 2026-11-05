@@ -101,7 +101,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const stored = new Map<string, Uint8Array<ArrayBuffer>>()
   const STORAGE = 'http://storage.test/'
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
-  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; sync: { key: string; platform: string; signIn?: boolean }[]; hash: string }
+  type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; sync: { key: string; platform: string }[]; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
   /** By principal, as the API keeps them: one each. */
   const registrations = new Map<string, Registration>()
@@ -215,7 +215,25 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   function match(change: Change) {
     const messageId = (change as { messageId?: string }).messageId
     const message = messageId ? messageNamed(messageId) : undefined
-    if (!message || !String(change.type).startsWith('message.')) return
+    if (!message) {
+      return
+    }
+    const queue = (owner: string, watcher: string) => {
+      const lane = queued.get(owner) ?? []
+      queued.set(owner, lane)
+      lane.push({ id: `mat_${randomUUID()}`, watcher, threadId: message.threadId, change, attempts: 0 })
+    }
+    // A thread's binding goes only to the sync that owns the target's key.
+    const binding = (change as { binding?: { target: string } }).binding
+    if (change.type === 'thread.synced' && binding) {
+      for (const registration of registrations.values()) {
+        if (registration.sync.some((entry) => entry.key === prefixOf(binding.target))) {
+          queue(registration.owner, '@sync')
+        }
+      }
+      return
+    }
+    if (!String(change.type).startsWith('message.')) return
     const thread = threads.get(message.threadId)!
     const channel = channels.find((c) => c.id === thread.channelId)!
     const rootLabels = thread.messages[0]?.labels ?? {}
@@ -231,16 +249,13 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     for (const registration of registrations.values())
       // A sync gets every message change on the board as a match of its watcher `@sync`.
       if (registration.sync.length > 0) {
-        const lane = queued.get(registration.owner) ?? []
-        queued.set(registration.owner, lane)
-        lane.push({ id: `mat_${randomUUID()}`, watcher: '@sync', threadId: message.threadId, change, attempts: 0 })
+        queue(registration.owner, '@sync')
       }
     for (const registration of registrations.values())
       for (const [watcher, spec] of Object.entries(registration.watch)) {
-        if ((change.actor as Actor).id === `${registration.owner}+${watcher.toLowerCase()}` || !sees(spec.filter)) continue
-        const lane = queued.get(registration.owner) ?? []
-        queued.set(registration.owner, lane)
-        lane.push({ id: `mat_${randomUUID()}`, watcher, threadId: message.threadId, change, attempts: 0 })
+        if ((change.actor as Actor).id !== `${registration.owner}+${watcher.toLowerCase()}` && sees(spec.filter)) {
+          queue(registration.owner, watcher)
+        }
       }
   }
 
@@ -547,8 +562,15 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       const message = id ? messageNamed(id) : undefined
       if (!message) return { message: null }
       const by = message.createdBy.principal
-      if (by.type !== 'external' || by.syncKey !== key) throw new Refused(403, 'message_not_owned')
-      if ((body.op === 'edit' || body.op === 'delete') && body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict')
+      // A sync edits and deletes only its own platform users' messages; it reacts and labels on any.
+      if (body.op === 'edit' || body.op === 'delete') {
+        if (by.type !== 'external' || by.syncKey !== key) {
+          throw new Refused(403, 'message_not_owned')
+        }
+        if (body.revision !== undefined && body.revision !== message.revision) {
+          throw new Refused(409, 'revision_conflict')
+        }
+      }
       const thread = threadAt(message.threadId)
       const ref = { threadId: thread.id, message: message.sequence, messageId: message.id }
       if (body.op === 'edit') {
@@ -562,6 +584,20 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         message.revision++
         message.changes++
         emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, author)
+      } else if (body.op === 'react') {
+        const reactors = message.reactions.get(body.emoji) ?? new Map()
+        if (body.remove) {
+          reactors.delete(author.id)
+        } else {
+          reactors.set(author.id, { actor: author, createdAt: now() })
+        }
+        if (reactors.size) {
+          message.reactions.set(body.emoji, reactors)
+        } else {
+          message.reactions.delete(body.emoji)
+        }
+        message.changes++
+        emit(thread.channelId, { type: body.remove ? 'message.reaction_removed' : 'message.reaction_added', ...ref, emoji: body.emoji }, author)
       } else if (body.op === 'labels') {
         for (const [label, value] of Object.entries(body.if ?? {})) if ((message.labels[label] ?? null) !== value) throw new Refused(409, 'label_conflict')
         for (const label of body.unset ?? []) delete message.labels[label]
@@ -583,7 +619,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
           if (at && at !== message.threadId) throw new Refused(409, 'already_synced')
           platformThreads.set(`${prefixOf(body.target)}|${body.target}`, message.threadId)
         }
-        list.push({ target: body.target, targetKind: body.targetKind, cause: body.cause })
+        const binding = { target: body.target, targetKind: body.targetKind, cause: body.cause }
+        list.push(binding)
+        const thread = threadAt(message.threadId)
+        emit(thread.channelId, { type: 'thread.synced', threadId: thread.id, messageId: thread.messages[0]!.id, binding }, actor)
         return { ok: true, attached: true }
       }
       const mine = copies.get(message.id) ?? {}
