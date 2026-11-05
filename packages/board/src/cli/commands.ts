@@ -80,6 +80,7 @@ export const options = {
   sync: { type: 'string', multiple: true, value: 'target', description: 'sync the new thread to a target too, e.g. slack:#incidents' },
   'no-sync': { type: 'boolean', description: 'keep it on the board: sync it nowhere' },
   attach: { type: 'string', multiple: true, value: 'file', description: 'attach a file' },
+  'text-file': { type: 'string', value: 'path', description: 'the text, from a file: - reads stdin' },
   unset: { type: 'string', multiple: true, value: 'k', description: 'remove a label' },
   if: { type: 'string', multiple: true, value: 'k=v', description: 'only while the message has this label now' },
   'if-unset': { type: 'string', multiple: true, value: 'k', description: "only while the message doesn't have this label" },
@@ -126,7 +127,7 @@ export const globalOptions: readonly CliOption[] = (['url', 'scope', 'team', 'as
 )
 
 const id = (description = 'a message ID, as read shows it (#812)'): CliArgument => ({ name: 'id', required: true, description })
-const text = (description = 'what it says: - reads it from stdin, and it may be left out when you --attach'): CliArgument => ({
+const text = (description = 'what it says: - reads it from stdin, and it may be left out when you --attach or --text-file'): CliArgument => ({
   name: 'text',
   required: false,
   description,
@@ -278,7 +279,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'post',
     description: 'a new thread in a channel, or with an ID, a reply in its thread',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('label', 'label it', 'k=v'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('text-file'), option('attach'), option('sync'), option('no-sync'), option('idempotency-key'), option('after', AFTER)],
     examples: [
       { name: 'start a thread', value: 'post dev "deploys are green again"' },
       { name: 'start a labeled thread', value: 'post dev "checkout times out" --label kind=bug' },
@@ -289,7 +290,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'reply',
     description: 'a reply in a thread',
     arguments: [id('the ID of a message in the thread'), text()],
-    options: [option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
+    options: [option('text-file'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
     examples: [
       { name: 'reply in a thread', value: 'reply 812 "on it"' },
       { name: "reply only if #815 is still the thread's newest", value: 'reply 812 "on it" --after 815' },
@@ -300,7 +301,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'schedule',
     description: 'post later, as you: once (--in or --at), or repeating (--every) until a stop or until canceled',
     arguments: [{ name: 'channel|id', required: true, description: 'a channel, or a message ID to reply in its thread' }, text()],
-    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('attach'), option('no-sync')],
+    options: [option('in'), option('at'), option('every'), option('until'), option('for'), option('times'), option('label', 'label it', 'k=v'), option('text-file'), option('attach'), option('no-sync')],
     examples: [
       { name: 'reply in a thread tomorrow', value: 'schedule 812 "still broken?" --in 1d' },
       { name: 'post every morning', value: 'schedule dev "standup" --at 2026-11-02T09:00:00Z --every 1d' },
@@ -328,8 +329,8 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     group: 'messages',
     name: 'edit',
     description: "change a message's text",
-    arguments: [id(), { name: 'text', required: true, description: 'its new text: - reads it from stdin' }],
-    options: [option('if-revision')],
+    arguments: [id(), { name: 'text', required: false, description: 'its new text: - reads it from stdin, and it may be left out when you --text-file' }],
+    options: [option('text-file'), option('if-revision')],
     examples: [
       { name: 'fix a typo', value: 'edit 812 "deploys are green again"' },
       { name: 'only if no one changed it since you read it', value: 'edit 812 "step 3 of 5" --if-revision 820' },

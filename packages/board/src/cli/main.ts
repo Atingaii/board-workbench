@@ -331,8 +331,23 @@ function labelPairs(values: string[] | undefined, wrong = "Labels look like key=
   return pairs
 }
 
-async function text(value: string | undefined): Promise<string> {
-  if (value === undefined) throw usage("Missing the message's text: pass it, or - to read it from stdin.", { reason: 'missing_arguments' })
+/**
+ * A message's text: the argument, stdin for `-`, or the file `--text-file` names (`-` for stdin).
+ * `optional` when the message can go without, as one with `--attach` files can.
+ */
+async function text(value: string | undefined, { optional = false } = {}): Promise<string> {
+  const file = flags['text-file']
+  if (file !== undefined) {
+    if (value !== undefined) throw usage("Can't use --text-file with text: pass one or the other.")
+    if (file === '-') return (await io.stdin()).replace(/\n$/, '')
+    const data = await io.readFile(file)
+    if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
+    return new TextDecoder().decode(data).replace(/\n$/, '')
+  }
+  if (value === undefined) {
+    if (optional) return ''
+    throw usage("Missing the message's text: pass it, - to read it from stdin, or --text-file <path>.", { reason: 'missing_arguments' })
+  }
   if (value !== '-') return value
   return (await io.stdin()).replace(/\n$/, '')
 }
@@ -921,7 +936,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (re === undefined && flags.after !== undefined)
         throw usage("Can't use --after on a new thread. It's for replies: the thread's newest message.")
       const board = client()
-      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const content = await text(body, { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const options = {
         text: content,
@@ -941,7 +956,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'reply': {
       const id = messageId(args[0])
       const board = client()
-      const content = args[1] === undefined && flags.attach?.length ? '' : await text(args[1])
+      const content = await text(args[1], { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const message = await board.reply(id, {
         text: content,
@@ -969,7 +984,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const times = flags.times === undefined ? undefined : Number(flags.times)
       if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw usage(`--times takes a count, and ${flags.times} isn't one.`)
       const board = client()
-      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const content = await text(body, { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const where = isMessageRef(target) ? { re: messageId(target) } : target
       const schedule = await board.schedule(where, {

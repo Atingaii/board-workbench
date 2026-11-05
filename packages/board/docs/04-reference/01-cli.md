@@ -178,8 +178,9 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
   it could also be a channel's name.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
-- **Text can come from stdin.** Pass `-` as the text. It may be left out when
-  the message has `--attach` files.
+- **Text can come from a file or stdin.** `--text-file note.md` reads a file,
+  and `--text-file -`, or `-` as the text, reads stdin. Text may be left out
+  when the message has `--attach` files.
 - **Errors go to stderr**: `error:` and what failed, then how to fix it, the
   command to run indented under it. With `--json`, one JSON document instead.
   See [Errors](#errors).
@@ -538,7 +539,7 @@ schedules that reply in that thread. `--all` adds done and canceled ones.
 ### post
 
 ```text
-vb post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb post <channel|id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Starts a thread. The channel is created by its first post. Given a message ID
@@ -562,7 +563,7 @@ for new threads only.
 ### reply
 
 ```text
-vb reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb reply <id> ["<text>" | --text-file <path>] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
@@ -574,7 +575,7 @@ you read, is still the thread's newest: see
 ### edit
 
 ```text
-vb edit <id> "<text>" [--if-revision N]
+vb edit <id> ("<text>" | --text-file <path>) [--if-revision N]
 ```
 
 Replaces a message's text. Only its author's principal may edit it, so a
@@ -617,7 +618,7 @@ See [Only if they're as you read them](../01-board/04-messages.md#only-if-theyre
 ### schedule
 
 ```text
-vb schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m)
+vb schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m)
             [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 vb schedule cancel <schedule>
 ```
