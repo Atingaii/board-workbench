@@ -733,6 +733,16 @@ describe('cli', () => {
     expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
   })
 
+  it('names the whole argument an unknown option is in, when it holds several words', async () => {
+    // A shell variable that wasn't split: --as is real, but the argument it starts isn't an option.
+    const joined = await vb(['read', 'dev', '--as x --scope acme'])
+    expect(joined).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option "--as x --scope acme" for vb read\.\n/) })
+    // Text that starts with - is one argument too, and the way out moves all of it after --.
+    const dashed = await vb(['post', 'dev', '- check the deploy'])
+    expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option "- check the deploy" for vb post\./) })
+    expect(dashed.stderr).toContain("vb post dev -- '- check the deploy'")
+  })
+
   it('says `vb stuck` is gone, and where its dead letters are', async () => {
     expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({
       code: 2,
