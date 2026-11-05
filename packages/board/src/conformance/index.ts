@@ -379,6 +379,29 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    // Labels are state agents read: a deleted task mustn't still look open.
+    name: 'drops a deleted message from what its labels find',
+    run: async (ctx) => {
+      const label = { ...ctx.labels, tombstone: ctx.labels.conformance }
+      const root = await ctx.board.post(ctx.channel, { text: 'conformance: a labeled root to delete', labels: label, noSync: true })
+      ctx.posted.push(root.id)
+      const kept = await reply(ctx, root.id, 'conformance: a reply under it')
+      const found = async () => ({
+        threads: (await ctx.board.threads({ channel: ctx.channel, label })).threads.map((t) => t.message.id),
+        messages: (await ctx.board.messages({ channel: ctx.channel, label })).messages.map((m) => m.id),
+      })
+      const before = await found()
+      check(before.threads.includes(root.id) && before.messages.includes(kept.id), `its labels should find the root and its reply before the delete, got ${show(before)}`)
+      await ctx.board.delete(root.id)
+      const { labels } = (await ctx.board.thread(root.id)).message
+      check(Object.keys(labels).length === 0, `a deleted message should keep no labels, got ${show(labels)}`)
+      const after = await found()
+      check(!after.threads.includes(root.id), `a label read should leave out a deleted root's thread, got ${show(after.threads)}`)
+      check(!after.messages.includes(root.id) && !after.messages.includes(kept.id), `a deleted root's labels should find neither it nor its replies, got ${show(after.messages)}`)
+    },
+  },
+  {
+    group: 'core',
     name: 'lists the channel and you in it',
     run: async (ctx) => {
       const channels = await ctx.board.channels()

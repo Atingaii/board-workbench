@@ -95,7 +95,7 @@ export function vb(board: Board, argv: string[], options: VbOptions = {}): Promi
       board,
       write: (chunk) => void (stdout += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true })),
       error: (chunk) => void (stderr += chunk),
-      readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach can't read files", 'readFile'),
+      readFile: options.readFile ? async (path) => options.readFile!(path) : lacking("--attach and --text-file can't read files", 'readFile'),
       writeFile: options.writeFile ? async (path, data) => options.writeFile!(path, data) : lacking("download can't save files", 'writeFile'),
       stdin: options.stdin !== undefined ? async () => options.stdin! : lacking("- can't read stdin", 'stdin'),
       ...(options.signal ? { signal: options.signal } : {}),

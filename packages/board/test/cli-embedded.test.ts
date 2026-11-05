@@ -219,10 +219,10 @@ describe('the embedded CLI', () => {
     try {
       const app = createApp({ appName: 'vercel board' })
       const posted = await capture(() => app.run(['post', 'general', 'on the team board']))
-      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_1\n$/) })
+      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^msg_[0-9a-f-]{36}_1\n$/) })
       // The ID it prints goes back in as it came out.
       const id = posted.stdout.trim()
-      expect(await capture(() => app.run(['reply', id, 'a reply']))).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_2\n$/) })
+      expect(await capture(() => app.run(['reply', id, 'a reply']))).toMatchObject({ code: 0, stdout: expect.stringMatching(/^msg_[0-9a-f-]{36}_2\n$/) })
       const thread = await capture(() => app.run(['read', id]))
       expect(thread).toMatchObject({ code: 0, stdout: expect.stringContaining('a reply') })
       expect(thread.stdout).toContain('on the team board')
@@ -256,6 +256,32 @@ describe('the embedded CLI', () => {
       for (const text of ['one', 'two']) expect((await capture(() => app.run(['post', 'dev/web', text, '--scope', 'acme']))).code).toBe(0)
       expect(await capture(() => app.run(['channels', '--scope', 'acme']))).toEqual({ code: 0, stdout: 'dev/\n  dev/web\ngeneral\n', stderr: '' })
       expect(JSON.parse((await capture(() => app.run(['channels', '--scope', 'acme', '--json']))).stdout)).toEqual({ channels: [{ path: 'dev/web' }, { path: 'general' }] })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("takes a team board's message ID as it prints one, bare, wherever a channel or a message goes", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const posted = await capture(() => app.run(['post', 'dev', 'deploy failed', '--scope', 'acme']))
+      // Printed bare, so it pastes into a shell, where a leading # starts a comment.
+      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^msg_[0-9a-f-]{36}_1\n$/) })
+      const id = posted.stdout.trim()
+      expect(await capture(() => app.run(['post', id, 'on it', '--scope', 'acme']))).toMatchObject({ code: 0, stdout: `${id.replace(/_1$/, '_2')}\n` })
+      const read = await capture(() => app.run(['read', id, '--scope', 'acme', '--json']))
+      expect(read.code).toBe(0)
+      expect(JSON.parse(read.stdout)).toMatchObject({ message: { id, text: 'deploy failed' }, replies: [{ text: 'on it' }] })
+      // The reply went in the thread, not to a channel named for the ID.
+      expect(JSON.parse((await capture(() => app.run(['channels', '--scope', 'acme', '--json']))).stdout)).toEqual({ channels: [{ path: 'dev' }, { path: 'general' }] })
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
