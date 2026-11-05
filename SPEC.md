@@ -1303,8 +1303,9 @@ export const schedulesContract = contract({
 - **Actor profiles:** `actor.seen` is appended in the same batch as an actor's
   write, and only when the actor is new or its display details changed.
 - **Edits and deletes:** deleted messages become tombstones and drop their
-  reactions. Later edits to a deleted message are ignored. This is the same
-  invariant as Just Chat.
+  reactions and labels, so no label filter finds a tombstone, or a reply by its
+  deleted root's labels. Later edits to a deleted message are ignored. This is
+  the same invariant as Just Chat.
 - **The event feed hides bookkeeping (`actor.seen`, `message.synced`) by default.** `tail --all` shows every
   board event. To see raw platform events, use `vb inbox`.
 
