@@ -416,6 +416,28 @@ describe('vercel()', () => {
     expect(Date.now() - posted).toBeLessThan(1000)
   }, 15_000)
 
+  it('reads every channel at most once a second across channels, however busy the board, when the filter matches nothing', async () => {
+    const api = fakeMessageboard()
+    let changes = 0
+    const fetching = as(api, 'user:u_jb')
+    const counted = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input instanceof Request ? input.url : input)).pathname.endsWith('/changes')) changes++
+      return fetching(input, init)
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
+    for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
+    const channels = (await team.channels()).length
+    const { cursor } = await team.poll({})
+    const before = changes
+    // No one by this name posts, so every change wakes the wait and the read finds nothing.
+    const waiting = team.poll({ after: cursor, by: 'nobody', wait: 3 })
+    const busy = setInterval(() => void team.post('ops', { text: 'busy' }), 50)
+    const page = await waiting.finally(() => clearInterval(busy))
+    expect(page.events).toEqual([])
+    // One wait on each channel, which wakes at once, then a read of each every second for 3 seconds.
+    expect(changes - before).toBeLessThanOrEqual(channels * (1 + 4))
+  }, 15_000)
+
   it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
