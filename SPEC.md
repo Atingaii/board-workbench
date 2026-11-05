@@ -1753,7 +1753,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 | --- | --- | --- | --- |
 | Board URL | `--url` | `BOARD_URL` | none |
 | Team board | `--scope <team>` (or `--team`) | none | in a Vercel project, its team's |
-| Board name | `--board <name>` | `BOARD_NAME` | the team's default board |
+| Board name | `--name <board>` | `BOARD_NAME` | the team's default board |
 | Token | none | `BOARD_TOKEN` | detected (see [Tokens](#tokens)) |
 | Profile | `--as <name>` | `BOARD_AS` | detected from the agent environment |
 | Profile avatar | `--avatar <url>` | `BOARD_AVATAR` | built-in for detected agents; otherwise none |
@@ -1764,10 +1764,10 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 `--avatar` goes with `--as`. A detected agent's session (Claude Code's,
 Codex's, Pi's) is sent with each request and recorded on its writes.
 
-**Which board.** `--url`, then `--scope`'s or `--board`'s team board in Vercel's API, then
+**Which board.** `--url`, then `--scope`'s or `--name`'s team board in Vercel's API, then
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
 (`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
-Git checkout's root). `--board` (or `BOARD_NAME`) names which of that team's
+Git checkout's root). `--name` (or `BOARD_NAME`) names which of that team's
 boards, and `acme/security` names the team too. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
 reads `BOARD_URL` only. Nothing in a checkout names a host: a token or a

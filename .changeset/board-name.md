@@ -11,6 +11,6 @@ import { vercel } from '@vercel/board/backend-vercel'
 const security = board({ backend: vercel(), name: 'security' })
 ```
 
-`vb --board <name>` (or `BOARD_NAME`) picks it from the CLI, next to `--scope`, ahead of `BOARD_URL`.
+`vb --name <board>` (or `BOARD_NAME`) picks it from the CLI, next to `--scope`, ahead of `BOARD_URL`.
 
 A backend of your own reads the name once, as `binding.name` in `bind` (null for the default board).
