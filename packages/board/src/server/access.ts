@@ -209,7 +209,8 @@ function fromRules(rules: Rules): Access {
       return out
     },
   }
-  return compiled
+  // Board hands the same objects to its own code and principals (FULL_ACCESS), so no importer may change one.
+  return Object.freeze(compiled)
 }
 
 /** Access from config: `'all'`, a list for every channel, or a map from pattern to grant. Throws on a bad pattern or permission. */

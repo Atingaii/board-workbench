@@ -265,4 +265,19 @@ describe('@vercel/board/access', () => {
     expect(publicAccess.FULL_ACCESS.everywhere('manage')).toBe(true)
     expect(() => publicAccess.compileAccess({ 'ci/*': ['post'] })).toThrow('write ci/ for ci and its subtree')
   })
+
+  it("can't be changed by code that imports it, so board's own decisions stay its own", () => {
+    const stub = () => {
+      ;(publicAccess.FULL_ACCESS as { can: Access['can'] }).can = () => false
+    }
+    expect(stub).toThrow(TypeError)
+    expect(publicAccess.FULL_ACCESS.can('manage', 'dev')).toBe(true)
+    expect(() => Object.assign(publicAccess.compileAccess(['read']), { readsAll: false })).toThrow(TypeError)
+  })
+
+  it('adds up only accesses it made: anything else counts as nothing', () => {
+    const handWritten = { can: () => true, readable: () => true, readsAll: true, everywhere: () => true, anywhere: () => true } as unknown as Access
+    expect(publicAccess.union([handWritten]).anywhere('read')).toBe(false)
+    expect(publicAccess.union([handWritten, publicAccess.compileAccess({ dev: ['read'] })]).summary()).toEqual({ dev: ['read'] })
+  })
 })

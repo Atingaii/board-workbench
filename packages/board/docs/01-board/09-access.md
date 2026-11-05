@@ -451,7 +451,7 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `oidcTokens(options?)` | An `authenticate`: the OIDC tokens made out to this board. It verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer `board.issuers` names, or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `board()`'s default |
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileRules(rules, { project })` | What a principal may do under `rules`, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
-| `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as the same `Access`, with `narrow(scope)` to keep only what both allow. `union` adds up what several allow, as grants do. A bad pattern or permission throws. For a backend that keeps its own copy of these rules to check itself against |
+| `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as the same `Access`, with `narrow(scope)` to keep only what both allow. `union` adds up what several allow, as grants do: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that keeps its own copy of these rules to check itself against |
 
 ## Permissions
 
