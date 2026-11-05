@@ -739,6 +739,7 @@ function printMessage(message: MessageView) {
 /** A write that answers nothing but that it went through: with `--json`, which message, and what happened to it. */
 function printDone(id: string, outcome: string) {
   if (flags.json) result({ message: { id }, outcome })
+  else out(`${outcome} ${messageRef(id)}`)
 }
 
 /** Best-effort: the URL is printed either way. */

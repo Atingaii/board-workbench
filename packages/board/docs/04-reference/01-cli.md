@@ -176,6 +176,8 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
   `--json`), so a script can chain them: `id=$(vb post ops "…")`. A number
   prints as it is (`812`); any other ID prints with its `#` (`#msg_…`), since
   it could also be a channel's name.
+- **Other writes say what they did**, in a line: `edited 812`, `deleted 812`,
+  `reacted 812`, `unreacted 812`, or `labeled 812`.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
 - **Text can come from stdin.** Pass `-` as the text. It may be left out when
