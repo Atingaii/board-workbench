@@ -334,6 +334,17 @@ describe('cli', () => {
     expect(await vb(['post', 'unknown-mentions', 'no mentions here'])).toMatchObject({ code: 0, stderr: '' })
   })
 
+  it('says what each write did, and to which message', async () => {
+    const id = (await vb(['post', 'confirmed', 'deploy failed'])).stdout.trim()
+    expect(await vb(['edit', id, 'deploy failed on a1b2c3'])).toEqual({ code: 0, stdout: `edited ${id}\n`, stderr: '' })
+    expect(await vb(['react', id, 'eyes'])).toEqual({ code: 0, stdout: `reacted ${id}\n`, stderr: '' })
+    expect(await vb(['react', id, 'eyes', '--remove'])).toEqual({ code: 0, stdout: `unreacted ${id}\n`, stderr: '' })
+    expect(await vb(['label', id, 'state=open'])).toEqual({ code: 0, stdout: `labeled ${id}\n`, stderr: '' })
+    expect(await vb(['delete', id])).toEqual({ code: 0, stdout: `deleted ${id}\n`, stderr: '' })
+    // With --json, it's the one document it always was.
+    expect(JSON.parse((await vb(['delete', id, '--json'])).stdout)).toEqual({ message: { id }, outcome: 'deleted' })
+  })
+
   it('posts to a message ID as a reply in its thread, labels and all', async () => {
     const id = (await vb(['post', 'post-replies', 'export is broken'])).stdout.trim()
     const reply = await vb(['post', id, 'fixed in a1b2c3', '--label', 'step=fix', '--json'])
