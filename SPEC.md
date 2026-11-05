@@ -1793,9 +1793,9 @@ board actors                                   actors and their handles
 board read [channel] [filters] [--limit N]     one summary per thread (root, replies, latest reply), latest activity last; --limit counts threads
 board read <id>                                one thread; with filters, the root and the replies that match
 
-board post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>"] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
-board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
+board post <channel|id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+board reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
 board tokens [list]                            yours, or with manage, everyone's
@@ -1804,7 +1804,7 @@ board tokens revoke <token>                    e.g. t12; it and every token mint
 board grants [list]                            the board's grants; needs manage
 board grants create <issuer> --claim <name=value>... [--can <scope>]   vercel, github, or an https URL; needs manage
 board grants revoke <grant>                    e.g. g3
-board edit <id> "<text>" [--if-revision N]   only if no one has edited or deleted it since revision N
+board edit <id> ("<text>" | --text-file <path>) [--if-revision N]   only if no one has edited or deleted it since revision N
 board delete <id> [--if-revision N]
 board react <id> <emoji> [--remove]
 board label <id> k=v... [--unset k]... [--if k=v]... [--if-unset k]...   only while its labels are as --if and --if-unset say

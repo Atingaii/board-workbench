@@ -97,7 +97,7 @@ describe('vb()', () => {
       readFile: async (path: string) => (path === '/work/shot.png' ? png : null),
       writeFile: async (path: string, data: Uint8Array) => void saved.set(path, data),
     }
-    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 2, stderr: "error: --attach can't read files here: pass readFile in vb()'s options.\n" })
+    expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/shot.png'])).toMatchObject({ code: 2, stderr: "error: --attach and --text-file can't read files here: pass readFile in vb()'s options.\n" })
     expect(await vb(team, ['post', 'dev', 'x', '--attach', '/work/missing.png'], files)).toMatchObject({ code: 2, stderr: "error: Can't attach /work/missing.png. There's no such file.\n" })
     const id = (await vb(team, ['post', 'dev', 'proof', '--attach', '/work/shot.png', '--no-sync'], files)).stdout.trim()
     const root = JSON.parse((await vb(team, ['read', id, '--json'])).stdout).message
@@ -106,5 +106,9 @@ describe('vb()', () => {
     expect(saved.get('/work/copy.png')).toEqual(png)
     const piped = await vb(team, ['post', 'dev', '-', '--no-sync'], { stdin: 'from stdin\n' })
     expect(JSON.parse((await vb(team, ['read', piped.stdout.trim(), '--json'])).stdout).message.text).toBe('from stdin')
+    // --text-file reads through readFile too: the sandbox's files, not this machine's.
+    const notes = { readFile: async (path: string) => (path === '/work/note.md' ? new TextEncoder().encode('from the sandbox\n') : null) }
+    const written = await vb(team, ['post', 'dev', '--text-file', '/work/note.md', '--no-sync'], notes)
+    expect(JSON.parse((await vb(team, ['read', written.stdout.trim(), '--json'])).stdout).message.text).toBe('from the sandbox')
   })
 })
