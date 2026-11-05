@@ -75,6 +75,7 @@ describe('vercel()', () => {
       'core: posts once for a client ID, however many times it is sent': 'passed',
       'core: raises the version with each edit, reaction, and label': 'passed',
       "core: matches a label on the message or its thread's root": 'passed',
+      'core: drops a deleted message from what its labels find': 'passed',
       'core: reads a channel after a cursor or a message ID, oldest first': 'passed',
       'core: lists threads, each with its reply count and latest reply': 'passed',
       'core: reads events after a cursor, each with a cursor of its own': 'passed',
@@ -400,6 +401,25 @@ describe('vercel()', () => {
     const { threads } = await team.threads({ channel: 'dev', label: { state: 'open|wip' }, limit: 2 })
     expect(threads.map((thread) => thread.message.text)).toEqual(['open one'])
     await expect(team.messages({ channel: 'dev', after: '!!' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+  })
+
+  it('leaves a deleted root out of every read by its labels, though the API still lists it by them', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const open = { state: 'open' }
+    const kept = await team.post('dev', { text: 'kept', labels: open })
+    const keptReply = await team.reply(kept.id, { text: 'under kept' })
+    const gone = await team.post('dev/web', { text: 'gone', labels: open })
+    const goneReply = await team.reply(gone.id, { text: 'under gone' })
+    const { cursor } = await team.poll({ label: open })
+    await team.delete(gone.id)
+    // The newest thread its labels find is the deleted one: a page of one fills past it.
+    expect((await team.threads({ channel: 'dev/', label: open, limit: 1 })).threads.map((t) => t.message.text)).toEqual(['kept'])
+    expect((await team.messages({ channel: 'dev/', label: open })).messages.map((m) => m.text)).toEqual(['kept', 'under kept'])
+    await team.edit(goneReply.id, 'under gone, edited')
+    await team.edit(keptReply.id, 'under kept, edited')
+    const { events } = await team.poll({ label: open, after: cursor })
+    expect(events.filter((event) => event.type === 'message.edited').map((event) => event.message?.text)).toEqual(['under kept, edited'])
   })
 
   it("registers its own watchers where it's woken, and runs what they matched when it is", async () => {
