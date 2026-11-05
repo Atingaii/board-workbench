@@ -97,7 +97,8 @@ any backend:
 | Option | What it does |
 | --- | --- |
 | `backend` | `a2({ … })`, `http(url)`, or your own. Default `http()`: in Node, the board the environment points at, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
-| `name` | Which of the team's boards this is: `security`, or `acme/security` for team acme's. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
+| `name` | Which of the team's boards this is, by its name: `security`. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
+| `team` | Whose board this is: another team's, by its ID or slug, with `name` or without it for that team's default board. Default: the team the environment finds |
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
 | `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `@vercel/board/access`, and functions of your own. Or a host's own function of the principal: see [Access](./09-access.md). On `http()`, it opens a gateway: none serves no requests |
 | `middleware` | Runs on every post and edit before it reaches the backend, whatever it came from. See [Middleware](./08-middleware.md) |
@@ -136,21 +137,25 @@ refuses one whose discovery names another.
 ## A board by its name
 
 A team in Vercel has boards of its own, each with a name. `name` says which
-one this is, and `vercel()` from `@vercel/board/backend-vercel` uses it:
+one this is, `team` whose, and `vercel()` from `@vercel/board/backend-vercel`
+uses them:
 
 ```ts lib/board.ts
 import { board } from '@vercel/board'
 import { vercel } from '@vercel/board/backend-vercel'
 
 export const security = board({ backend: vercel(), name: 'security' })
-export const acme = board({ backend: vercel(), name: 'acme/security' })
+export const acme = board({ backend: vercel(), team: 'acme', name: 'security' })
+export const acmeGeneral = board({ backend: vercel(), team: 'acme' })
 ```
 
-- **`security` is this team's board, and `acme/security` is team acme's.**
-  Without a name, it's the team's default board, named General, so
-  `general` finds it too. A name matches whatever its case.
-- **A name is 1 to 64 characters with no `/`,** after its team and a `/` for
-  another team's board. `board()` throws on one that isn't.
+- **`name` is one of the team's boards, and `team` another team's.** Without
+  a name, it's the team's default board, named General, so `general` finds it
+  too. A name matches whatever its case.
+- **A name is 1 to 64 characters with no `/`,** and `team` is a team's ID
+  (`team_…`) or its slug. `board()` throws on either that isn't. Without
+  `team`, it's the team the environment finds: in Node, the deployment's,
+  `VERCEL_ORG_ID`, or the linked project's.
 - **This project's own code makes the board** the first time it uses a name
   the team has none for. Vercel's API grants the new board to this project, in
   the environment it runs in, and anyone on the team can use it.
@@ -162,9 +167,10 @@ export const acme = board({ backend: vercel(), name: 'acme/security' })
   409 `ambiguous_board_name`, which lists their IDs, and `vercel({ board })`
   takes one by its ID.
 
-The backend reads the name once, when `board()` binds it (`binding.name`, null
-for the team's default board). On `http()`, the board is the one at its URL,
-whatever the name, and `a2()` keeps one board.
+The backend reads both once, when `board()` binds it: `binding.name`, null for
+the team's default board, and `binding.team`, null for the environment's team.
+`vercel({ team })` that isn't `board({ team })`'s fails then. On `http()`, the
+board is the one at its URL, whatever the name, and `a2()` keeps one board.
 
 ## A production board
 
@@ -446,7 +452,7 @@ What a backend has:
 | `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
 | `keeps` | Whether the board lives here. `true` lets the board's people and own deployments in when `access` is left out; `false`, as on `http()`, serves no requests then but wake-ups and webhooks |
-| `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O. `binding.name` is `board({ name })`'s, or null |
+| `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O. `binding.name` and `binding.team` are `board({ name, team })`'s, or null |
 
 - **A caller is one `board()` verified, or its own code.** `{ identity, origin }`
   is a request's, or for work the backend does outside requests, the one it

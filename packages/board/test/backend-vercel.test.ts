@@ -428,7 +428,7 @@ describe('vercel()', () => {
       expect(lookups(api, 'POST /boards/ensure')).toBe(0)
     })
 
-    it("takes another team's board by acme/security, and names the team once", async () => {
+    it("takes another team's board by its team and name, or that team's default board by its team alone", async () => {
       const api = fakeMessageboard({ slug: 'acme', boards: [{ name: 'security' }] })
       const teams: (string | null)[] = []
       const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -436,14 +436,17 @@ describe('vercel()', () => {
         teams.push(searchParams.get('slug') ?? searchParams.get('teamId'))
         return as(api, 'user:u_jb')(input, init)
       }) as typeof globalThis.fetch
-      const acme = board({ name: 'acme/security', backend: vercel({ api: API, fetch }) })
-      await acme.post('dev', { text: 'for acme' })
+      await board({ team: 'acme', name: 'security', backend: vercel({ api: API, fetch }) }).post('dev', { text: 'for acme security' })
+      await board({ team: 'acme', backend: vercel({ api: API, fetch }) }).post('dev', { text: "on acme's default board" })
       expect(new Set(teams)).toEqual(new Set(['acme']))
-      expect(() => board({ name: 'acme/security', backend: vercel({ team: 'team_test', api: API, fetch }) })).toThrow('name the team once')
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(["on acme's default board"])
+      expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['for acme security'])
+      // vercel()'s own team is board()'s, or nothing binds.
+      board({ team: 'acme', backend: vercel({ team: 'acme', api: API, fetch }) })
+      expect(() => board({ team: 'acme', backend: vercel({ team: 'team_test', api: API, fetch }) })).toThrow('name the team once')
       // Its own board ID wins over the name, as the CLI's URL form passes it.
-      await handleOn(api).post('dev', { text: 'on the default board' })
-      const byId = board({ name: 'acme/nope', backend: vercel({ board: 'brd_test', team: 'acme', api: API, fetch }) })
-      expect((await byId.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['on the default board'])
+      const byId = board({ name: 'nope', backend: vercel({ board: 'brd_test', team: 'acme', api: API, fetch }) })
+      expect((await byId.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(["on acme's default board"])
     })
   })
 
