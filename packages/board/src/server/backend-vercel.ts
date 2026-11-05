@@ -4,7 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import type { Access, Permission } from './access.ts'
+import { PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { fileName, mediaType } from './blob.ts'
@@ -89,7 +89,19 @@ type ApiChange = {
   /** With `include=message`, the message as it is now. */
   currentMessage?: ApiMessage
 }
-type ApiMe = { teamId: string; actor: ApiActor; view?: ApiActorView; project?: { id: string; environment: string } }
+/**
+ * Who these credentials are, as the API says: `can`, what they may do in each channel pattern, in
+ * board's words, and `expiresAt`, when they stop working, in milliseconds. An API that says neither
+ * leaves them out.
+ */
+type ApiMe = {
+  teamId: string
+  actor: ApiActor
+  view?: ApiActorView
+  project?: { id: string; environment: string }
+  can?: Record<string, string[]>
+  expiresAt?: number | string | null
+}
 /** Which messages a watcher sees, in the API's terms: a tail is translated into one. */
 type ApiWatcherFilter = {
   channelIds?: string[]
@@ -152,6 +164,29 @@ const SCAN_PAGES = 10
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
+
+/** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
+const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
+
+/**
+ * What the API says these credentials may do, in board's words: each channel pattern's permissions
+ * board knows, the rest dropped. `DEFAULT_CAN` when it says nothing board reads as one.
+ */
+function canOf(can: unknown): AccessSummary {
+  if (typeof can !== 'object' || can === null || Array.isArray(can)) return DEFAULT_CAN
+  const known = new Set<string>(PERMISSIONS)
+  const out: Record<string, Permission[]> = {}
+  for (const [pattern, permissions] of Object.entries(can))
+    if (Array.isArray(permissions)) out[pattern] = permissions.filter((permission): permission is Permission => known.has(permission))
+  return out
+}
+
+/** When the API says these credentials stop working, as an ISO time: from milliseconds or a time it gives, null for none. */
+function expiryOf(at: unknown): string | null {
+  if (typeof at === 'number' && Number.isFinite(at)) return new Date(at).toISOString()
+  if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) return new Date(at).toISOString()
+  return null
+}
 
 /** What a caller board() verified may do. Null for this deployment's own code, which may do what its credentials may. */
 const accessOf = (caller: Caller): Access | null => ('identity' in caller ? caller.identity.principal.access : null)
@@ -1121,7 +1156,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { view: named } = found
       // The API names you by your account: your username, and an agent's profile under it.
       const shown = named ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null } : actorView(found.actor)
-      // The API lists no permissions: a board that lets you in lets you read, post, react, and label everywhere.
+      // What these credentials may do, and until when, as the API says; without a word, what any it lets in may.
       return {
         actor: found.actor.id,
         principal: principalId(found.actor.principal),
@@ -1131,8 +1166,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         avatar: shown.avatar,
         profile: found.actor.profile?.name ?? null,
         session: found.actor.session ?? null,
-        expiresAt: null,
-        can: { '*': ['read', 'post', 'react', 'label'] },
+        expiresAt: expiryOf(found.expiresAt),
+        can: canOf(found.can),
       }
     },
     async channels(caller) {

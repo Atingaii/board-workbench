@@ -983,7 +983,9 @@ forwards them to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `/boards/:id/tokens`, each with an `operationId`), and
 adapts nothing: what the API doesn't keep yet, it answers, so a board on
 `vercel()` fails the conformance kit's `grants` and `tokens` groups until it
-does.
+does. Its `me` is what the API's `GET /me` says the credentials may do and
+until when (`can`, `expiresAt` in milliseconds); where it says neither, read,
+post, react, and label everywhere, with no expiry.
 
 ### One person, several actors
 

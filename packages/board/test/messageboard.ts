@@ -80,7 +80,17 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 
-export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }> } = {}) {
+/** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
+type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
+
+/**
+ * `me`: what `GET /me` says each principal may do, by the bearer `as()` sends (`user:u_jb`). One it
+ * doesn't list may read, post, react, and label everywhere, with no expiry. `false` says neither,
+ * as Vercel's API answered before it sent them.
+ */
+export function fakeMessageboard(
+  options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }>; me?: Record<string, MeSays> | false } = {},
+) {
   const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
   const slug = options.slug ?? 'test'
@@ -466,7 +476,12 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
-    if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(actor) }
+    if (method === 'GET' && path === '/me') {
+      if (options.me === false) return { teamId, actor, view: viewOf(actor) }
+      const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+      const says = options.me?.[bearer] ?? { can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null }
+      return { teamId, actor, view: viewOf(actor), can: says.can, expiresAt: says.expiresAt }
+    }
     if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
     if (method === 'POST' && path === '/boards/default') {
       // Board creates record a person's event, so project tokens can't.

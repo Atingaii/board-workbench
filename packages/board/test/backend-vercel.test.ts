@@ -373,6 +373,25 @@ describe('vercel()', () => {
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
   })
 
+  it('says what the API says its credentials may do, and until when, and what any it lets in may when it says neither', async () => {
+    const expiresAt = Date.now() + 59 * 60_000
+    const api = fakeMessageboard({
+      me: {
+        // Permissions board doesn't know are dropped; its own are kept as the API gives them.
+        'project:prj_pong:production': { can: { 'pings/': ['read', 'post'], 'dev/': ['read', 'fly'] }, expiresAt },
+        'user:u_jb': { can: { '*': ['read'] }, expiresAt: null },
+      },
+    })
+    const said = async (handle: ReturnType<typeof handleOn>) => {
+      const { can, expiresAt: until } = await handle.me()
+      return { can, expiresAt: until }
+    }
+    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { 'pings/': ['read', 'post'], 'dev/': ['read'] }, expiresAt: new Date(expiresAt).toISOString() })
+    expect(await said(handleOn(api))).toEqual({ can: { '*': ['read'] }, expiresAt: null })
+    // An API that says neither, as before it sent them: what any credentials it lets in may do, with no expiry.
+    expect(await said(handleOn(fakeMessageboard({ me: false })))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+  })
+
   it("says the team's ID in its discovery, though it's named by its slug", async () => {
     const api = fakeMessageboard({ slug: 'acme' })
     const team = board({ backend: vercel({ team: 'acme', api: API, fetch: as(api, 'user:u_jb') }) })

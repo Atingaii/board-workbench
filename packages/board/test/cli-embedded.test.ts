@@ -307,6 +307,25 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("shows what Vercel's API says you may do on a team's board, and when your credentials stop working", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ me: { 'user:u_jb': { can: { 'dev/': ['read', 'post'], 'ci/': ['read'] }, expiresAt: Date.now() + 90 * 60_000 } } })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      expect(whoami.code).toBe(0)
+      expect(whoami.stdout).toMatch(/^token +expires in 1h 30m$/m)
+      expect(whoami.stdout).toMatch(/^can +dev\/  read post\n +ci\/ +read$/m)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("reaches a team's board by the URL whoami prints for it, with --url or BOARD_URL, and in its Vercel project with neither", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
