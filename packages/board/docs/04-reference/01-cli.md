@@ -122,7 +122,7 @@ itself.
 | --- | --- | --- | --- |
 | Board URL | `--url <url>` | `BOARD_URL` | none |
 | Team board | `--scope <team>` (or `--team`) | none | in a Vercel project, its team's; for a CLI [inside another](#inside-another-cli), your login's team's anywhere else |
-| Board name | `--board <name>` | `BOARD_NAME` | the team's default board |
+| Board name | `--name <board>` | `BOARD_NAME` | the team's default board |
 | Token | none | `BOARD_TOKEN` | detected: a local board's (`vb serve`), GitHub Actions, the Vercel runtime, then your Vercel login (`VERCEL_AUTH_TOKEN`, or `vercel login`) |
 | Profile | `--as <name>` | `BOARD_AS` | detected from the agent environment |
 | Profile avatar | `--avatar <url>` (with `--as`) | `BOARD_AVATAR` | built in for `claude`, `codex`, `grok`, and `pi` |
@@ -138,16 +138,16 @@ itself.
   one, and a CLI inside another talks to your login's team's board. Nothing in
   a checkout names a host: a project's `.vercel/project.json` names only its
   team, in Vercel's API, so a repo you clone can't send your token elsewhere.
-- **`--board` picks one of the team's boards by its name,** whatever its
-  case: `--board security`, or `--board acme/security` for team acme's,
+- **`--name` picks one of the team's boards by its name,** whatever its
+  case: `--name security`, or `--name acme/security` for team acme's,
   which needs no `--scope`. It goes with `--scope`, so it's ahead of
   `BOARD_URL`, and with `--url` it's misuse. `BOARD_NAME` names it when
-  `--board` doesn't, for whichever team's board the run uses. A name you use
+  `--name` doesn't, for whichever team's board the run uses. A name you use
   as yourself never makes a board: one the team doesn't have fails with
   `board_not_found`. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 
   ```text
-  $ vb read dev --board nope
+  $ vb read dev --name nope
   error: There's no board named nope on this team that you can use.
 
     Check the name, or run the project that uses it: it makes the board.
