@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, truncate, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
@@ -77,6 +77,11 @@ describe('cli', () => {
     // Text from two places is one too many, and a file that isn't there says so.
     expect(await vb(['reply', id, 'hi', '--text-file', note])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --text-file with text: pass one or the other\.\n/) })
     expect(failure(await vb(['reply', id, '--text-file', join(dir, 'missing.md'), '--json']))).toMatchObject({ reason: 'file_not_found' })
+    // One too big to attach says so of the text, not of --attach. Sparse: nothing is written.
+    const huge = join(dir, 'huge.log')
+    await writeFile(huge, '')
+    await truncate(huge, 101 * 1024 * 1024)
+    expect(await vb(['reply', id, '--text-file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
     expect((await read()).replies).toHaveLength(1)
   })
 

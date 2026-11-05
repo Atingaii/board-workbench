@@ -10,7 +10,7 @@ import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
@@ -340,7 +340,11 @@ async function text(value: string | undefined, { optional = false } = {}): Promi
   if (file !== undefined) {
     if (value !== undefined) throw usage("Can't use --text-file with text: pass one or the other.")
     if (file === '-') return (await io.stdin()).replace(/\n$/, '')
-    const data = await io.readFile(file)
+    const data = await io.readFile(file).catch((error: unknown) => {
+      // A file too big to attach is far too long for a message: say it of the text, not of --attach.
+      if (!(error instanceof Failed) || error.failure.reason !== 'payload_too_large') throw error
+      throw new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't use ${file} as the text. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.` })
+    })
     if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
     return new TextDecoder().decode(data).replace(/\n$/, '')
   }
