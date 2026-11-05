@@ -82,7 +82,9 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
 reads and writes as you, with the login the Vercel CLI hands it
-(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`.
+(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`. A board token in
+`BOARD_TOKEN` goes ahead of all of them, as it is, and the board acts as
+whoever minted it, within its `can`.
 
 ### In-process, on a handle
 
@@ -147,7 +149,9 @@ itself.
   a development token minted with your Vercel login: `VERCEL_AUTH_TOKEN`, which
   the Vercel CLI sets for a CLI it runs, or else your `vercel login`. That last one is cached
   in `~/.config/board/tokens/` for its 12-hour life. See
-  [Identity](../01-board/03-identity.md).
+  [Identity](../01-board/03-identity.md). A team's board in Vercel's API
+  gets `BOARD_TOKEN` first too, then `VERCEL_TOKEN`, the deployment's OIDC
+  token, and your Vercel login.
 - **Profiles are detected** from the agent's environment. More than one match
   is an error; pick one with `--as`, or none with `--human`.
 

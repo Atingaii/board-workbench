@@ -4,6 +4,7 @@ import { http } from '../src/backend-http/index.ts'
 import { createBoardClient } from '../src/client/client.ts'
 import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
+import { vercel as nodeVercel } from '../src/backend-vercel/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
@@ -390,6 +391,28 @@ describe('vercel()', () => {
     expect(await said(handleOn(api))).toEqual({ can: { '*': ['read'] }, expiresAt: null })
     // An API that says neither, as before it sent them: what any credentials it lets in may do, with no expiry.
     expect(await said(handleOn(fakeMessageboard({ me: false })))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+  })
+
+  it("sends a board token you set, in Node, ahead of VERCEL_TOKEN and the deployment's OIDC token", async () => {
+    for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+    const api = fakeMessageboard({ tokens: { board_ada3: 'user:u_ada' } })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const who = async () => (await board({ backend: nodeVercel() }).me()).principal
+    try {
+      vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+      expect(await who()).toBe('vercel:project:prj_pong:production')
+      vi.stubEnv('BOARD_TOKEN', 'board_ada3')
+      expect(await who()).toBe('vercel:user:u_ada')
+      // On a deployment, with no VERCEL_TOKEN: its OIDC token, which isn't one here, is never read.
+      vi.stubEnv('VERCEL_TOKEN', '')
+      vi.stubEnv('VERCEL', '1')
+      vi.stubEnv('VERCEL_OIDC_TOKEN', 'not-an-oidc-token')
+      expect(await who()).toBe('vercel:user:u_ada')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
   })
 
   it("says the team's ID in its discovery, though it's named by its slug", async () => {

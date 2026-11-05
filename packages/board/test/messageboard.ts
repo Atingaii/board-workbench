@@ -84,12 +84,21 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
 type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
 
 /**
- * `me`: what `GET /me` says each principal may do, by the bearer `as()` sends (`user:u_jb`). One it
+ * `me`: what `GET /me` says each principal may do, by the bearer it's sent (`user:u_jb`, or a board
+ * token's secret). One it
  * doesn't list may read, post, react, and label everywhere, with no expiry. `false` says neither,
  * as Vercel's API answered before it sent them.
  */
 export function fakeMessageboard(
-  options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }>; me?: Record<string, MeSays> | false } = {},
+  options: {
+    teamId?: string
+    slug?: string
+    boardId?: string | null
+    accounts?: Record<string, { username: string; name: string }>
+    me?: Record<string, MeSays> | false
+    /** Board tokens the API takes, by their secret (`board_…`): the principal each acts as, as `as()` names it. */
+    tokens?: Record<string, string>
+  } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
@@ -119,7 +128,9 @@ export function fakeMessageboard(
   const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
 
   function actorOf(request: Request): Actor {
-    const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+    const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+    // A board token acts as whoever it was minted for.
+    const token = options.tokens?.[bearer] ?? bearer
     const [type, id, environment] = token.split(':')
     const principal: Principal | null =
       type === 'user' && id ? { type, userId: id } : type === 'app' && id ? { type, clientId: id } : type === 'project' && id && environment ? { type, projectId: id, environment } : null
