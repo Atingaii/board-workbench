@@ -223,9 +223,12 @@ function parseFailure(error: Error & { code?: string }, argv: string[], word: st
   const option = error.message.match(/--[a-z][\w-]*/)?.[0] ?? /'(-[^' ,]+)/.exec(error.message)?.[1]
   if (error.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && option) {
     // One argument can hold several words (a shell variable that wasn't split): it's that argument
-    // that's unknown, not the option it starts with, which may well be real.
+    // that's unknown, not the option it starts with, which may well be real. The parser names a long
+    // one whole, and only a short group's start (`- `, `-z`), and nothing after `--` is an option.
     const token = /^Unknown option '(.*?)'\. /.exec(error.message)?.[1]
-    const spaced = token === undefined ? undefined : argv.find((arg) => /\s/.test(arg) && arg.startsWith(token))
+    const dash = argv.indexOf('--')
+    const options = dash === -1 ? argv : argv.slice(0, dash)
+    const spaced = token === undefined ? undefined : options.find((arg) => /\s/.test(arg) && (token.startsWith('--') ? arg === token : arg.startsWith(token)))
     const guess = !spaced && option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
     const next: Recovery[] = [{ instruction: 'See all options', argv: [...cli(), ...(word ? [word] : []), '--help'] }]
     const unknown = spaced ?? option
