@@ -950,6 +950,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const message = await board.reply(id, {
         text: content,
         ...(files.length ? { attachments: files } : {}),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}),

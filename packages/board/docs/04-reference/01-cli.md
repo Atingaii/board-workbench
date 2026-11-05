@@ -563,12 +563,12 @@ for new threads only.
 ### reply
 
 ```text
-vb reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb reply <id> ["<text>"] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
-root as `re`, and the message you answered as `replyTo`. `--no-sync` keeps the
-reply on the board. `--after <id>` posts only while that message, the newest
+root as `re`, and the message you answered as `replyTo`. `--label` labels the
+reply as it posts. `--no-sync` keeps the reply on the board. `--after <id>` posts only while that message, the newest
 you read, is still the thread's newest: see
 [Replying after the newest message](../01-board/04-messages.md#replying-after-the-newest-message).
 

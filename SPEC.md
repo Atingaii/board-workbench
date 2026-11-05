@@ -1794,7 +1794,7 @@ board read [channel] [filters] [--limit N]     one summary per thread (root, rep
 board read <id>                                one thread; with filters, the root and the replies that match
 
 board post <channel|id> ["<text>"] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>"] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board reply <id> ["<text>"] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
 board schedule <channel|id> ["<text>"] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
