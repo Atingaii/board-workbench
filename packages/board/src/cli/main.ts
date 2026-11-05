@@ -50,9 +50,9 @@ function rerun(...extra: string[]): string[] {
   return [...cli(), ...(at === -1 ? [...typed, ...extra] : [...typed.slice(0, at), ...extra, ...typed.slice(at)])]
 }
 
-/** A command line without its `--name` and that option's value. */
-const withoutName = (argv: string[]): string[] =>
-  argv.filter((arg, at) => arg !== '--name' && argv[at - 1] !== '--name' && !arg.startsWith('--name='))
+/** A command line without `options` and their values. */
+const without = (argv: string[], ...options: string[]): string[] =>
+  argv.filter((arg, at) => !options.some((option) => arg === option || argv[at - 1] === option || arg.startsWith(`${option}=`)))
 
 /** What the parser accepts: every option, by name (`commands.ts`). */
 const OPTIONS = options
@@ -554,7 +554,7 @@ function failureOf(error: unknown): Failure {
         return own('permission', 'board_not_granted')
       case 'ambiguous_board_name':
         // The CLI picks one by its URL, which names its ID, in place of the name.
-        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: withoutName(rerun('--url', 'https://api.vercel.com/v1/messageboard/boards/<ID>')) }])
+        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: without(rerun('--url', 'https://api.vercel.com/v1/messageboard/boards/<ID>'), '--name') }])
       case 'invalid_board_name':
         return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
@@ -671,7 +671,7 @@ function profileFlag(): ProfileOption | undefined {
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
-  const name = boardNameFlag(url, team)
+  const name = boardNameFlag(url)
   // --name names a team's board as --scope does, so it goes before BOARD_URL too.
   const configured = url ?? (team === undefined && flags.name === undefined ? configuredUrl() : null)
   if (configured === null) {
@@ -693,17 +693,24 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
 }
 
 /**
- * The team's board this run names: `--name`, or `BOARD_NAME`, with `--scope`'s team or the one the
- * environment finds, unless the name says its own (`acme/security`). A URL names a board itself.
+ * The team's board this run names: `--name`, or `BOARD_NAME`, on `--scope`'s team or the one the
+ * environment finds. A URL names a board itself.
  */
-function boardNameFlag(url: string | undefined, team: string | undefined): string | undefined {
+function boardNameFlag(url: string | undefined): string | undefined {
   if (flags.name !== undefined && flags.url !== undefined)
     throw usage("--name names a team's board, and --url a board by its URL: pass one of them.", { reason: 'conflicting_options' })
   const given = flags.name ?? (process.env.BOARD_NAME || undefined)
   if (given === undefined || url !== undefined) return undefined
   const from = flags.name !== undefined ? '--name' : 'BOARD_NAME'
-  if (!isBoardName(given)) throw usage(`${from} ${given} isn't a board's name, such as security or acme/security.`)
-  if (team !== undefined && given.includes('/')) throw usage(`${from} ${given} names its team: leave out --scope.`, { reason: 'conflicting_options' })
+  if (given.includes('/')) {
+    // Another team's board is its team, with --scope, and its name.
+    const [owner, ...rest] = given.split('/')
+    const argv = [...without(rerun(), '--name', '--scope', '--team'), '--scope', owner || '<TEAM>', '--name', rest.join('/') || '<NAME>']
+    throw usage(`${from} takes a board's name alone, not its team's.`, {
+      next: [flags.name !== undefined ? { instruction: 'Pass its team with --scope', argv } : { instruction: 'Set BOARD_NAME to the name alone, and pass its team with --scope' }],
+    })
+  }
+  if (!isBoardName(given)) throw usage(`${from} ${given} isn't a board's name: one is 1 to 64 characters.`)
   return given
 }
 

@@ -105,8 +105,9 @@ type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; 
 
 export type VercelOptions = {
   /**
-   * The team whose board it is: its ID (`team_…`) or its slug. By default the one `board({ name })`
-   * names (`acme/security`), or in Node your deployment's, or `VERCEL_ORG_ID`.
+   * The team whose board it is: its ID (`team_…`) or its slug. By default the one `board({ team })`
+   * names, or in Node your deployment's, or `VERCEL_ORG_ID`. One that isn't `board({ team })`'s
+   * fails when board() binds it.
    */
   team?: string
   /**
@@ -237,17 +238,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** This board's own code's names, which a caller here never takes as its profile. */
   const own = new Set<string>()
 
-  /** The board `board({ name })` names, and its team when it's another's (`acme/security`): null for the team's default board. */
-  const boardName = (): { team: string | null; board: string } | null => {
-    const name = options.board ? null : (binding?.name ?? null)
-    if (name === null) return null
-    const slash = name.indexOf('/')
-    return slash === -1 ? { team: null, board: name } : { team: name.slice(0, slash), board: name.slice(slash + 1) }
-  }
+  /** The board `board({ name })` names: null for the team's default board, or when `board` names one by its ID. */
+  const boardName = (): string | null => (options.board ? null : (binding?.name ?? null))
 
   let team: Promise<string | null> | null = null
   const teamId = () => {
-    const given = options.team ?? boardName()?.team
+    const given = binding?.team ?? options.team
     return (team ??= given ? Promise.resolve(given) : (environment?.team() ?? Promise.resolve(null)))
   }
 
@@ -345,7 +341,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     (board ??= options.board
       ? Promise.resolve(options.board)
       : boardName()
-        ? boardNamed(who, boardName()!.board)
+        ? boardNamed(who, boardName()!)
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
             if ((await self(who)).actor.principal.type === 'project')
@@ -1571,9 +1567,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
       const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
       if (kinds.includes('sync')) throw new Error("vercel: Vercel's boards don't run sync yet: leave `sync` out")
-      // A name with its team says the team, as `team` does: one of them is enough.
-      if (!options.board && options.team && next.name?.includes('/'))
-        throw new Error(`vercel: the board's name ${next.name} says its team, and so does team ${options.team}: name the team once`)
+      // board({ team }) says whose board it is: a team of vercel()'s own must be the same one.
+      if (options.team && next.team && options.team !== next.team)
+        throw new Error(`vercel: board() names team ${next.team}, and vercel() team ${options.team}: name the team once`)
       for (const id of Object.keys(next.subscriptions)) own.add(id)
       tails = Object.fromEntries(
         Object.entries(next.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),

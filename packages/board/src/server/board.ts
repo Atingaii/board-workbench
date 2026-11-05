@@ -14,13 +14,18 @@ import type { Watcher } from './watcher.ts'
  */
 export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
   /**
-   * Which of the team's boards this is: `security` is this team's board named security, and
-   * `acme/security` team acme's. Without one, the team's default board. A name is 1 to 64
-   * characters with no `/`, and matches whatever its case. The backend reads it when board()
-   * binds it: `vercel()` finds that board, a board on `http()` is the one at its URL, whatever its
-   * name.
+   * Which of the team's boards this is, by its name: `security` is the team's board named
+   * security. Without one, the team's default board. A name is 1 to 64 characters with no `/`, and
+   * matches whatever its case. The backend reads it when board() binds it: `vercel()` finds that
+   * board, a board on `http()` is the one at its URL, whatever its name.
    */
   name?: string
+  /**
+   * Whose board this is: another team's, by its ID (`team_…`) or its slug, with `name` or without
+   * it for that team's default board. Without one, the team the environment finds: in Node, the
+   * deployment's, `VERCEL_ORG_ID`, or the linked project's.
+   */
+  team?: string
   /**
    * Runs on every post and edit before it reaches the backend, whatever it came from: requests (a
    * board on `http()` using this one included), watchers, schedules, the handle, and sync's imports.
@@ -117,10 +122,12 @@ export type BoardContext = {
 /** How long a handle's live events wait for the next, in seconds, before asking again. */
 const EVENTS_WAIT_S = 25
 
-/** A board's name, after its team's and a `/` for another team's: 1 to 64 characters, no `/`. */
-const BOARD_NAME = /^(?:[^/]+\/)?[^/]{1,64}$/
+/** A board's name: 1 to 64 characters, no `/`. */
+const BOARD_NAME = /^[^/]{1,64}$/
+/** A team, by its ID or its slug. */
+const TEAM = /^[^\s/]+$/
 
-/** Whether `name` is a board's name: `security`, or `acme/security` for team acme's. */
+/** Whether `name` is a board's name, such as `security`. */
 export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
 
 /**
@@ -131,7 +138,8 @@ export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
  */
 export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   if (options.name !== undefined && !isBoardName(options.name))
-    throw new Error(`board: ${JSON.stringify(options.name)} isn't a board's name: one is 1 to 64 characters with no /, after its team and a / for another team's board (acme/security)`)
+    throw new Error(`board: ${JSON.stringify(options.name)} isn't a board's name: one is 1 to 64 characters with no /, and another team's board takes its team apart, board({ team, name })`)
+  if (options.team !== undefined && !TEAM.test(options.team)) throw new Error(`board: ${JSON.stringify(options.team)} isn't a team: pass its ID (team_…) or its slug`)
   const backend = options.backend ?? runtime.backend(options.fetch)
   const policy = createPolicy(options, backend.keeps, runtime.serving, backend.trust ?? null)
   const watch = options.watch ?? {}
@@ -226,6 +234,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   const ownEntries: SyncEntry[] = Object.entries(entries).map(([key, entry]) => ({ key, platform: entry.platform }))
   const binding: BoardBinding = {
     name: options.name ?? null,
+    team: options.team ?? null,
     subscriptions,
     run: async (id, event, meta) => (await server()).run(id, event, meta),
     receive: async (key, item, meta) => (await server()).receive(key, item, meta),

@@ -139,10 +139,11 @@ itself.
   a checkout names a host: a project's `.vercel/project.json` names only its
   team, in Vercel's API, so a repo you clone can't send your token elsewhere.
 - **`--name` picks one of the team's boards by its name,** whatever its
-  case: `--name security`, or `--name acme/security` for team acme's,
-  which needs no `--scope`. It goes with `--scope`, so it's ahead of
-  `BOARD_URL`, and with `--url` it's misuse. `BOARD_NAME` names it when
-  `--name` doesn't, for whichever team's board the run uses. A name you use
+  case: `--name security`, and with `--scope acme`, team acme's. It goes
+  with `--scope`, so it's ahead of `BOARD_URL`. With `--url` it's misuse,
+  and so is a name with its team in it (`--name acme/security`): the team
+  is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't, for
+  whichever team's board the run uses. A name you use
   as yourself never makes a board: one the team doesn't have fails with
   `board_not_found`. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 

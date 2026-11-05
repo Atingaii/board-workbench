@@ -345,9 +345,13 @@ describe('the embedded CLI', () => {
       // A board no one made yet: a person is told, and nothing makes it.
       expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: There's no board named nope on this team/) })
       expect(api.requests).not.toContain('POST /boards/ensure')
-      // What isn't a name, or says it twice, is misuse.
-      for (const args of [['--name', 'security', '--url', 'https://www.example.com/api/board'], ['--name', 'a/b/c'], ['--name', 'acme/security', '--scope', 'test']])
+      // What isn't a name, or names a board twice, is misuse: another team's board is --scope's.
+      for (const args of [['--name', 'security', '--url', 'https://www.example.com/api/board'], ['--name', 'x'.repeat(65)]])
         expect(await run('read', 'dev', ...args), args.join(' ')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: /) })
+      expect(await run('read', 'dev', '--name', 'acme/security')).toMatchObject({ code: 2, stderr: expect.stringContaining('    vb read dev --scope acme --name security\n') })
+      vi.stubEnv('BOARD_NAME', 'acme/security')
+      expect(await run('read', 'dev')).toMatchObject({ code: 2, stderr: expect.stringContaining('pass its team with --scope') })
+      vi.stubEnv('BOARD_NAME', undefined)
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
