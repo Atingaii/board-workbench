@@ -12,6 +12,7 @@ import {
   type Can,
   type Permission,
 } from '../src/server/access.ts'
+import * as publicAccess from '../src/access/index.ts'
 import { HttpError } from '../src/server/errors.ts'
 
 const CHANNELS = ['dev', 'dev/pi', 'dev/pi/deep', 'devops', 'ci', 'ci/main', 'security', 'security/vuln', 'feedback']
@@ -252,5 +253,16 @@ describe('authorize', () => {
   it('refuses with a 403 when there’s nothing to hide, like a new thread’s own channel', () => {
     expect(() => authorize(access, 'post', 'dev')).toThrow("this token can't post in dev")
     expect(() => authorize(compileAccess([]), 'read', 'dev')).toThrow("this token can't read dev")
+  })
+})
+
+describe('@vercel/board/access', () => {
+  it('evaluates a can on its own, for a copy of these rules to check itself against', () => {
+    const ci = publicAccess.compileAccess({ 'ci/': ['post'] })
+    expect(ci.can('post', 'ci/main')).toBe(true)
+    expect(ci.readable('ci/main')).toBe(false)
+    expect(publicAccess.union([ci, publicAccess.compileAccess({ dev: ['label'] })]).summary()).toEqual({ 'ci/': ['post'], dev: ['read', 'label'] })
+    expect(publicAccess.FULL_ACCESS.everywhere('manage')).toBe(true)
+    expect(() => publicAccess.compileAccess({ 'ci/*': ['post'] })).toThrow('write ci/ for ci and its subtree')
   })
 })

@@ -21,4 +21,4 @@ export {
 export { oidcTokens } from '../server/tokens.ts'
 export { resolveActor } from '../server/actors.ts'
 export { compileRules } from '../server/auth.ts'
-export { type Access, type Permission, type ChannelPattern, type Grant, type Can, type AccessSummary } from '../server/access.ts'
+export { compileAccess, union, FULL_ACCESS, type Access, type Permission, type ChannelPattern, type Grant, type Can, type AccessSummary } from '../server/access.ts'
