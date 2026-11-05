@@ -136,6 +136,8 @@ const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 const SESSION = /^[A-Za-z0-9_.:-]{1,128}$/
 const CLIENT_ID = /^[A-Za-z0-9_.:-]{1,128}$/
 const MESSAGE_ID = /^msg_([0-9a-f-]{36})_([1-9]\d*)$/
+/** Whether `value` is a message ID Vercel's API hands out (`msg_<thread>_<n>`): the CLI takes one as a message, even where a channel has its name. */
+export const isApiMessageId = (value: string) => MESSAGE_ID.test(value)
 /** A cursor this backend made: a time, then the position it names, in base 36. */
 const CURSOR = /^([0-9a-z]+)(?:\.([0-9a-z]+))?$/
 /** The API's own cursor for one channel, which its message list and feed share, and any process resumes. */
