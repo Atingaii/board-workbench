@@ -743,6 +743,44 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return { events, position: { t: Math.max(position.t, ...merged.map(({ change }) => change.createdAt)), feeds: after } }
   }
 
+  /**
+   * Until one of `listed`'s feeds has something after `position`, or it's `until`. The API's feed is
+   * one channel's, and only it can wait for what comes next, so this waits on each at once and lets
+   * the rest go when the first answers with something: a read across channels costs a request a
+   * channel each time it waits, not each second it does.
+   */
+  async function changed(who: Who, listed: ApiChannel[], position: Position, until: number, signal: AbortSignal): Promise<void> {
+    const wait = Math.min(WAIT_MAX_S, Math.ceil((until - Date.now()) / 1000))
+    if (wait <= 0) return
+    const stop = new AbortController()
+    const either = AbortSignal.any([signal, stop.signal])
+    if (listed.length === 0) {
+      // No channel to wait on: only the time passes.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, until - Date.now())
+        either.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true })
+      })
+      return
+    }
+    const path = await onBoard(who, '/changes')
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let pending = listed.length
+        for (const channel of listed) {
+          const at = position.feeds[channel.id]?.at
+          api<{ events: ApiChange[] }>(who, 'GET', path, { query: { channelId: channel.id, ...(at ? { cursor: at } : { from: 'latest' }), wait: String(wait) }, signal: either })
+            .then((page) => {
+              if (page.events.length > 0 || --pending === 0) resolve()
+            })
+            // One this let go is no failure; the caller's own stop is, as a read's would be.
+            .catch((error: unknown) => (stop.signal.aborted && !signal.aborted ? undefined : reject(error)))
+        }
+      })
+    } finally {
+      stop.abort()
+    }
+  }
+
   /** Whether a read filters on what messages say, who wrote them, or their labels: what the API can't narrow by. */
   const filtered = (filters: Filters) =>
     filters.by !== undefined || filters.mentions !== undefined || filters.text !== undefined || filters.from !== undefined || (filters.label?.length ?? 0) > 0
@@ -1444,12 +1482,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
             ? { t: await timeOf(who, query.after), feeds: {} }
             : positionOf(query.after)
       const until = Date.now() + (query.wait ?? 0) * 1000
-      // The API's feed is polled: a long-poll asks again every second until something comes or it's done waiting.
       for (;;) {
         const page = await read(who, listed, position, query, signal)
         position = page.position
         if (page.events.length > 0 || Date.now() >= until || signal.aborted) return { events: page.events, cursor: cursorOf(position) }
-        await new Promise((resolve) => setTimeout(resolve, Math.min(1000, until - Date.now())))
+        await changed(who, listed, position, until, signal)
       }
     },
     // Nothing syncs here, so no platform shows typing.

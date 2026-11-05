@@ -392,6 +392,30 @@ describe('vercel()', () => {
     expect((await team.messages({ channel: 'busy', limit: 120 })).messages).toHaveLength(100)
   }, 30_000)
 
+  it("waits on every channel's feed at once for a read across channels, asking nothing more until one answers", async () => {
+    const api = fakeMessageboard()
+    const changes: number[] = []
+    const fetching = as(api, 'user:u_jb')
+    const counted = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input instanceof Request ? input.url : input)).pathname.endsWith('/changes')) changes.push(Date.now())
+      return fetching(input, init)
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
+    for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
+    const { cursor } = await team.poll({})
+    const waiting = team.poll({ after: cursor, wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const settled = changes.length
+    // Idle, the API hears nothing more: each channel's long-poll holds.
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    expect(changes.length).toBe(settled)
+    const posted = Date.now()
+    await team.post('ops', { text: 'later' })
+    const page = await waiting
+    expect(page.events.map((event) => event.message?.text)).toEqual(['later'])
+    expect(Date.now() - posted).toBeLessThan(1000)
+  }, 15_000)
+
   it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
