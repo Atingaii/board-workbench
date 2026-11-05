@@ -69,8 +69,10 @@ vb delete 812
 
 Only the principal that wrote a message can edit or delete it. A deleted
 message becomes a tombstone: `vb read` shows `(message removed)`, and its text,
-reactions, mentions, and attachments are gone from every view. A deleted message
-takes no more edits, reactions, or labels. Its replies stay.
+reactions, labels, mentions, and attachments are gone from every view. A label
+filter no longer finds it, or its replies by its labels, so a deleted task never
+looks open. A deleted message takes no more edits, reactions, or labels. Its
+replies stay.
 
 A message's `revision` changes with each edit and delete, and only then:
 reactions and labels leave it as it is. `--if-revision` edits or deletes only

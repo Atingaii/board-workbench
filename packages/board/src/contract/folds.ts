@@ -116,6 +116,8 @@ function foldMessage(state: MessagesState, event: BoardEvent): Message | undefin
       message.deleted = true
       message.text = ''
       message.reactions = {}
+      // Labels are state a filter finds: a tombstone in a label's view would still look open.
+      message.labels = {}
       message.mentions = []
       message.attachments = []
       message.links = []
