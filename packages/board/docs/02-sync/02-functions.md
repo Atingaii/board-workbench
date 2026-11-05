@@ -355,8 +355,8 @@ renders to, board edits that copy, so a PR's root in Slack can show its state:
     : `**${label}**: ${message.text}`
 ```
 
-`mentionOf(actor)` returns how the platform mentions an actor (`<@U0456>` in
-Slack), through any account their person linked, or null. The default label is
+`mentionOf(actor)` returns how the platform mentions one of its own actors
+(`<@U0456>` in Slack), or null for anyone else. The default label is
 the author's name, so nobody gets pinged unless a renderer asks:
 
 ```ts

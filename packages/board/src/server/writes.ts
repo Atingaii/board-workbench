@@ -1,12 +1,12 @@
 import { derivedId } from '../client/ids.ts'
 import type { BoardEvent } from '../contract/events.ts'
 import type { Link, Origin } from '../contract/external.ts'
-import { actorsReducer } from '../contract/reducers.ts'
-import { foldMessages, type Actor, type ActorsState, type Message } from '../contract/folds.ts'
+import { actorsReducer, channelsReducer } from '../contract/reducers.ts'
+import { foldMessages, type Actor, type ActorsState, type Channel, type Message } from '../contract/folds.ts'
 import { own } from '../contract/own.ts'
 import { channelOf, isThreadTarget } from '../contract/external.ts'
 import type { Attachment, Author, Labels } from '../contract/schemas.ts'
-import type { Granted } from './auth.ts'
+import { wroteAs, type Granted } from './auth.ts'
 import { authorize, FULL_ACCESS, type Access, type Permission, type Proof } from './access.ts'
 import { actorSeen, resolveMentions } from './actors.ts'
 import { extractMentions, replaceMentions } from '../contract/mentions.ts'
@@ -85,18 +85,20 @@ export async function authorizeMessage<P extends Permission>(
  * read, it's yours only if it was posted without reading too: a write-only
  * source fixes what it wrote, but a principal ID it shares with a caller that
  * reads (a repo's workflows share one) doesn't reach that caller's messages.
+ * A board token that pins a profile owns only what was written as it (`wroteAs`).
  * Someone else's answers 404 where you can't read it, and 403 where you can.
  */
 export async function authorizeOwn(
   ctx: WriteContext,
-  principal: Granted,
+  identity: Pick<Identity, 'principal' | 'actor'>,
   id: number,
   verb: 'edit' | 'delete',
 ): Promise<Authorized<'post'>> {
+  const { principal } = identity
   const message = await ctx.reads.message(id)
   if (!message) throw messageNotFound(id)()
   const readable = principal.access.readable(message.channel)
-  if (message.by.principal !== principal.id || (!readable && !message.blind)) {
+  if (!wroteAs(identity, message.by) || (!readable && !message.blind)) {
     if (!readable) throw messageNotFound(id)()
     throw forbidden(`only the author can ${verb} a message`)
   }
@@ -412,16 +414,25 @@ const LANDED_WAIT_MS = 10_000
  * anywhere on the board, moves it, and it looks again from there.
  */
 async function appendWhile(ctx: WriteContext, holds: () => Promise<number>, events: Parameters<BoardSession['append']>) {
-  for (let attempt = 1; ; attempt++) {
+  return whileHeadMoves(async () => {
     await ctx.reads.ensure()
-    const position = await holds()
+    return appendIfLast(ctx.session, await holds(), events)
+  })
+}
+
+/**
+ * Runs `attempt`, a look and a conditional append, again each time the board moves on in
+ * between, up to `CONDITIONAL_TRIES` times: how every conditional write here looks again.
+ */
+async function whileHeadMoves<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries++) {
     try {
-      return await appendIfLast(ctx.session, position, events)
+      return await attempt()
     } catch (error) {
       if (!headMoved(error)) throw error
-      if (attempt === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
+      if (tries === CONDITIONAL_TRIES) throw new HttpError(503, 'unavailable', 'the board kept changing while it checked: try again')
       // Writers the same write moved on look again apart, so they don't keep meeting.
-      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * attempt))
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 5 * tries))
     }
   }
 }
@@ -620,6 +631,31 @@ export async function writeAttach(
     payload: { thread: message.thread, target, kind, cause: input.cause, by: input.identity.author },
   }))
   return { attached: true }
+}
+
+/**
+ * A channel made before anything posts to it, or the one that's there, made by a post or another
+ * create, which `created: false` says. It needs `read` and `post` there, refused alike whether it's
+ * there or not: the answer says whether it was, and shows what it holds.
+ */
+export async function writeChannel(ctx: WriteContext, input: { identity: Identity; path: string }): Promise<{ channel: Channel; created: boolean }> {
+  const { access } = input.identity.principal
+  authorize(access, 'read', input.path)
+  authorize(access, 'post', input.path)
+  const seen = seenFor(input.identity, (await ctx.session.state(actorsReducer)).state)
+  const events: Parameters<BoardSession['append']> = [
+    ...(seen ? [seen] : []),
+    { type: 'channel.created', payload: { channel: input.path, by: input.identity.author } },
+  ]
+  const made = await whileHeadMoves<{ found: Channel } | { rows: Awaited<ReturnType<typeof appendIfLast>> }>(async () => {
+    const { state, index } = await ctx.session.state(channelsReducer, { through: 'latest' })
+    const found = own(state, input.path)
+    // Only while nothing has landed since it looked: a post or a create in between makes it look again.
+    return found ? { found } : { rows: await appendIfLast(ctx.session, index, events) }
+  })
+  if ('found' in made) return { channel: made.found, created: false }
+  await untilApplied(ctx, made.rows)
+  return { channel: { path: input.path, lastIndex: 0, messages: 0, threads: 0 }, created: true }
 }
 
 /** The batch, only while `index` is still the session's last: A2's conditional append. */

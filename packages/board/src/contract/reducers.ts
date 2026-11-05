@@ -1,8 +1,8 @@
 // The board's views as A2 reducers: the folds in `folds.ts`, named and seeded for the engine.
 // Only `a2()` loads this module; anything else folds with `folds.ts` directly.
 import { reducer } from 'experimental-a2'
-import { boardContract, identityContract } from './contract.ts'
-import { foldActors, foldMessages, type ActorsState, type ChannelsState, type IdentityCodesState, type MessagesState } from './folds.ts'
+import { boardContract } from './contract.ts'
+import { foldActors, foldMessages, type ActorsState, type ChannelsState, type MessagesState } from './folds.ts'
 import { own, setOwn } from './own.ts'
 
 export const messagesReducer = reducer({
@@ -24,14 +24,21 @@ export const postedReducer = reducer({
   return state
 })
 
+const emptyChannel = (path: string) => ({ path, lastIndex: 0, messages: 0, threads: 0 })
+
 export const channelsReducer = reducer({
   contract: boardContract,
-  name: 'board.channels.v1',
+  // v2 folds `channel.created`: a v1 snapshot an older deployment made may have passed one by.
+  name: 'board.channels.v2',
   initialState: {} as ChannelsState,
 }).fold((state, event) => {
+  if (event.type === 'channel.created') {
+    if (!own(state, event.payload.channel)) setOwn(state, event.payload.channel, emptyChannel(event.payload.channel))
+    return state
+  }
   if (event.type !== 'message.posted') return state
   const { channel, re } = event.payload
-  const entry = own(state, channel) ?? setOwn(state, channel, { path: channel, lastIndex: 0, messages: 0, threads: 0 })
+  const entry = own(state, channel) ?? setOwn(state, channel, emptyChannel(channel))
   entry.lastIndex = event.index
   entry.messages += 1
   if (re === null) entry.threads += 1
@@ -41,23 +48,5 @@ export const channelsReducer = reducer({
 export const actorsReducer = reducer({
   contract: boardContract,
   name: 'board.actors.v2',
-  initialState: { byId: {}, byHandle: {}, links: {} } as ActorsState,
+  initialState: { byId: {}, byHandle: {} } as ActorsState,
 }).fold(foldActors)
-
-export const identityCodesReducer = reducer({
-  contract: identityContract,
-  name: 'board.identity-codes.v1',
-  initialState: {} as IdentityCodesState,
-}).fold((state, event) => {
-  if (event.type === 'identity.code_issued') {
-    const { hash, principal, sync, expiresAt } = event.payload
-    state[hash] ??= { principal, sync, expiresAt, usedBy: null, usedIn: null }
-  } else if (event.type === 'identity.code_used') {
-    const code = state[event.payload.hash]
-    if (code && code.usedBy === null) {
-      code.usedBy = event.payload.actor
-      code.usedIn = event.payload.message ?? null
-    }
-  }
-  return state
-})

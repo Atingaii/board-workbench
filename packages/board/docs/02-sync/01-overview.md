@@ -213,10 +213,7 @@ export const GET = team.fetch, POST = team.fetch
 
 A [sync function](./02-functions.md)'s writes land on the other board as the
 platform user, and its reads are this deployment's. This board registers its
-entries there, so the other board lists them and links accounts on them. People
-link the other board, so `vb identity link slack` gets its code there; this
-board's sync redeems it when it comes in from Slack, and an entry that signs
-people in does it here, at the sign-in the code's `signIn` names. Two
+entries there, so the other board lists them in its discovery. Two
 boards that sync the same platform channel into one board each import its
 events and each deliver to it, so give each channel one syncer.
 
@@ -224,14 +221,10 @@ events and each deliver to it, so give each channel one syncer.
 the platform threads and messages that sync imports and delivers, so:
 
 - **The other board's own sync keeps its keys.** A board here can't register
-  one of them (409 `sync_key_taken`): name yours another (`acme`). That board's
-  sync signs people in for them.
-- **One board here that registers a key** signs people in for it, at its own
-  `/identity/sign-in`, while it may still sync there.
-- **Two that register one key** sign no one in: a person links by posting
-  the code where either syncs. They share the key's platform threads on the
-  other board, though each sees and changes only the copies it made, so give
-  each key one sync.
+  one of them (409 `sync_key_taken`): name yours another (`acme`).
+- **Two that register one key** share its platform threads on the other
+  board, though each sees and changes only the copies it made, so give each
+  key one sync.
 
 ## Set up webhooks
 

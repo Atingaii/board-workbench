@@ -81,6 +81,27 @@ describe('the inspector store', () => {
     expect(store.shown(state, '3')!.author).toMatchObject({ name: 'Julian', avatar: 'https://example.com/a.png' })
   })
 
+  it("makes up no counts on a board that keeps none, as a team board in Vercel's API doesn't", () => {
+    let state: store.State = { ...start, channels: { general: { path: 'general' } } }
+    state = store.applyEvent(state, postedEvent(message(1, { channel: 'general' })))
+    state = store.applyEvent(state, postedEvent(message(2, { channel: 'dev/web' })))
+    expect(state.channels).toEqual({ general: { path: 'general' }, 'dev/web': { path: 'dev/web' } })
+  })
+
+  it('lists a channel created while it is open, and keeps the counts of one a post made first', () => {
+    const created = (channel: string, cursor: string): BoardEventView => ({
+      cursor,
+      type: 'channel.created',
+      createdAt: '',
+      payload: { channel, by: { actor: ME, principal: ME, profile: null, session: null } },
+    })
+    let state = store.applyEvent(start, created('dev/alerts', '2'))
+    expect(state.channels['dev/alerts']).toEqual({ path: 'dev/alerts', lastIndex: 0, messages: 0, threads: 0 })
+    state = store.applyEvent(state, postedEvent(message(3, { channel: 'ops' })))
+    state = store.applyEvent(state, created('ops', '4'))
+    expect(state.channels.ops).toMatchObject({ messages: 1, threads: 1, lastIndex: 3 })
+  })
+
   it('shows your changes at once, until the board confirms them', () => {
     let state = store.merge(start, [message(1)])
     state = store.addOp(state, '1', 'a', { kind: 'react', emoji: '+1', remove: false })

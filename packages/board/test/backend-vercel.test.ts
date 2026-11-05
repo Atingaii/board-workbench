@@ -62,7 +62,8 @@ const verified = (can: Can, who: { id: string; kind: string; handle: string; nam
 
 describe('vercel()', () => {
   it("passes the conformance kit's core, attachments, and watchers, and skips sync for a person, whom Vercel's API lets sync nowhere", async () => {
-    const report = await conformance(handleOn(fakeMessageboard()))
+    const api = fakeMessageboard()
+    const report = await conformance(handleOn(api), { withToken: () => handleOn(api) })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -80,10 +81,18 @@ describe('vercel()', () => {
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
       'core: lists the channel and you in it': 'passed',
+      'core: creates a channel only once: one a post made is there already': 'passed',
       'core: answers 404 for an ID that names nothing': 'passed',
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
+      // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
+      'grants: grants a project, lists it, takes the same grant again as one, and revokes it': 'failed',
+      "grants: changes a grant's can when it's set again": 'failed',
+      "grants: grants a GitHub repository's workflows, and another team's project": 'failed',
+      'grants: keeps two environments of one project as two grants, and revokes one without the other': 'failed',
+      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
+      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
@@ -91,7 +100,6 @@ describe('vercel()', () => {
       "sync: queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'skipped',
       'sync: hands a sync each message change as a match of its @sync watcher': 'skipped',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
-      'sync: finds no one for a platform account nobody linked': 'skipped',
     })
   }, 30_000)
 
@@ -185,6 +193,34 @@ describe('vercel()', () => {
     await team.post('ops', { text: 'three' })
     expect((await team.messages({ channel: 'dev/' })).messages.map((m) => m.text)).toEqual(['one', 'two'])
     expect((await team.threads({ channel: 'dev/', label: { state: 'open' } })).threads.map((t) => t.message.id)).toEqual([two.id])
+  })
+
+  it("lists channels by path, sorted, with none of the counts the API doesn't keep", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.post('ops', { text: 'one' })
+    await team.post('dev/web', { text: 'two' })
+    await team.reply((await team.post('dev/web', { text: 'three' })).id, { text: 'four' })
+    expect(await team.channels()).toEqual([{ path: 'dev/web' }, { path: 'general' }, { path: 'ops' }])
+  })
+
+  it('makes a channel in the API before anything posts to it, once, and only for a caller that reads and posts there', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    expect(await team.createChannel('dev/alerts')).toEqual({ channel: { path: 'dev/alerts' }, created: true })
+    expect(await team.createChannel('dev/alerts')).toMatchObject({ created: false })
+    // One a post made, or another handle, is there already.
+    await team.post('ops', { text: 'hi' })
+    expect(await team.createChannel('ops')).toMatchObject({ created: false })
+    expect(await handleOn(api, 'user:u_ada').createChannel('dev/alerts')).toMatchObject({ created: false })
+
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production') })
+    const signal = new AbortController().signal
+    await expect(backend.createChannel(verified({ 'feedback/': ['post'] }), { path: 'feedback/acme' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.createChannel(verified({ 'dev/': ['read'] }), { path: 'dev/web' }, signal)).rejects.toMatchObject({ status: 403 })
+    expect(await backend.createChannel(verified({ 'dev/': ['read', 'post'] }), { path: 'dev/web' }, signal)).toMatchObject({ created: true })
+    // What it refused never reached the API: the board's own general, and what it made.
+    expect((await team.channels()).map((c) => c.path).sort()).toEqual(['dev/alerts', 'dev/web', 'general', 'ops'])
   })
 
   it("lists a busy channel's threads from the API's thread list, reading only the roots and latest replies it shows", async () => {
@@ -407,7 +443,6 @@ describe('vercel()', () => {
       "queues a platform thread's events in its sync's inbox once, and leases each after the one before is acked": 'passed',
       'hands a sync each message change as a match of its @sync watcher': 'passed',
       'keeps noSync on a post and a reply, so sync sends neither': 'failed',
-      'finds no one for a platform account nobody linked': 'passed',
     })
   }, 30_000)
 
@@ -669,5 +704,21 @@ describe('vercel()', () => {
     const signal = new AbortController().signal
     await expect(backend.register(verified('all'), { url: null, watch: { w: { tail: 'general' } } } as never, signal)).rejects.toMatchObject({ status: 403 })
     await expect(backend.matches(verified('all'), {}, signal)).rejects.toMatchObject({ status: 403 })
+  })
+
+  it("sends grants and tokens to Vercel's API as the protocol has them, which answers what it doesn't keep yet", async () => {
+    const api = fakeMessageboard()
+    const jb = handleOn(api)
+    await expect(jb.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
+    await expect(jb.createToken({ name: 'widget', can: { 'feedback/': ['post'] } })).rejects.toMatchObject({ status: 404 })
+    expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/brd_test/grants', 'POST /boards/brd_test/tokens']))
+  })
+
+  it("refuses a caller it serves grants and tokens, which would act as whoever its credentials are", async () => {
+    // A person's credentials, which Vercel's API lets change grants: only the board's own code may use them for it.
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })
+    const signal = new AbortController().signal
+    await expect(backend.createGrant(verified('all'), { issuer: 'vercel', claims: { project_id: 'prj_x', environment: 'production' } }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 403 })
   })
 })

@@ -362,24 +362,26 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
     return found
   }
-  /** A channel to post in, made the first time something posts to it, as on any board. */
-  async function channelToPost(who: Who, name: string): Promise<ApiChannel> {
+  /** The channel by `name`, made if it isn't there: `created` says whether this made it. */
+  async function ensureChannel(who: Who, name: string): Promise<{ channel: ApiChannel; created: boolean }> {
     const found = await channelNamed(who, name)
-    if (found) return found
+    if (found) return { channel: found, created: false }
     try {
       const { channel } = await api<{ channel: ApiChannel }>(who, 'POST', await onBoard(who, '/channels'), { body: { operationId: operationId(), name } })
       channels = null
       named.set(name, channel)
-      return channel
+      return { channel, created: true }
     } catch (error) {
       // Someone made it first.
       if (error instanceof HttpError && error.code === 'channel_name_taken') {
         const made = await channelNamed(who, name)
-        if (made) return made
+        if (made) return { channel: made, created: false }
       }
       throw error
     }
   }
+  /** A channel to post in, made the first time something posts to it, as on any board. */
+  const channelToPost = async (who: Who, name: string): Promise<ApiChannel> => (await ensureChannel(who, name)).channel
   /** The channels a filter names that `access` reads: one, a channel and those under it (`dev/`), or every one. */
   async function channelsFor(who: Who, filter: string | undefined, access: Access | null): Promise<ApiChannel[]> {
     const readable = (channel: ApiChannel) => access === null || access.readable(channel.name)
@@ -1153,9 +1155,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async channels(caller) {
       const who = whoOf(caller)
-      // The API counts neither messages nor threads in a channel.
-      const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller))).map((channel) => ({ path: channel.name, lastIndex: 0, messages: 0, threads: 0 }))
+      // The API counts neither messages nor threads in a channel, so a view says nothing of them.
+      const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller)))
+        .map((channel) => ({ path: channel.name }))
+        .sort((a, b) => a.path.localeCompare(b.path))
       return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
+    },
+    async createChannel(caller, { path }) {
+      checkCaller('createChannel', caller)
+      // As on any board: the answer says whether it was there, so it needs both, whether it was or not.
+      const access = accessOf(caller)
+      need(access, 'read', path)
+      need(access, 'post', path)
+      const { created } = await ensureChannel(whoOf(caller), path)
+      return { channel: { path }, created }
     },
     async actors(caller, _input, signal) {
       const who = whoOf(caller)
@@ -1397,6 +1410,38 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         signal,
       })
       return { ok: true }
+    },
+    // Grants and tokens are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
+    // A caller this board serves gets none of them, since it reaches the API as these credentials.
+    async grants(caller, _input, signal) {
+      checkCaller('grants', caller)
+      const who = whoOf(caller)
+      return api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
+    },
+    async createGrant(caller, input, signal) {
+      checkCaller('createGrant', caller)
+      const who = whoOf(caller)
+      return api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+    },
+    async revokeGrant(caller, { id }, signal) {
+      checkCaller('revokeGrant', caller)
+      const who = whoOf(caller)
+      return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
+    },
+    async tokens(caller, _input, signal) {
+      checkCaller('tokens', caller)
+      const who = whoOf(caller)
+      return api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+    },
+    async createToken(caller, input, signal) {
+      checkCaller('createToken', caller)
+      const who = whoOf(caller)
+      return api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+    },
+    async revokeToken(caller, { id }, signal) {
+      checkCaller('revokeToken', caller)
+      const who = whoOf(caller)
+      return api<Protocol['revokeToken']['output']>(who, 'POST', await onBoard(who, `/tokens/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
     async schedule(caller, input, signal) {
       if (input.attachments?.length) throw notSupported('files on scheduled messages')
