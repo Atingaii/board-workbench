@@ -275,6 +275,10 @@ describe('@vercel/board/access', () => {
     expect(() => Object.assign(publicAccess.compileAccess(['read']), { readsAll: false })).toThrow(TypeError)
   })
 
+  it('gives a grant or a token that names no can read, post, react, and label everywhere', () => {
+    expect(publicAccess.compileAccess(publicAccess.DEFAULT_CAN).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
+  })
+
   it('adds up only accesses it made: anything else counts as nothing', () => {
     const handWritten = { can: () => true, readable: () => true, readsAll: true, everywhere: () => true, anywhere: () => true } as unknown as Access
     expect(publicAccess.union([handWritten]).anywhere('read')).toBe(false)
