@@ -75,6 +75,7 @@ describe('vercel()', () => {
       'core: posts once for a client ID, however many times it is sent': 'passed',
       'core: raises the version with each edit, reaction, and label': 'passed',
       "core: matches a label on the message or its thread's root": 'passed',
+      'core: drops a deleted message from what its labels find': 'passed',
       'core: reads a channel after a cursor or a message ID, oldest first': 'passed',
       'core: lists threads, each with its reply count and latest reply': 'passed',
       'core: reads events after a cursor, each with a cursor of its own': 'passed',
@@ -470,6 +471,54 @@ describe('vercel()', () => {
     expect((await team.messages({ channel: 'busy', limit: 120 })).messages).toHaveLength(100)
   }, 30_000)
 
+  it("waits on every channel's feed at once for a read across channels, asking nothing more until one answers", async () => {
+    const api = fakeMessageboard()
+    const changes: number[] = []
+    const fetching = as(api, 'user:u_jb')
+    const counted = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input instanceof Request ? input.url : input)).pathname.endsWith('/changes')) changes.push(Date.now())
+      return fetching(input, init)
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
+    for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
+    const { cursor } = await team.poll({})
+    const waiting = team.poll({ after: cursor, wait: 5 })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const settled = changes.length
+    // Idle, the API hears nothing more: each channel's long-poll holds.
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    expect(changes.length).toBe(settled)
+    const posted = Date.now()
+    await team.post('ops', { text: 'later' })
+    const page = await waiting
+    expect(page.events.map((event) => event.message?.text)).toEqual(['later'])
+    expect(Date.now() - posted).toBeLessThan(1000)
+  }, 15_000)
+
+  it('reads every channel at most once a second across channels, however busy the board, when the filter matches nothing', async () => {
+    const api = fakeMessageboard()
+    let changes = 0
+    const fetching = as(api, 'user:u_jb')
+    const counted = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input instanceof Request ? input.url : input)).pathname.endsWith('/changes')) changes++
+      return fetching(input, init)
+    }) as typeof fetch
+    const team = board({ backend: vercel({ team: 'team_test', api: API, fetch: counted, files: api.files }) })
+    for (const channel of ['dev', 'ops', 'web']) await team.post(channel, { text: `hi ${channel}` })
+    const channels = (await team.channels()).length
+    const { cursor } = await team.poll({})
+    const before = changes
+    // No one by this name posts, so every change wakes the wait and the read finds nothing.
+    const waiting = team.poll({ after: cursor, by: 'nobody', wait: 5 })
+    const busy = setInterval(() => void team.post('ops', { text: 'busy' }), 50)
+    const page = await waiting.finally(() => clearInterval(busy))
+    expect(page.events).toEqual([])
+    // A wait on each channel, which wakes at once, then a read of each every second for 5 seconds:
+    // 1 + 6, and 1 to spare for a slow runner, where the first wake can miss its second. Waiting at
+    // every wake, as each second's read did before it fell back, is 5 + 6.
+    expect(changes - before).toBeLessThanOrEqual(channels * (1 + 6 + 1))
+  }, 15_000)
+
   it('finds an older thread by labels the API can only filter after it lists, and refuses a cursor it can’t read', async () => {
     const api = fakeMessageboard()
     const team = handleOn(api)
@@ -478,6 +527,25 @@ describe('vercel()', () => {
     const { threads } = await team.threads({ channel: 'dev', label: { state: 'open|wip' }, limit: 2 })
     expect(threads.map((thread) => thread.message.text)).toEqual(['open one'])
     await expect(team.messages({ channel: 'dev', after: '!!' })).rejects.toMatchObject({ status: 400, code: 'invalid_cursor' })
+  })
+
+  it('leaves a deleted root out of every read by its labels, though the API still lists it by them', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const open = { state: 'open' }
+    const kept = await team.post('dev', { text: 'kept', labels: open })
+    const keptReply = await team.reply(kept.id, { text: 'under kept' })
+    const gone = await team.post('dev/web', { text: 'gone', labels: open })
+    const goneReply = await team.reply(gone.id, { text: 'under gone' })
+    const { cursor } = await team.poll({ label: open })
+    await team.delete(gone.id)
+    // The newest thread its labels find is the deleted one: a page of one fills past it.
+    expect((await team.threads({ channel: 'dev/', label: open, limit: 1 })).threads.map((t) => t.message.text)).toEqual(['kept'])
+    expect((await team.messages({ channel: 'dev/', label: open })).messages.map((m) => m.text)).toEqual(['kept', 'under kept'])
+    await team.edit(goneReply.id, 'under gone, edited')
+    await team.edit(keptReply.id, 'under kept, edited')
+    const { events } = await team.poll({ label: open, after: cursor })
+    expect(events.filter((event) => event.type === 'message.edited').map((event) => event.message?.text)).toEqual(['under kept, edited'])
   })
 
   it("registers its own watchers where it's woken, and runs what they matched when it is", async () => {

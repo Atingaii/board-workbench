@@ -10,8 +10,9 @@ import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
+import { isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
-import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
+import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
@@ -227,18 +228,26 @@ function parse(argv: string[]) {
 function parseFailure(error: Error & { code?: string }, argv: string[], word: string | undefined): Failed {
   const option = error.message.match(/--[a-z][\w-]*/)?.[0] ?? /'(-[^' ,]+)/.exec(error.message)?.[1]
   if (error.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && option) {
-    const guess = option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
+    // One argument can hold several words (a shell variable that wasn't split): it's that argument
+    // that's unknown, not the option it starts with, which may well be real. The parser names a long
+    // one whole, and only a short group's start (`- `, `-z`), and nothing after `--` is an option.
+    const token = /^Unknown option '(.*?)'\. /.exec(error.message)?.[1]
+    const dash = argv.indexOf('--')
+    const options = dash === -1 ? argv : argv.slice(0, dash)
+    const spaced = token === undefined ? undefined : options.find((arg) => /\s/.test(arg) && (token.startsWith('--') ? arg === token : arg.startsWith(token)))
+    const guess = !spaced && option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
     const next: Recovery[] = [{ instruction: 'See all options', argv: [...cli(), ...(word ? [word] : []), '--help'] }]
-    const at = argv.indexOf(option)
+    const unknown = spaced ?? option
+    const at = argv.indexOf(unknown)
     if (word && TEXT.has(word) && at !== -1) {
       // The text goes first after the `--` there is, or a new one.
       const rest = [...argv.slice(0, at), ...argv.slice(at + 1)]
       const dash = rest.indexOf('--')
-      const text = dash === -1 ? [...rest, '--', option] : [...rest.slice(0, dash + 1), option, ...rest.slice(dash + 1)]
+      const text = dash === -1 ? [...rest, '--', unknown] : [...rest.slice(0, dash + 1), unknown, ...rest.slice(dash + 1)]
       next.push({ instruction: 'Or, for text that starts with -, put it after --', argv: [...cli(), ...text] })
     }
     const where = `${named()}${word ? ` ${word}` : ''}`
-    return usage(`Unknown option ${option} for ${where}.${guess ? ` Did you mean --${guess}?` : ''}`, { reason: 'unknown_option', next })
+    return usage(`Unknown option ${spaced ? JSON.stringify(spaced) : option} for ${where}.${guess ? ` Did you mean --${guess}?` : ''}`, { reason: 'unknown_option', next })
   }
   if (error.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' && option) return usage(`${option} needs a value.`, { reason: 'missing_value' })
   return usage(sentence(error.message))
@@ -312,11 +321,14 @@ function messageId(value: string | undefined, what = 'message ID'): string {
 const tooLarge = (path: string) =>
   new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't attach ${path}. It's over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be.` })
 
-/** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
-const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
+/** Whether an ID goes in and out bare: a number, or one Vercel's API hands out (`msg_…`), a message even where a channel has its name. */
+const bareId = (value: string) => /^\d+$/.test(value) || isApiMessageId(value)
 
-/** A message's ID as it's passed back: bare when it's a number, `#<id>` when it could be a channel's name. */
-const messageRef = (id: string) => (/^\d+$/.test(id) ? id : `#${id}`)
+/** Whether an argument names a message rather than a channel: `#<id>`, or an ID that goes bare. */
+const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value)
+
+/** A message's ID as it's passed back: bare when it goes bare, `#<id>` when it could be a channel's name. */
+const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
 
 /** `--if-revision N`, as an edit or a delete takes it. */
 function ifRevision(): { revision?: number } {
@@ -336,8 +348,27 @@ function labelPairs(values: string[] | undefined, wrong = "Labels look like key=
   return pairs
 }
 
-async function text(value: string | undefined): Promise<string> {
-  if (value === undefined) throw usage("Missing the message's text: pass it, or - to read it from stdin.", { reason: 'missing_arguments' })
+/**
+ * A message's text: the argument, stdin for `-`, or the file `--text-file` names (`-` for stdin).
+ * `optional` when the message can go without, as one with `--attach` files can.
+ */
+async function text(value: string | undefined, { optional = false } = {}): Promise<string> {
+  const file = flags['text-file']
+  if (file !== undefined) {
+    if (value !== undefined) throw usage("Can't use --text-file with text: pass one or the other.")
+    if (file === '-') return (await io.stdin()).replace(/\n$/, '')
+    const data = await io.readFile(file).catch((error: unknown) => {
+      // A file too big to attach is far too long for a message: say it of the text, not of --attach.
+      if (!(error instanceof Failed) || error.failure.reason !== 'payload_too_large') throw error
+      throw new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't use ${file} as the text. A message's text is at most ${MESSAGE_TEXT_MAX.toLocaleString('en-US')} characters.` })
+    })
+    if (!data) throw usage(`Can't read ${file}. There's no such file.`, { reason: 'file_not_found', next: [] })
+    return new TextDecoder().decode(data).replace(/\n$/, '')
+  }
+  if (value === undefined) {
+    if (optional) return ''
+    throw usage("Missing the message's text: pass it, - to read it from stdin, or --text-file <path>.", { reason: 'missing_arguments' })
+  }
   if (value !== '-') return value
   return (await io.stdin()).replace(/\n$/, '')
 }
@@ -775,6 +806,7 @@ function printMessage(message: MessageView) {
 /** A write that answers nothing but that it went through: with `--json`, which message, and what happened to it. */
 function printDone(id: string, outcome: string) {
   if (flags.json) result({ message: { id }, outcome })
+  else out(`${outcome} ${messageRef(id)}`)
 }
 
 /** Best-effort: the URL is printed either way. */
@@ -957,7 +989,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (re === undefined && flags.after !== undefined)
         throw usage("Can't use --after on a new thread. It's for replies: the thread's newest message.")
       const board = client()
-      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const content = await text(body, { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const options = {
         text: content,
@@ -977,11 +1009,12 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'reply': {
       const id = messageId(args[0])
       const board = client()
-      const content = args[1] === undefined && flags.attach?.length ? '' : await text(args[1])
+      const content = await text(args[1], { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const message = await board.reply(id, {
         text: content,
         ...(files.length ? { attachments: files } : {}),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}),
@@ -1005,7 +1038,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const times = flags.times === undefined ? undefined : Number(flags.times)
       if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw usage(`--times takes a count, and ${flags.times} isn't one.`)
       const board = client()
-      const content = body === undefined && flags.attach?.length ? '' : await text(body)
+      const content = await text(body, { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const where = isMessageRef(target) ? { re: messageId(target) } : target
       const schedule = await board.schedule(where, {
