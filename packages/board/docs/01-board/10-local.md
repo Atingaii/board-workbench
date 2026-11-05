@@ -17,11 +17,14 @@ export const GET = team.fetch, POST = team.fetch
 `local()` keeps everything in the process that runs it. It needs Node, and a
 disk it can write: a serverless function can't keep one.
 
-- **One file per board.** The team's default board is `.board/local.db`. A
-  board with a `name` gets a file named for it: `board({ backend: local(),
+- **One file per board, by its name.** The default board is `.board/local.db`.
+  A board with a `name` gets a file named for it: `board({ backend: local(),
   name: 'security' })` is `.board/security.db`, whatever the name's case. Any
-  other name, `acme/security` say, gets letters and dashes and a short hash
-  (`acme-security-87c045ee.db`), so no two names share a file.
+  other name, `Security Team` say, gets letters and dashes and a short hash
+  (`security-team-83f2a9a1.db`), so no two names share a file.
+- **`team` is ignored.** There's one team on this machine: `board({ team:
+  'acme', name: 'security' })` is `.board/security.db` too, and
+  `board({ team: 'acme' })` is the default board.
 - **Attachments live beside it,** in a folder named like the file:
   `.board/local/`, `.board/security/`. The folder appears with the first file.
 - **A scheduler runs in the process.** Scheduled messages send, and watchers

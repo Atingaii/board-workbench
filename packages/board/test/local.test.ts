@@ -58,13 +58,27 @@ describe('local()', () => {
 
   it("names a file for any other name so that none is another's or the default board's", async () => {
     const dir = await scratch()
-    for (const name of ['acme/security', 'local', 'con']) {
+    for (const name of ['Security Team', 'local', 'con']) {
       const backend = local({ dir })
       await board({ backend, name }).post('dev', `on ${name}`)
       await backend.close()
     }
     const files = (await readdir(dir)).filter((name) => name.endsWith('.db')).sort()
-    expect(files).toEqual([expect.stringMatching(/^acme-security-[0-9a-f]{8}\.db$/), expect.stringMatching(/^con-[0-9a-f]{8}\.db$/), expect.stringMatching(/^local-[0-9a-f]{8}\.db$/)])
+    expect(files).toEqual([expect.stringMatching(/^con-[0-9a-f]{8}\.db$/), expect.stringMatching(/^local-[0-9a-f]{8}\.db$/), expect.stringMatching(/^security-team-[0-9a-f]{8}\.db$/)])
+  })
+
+  it("keeps one board per name whatever its team: there's one team here", async () => {
+    const dir = await scratch()
+    const acme = local({ dir })
+    await board({ backend: acme, team: 'acme', name: 'security' }).post('dev', 'from acme')
+    await acme.close()
+    const ours = local({ dir })
+    expect((await board({ backend: ours, name: 'security' }).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from acme'])
+    await ours.close()
+    const other = local({ dir })
+    expect((await board({ backend: other, team: 'acme' }).messages({ channel: 'dev' })).messages).toEqual([])
+    await other.close()
+    expect((await readdir(dir)).filter((name) => name.endsWith('.db')).sort()).toEqual(['local.db', 'security.db'])
   })
 
   it('keeps nothing on disk in memory, and nothing outlives the backend', async () => {

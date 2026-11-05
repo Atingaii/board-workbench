@@ -13,8 +13,8 @@ import type { BoardStore } from '../store/types.ts'
 export type LocalOptions = {
   /**
    * Where it keeps its files: `.board` under the working directory by default. Each board is one
-   * SQLite file there, `local.db` for the team's default board and one named for the board
-   * otherwise, with its attachments in the folder of the same name.
+   * SQLite file there, `local.db` for the default board and one named for the board otherwise,
+   * whatever its team, with its attachments in the folder of the same name.
    */
   dir?: string
   /** Keeps the board in memory, attachments too, for tests: nothing is written, and it's gone with the process. */
@@ -32,9 +32,10 @@ const PLAIN = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/
 
 /**
- * The file a board keeps, without its extension: `local` for the team's default board, a plain
- * name as it is (whatever its case: names match that way), and any other name, `acme/security`
- * say, as letters and dashes after a hash of it, so no two names share one and none is `local`'s.
+ * The file a board keeps, without its extension, from its name alone: `local` for the default
+ * board, a plain name as it is (whatever its case: names match that way), and any other name,
+ * `Security Team` say, as letters and dashes after a hash of it, so no two names share one and
+ * none is `local`'s.
  */
 export function localFile(name: string | null): string {
   if (name === null) return 'local'
@@ -53,7 +54,8 @@ function unwritable(error: unknown): string {
 }
 
 /**
- * A board kept in this process: in SQLite under `.board/` (or `dir`), one file per board's name,
+ * A board kept in this process: in SQLite under `.board/` (or `dir`), one file per board's name
+ * (whatever `board({ team })` says: there's one team here),
  * its attachments next to it, and a scheduler whose timers run here, so schedules send, and
  * watchers and sync retry, while the process runs. `memory` keeps it all in memory, for tests.
  * A restart drops pending timers, so it's for development, `vb serve`, tests, and working offline,
