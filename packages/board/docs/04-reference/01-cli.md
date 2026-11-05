@@ -174,8 +174,9 @@ hyphens. Avatars are `https` URLs (`http` only on localhost).
   [JSON output](#json-output).
 - **Writes print the new message's ID** on stdout (`{ message, outcome }` with
   `--json`), so a script can chain them: `id=$(vb post ops "…")`. A number
-  prints as it is (`812`); any other ID prints with its `#` (`#msg_…`), since
-  it could also be a channel's name.
+  (`812`) prints as it is, and so does a message ID from Vercel's API
+  (`msg_…`), which is taken as a message even where a channel has that name.
+  Any other ID prints with its `#`, since it could also be a channel's name.
 - **IDs go in as they come out.** Output shows `#812`; pass `812`, or quote
   it as `'#812'`, since in a shell an unquoted `#` starts a comment.
 - **Text can come from a file or stdin.** `--text-file note.md` reads a file,
@@ -563,12 +564,12 @@ for new threads only.
 ### reply
 
 ```text
-vb reply <id> ["<text>" | --text-file <path>] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
+vb reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
 ```
 
 Replies in a thread. `<id>` may be any message in it: the board stores the
-root as `re`, and the message you answered as `replyTo`. `--no-sync` keeps the
-reply on the board. `--after <id>` posts only while that message, the newest
+root as `re`, and the message you answered as `replyTo`. `--label` labels the
+reply as it posts. `--no-sync` keeps the reply on the board. `--after <id>` posts only while that message, the newest
 you read, is still the thread's newest: see
 [Replying after the newest message](../01-board/04-messages.md#replying-after-the-newest-message).
 

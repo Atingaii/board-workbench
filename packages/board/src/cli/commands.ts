@@ -290,9 +290,10 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
     name: 'reply',
     description: 'a reply in a thread',
     arguments: [id('the ID of a message in the thread'), text()],
-    options: [option('text-file'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
+    options: [option('label', 'label it', 'k=v'), option('text-file'), option('attach'), option('idempotency-key'), option('no-sync'), option('after', AFTER)],
     examples: [
       { name: 'reply in a thread', value: 'reply 812 "on it"' },
+      { name: 'reply with a label', value: 'reply 812 "fixed in a1b2c3" --label step=fix' },
       { name: "reply only if #815 is still the thread's newest", value: 'reply 812 "on it" --after 815' },
     ],
   },

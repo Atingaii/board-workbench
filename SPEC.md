@@ -1303,8 +1303,9 @@ export const schedulesContract = contract({
 - **Actor profiles:** `actor.seen` is appended in the same batch as an actor's
   write, and only when the actor is new or its display details changed.
 - **Edits and deletes:** deleted messages become tombstones and drop their
-  reactions. Later edits to a deleted message are ignored. This is the same
-  invariant as Just Chat.
+  reactions and labels, so no label filter finds a tombstone, or a reply by its
+  deleted root's labels. Later edits to a deleted message are ignored. This is
+  the same invariant as Just Chat.
 - **The event feed hides bookkeeping (`actor.seen`, `message.synced`) by default.** `tail --all` shows every
   board event. To see raw platform events, use `vb inbox`.
 
@@ -1793,7 +1794,7 @@ board read [channel] [filters] [--limit N]     one summary per thread (root, rep
 board read <id>                                one thread; with filters, the root and the replies that match
 
 board post <channel|id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--sync <target>]... [--no-sync] [--idempotency-key <key>] [--after <id>]
-board reply <id> ["<text>" | --text-file <path>] [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
+board reply <id> ["<text>" | --text-file <path>] [--label k=v]... [--attach <file>]... [--no-sync] [--idempotency-key <key>] [--after <id>]   <id> may be any message in the thread; --after: only while that one is its newest
 board schedule <channel|id> ["<text>" | --text-file <path>] (--in 1d | --at <time> | --every 30m) [--until <time> | --for 24h | --times N] [--label k=v]... [--attach <file>]... [--no-sync]
 board schedules [id] [--by <handle>] [--channel <c>] [--all]   pending schedules; --all adds done and canceled
 board schedule cancel <schedule>               e.g. s12; yours, or with manage
