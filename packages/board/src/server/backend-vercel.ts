@@ -67,7 +67,6 @@ type ApiSchedule = {
   threadId?: string
   text: string
   labels?: Labels
-  noSync?: boolean
   firstAt: number
   every?: number
   until?: number
@@ -525,7 +524,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       re: schedule.threadId === undefined ? null : idAt(schedule.threadId, 1),
       text: schedule.text,
       labels: { ...schedule.labels },
-      noSync: schedule.noSync ?? false,
+      noSync: false,
       attachments: [],
       first: iso(schedule.firstAt),
       every: schedule.every ?? null,
@@ -1323,7 +1322,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (labeled) need(access, 'label', input.channel)
         const channel = await channelToPost(who, input.channel)
         made = await api(who, 'POST', await onBoard(who, '/threads'), {
-          body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}) },
+          body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}) },
           signal,
         })
       } else {
@@ -1339,7 +1338,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
         }
         made = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
-          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
+          body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}) },
           signal,
         }).catch((error: unknown) => {
           // The API names messages by their sequence in the thread, which a board's IDs don't show.
@@ -1442,7 +1441,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           ...target,
           text: input.text,
           ...(labels ? { labels } : {}),
-          ...(input.noSync ? { noSync: true } : {}),
           firstAt,
           ...(input.every !== undefined ? { every: ms(input.every) } : {}),
           ...(until !== undefined ? { until } : {}),
