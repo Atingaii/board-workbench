@@ -308,13 +308,13 @@ function messageId(value: string | undefined, what = 'message ID'): string {
 const tooLarge = (path: string) =>
   new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't attach ${path}. It's over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be.` })
 
-/** Whether an ID can't be a channel's name: a number, or one Vercel's API hands out (`msg_…`). */
+/** Whether an ID goes in and out bare: a number, or one Vercel's API hands out (`msg_…`), a message even where a channel has its name. */
 const bareId = (value: string) => /^\d+$/.test(value) || isApiMessageId(value)
 
-/** Whether an argument names a message rather than a channel: `#<id>`, or an ID no channel is named. */
+/** Whether an argument names a message rather than a channel: `#<id>`, or an ID that goes bare. */
 const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value)
 
-/** A message's ID as it's passed back: bare when no channel is named it, `#<id>` when one could be. */
+/** A message's ID as it's passed back: bare when it goes bare, `#<id>` when it could be a channel's name. */
 const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
 
 /** `--if-revision N`, as an edit or a delete takes it. */
