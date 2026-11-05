@@ -9,6 +9,7 @@ import { boardUrl, connect, handFetch, handLogin, vercelProjectFile } from '../c
 import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
+import { isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
@@ -222,18 +223,26 @@ function parse(argv: string[]) {
 function parseFailure(error: Error & { code?: string }, argv: string[], word: string | undefined): Failed {
   const option = error.message.match(/--[a-z][\w-]*/)?.[0] ?? /'(-[^' ,]+)/.exec(error.message)?.[1]
   if (error.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' && option) {
-    const guess = option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
+    // One argument can hold several words (a shell variable that wasn't split): it's that argument
+    // that's unknown, not the option it starts with, which may well be real. The parser names a long
+    // one whole, and only a short group's start (`- `, `-z`), and nothing after `--` is an option.
+    const token = /^Unknown option '(.*?)'\. /.exec(error.message)?.[1]
+    const dash = argv.indexOf('--')
+    const options = dash === -1 ? argv : argv.slice(0, dash)
+    const spaced = token === undefined ? undefined : options.find((arg) => /\s/.test(arg) && (token.startsWith('--') ? arg === token : arg.startsWith(token)))
+    const guess = !spaced && option.startsWith('--') ? closest(option.slice(2), optionsOf(word)) : undefined
     const next: Recovery[] = [{ instruction: 'See all options', argv: [...cli(), ...(word ? [word] : []), '--help'] }]
-    const at = argv.indexOf(option)
+    const unknown = spaced ?? option
+    const at = argv.indexOf(unknown)
     if (word && TEXT.has(word) && at !== -1) {
       // The text goes first after the `--` there is, or a new one.
       const rest = [...argv.slice(0, at), ...argv.slice(at + 1)]
       const dash = rest.indexOf('--')
-      const text = dash === -1 ? [...rest, '--', option] : [...rest.slice(0, dash + 1), option, ...rest.slice(dash + 1)]
+      const text = dash === -1 ? [...rest, '--', unknown] : [...rest.slice(0, dash + 1), unknown, ...rest.slice(dash + 1)]
       next.push({ instruction: 'Or, for text that starts with -, put it after --', argv: [...cli(), ...text] })
     }
     const where = `${named()}${word ? ` ${word}` : ''}`
-    return usage(`Unknown option ${option} for ${where}.${guess ? ` Did you mean --${guess}?` : ''}`, { reason: 'unknown_option', next })
+    return usage(`Unknown option ${spaced ? JSON.stringify(spaced) : option} for ${where}.${guess ? ` Did you mean --${guess}?` : ''}`, { reason: 'unknown_option', next })
   }
   if (error.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' && option) return usage(`${option} needs a value.`, { reason: 'missing_value' })
   return usage(sentence(error.message))
@@ -307,11 +316,14 @@ function messageId(value: string | undefined, what = 'message ID'): string {
 const tooLarge = (path: string) =>
   new Failed({ class: 'limit', reason: 'payload_too_large', message: `Can't attach ${path}. It's over ${DIRECT_UPLOAD_BYTES_MAX / 1024 / 1024} MB, the most an attachment can be.` })
 
-/** Whether an argument names a message rather than a channel: `#<id>`, or a bare number. */
-const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || /^\d+$/.test(value)
+/** Whether an ID goes in and out bare: a number, or one Vercel's API hands out (`msg_…`), a message even where a channel has its name. */
+const bareId = (value: string) => /^\d+$/.test(value) || isApiMessageId(value)
 
-/** A message's ID as it's passed back: bare when it's a number, `#<id>` when it could be a channel's name. */
-const messageRef = (id: string) => (/^\d+$/.test(id) ? id : `#${id}`)
+/** Whether an argument names a message rather than a channel: `#<id>`, or an ID that goes bare. */
+const isMessageRef = (value: string) => /^#[^\s/]+$/.test(value) || bareId(value)
+
+/** A message's ID as it's passed back: bare when it goes bare, `#<id>` when it could be a channel's name. */
+const messageRef = (id: string) => (bareId(id) ? id : `#${id}`)
 
 /** `--if-revision N`, as an edit or a delete takes it. */
 function ifRevision(): { revision?: number } {
@@ -947,6 +959,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const message = await board.reply(id, {
         text: content,
         ...(files.length ? { attachments: files } : {}),
+        ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
         ...(flags.after !== undefined ? { after: messageId(flags.after) } : {}),

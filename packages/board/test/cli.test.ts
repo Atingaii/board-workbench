@@ -358,6 +358,14 @@ describe('cli', () => {
     expect(synced.stderr).toContain(`vb sync ${id} <TARGET>`)
   })
 
+  it('labels a reply as it posts it', async () => {
+    const id = (await vb(['post', 'reply-labels', 'export is broken'])).stdout.trim()
+    const reply = await vb(['reply', id, 'fixed in a1b2c3', '--label', 'step=fix', '--label', 'owner=claude', '--json'])
+    expect(reply.code).toBe(0)
+    expect(JSON.parse(reply.stdout)).toMatchObject({ message: { re: id, text: 'fixed in a1b2c3', labels: { step: 'fix', owner: 'claude' } }, outcome: 'posted' })
+    expect(JSON.parse((await vb(['read', id, '--json'])).stdout).replies.map((m: { labels: object }) => m.labels)).toEqual([{ step: 'fix', owner: 'claude' }])
+  })
+
   it('creates a channel before anything posts to it, and leaves one that is there as it is', async () => {
     expect(await vb(['channels', 'create', 'made/early'])).toEqual({ code: 0, stdout: 'created made/early\n', stderr: '' })
     // It lists with nothing in it, under its prefix like any channel, and reads as empty, not as a typo.
@@ -734,14 +742,29 @@ describe('cli', () => {
     const unknown = await vb(['read', 'dev', '--labl'])
     expect(unknown).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option --labl for vb read\. Did you mean --label\?\n/) })
     expect(unknown.stderr).toContain('vb read --help')
-    // Only what the command takes: `reply` takes no --label, so it guesses nothing.
-    expect(await vb(['reply', '12', 'hi', '--labl'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --labl for vb reply\.\n/) })
+    // Only what the command takes: `edit` takes no --label, so it guesses nothing.
+    expect(await vb(['edit', '12', 'hi', '--labl'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --labl for vb edit\.\n/) })
     // Text that starts with - goes after --, and the error says how, for this very command.
     const dashed = await vb(['post', 'dev', '-1'])
     expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option -1 for vb post\./) })
     expect(dashed.stderr).toContain('vb post dev -- -1')
     // `update` here is a channel, not the removed command.
     expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
+  })
+
+  it('names the whole argument an unknown option is in, when it holds several words', async () => {
+    // A shell variable that wasn't split: --as is real, but the argument it starts isn't an option.
+    const joined = await vb(['read', 'dev', '--as x --scope acme'])
+    expect(joined).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option "--as x --scope acme" for vb read\.\n/) })
+    // Text that starts with - is one argument too, and the way out moves all of it after --.
+    const dashed = await vb(['post', 'dev', '- check the deploy'])
+    expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option "- check the deploy" for vb post\./) })
+    expect(dashed.stderr).toContain("vb post dev -- '- check the deploy'")
+    // Text after -- isn't an option, even one that starts like the one the parser rejected.
+    expect(await vb(['read', 'dev', '--limt', '3', '--', '--limt x'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --limt for vb read\. Did you mean --limit\?\n/) })
+    const after = await vb(['post', 'dev', '--bogus', '--', '--bogus thing'])
+    expect(after.stderr).toMatch(/^error: Unknown option --bogus for vb post\.\n/)
+    expect(after.stderr).not.toContain("vb post dev --bogus -- '--bogus thing'")
   })
 
   it('says `vb stuck` is gone, and where its dead letters are', async () => {
