@@ -81,7 +81,7 @@ type ApiSchedule = {
 }
 /** A file on the board: `messageId` once a post carries it. */
 type ApiAttachment = Attachment & { boardId: string; sha256: string; state: 'pending' | 'ready'; messageId?: string }
-type ApiActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'; handle: string; name?: string; avatar?: string; person?: { id: string; handle: string; name?: string; avatar?: string } }
+type ApiActorView = { id: string; kind: 'person' | 'agent' | 'deployment' | 'app' | 'external'; handle: string; name?: string; avatar?: string }
 type ApiChange = {
   type: string
   channelId: string
@@ -153,22 +153,17 @@ const WAIT_MAX_S = 25
 /** The most recent inbox events the API lists at once. */
 const INBOX_LIST_MAX = 100
 const API_ONLY_CODES = new Set([
-  'consent_needs_sign_in',
   'duplicate_sync_key',
   'event_too_large',
-  'find_unsupported',
   'foreign_author',
-  'invalid_account',
   'invalid_find',
   'invalid_import',
   'invalid_inbox_event',
   'invalid_receipt',
-  'links_need_person',
   'message_not_owned',
   'not_a_member',
   'sync_key_not_owned',
   'sync_needs_project',
-  'sync_not_found',
 ])
 const BOARD_CODES: Record<number, string> = { 400: 'invalid_request', 403: 'forbidden', 404: 'not_found' }
 /** Pages a filtered read of one channel scans for matches before it answers with what it found. */
@@ -248,10 +243,6 @@ function actorView(actor: ApiActor): ActorView & { id: string } {
 /** A platform location as board shows one, its optional parts null. */
 const originOf = (origin: ApiMessage['origin']): Origin | null =>
   origin ? { ...(origin.channel !== undefined ? { channel: origin.channel } : {}), thread: origin.thread, subthread: origin.subthread ?? null, message: origin.message, context: origin.context ?? null } : null
-
-/** Who a linked platform user is, as the API's actors list says. */
-const personOf = (found: ApiActorView) =>
-  found.person ? { person: { id: found.person.id, handle: found.person.handle, name: found.person.name ?? found.person.handle, avatar: found.person.avatar ?? null } } : {}
 
 type Filters = Protocol['messages']['input']
 
@@ -484,7 +475,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const kind = found && apiKind(found.kind)
     // The API names a project or an app by its ID, and an agent under one after it: board's names say more.
     if (!found || !(kind === 'person' || kind === 'external' || (kind === 'agent' && actor.principal.type === 'user'))) return actorView(actor)
-    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null, ...personOf(found) }
+    return { id: actor.id, kind, handle: found.handle, name: found.name ?? found.handle, avatar: found.avatar ?? null }
   }
 
   async function view(who: Who, message: ApiMessage, channel: string): Promise<MessageView> {
@@ -1068,11 +1059,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if ('identity' in caller) throw forbidden(`this board syncs as its own deployment on Vercel's board, so it can't ${what} for you: sync with Vercel's API as yourself`)
   }
 
-  /** A person's links, which the API answers only for the person whose credentials it sees. */
-  function ownLinks(caller: Caller, what: string) {
-    if ('identity' in caller) throw forbidden(`Vercel's board sees this deployment, not you, so it can't ${what} here: run \`vb\` with your own login`)
-  }
-
   const platformUser = ({ id, handle, name, avatar, isBot }: ExternalAuthor) => ({ id, handle, name, avatar, isBot })
 
   /** An import as the API takes it: a channel by its ID, and a reply's `after` as its sequence in the thread. */
@@ -1179,7 +1165,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         handle: actor.handle,
         name: actor.name ?? actor.handle,
         avatar: actor.avatar ?? null,
-        ...personOf(actor),
       }))
       const cursor = cursorOf({ t: Date.now(), feeds: {} })
       // The API lists the whole board's. A reader of every channel sees everyone; anyone else, as on
@@ -1555,12 +1540,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       return api<Protocol['syncCopies']['output']>(who, 'GET', await onBoard(who, '/sync/copies'), { query: { message }, signal })
     },
-    async syncRoots(caller, { by, since }, signal) {
-      ownSync(caller, 'look up a sync')
-      const who = whoOf(caller)
-      const { roots } = await api<{ roots: ApiMessage[] }>(who, 'GET', await onBoard(who, '/sync/roots'), { query: { by, since: String(since) }, signal })
-      return { roots: await Promise.all(roots.map(async (root) => view(who, root, (await channelById(who, (await messageById(who, root.id, signal)).thread.channelId)).name))) }
-    },
     async synced(caller, { id }, signal) {
       const who = whoOf(caller)
       const at = locate(id)
@@ -1630,31 +1609,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         event ? [{ id, channel: typeof event.channel === 'string' ? event.channel : '', createdAt, sync: key, event, raw: raw ?? null }] : [],
       )
       return { events: channel === undefined ? entries : entries.filter((entry) => entry.channel === channel) }
-    },
-    async syncCode(caller, { sync }, signal) {
-      ownLinks(caller, 'issue you a code')
-      const who = whoOf(caller)
-      return api<Protocol['syncCode']['output']>(who, 'POST', await onBoard(who, '/sync/codes'), { body: { sync }, signal })
-    },
-    async syncAccount(caller, body, signal) {
-      ownSync(caller, 'link an account')
-      const who = whoOf(caller)
-      return api<Protocol['syncAccount']['output']>(who, 'POST', await onBoard(who, '/sync/accounts'), {
-        body: { sync: body.sync, account: platformUser(body.account), code: body.code, ...(body.message !== undefined ? { message: body.message } : {}), ...(body.method ? { method: body.method } : {}) },
-        signal,
-      })
-    },
-    async syncUnlink(caller, { account }, signal) {
-      ownLinks(caller, 'unlink an account')
-      const who = whoOf(caller)
-      await api(who, 'POST', await onBoard(who, '/sync/accounts/unlink'), { body: { account }, signal })
-      return { ok: true }
-    },
-    async identity(caller, _input, signal) {
-      ownLinks(caller, 'list your linked accounts')
-      const who = whoOf(caller)
-      const found = await api<Omit<Protocol['identity']['output'], 'cursor'>>(who, 'GET', await onBoard(who, '/sync/accounts'), { signal })
-      return { ...found, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
     async watchers(caller) {
       ownWatchers(caller, 'list watchers')

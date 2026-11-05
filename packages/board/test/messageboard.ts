@@ -107,7 +107,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
   const schedules = new Map<string, Schedule>()
-  /** Sync, as Vercel's API keeps it: each key's owner, platform IDs to the board's, copies, bindings, inboxes, and links. */
+  /** Sync, as Vercel's API keeps it: each key's owner, platform IDs to the board's, copies, bindings, and inboxes. */
   const syncKeys = new Map<string, string>()
   const platformThreads = new Map<string, string>()
   const platformMessages = new Map<string, string>()
@@ -117,8 +117,6 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const failures = new Map<string, Record<string, string>>()
   type InboxEntry = { id: string; eventId: string; thread: string; event?: unknown; raw?: unknown; pushedAt: number; attempts: number; lease?: string; leaseUntil?: number; done?: boolean }
   const inboxes = new Map<string, InboxEntry[]>()
-  const codes = new Map<string, { person: string; key: string; usedBy?: string; expiresAt: number }>()
-  const links = new Map<string, { person: string; method: 'code' | 'consent'; at: number; handle: string; name: string }>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
 
@@ -501,7 +499,6 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     if (syncKeys.get(key) !== principalId(actor.principal)) throw new Refused(403, 'sync_key_not_owned')
   }
   const ownedKeys = (actor: Actor) => new Set([...syncKeys].filter(([, owner]) => owner === principalId(actor.principal)).map(([key]) => key))
-  const linkFor = (account: string) => links.get(account)
 
   /** Vercel's API's sync routes, as they behave: undefined for a route that isn't one. */
   function syncRoute(method: string, rest: string, actor: Actor, body: Record<string, any>, url: URL): unknown {
@@ -615,15 +612,8 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         thread = platformThreads.get(`${prefixOf(query.thread)}|${query.thread}`) ?? null
         if (query.message !== undefined) message = platformMessages.get(`${prefixOf(query.thread)}|${query.thread}|${query.message}`) ?? message
       }
-      const link = query.account !== undefined && owned.has(prefixOf(query.account)) ? linkFor(query.account) : undefined
-      const code = query.code !== undefined ? codes.get(query.code) : undefined
-      return {
-        thread,
-        message,
-        person: link ? { id: link.person, method: link.method } : null,
-        accounts: query.person === undefined ? [] : [...links].filter(([account, l]) => l.person === query.person && owned.has(prefixOf(account))).map(([id, l]) => ({ id, method: l.method })),
-        holder: code && !code.usedBy && code.expiresAt >= Date.now() && owned.has(code.key) ? code.person : null,
-      }
+      // The API links no platform accounts to people, so it finds none.
+      return { thread, message, person: null, accounts: [], holder: null }
     }
     if ((found = /^\/sync\/threads\/([^/]+)$/.exec(rest)) && method === 'GET') {
       if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
@@ -702,47 +692,6 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       if (method === 'GET' && found[2] === undefined) {
         const limit = Number(url.searchParams.get('limit') ?? 50)
         return { events: [...inbox].reverse().slice(0, limit).map((entry) => ({ id: entry.eventId, thread: entry.thread, createdAt: new Date(entry.pushedAt).toISOString(), ...(entry.event !== undefined ? { event: entry.event } : {}), ...(entry.raw !== undefined ? { raw: entry.raw } : {}) })) }
-      }
-    }
-    if (method === 'GET' && rest === '/sync/roots') {
-      if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
-      const by = url.searchParams.get('by') ?? ''
-      const since = Number(url.searchParams.get('since') ?? 0)
-      const roots = [...threads.values()].map((thread) => thread.messages[0]!).filter((root) => root && principalId(root.createdBy.principal) === by && root.createdAt >= since && root.deletedAt === undefined)
-      return { roots: roots.sort((a, b) => a.createdAt - b.createdAt).map(show) }
-    }
-    if (method === 'POST' && rest === '/sync/codes') {
-      if (actor.principal.type !== 'user' || actor.profile) throw new Refused(403, 'not_a_person')
-      if (!syncKeys.has(body.sync)) throw new Refused(404, 'not_synced_here')
-      const code = `vb-${randomUUID().slice(0, 4).toUpperCase()}-${randomUUID().slice(0, 4).toUpperCase()}`
-      const expiresAt = Date.now() + 10 * 60_000
-      codes.set(code, { person: owner, key: body.sync, expiresAt })
-      return { code, expiresAt: new Date(expiresAt).toISOString() }
-    }
-    if (method === 'POST' && rest === '/sync/accounts') {
-      requireKey(actor, body.sync)
-      const code = codes.get(body.code)
-      if (!code || code.key !== body.sync || code.expiresAt < Date.now() || (code.usedBy !== undefined && code.usedBy !== body.account.id)) throw new Refused(404, 'bad_code')
-      if (!String(body.account.id).startsWith(`${body.sync}:`)) throw new Refused(400, 'invalid_account')
-      code.usedBy = body.account.id
-      const link = { person: code.person, method: (body.method ?? 'code') as 'code' | 'consent', at: now(), handle: body.account.handle, name: body.account.name }
-      links.set(body.account.id, link)
-      return { person: link.person, link: { actor: body.account.id, handle: link.handle, name: link.name, method: link.method, at: new Date(link.at).toISOString() } }
-    }
-    if (method === 'POST' && rest === '/sync/accounts/unlink') {
-      const link = linkFor(body.account)
-      const mine = link && (link.person === owner || ownedKeys(actor).has(prefixOf(body.account)))
-      if (!mine) throw new Refused(404, 'not_linked')
-      links.delete(body.account)
-      return { ok: true }
-    }
-    if (method === 'GET' && rest === '/sync/accounts') {
-      if (actor.principal.type !== 'user') throw new Refused(403, 'not_a_person')
-      const mine = [...links].filter(([, link]) => link.person === owner)
-      return {
-        principal: owner,
-        links: mine.map(([account, link]) => ({ actor: account, handle: link.handle, name: link.name, method: link.method, at: new Date(link.at).toISOString() })),
-        unlinked: [...syncKeys.keys()].filter((key) => !mine.some(([account]) => prefixOf(account) === key)),
       }
     }
     return undefined
@@ -855,15 +804,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         return { attachment, url: `${STORAGE}${attachment.id}`, expiresAt: now() + 60_000 }
       }
     }
-    if (method === 'GET' && rest === '/actors') {
-      const personOf = (id: string) => {
-        const link = links.get(id)
-        if (!link) return {}
-        const userId = link.person.replace(/^vercel:user:/, '')
-        return { person: { id: link.person, handle: accounts[userId]?.username ?? userId, ...(accounts[userId] ? { name: accounts[userId].name } : {}) } }
-      }
-      return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt).map((actor) => ({ ...actor, ...personOf(actor.id) })), cursor: null }
-    }
+    if (method === 'GET' && rest === '/actors') return { actors: [...actors.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt), cursor: null }
     if (method === 'GET' && rest === '/messages') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
