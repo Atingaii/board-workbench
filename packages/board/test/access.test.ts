@@ -13,6 +13,7 @@ import {
   type Permission,
 } from '../src/server/access.ts'
 import * as publicAccess from '../src/access/index.ts'
+import { checkGrant } from '../src/server/auth.ts'
 import { HttpError } from '../src/server/errors.ts'
 
 const CHANNELS = ['dev', 'dev/pi', 'dev/pi/deep', 'devops', 'ci', 'ci/main', 'security', 'security/vuln', 'feedback']
@@ -273,6 +274,17 @@ describe('@vercel/board/access', () => {
     expect(stub).toThrow(TypeError)
     expect(publicAccess.FULL_ACCESS.can('manage', 'dev')).toBe(true)
     expect(() => Object.assign(publicAccess.compileAccess(['read']), { readsAll: false })).toThrow(TypeError)
+  })
+
+  it("can't have its default can widened by code that imports it", () => {
+    const defaults = publicAccess.DEFAULT_CAN as Record<string, Permission[]>
+    expect(() => defaults['*']!.push('manage')).toThrow(TypeError)
+    expect(() => {
+      defaults.dev = ['manage']
+    }).toThrow(TypeError)
+    const grant = checkGrant({ issuer: 'github', claims: { repository: 'acme/app' } }, [])
+    expect(compileAccess(grant.can).anywhere('manage')).toBe(false)
+    expect(compileAccess(grant.can).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
   })
 
   it('gives a grant or a token that names no can read, post, react, and label everywhere', () => {
