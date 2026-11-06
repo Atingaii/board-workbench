@@ -276,9 +276,9 @@ describe('explain', () => {
     const lock = (await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })).body.grant
     const team = (await person('POST', '/grants', { principals: [user('u_alice'), user('u_bob')], can: { 'security/': 'all' } })).body.grant
     const explain = async (query: string) => (await person('GET', `/grants/explain?${query}`)).body
-    expect(await explain('channel=security/incidents&user=u_bob')).toEqual({ channel: 'security/incidents', pattern: 'security/', level: 'principal', grants: [team], rule: null, capped: null, can: ALL })
-    expect(await explain('channel=security/incidents&user=u_carol')).toEqual({ channel: 'security/incidents', pattern: 'security/', level: 'everyone', grants: [lock], rule: null, capped: null, can: [] })
-    expect(await explain('channel=dev&user=u_carol')).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g1' }], can: ALL })
+    expect(await explain('channel=security/incidents&user=u_bob')).toEqual({ channel: 'security/incidents', pattern: 'security/', over: ['*'], level: 'principal', grants: [team], rule: null, capped: null, can: ALL })
+    expect(await explain('channel=security/incidents&user=u_carol')).toEqual({ channel: 'security/incidents', pattern: 'security/', over: ['*'], level: 'everyone', grants: [lock], rule: null, capped: null, can: [] })
+    expect(await explain('channel=dev&user=u_carol')).toMatchObject({ pattern: '*', over: [], level: 'group', grants: [{ id: 'g1' }], can: ALL })
     // A project on the board's team, in the environment it names.
     expect(await explain('channel=dev&project=prj_web&environment=preview')).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g2' }], can: ['read', 'post', 'react', 'label'] })
   })
@@ -290,16 +290,17 @@ describe('explain', () => {
     expect(await explain('channel=ci&github=basehub-ai/www')).toEqual({
       channel: 'ci',
       pattern: 'ci/',
+      over: [],
       level: 'principal',
       grants: [],
       rule: "githubActions({ repository: 'basehub-ai/www' })",
       capped: null,
       can: ['read', 'post'],
     })
-    expect(await explain('channel=ci&github=acme/other')).toEqual({ channel: 'ci', pattern: null, level: null, grants: [], rule: null, capped: null, can: [] })
+    expect(await explain('channel=ci&github=acme/other')).toEqual({ channel: 'ci', pattern: null, over: [], level: null, grants: [], rule: null, capped: null, can: [] })
     // A run asks about itself: what decides, without the grants, which it may not list.
     const run = await as(workflowToken({ repository: 'acme/web', repository_id: '99' }))
-    expect((await run('GET', '/grants/explain?channel=ci')).body).toEqual({ channel: 'ci', pattern: 'ci/', level: 'principal', grants: [], rule: null, capped: null, can: ['post'] })
+    expect((await run('GET', '/grants/explain?channel=ci')).body).toEqual({ channel: 'ci', pattern: 'ci/', over: [], level: 'principal', grants: [], rule: null, capped: null, can: ['post'] })
     expect((await explain('channel=ci&github=acme/web')).grants).toHaveLength(1)
     expect((await run('GET', '/grants/explain?channel=ci&user=u_julian')).status).toBe(403)
     // A token says what it may do, narrowed.
