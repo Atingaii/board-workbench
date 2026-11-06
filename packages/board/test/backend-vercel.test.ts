@@ -918,6 +918,29 @@ describe('vercel()', () => {
     )
   })
 
+  it("gives back grants' and tokens' times as the protocol has them, though the API answers milliseconds", async () => {
+    const api = fakeMessageboard()
+    const signed = as(api, 'user:u_jb')
+    // The fake keeps no tokens: this answers as the API does, in milliseconds.
+    const minted = { id: 'tok_1', name: 'ci', can: { 'ci/': ['post'] }, by: null, at: Date.UTC(2026, 10, 1), expiresAt: Date.UTC(2026, 11, 1) }
+    const fetch: typeof signed = async (input, init) => {
+      const request = new Request(input, init)
+      if (new URL(request.url).pathname.endsWith('/boards/brd_test/tokens')) return Response.json(request.method === 'POST' ? { token: minted, secret: 'opaque-secret' } : { tokens: [minted] })
+      return signed(input, init)
+    }
+    const jb = board({ backend: vercel({ team: 'team_test', api: API, fetch, files: api.files }) })
+    const before = Date.now()
+    const { grant } = await jb.createGrant({ principals: [{ kind: 'user', email: 'ada@acme.com' }], can: { 'ci/': ['read'] } })
+    expect(Date.parse(grant.at!)).toBeGreaterThanOrEqual(before)
+    expect(grant.at).toBe(new Date(Date.parse(grant.at!)).toISOString())
+    expect((await jb.grants()).find((listed) => listed.id === grant.id)?.at).toBe(grant.at)
+    expect((await jb.explain('ci', { user: 'ada@acme.com' })).grants).toMatchObject([{ id: grant.id, at: grant.at }])
+    expect((await jb.updateGrant(grant.id, { can: { 'ci/': ['read', 'post'] } })).grant.at).toMatch(/^\d{4}-\d\d-\d\dT/)
+    const times = { at: '2026-11-01T00:00:00.000Z', expiresAt: '2026-12-01T00:00:00.000Z' }
+    expect(await jb.tokens()).toMatchObject([times])
+    expect((await jb.createToken({ name: 'ci', can: { 'ci/': ['post'] } })).token).toMatchObject(times)
+  })
+
   it("refuses a caller it serves grants and tokens, which would act as whoever its credentials are", async () => {
     // A person's credentials, which Vercel's API lets change grants: only the board's own code may use them for it.
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })

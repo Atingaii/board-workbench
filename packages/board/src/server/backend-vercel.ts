@@ -1,5 +1,5 @@
 import type { Method, Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -217,6 +217,11 @@ function operationId(): string {
 }
 
 const iso = (ms: number) => new Date(ms).toISOString()
+
+/** A grant as the API answers it, its `at` in milliseconds, as the protocol has it: an ISO string. */
+const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })
+/** A token as the API answers it, its times in milliseconds, as the protocol has them. */
+const tokenFrom = (token: TokenView): TokenView => ({ ...token, at: expiryOf(token.at) ?? token.at, expiresAt: expiryOf(token.expiresAt) ?? token.expiresAt })
 const idAt = (threadId: string, sequence: number) => `msg_${threadId.slice('thr_'.length)}_${sequence}`
 
 /** Where a message ID points: its thread and its place in it. Null for one that isn't a message's. */
@@ -1500,17 +1505,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async grants(caller, _input, signal) {
       checkCaller('grants', caller)
       const who = whoOf(caller)
-      return api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
+      const { grants } = await api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
+      return { grants: grants.map(grantFrom) }
     },
     async createGrant(caller, input, signal) {
       checkCaller('createGrant', caller)
       const who = whoOf(caller)
-      return api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      return { grant: grantFrom(grant) }
     },
     async updateGrant(caller, { id, ...change }, signal) {
       checkCaller('updateGrant', caller)
       const who = whoOf(caller)
-      return api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) })
+      const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) })
+      return { grant: grantFrom(grant) }
     },
     async explain(caller, { claim, ...query }, signal) {
       checkCaller('explain', caller)
@@ -1518,7 +1526,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const params = new URLSearchParams()
       for (const [name, value] of Object.entries(query)) if (value !== undefined) params.set(name, value)
       for (const pair of claim ?? []) params.append('claim', pair)
-      return api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {})
+      const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {})
+      return { ...explained, grants: explained.grants.map(grantFrom) }
     },
     async revokeGrant(caller, { id }, signal) {
       checkCaller('revokeGrant', caller)
@@ -1528,12 +1537,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async tokens(caller, _input, signal) {
       checkCaller('tokens', caller)
       const who = whoOf(caller)
-      return api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+      const { tokens } = await api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+      return { tokens: tokens.map(tokenFrom) }
     },
     async createToken(caller, input, signal) {
       checkCaller('createToken', caller)
       const who = whoOf(caller)
-      return api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      const created = await api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      return { ...created, token: tokenFrom(created.token) }
     },
     async revokeToken(caller, { id }, signal) {
       checkCaller('revokeToken', caller)

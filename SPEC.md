@@ -1049,13 +1049,14 @@ can't create them there (403), since they'd act as its project. `vercel()`
 forwards them to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
 `/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
-`operationId`), and adapts nothing: the API looks up the names people type
-and answers views with IDs and names, and what it doesn't keep yet, it
-answers, so a board on `vercel()` fails the conformance kit's `tokens` group
-until it does, and its `grants` group wherever the run names a project or a
-repository the team doesn't have. Only the board's own code does any of these
-there: a caller it serves acts as its project on Vercel's board, which can't
-tell them apart.
+`operationId`), and adapts only times, which the API answers in milliseconds
+and the protocol as ISO strings (a grant's `at`, a token's `at` and
+`expiresAt`). The API looks up the names people type and answers views with
+IDs and names, and what it doesn't keep yet, it answers, so a board on
+`vercel()` fails the conformance kit's `tokens` group until it does, and its
+`grants` group wherever the run names a project or a repository the team
+doesn't have. Only the board's own code does any of these there: a caller it
+serves acts as its project on Vercel's board, which can't tell them apart.
 Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers and `read` for viewers, and a
