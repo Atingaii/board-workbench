@@ -2201,8 +2201,13 @@ compose by calling each other, with no other mechanism.
 **What the webhook keeps.** An event goes to the inbox when the board syncs its
 thread, or when its channel is one the function's helpers route: `channels`,
 `repos`, and `numbers` mark the function with their keys, privately, and `render`
-keeps the mark. A function of your own at the top has none and keeps every event
-the platform sends, and each is stored.
+keeps the mark. While a map key can't be checked (a failed listing), an event
+it may route isn't dropped: one in an ID key's own channel is kept, for the
+function to decide once the key resolves. One that only a name key (`'#prs'`)
+may route, which could be any channel, the webhook refuses (500), unless the
+board syncs its thread, so the platform sends it again and nothing off the map is
+stored. A function of your own at the top has none and keeps every event the
+platform sends, and each is stored.
 
 **Entry keys** are names you choose, such as `slack` and `acme`, and the sync
 adapter decides the platform. The key appears in external IDs
@@ -2217,9 +2222,12 @@ default.
   minute; the rest sync. Without `groups:read`, a private channel's name counts
   as one, since it never lists; its ID still maps it. One the platform couldn't
   check (a failed listing) is asked again on every call, and meanwhile
-  `channels` throws for any event outside the channels that resolved, so it's
-  retried instead of reaching the fallback past that key's function. A new root
-  starts only in the channels that resolved.
+  `channels` throws for any event outside the channels that resolved that the
+  key may be (any channel's for a name, its own for an ID), so it's retried
+  instead of reaching the fallback past that key's function. Each retry counts
+  toward the event's dead letter, so a listing down for long dead-letters what
+  was kept meanwhile; an event the webhook refused is lost once the platform
+  stops sending it again (Slack tries 3 times, over about 5 minutes). A new root starts only in the channels that resolved.
 - A name stops matching after a rename, on the next cold start. IDs survive
   renames.
 - Each external channel or repo should appear at most once per entry. Nothing

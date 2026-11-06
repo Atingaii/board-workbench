@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fakePlatform, withSlackClient } from './sync-fixtures.ts'
 import { slack, type SlackEvent } from '../src/sync/slack.ts'
 import { github, repos } from '../src/sync/github.ts'
-import { channels, into, mirror, render, type Sync, type SyncFn } from '../src/sync/fn.ts'
+import { channels, into, mirror, render, routesOf, type Sync, type SyncFn } from '../src/sync/fn.ts'
 import { BOARD_URL, caller, personToken, testBoard } from './harness.ts'
 
 type Read = { id: number; text: string; re: number | null }
@@ -162,6 +162,88 @@ describe('sync functions', () => {
     })
     expect(s.posts).toEqual([])
     warn.mockRestore()
+  })
+
+  it("refuses what comes in while a channel name can't be checked, so it's sent again, and imports it once the name resolves", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let listing = false
+    const conversations = {
+      list: vi.fn(async () => {
+        if (!listing) throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } })
+        return { channels: [{ id: 'C9', name: 'support', is_member: true }] }
+      }),
+      info: vi.fn(async () => ({ channel: { id: 'C9', is_member: true } })),
+      join: vi.fn(async () => ({ ok: true })),
+    }
+    const s = fakePlatform('slack', withSlackClient({ conversations }, false))
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => ({ conversations }) as never }, channels({ '#support': into('support') })) } })
+    const julian = caller(board.fetch, await personToken())
+    const event = { type: 'message', threadId: 'slack:C9:900', id: '900', text: 'my refund?', user: 'U_ADA' }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // Nothing is stored while #support might be any channel: the platform is told to send it again.
+    expect((await webhookOf(board)('slack', event)).ok).toBe(false)
+    expect((await julian('GET', '/inbox/slack?channel=C9')).body.events).toHaveLength(0)
+    expect(await read(julian, 'support')).toEqual([])
+
+    listing = true
+    expect((await webhookOf(board)('slack', event)).ok).toBe(true)
+    await vi.waitFor(async () => expect((await read(julian, 'support')).map((m) => m.text)).toEqual(['my refund?']))
+    warn.mockRestore()
+    error.mockRestore()
+  })
+
+  it("still keeps what comes in on a thread synced by hand while a channel name can't be checked", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let listing = false
+    const conversations = {
+      list: vi.fn(async () => {
+        if (!listing) throw Object.assign(new Error('An API error occurred: ratelimited'), { data: { error: 'ratelimited' } })
+        return { channels: [{ id: 'C9', name: 'support', is_member: true }] }
+      }),
+      info: vi.fn(async () => ({ channel: { id: 'C7', is_member: true } })),
+      join: vi.fn(async () => ({ ok: true })),
+    }
+    const s = fakePlatform('slack', withSlackClient({ conversations }, false))
+    const board = testBoard({ sync: { slack: slack({ adapter: s.adapter, client: async () => ({ conversations }) as never }, channels({ '#support': into('support') })) } })
+    const julian = caller(board.fetch, await personToken())
+    const root = (await julian('POST', '/messages', { channel: 'random', text: 'deploy is out' })).body.message
+    await julian('POST', `/messages/${root.id}/sync`, { target: 'slack:C7:700.1' })
+    const event = { type: 'message', threadId: 'slack:C7:700.1', id: '701', text: 'looks good', user: 'U_ADA' }
+    expect((await webhookOf(board)('slack', event)).ok).toBe(true)
+    expect((await julian('GET', '/inbox/slack?channel=C7')).body.events).toHaveLength(1)
+
+    listing = true
+    const inbox = board.servers.find((server) => server.contract.name === 'board-inbox')!
+    await vi.waitFor(async () => {
+      await board.skipHold(inbox, 'inbox:slack:C7')
+      await inbox.drain('inbox:slack:C7')
+      const { body } = await julian('GET', `/messages/${root.id}`)
+      expect(body.replies.map((m: { text: string }) => m.text)).toContain('looks good')
+    })
+    warn.mockRestore()
+  })
+
+  it("keeps and retries only what an ID it couldn't check may route, and refuses what only a name may", async () => {
+    const down = new Error('rate limited')
+    const failing = (key: string) => async (name: string) => {
+      if (name === key) throw down
+      return name
+    }
+    const byId = channels({ C1: 'one', C2: 'two' })
+    const keeps = (fn: SyncFn, channel: string, resolve: (name: string) => Promise<string>) => routesOf(fn)!(channel, resolve)
+    expect(await keeps(byId, 'C1', failing('C2'))).toBe(true)
+    expect(await keeps(byId, 'C2', failing('C2'))).toBe(true)
+    expect(await keeps(byId, 'C9', failing('C2'))).toBe(false)
+    // A name may be any channel: what it may route is refused, not kept, so it's sent again.
+    await expect(keeps(channels({ C1: 'one', '#two': 'two' }), 'C9', failing('#two'))).rejects.toBe(down)
+    expect(await keeps(channels({ C1: 'one', '#two': 'two' }), 'C1', failing('#two'))).toBe(true)
+
+    // A thread synced by hand in another channel goes on; one in the failed key's channel waits.
+    const imported: (string | undefined)[] = []
+    const inbound = (channel: string) => ({ direction: 'in', channel, resolve: failing('C2'), import: async (to?: string) => void imported.push(to) }) as never
+    await expect(byId(inbound('C2'))).rejects.toBe(down)
+    await byId(inbound('C9'))
+    expect(imported).toEqual([undefined])
   })
 
   const missingScope = Object.assign(new Error('An API error occurred: missing_scope'), { data: { error: 'missing_scope' } })
