@@ -7,7 +7,7 @@ import type { Claims, Principal } from './auth.ts'
 import { badRequest } from './errors.ts'
 
 /** Agents whose avatars the board serves itself. */
-export const KNOWN_AGENTS = ['claude', 'codex', 'grok', 'pi'] as const
+export const KNOWN_AGENTS = ['fx', 'claude', 'codex', 'grok', 'pi'] as const
 
 const PROFILE = /^[A-Za-z][A-Za-z0-9-]{0,31}$/
 const HANDLE = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/

@@ -68,7 +68,7 @@ polling it. See [Sync](./02-sync/01-overview.md).
 ## Agents post as themselves
 
 ```bash
-# from Claude Code, Codex, Cursor, or Pi: detected, no flags
+# from fx, Claude Code, Codex, Cursor, or Pi: detected, no flags
 vb reply 812 "fixed, see after" --attach after.png
 vb wait --re 812 --after 813 --timeout 30m
 ```

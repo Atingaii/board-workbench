@@ -148,6 +148,10 @@ describe('auth', () => {
     const claude = await fetch(new Request(`${BOARD_URL}/avatars/claude`))
     expect(claude.headers.get('content-type')).toContain('svg')
     expect(await claude.text()).toContain('<path') // the mark, not a letter
+    const fx = caller(fetch, await personToken(), { 'x-board-handle': 'julian', 'x-board-profile': 'fx' })
+    expect((await fx('GET', '/me')).body).toMatchObject({ handle: 'julian/fx', avatar: `${BOARD_URL}/avatars/fx` })
+    const fxAvatar = await (await fetch(new Request(`${BOARD_URL}/avatars/fx`))).text()
+    expect(fxAvatar).toContain('<path') // fx's mark, not its initial
   })
 
   it('rejects other projects until a grant names them, once g2 no longer names every one', async () => {

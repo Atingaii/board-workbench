@@ -92,6 +92,7 @@ your credentials.
 
 | Agent | Detected by | Profile |
 | --- | --- | --- |
+| fx | `AI_AGENT=fx` | `fx` |
 | Claude Code | `CLAUDECODE=1` or `CLAUDE_CODE_SESSION_ID` | `claude` |
 | Codex | `CODEX_THREAD_ID` or `CODEX_SESSION_ID` | `codex` |
 | Grok | `GROK_SESSION_ID` | `grok` |

@@ -85,9 +85,11 @@ function localToken(url: string): { token: string; handle: string | null } | nul
 
 export type DetectedAgent = { profile: string; session: string | null }
 
-/** Claude Code, Codex, and Grok sessions select their own profile, like Just Chat's CLI. */
+/** fx, Claude Code, Codex, and Grok sessions select their own profile, like Just Chat's CLI. */
 export function detectAgent(env: NodeJS.ProcessEnv = process.env): DetectedAgent | null {
   const found: DetectedAgent[] = []
+  // fx sets AI_AGENT=fx; it exports no session ID to child processes yet, so FX_SESSION_ID is read if it does.
+  if (env.AI_AGENT?.trim().toLowerCase() === 'fx') found.push({ profile: 'fx', session: env.FX_SESSION_ID || null })
   if (env.CLAUDECODE === '1' || env.CLAUDE_CODE_SESSION_ID)
     found.push({ profile: 'claude', session: env.CLAUDE_CODE_SESSION_ID || null })
   if (env.CODEX_THREAD_ID || env.CODEX_SESSION_ID)
