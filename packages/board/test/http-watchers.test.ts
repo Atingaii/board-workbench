@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { board, type Watcher, type WatcherContext } from '../src/server/index.ts'
-import { githubActions, oidc, vercelProject, type CallerRequest } from '../src/access/index.ts'
+import type { CallerRequest, Can } from '../src/access/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
@@ -20,14 +20,16 @@ const v0Token = () => deploymentToken('v0', 'prj_v0', 'production')
 const mint = vi.hoisted(() => vi.fn(async (_options: { audience: string }): Promise<string> => Promise.reject(new Error('not on Vercel'))))
 vi.mock('@vercel/oidc', async (original) => ({ ...(await original<typeof import('@vercel/oidc')>()), getVercelOidcToken: mint }))
 
+/** Lets a project's production deployments do what `can` says on `on`: again, it changes what they may. */
+const grant = (on: ReturnType<typeof testBoard>, projectId: string, can: Can) =>
+  on.createGrant({ issuer: 'vercel', claims: { project_id: projectId, environment: 'production' }, can })
+
 /**
  * The team's board on a2(), and v0's board on http() using it, calling each other in-process:
- * the team's board wakes v0's at `<V0_URL>/wake`, and v0's pulls and writes back over HTTP.
+ * the team's board wakes v0's at `<V0_URL>/wake`, and v0's pulls and writes back over HTTP. v0 may
+ * do what `can` says there, until a test changes it, and marketing everything.
  */
-type Can = Parameters<typeof vercelProject>[0]['can']
-
-/** v0's access on the team's board: what `can` says, or what it says at each call, which a test changes. */
-function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null) = 'all') {
+async function team(watch: Record<string, Watcher> = {}, can: Can = 'all') {
   const queue = fakeQueue()
   const woken: string[] = []
   /** Each wake-up's headers, as the board sent them. */
@@ -44,10 +46,6 @@ function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null)
   }
   const remote = testBoard({
     scheduler: queue.scheduler,
-    access: [
-      typeof can === 'function' ? (principal: { id: string }) => (principal.id === V0 ? can() : undefined) : vercelProject({ project: 'prj_v0', can }),
-      vercelProject({ project: 'prj_marketing', can: 'all' }),
-    ],
     transport: {
       post: (url, init) => {
         woken.push(url)
@@ -65,9 +63,13 @@ function team(watch: Record<string, Watcher> = {}, can: Can | (() => Can | null)
     // The backend's own registration, as `POST /watchers` does.
     return Object.assign(board({ backend, url: V0_URL, watch: next }), { registerWatchers: backend.registerWatchers })
   }
+  await grant(remote, 'prj_v0', can)
+  await grant(remote, 'prj_marketing', 'all')
   project = v0Board(watch)
   return {
     remote,
+    /** What v0 may do on the team's board from now on. */
+    allow: (next: Can) => grant(remote, 'prj_v0', next),
     queue,
     woken,
     wakes,
@@ -112,7 +114,7 @@ describe('watchers on http()', () => {
     const fix = recorder('feedback', async ({ event, board }) => {
       if (event.type === 'message.posted' && event.message?.re === null) await board.reply(event.message.id, 'on it')
     })
-    const t = team({ fix: fix.watcher })
+    const t = await team({ fix: fix.watcher })
     await t.project.registerWatchers()
     const julian = await julianOn(t.remote.fetch)
     const root = (await julian('POST', '/messages', { channel: 'feedback', text: 'export is broken' })).body.message
@@ -128,7 +130,7 @@ describe('watchers on http()', () => {
     let release!: () => void
     const held = new Promise<void>((resolve) => (release = resolve))
     const fix = recorder('feedback', () => held)
-    const t = team({ fix: fix.watcher })
+    const t = await team({ fix: fix.watcher })
     await t.project.registerWatchers()
     const julian = await julianOn(t.remote.fetch)
     for (const n of [1, 2, 3, 4, 5]) await julian('POST', '/messages', { channel: 'feedback', text: `report ${n}` })
@@ -137,7 +139,12 @@ describe('watchers on http()', () => {
     await vi.waitFor(async () => expect((await queue.history()).filter((event: { type: string }) => event.type === 'watch.matched')).toHaveLength(5))
     release()
     await vi.waitFor(() => expect(fix.seen).toHaveLength(5))
-    await t.remote.servers.at(-1)!.drain(`watch:@${V0}`)
+    // Every match has been to the waker since: a drain here returns while the first wake-up's holds its claim.
+    const server = t.remote.servers.at(-1)!
+    await vi.waitFor(async () => {
+      const cursors = await t.remote.store.log.cursors(`${server.contract.name}\u001fwatch:@${V0}`)
+      expect(cursors.filter((cursor) => cursor.head !== null || cursor.claimHolder !== null)).toEqual([])
+    })
     expect(t.woken).toEqual([`${V0_URL}/wake`])
   })
 
@@ -145,7 +152,7 @@ describe('watchers on http()', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       const fix = recorder('feedback')
-      const t = team({ fix: fix.watcher })
+      const t = await team({ fix: fix.watcher })
       await t.project.registerWatchers()
       t.down = true
       const julian = await julianOn(t.remote.fetch)
@@ -164,7 +171,7 @@ describe('watchers on http()', () => {
 
   it("never runs on what its registrant can't read", async () => {
     const fix = recorder('--all')
-    const t = team({ fix: fix.watcher }, { feedback: ['read', 'post'] })
+    const t = await team({ fix: fix.watcher }, { feedback: ['read', 'post'] })
     await t.project.registerWatchers()
     const julian = await julianOn(t.remote.fetch)
     await julian('POST', '/messages', { channel: 'security', text: 'hunter2' })
@@ -176,7 +183,7 @@ describe('watchers on http()', () => {
     const echo = recorder('feedback', async ({ event, board }) => {
       if (event.type === 'message.posted') await board.post('feedback', 'echo')
     })
-    const t = team({ echo: echo.watcher })
+    const t = await team({ echo: echo.watcher })
     await t.project.registerWatchers()
     await (await julianOn(t.remote.fetch))('POST', '/messages', { channel: 'feedback', text: 'hello' })
     await vi.waitFor(() => expect(echo.seen).toHaveLength(1))
@@ -185,7 +192,7 @@ describe('watchers on http()', () => {
   })
 
   it('registers again when a wake-up shows the remote holds an older registration', async () => {
-    const t = team({ fix: recorder('feedback').watcher })
+    const t = await team({ fix: recorder('feedback').watcher })
     await t.project.registerWatchers()
     const next = recorder('feedback --label kind=bug')
     t.deploy({ fix: next.watcher })
@@ -201,7 +208,7 @@ describe('watchers on http()', () => {
     let release!: () => void
     const held = new Promise<void>((resolve) => (release = resolve))
     const fix = recorder('feedback', () => held)
-    const t = team({ fix: fix.watcher })
+    const t = await team({ fix: fix.watcher })
     await t.project.registerWatchers()
     const julian = await julianOn(t.remote.fetch)
     await julian('POST', '/messages', { channel: 'feedback', text: 'slow report' })
@@ -215,7 +222,7 @@ describe('watchers on http()', () => {
   }, 10_000)
 
   it('ignores what a forged wake-up says: it only pulls its own', async () => {
-    const t = team({ fix: recorder('feedback').watcher })
+    const t = await team({ fix: recorder('feedback').watcher })
     await t.project.registerWatchers()
     const forged = await t.project.fetch(new Request(`${V0_URL}/wake`, { method: 'POST', body: '{"run":"everything"}' }))
     expect(await forged.json()).toEqual({ ran: 0 })
@@ -223,7 +230,7 @@ describe('watchers on http()', () => {
 
   it("pulls on its own when it can't be woken", async () => {
     const fix = recorder('feedback')
-    const t = team()
+    const t = await team()
     const backend = http(BOARD_URL, { fetch: bearer((input, init) => t.remote.fetch(new Request(input, init)), v0Token) })
     const local = board({ backend, url: 'http://localhost:3000/api/board', watch: { fix: fix.watcher } })
     try {
@@ -247,7 +254,7 @@ const wakeLogs = (errors: { mock: { calls: unknown[][] } }) =>
   errors.mock.calls.map((args) => args.join(' ')).filter((line) => line.includes("couldn't wake"))
 
 /** v0's queue on the team's board, and how many of its wake-ups in a row didn't get there, as recorded. */
-function v0Queue(t: ReturnType<typeof team>) {
+function v0Queue(t: Awaited<ReturnType<typeof team>>) {
   const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
   const history = async () => (await queue.history()) as { type: string; payload: { failures?: number; by?: string } }[]
   return {
@@ -269,7 +276,7 @@ describe("a board whose wake-ups don't get there", () => {
   it('is woken less often while they fail, a minute doubling to an hour, and the log says so twice', async () => {
     expect([1, 2, 3, 4, 5, 6, 7, 8].map((failures) => wakeBackoff(failures) / SWEEP_MS)).toEqual([1, 2, 4, 8, 16, 32, 60, 60])
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const t = team({ fix: recorder('feedback').watcher })
+    const t = await team({ fix: recorder('feedback').watcher })
     await t.project.registerWatchers()
     t.down = true
     const julian = await julianOn(t.remote.fetch)
@@ -299,7 +306,7 @@ describe("a board whose wake-ups don't get there", () => {
   it('starts over once one gets there', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const fix = recorder('feedback')
-    const t = team({ fix: fix.watcher })
+    const t = await team({ fix: fix.watcher })
     await t.project.registerWatchers()
     t.down = true
     const julian = await julianOn(t.remote.fetch)
@@ -324,7 +331,7 @@ describe("a board whose wake-ups don't get there", () => {
   it.each(['pulls', 'registers'] as const)('is woken for its next match right away once its board %s', async (how) => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const fix = recorder('feedback')
-    const t = team({ fix: fix.watcher })
+    const t = await team({ fix: fix.watcher })
     await t.project.registerWatchers()
     t.down = true
     const julian = await julianOn(t.remote.fetch)
@@ -369,21 +376,16 @@ describe('a wake-up through Deployment Protection', () => {
         return new Response(null, { status: 204 })
       },
     }
-    const remote = testBoard({
-      scheduler: fakeQueue().scheduler,
-      transport,
-      access: [
-        githubActions({ repository: 'basehub-ai/www', can: 'all' }),
-        oidc({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' }),
-        vercelProject({ project: 'prj_v0', can: 'all' }),
-      ],
-    })
+    const remote = testBoard({ scheduler: fakeQueue().scheduler, transport })
+    await remote.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: 'all' })
+    await remote.createGrant({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' })
+    await grant(remote, 'prj_v0', 'all')
     const hosted = testBoard({
       scheduler: fakeQueue().scheduler,
       transport,
       authenticate: (request: CallerRequest) => (request.credential === 'pt_app' ? { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } : null),
-      access: () => 'all',
     })
+    await grant(hosted, 'prj_app', 'all')
     const register = (host: string) => ({ url: `https://${host}/api/board`, watch: { fix: { tail: 'feedback' } } })
     const registrants = [
       [remote, await workflowToken(), 'workflow.test'],
@@ -404,8 +406,8 @@ describe('a wake-up through Deployment Protection', () => {
 })
 
 /** The queue as v0 sees it through the API, registered without a URL so nothing wakes it. */
-async function queued(tail = 'feedback', can: Can | (() => Can | null) = 'all') {
-  const t = team({}, can)
+async function queued(tail = 'feedback') {
+  const t = await team()
   const v0 = caller(t.remote.fetch, await v0Token())
   expect((await v0('POST', '/watchers', { watch: { fix: { tail } } })).status).toBe(200)
   const julian = await julianOn(t.remote.fetch)
@@ -524,16 +526,15 @@ describe('pulling matches', () => {
   })
 
   it("drops a match its registrant can't read anymore", async () => {
-    let can: Can = 'all'
-    const { t, julian, pull } = await queued('feedback', () => can)
+    const { t, julian, pull } = await queued()
     await julian('POST', '/messages', { channel: 'feedback', text: 'meant for v0' })
     const queue = t.remote.servers.at(-1)!.session(`watch:@${V0}`)
     await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
-    // The team's access took feedback away since: the match is skipped, not handed out.
-    can = { other: ['read'] }
+    // The team's grant took feedback away since: the match is skipped, not handed out.
+    await t.allow({ other: ['read'] })
     expect(await pull()).toEqual([])
     expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.skipped')
-    can = 'all'
+    await t.allow('all')
     expect(await pull()).toEqual([])
   })
 
@@ -558,11 +559,9 @@ describe('pulling matches', () => {
   it('shows what a match links to only as its puller may read it now', async () => {
     // A Slack message in feedback links to one in security, which v0 could read when it matched.
     const s = fakePlatform('slack')
-    let can: Can = 'all'
-    const remote = testBoard({
-      access: [(principal) => (principal.id === V0 ? can : undefined), vercelProject({ project: 'prj_sync', can: 'all' })],
-      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'feedback', C2: 'security' })) },
-    })
+    const remote = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'feedback', C2: 'security' })) } })
+    await grant(remote, 'prj_v0', 'all')
+    await grant(remote, 'prj_sync', 'all')
     const webhook = (body: unknown) =>
       remote.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
     const v0 = caller(remote.fetch, await v0Token())
@@ -583,7 +582,7 @@ describe('pulling matches', () => {
     const queue = remote.servers.at(-1)!.session(`watch:@${V0}`)
     await vi.waitFor(async () => expect((await queue.history()).map((event: { type: string }) => event.type)).toContain('watch.matched'))
     // Down to feedback since, it still gets the match, but nothing of the message in security.
-    can = { feedback: ['read'] }
+    await grant(remote, 'prj_v0', { feedback: ['read'] })
     const [match] = (await v0('GET', '/watchers/matches')).body.matches
     expect(match.event.message.text).toContain(permalink)
     // In the message it matched, and in its event's own payload.
@@ -605,7 +604,7 @@ describe('pulling matches', () => {
 
 describe('registering', () => {
   it("is checked the way a board's own watchers are", async () => {
-    const t = team()
+    const t = await team()
     const v0 = caller(t.remote.fetch, await v0Token())
     const register = (watch: unknown, url?: string) => v0('POST', '/watchers', { watch, ...(url ? { url } : {}) })
     expect(await register({ fix: { tail: 'feedback --after 3' } })).toEqual({
@@ -622,7 +621,7 @@ describe('registering', () => {
   })
 
   it('needs a token that reads somewhere, and lists registrations to whoever may see them', async () => {
-    const t = team({}, { feedback: ['post'] })
+    const t = await team({}, { feedback: ['post'] })
     const v0 = caller(t.remote.fetch, await v0Token())
     expect((await v0('POST', '/watchers', { watch: {} })).status).toBe(403)
     const marketing = caller(t.remote.fetch, await deploymentToken())
@@ -653,7 +652,9 @@ describe('registering by path', () => {
   })
 
   it("is the board's to offer: one on a2() can't find a project's deployments, so it says so", async () => {
-    const v0 = caller(testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch, await v0Token())
+    const remote = testBoard()
+    await grant(remote, 'prj_v0', 'all')
+    const v0 = caller(remote.fetch, await v0Token())
     expect(await v0('POST', '/watchers', { path: '/api/board', watch: { fix: { tail: 'feedback' } } })).toMatchObject({
       status: 501,
       body: { error: { code: 'no_wake_by_path' } },
@@ -661,7 +662,9 @@ describe('registering by path', () => {
   })
 
   it('takes a url or a path, not both, and a branch only with a path, and says which', async () => {
-    const v0 = caller(testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch, await v0Token())
+    const remote = testBoard()
+    await grant(remote, 'prj_v0', 'all')
+    const v0 = caller(remote.fetch, await v0Token())
     const refused = (message: string) => ({ status: 400, body: { error: { code: 'invalid_request', message } } })
     expect(await v0('POST', '/watchers', { url: V0_URL, path: '/api/board', watch: {} })).toMatchObject(refused('path: register a url or a path, not both'))
     expect(await v0('POST', '/watchers', { url: V0_URL, branch: 'jb/watchers', watch: {} })).toMatchObject(refused('branch: a branch goes with a path'))

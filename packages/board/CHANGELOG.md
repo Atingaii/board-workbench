@@ -1,5 +1,56 @@
 # vboard
 
+## 0.32.0
+
+### Minor Changes
+
+- 1c0eb3d: `--text-file <path>` on `vb post`, `reply`, `edit`, and `schedule` takes the message's text from a file, and `--text-file -` from stdin: `vb reply 812 --text-file note.md`. A bare `-` as the text still reads stdin. In `vb()`, it reads through `readFile`, as `--attach` does.
+
+### Patch Changes
+
+- 903bbd9: `vercel board read msg_…` reads the message, where it looked for a channel by that name and failed with `channel_not_found`, and `vercel board post msg_… "…"` replies in its thread, where it started a thread in a new channel named for the ID. The CLI now takes an argument shaped like a team board's message ID (`msg_<thread>_<n>`) as a message wherever a channel or a message goes, and prints those IDs bare, so they paste into a shell, where a leading `#` starts a comment.
+- 62b0d37: `vb tail` and `vb wait` across channels on a team board in Vercel's API (no channel, or a prefix like `dev/`), and the inspector's live view, wait on every channel's feed at once, and ask again only when one has something. They asked each channel again every second while nothing happened: about 180 reads a minute from one idle tail on a board with 3 channels, most of a principal's read budget. Events arrive as quickly as before.
+- ffeee60: `DEFAULT_CAN` from `@vercel/board/access` is frozen, like `FULL_ACCESS`. Before, code that imported it and pushed onto it changed what every grant and token without a `can` gets on that board.
+- 5bda2dc: `vb reply <id> "…" --label step=fix` labels the reply as it posts it, as `vb post <id> "…" --label …` already did. Before, `reply` took `--label` and posted the reply without it, saying nothing.
+- 9248118: A deleted message drops its labels, so `vb read dev --label state=open` no longer finds a deleted root, or its replies by the root's labels. Before, a deleted task still matched its labels and looked open. On a team board in Vercel's API, which keeps a deleted message's labels, the board leaves them out of every read itself, for every message. On a board on `a2()`, it covers what's deleted from now on: a message deleted before keeps its labels in the board's tables. The conformance kit checks it.
+- 6da6a58: An unknown-option error names the whole argument when one holds several words: `vb read dev "--as x --scope acme"` says `Unknown option "--as x --scope acme"`, where it said `Unknown option --as`, an option `read` takes. Text that starts with `-` and has spaces in it (`vb post dev "- check the deploy"`) now gets the way out that moves it after `--`, where the error named `--` and offered none.
+- 7c019ff: `vb edit`, `delete`, `react`, and `label` say what they did, in a line (`deleted 812`), where they printed nothing unless asked for `--json`. Their `--json` output is as it was.
+
+## 0.31.0
+
+### Minor Changes
+
+- 5b7f62c: `vb channels` on a team board in Vercel's API lists each channel by name, sorted by path, where it showed `0 threads · 0 messages` for every one. Vercel's API counts nothing in a channel, so a board on it now leaves the counts out instead of answering 0, and the inspector shows none there either.
+  
+  Breaking for code that reads them: `ChannelView`'s `lastIndex`, `messages`, and `threads` are optional, there only where the board keeps them, as `a2()` does.
+- 1fbabf3: Create a channel before anything posts to it: `vb channels create dev/alerts`, `createChannel('dev/alerts')` on a handle, or `POST /channels { path }`. It needs `read` and `post` there, and answers `{ channel, created }`: a channel that's there, made by a post or another create, stays as it is with `created: false`. A first post still makes one. `vb channels` runs `vb channels list`.
+  
+  Breaking for custom backends: `createChannel` is a new protocol method. On `a2()` it's a `channel.created` event on the board log, and on `vercel()` Vercel's API makes the channel.
+- d827290: Who gets into a board is now kept in the board's data as well as its code, so people change it while the board runs. Until now, letting a CI run or another project in took an `access` rule in the board's route and a deploy, and a caller without an OIDC token couldn't get in at all. Rules in `access` work as they did, and grants add to them.
+  
+  A grant lets in OIDC tokens from an issuer that carry the claims it names: `vb grants create github --claim repository=acme/web --can ci/=read,post`, or `team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })`. `vercel`, `github`, or any https issuer, another team's projects included. Grants add to what `access`'s rules give, and to each other; creating, listing, and revoking them takes `manage` in every channel.
+  
+  A token is a credential the board issues, for a widget, a sandbox, or a script: `vb tokens create feedback-widget --can feedback/=post` prints its secret once. It acts as whoever minted it, narrowed to its `can` (read, post, react, and label everywhere when left out, as for a grant), and can pin the profile and session it writes as. It lives 30 days, or up to 90, and stops on its next request once revoked, with every token minted with it and the schedules made with it, which end by its expiry. `vb grants [list]|revoke` and `vb tokens [list]|revoke` show and stop them. A token sees and revokes only itself and the tokens minted with it, reads only the unposted files it or they uploaded, and when it pins a profile, edits, deletes, and cancels only what was written as that profile.
+  
+  The protocol has six new routes (`/grants`, `/tokens`, and a revoke for each), and `vb conformance` checks them in two optional groups. A backend of your own implements the new methods, answering 501 `no_grants` or `no_tokens` where it keeps none. `vercel()` sends both to Vercel's API as the protocol has them, which doesn't keep them yet, so a board on `vercel()` fails those groups until it does.
+- bbe4e3f: `--mentions` takes an email: `vb tail --mentions julian@vercel.com` follows Slack pings of whoever has that email on Slack. The board that runs sync looks the email up (once every few minutes, for a caller that may read somewhere) and learns the user, so a ping of them resolves from then on. A watcher doesn't look emails up: name the Slack user by actor (`--mentions slack:user:U0456`).
+- 17feb5c: Account linking is removed, and with it posting to Slack and GitHub as yourself. Nobody linked an account, and checking for one cost every inbound Slack message a lookup on a board whose sync could sign people in.
+  
+  Gone: `vb identity`, `identity link`, and `identity unlink`; the handle's `identity()`, `unlinkAccount()`, `syncCode()`, `syncAccount()`, `syncUnlink()`, and `syncRoots()`, and the routes behind them (`/identity`, `/identity/sign-in`, `/identity/signed-in`, `/identity/unlink`, `/sync/codes`, `/sync/accounts`, `/sync/accounts/unlink`, `/sync/roots`); `withUserTokens`, `connectUserTokens`, and `UserTokens`; `syncFind`'s `account`, `person`, and `code`; and `person` on an actor's view and `signIn` on a sync entry. A backend of your own drops those methods.
+  
+  A person's Slack or GitHub account is an actor of its own: `--by` and `--mentions` cover a person and their agents, and a Slack user still gets a native mention by actor (`@[slack:user:U0456]`) or email (`@[ada@vercel.com]`). Board messages reach Slack and GitHub as the app.
+  
+  The log's contract drops `actor.linked`, `actor.unlinked`, and a receipt's `asUser`. A log that has them still loads. A copy an older board posted as its author now changes as the app's: on Slack, the app can't edit or delete someone else's message, so it's skipped with a warning, as before; on GitHub it can, so an edit or delete on the board changes their comment too. A board where nobody linked an account has no such copies.
+- 2657ff4: **Breaking:** `@vercel/board/sync-kapso` is gone, with `kapso()`, `numbers`, and `WhatsAppEvent`, and board no longer syncs WhatsApp. A board that syncs through `kapso()` stays on `@vercel/board@0.30`, or moves to a provider of its own (`chatSdk()` from `@vercel/board/sync-chat-sdk`, or `SyncProvider` from `@vercel/board/sync`). Its synced threads don't carry over: a new provider's thread and author IDs are its own.
+- c433008: `chatSdk({ adapter }, sync)` from `@vercel/board/sync-chat-sdk` syncs any platform through its Chat SDK adapter: `chatSdk({ adapter: createTelegramAdapter() }, channels({ '-1001234567890': 'support' }))`. It reads the platform's name, its channel IDs, and which targets are threads from the adapter, and knows a reaction by the webhook that brought it, so a redelivery is one and a re-add is another, on Discord too. A new board root stays on the board unless you pass `canStartThreads: true`, for a platform whose channels hold many threads, like Discord or Teams. `state` takes a Chat SDK state adapter, for an adapter that reads back what it stored. Each guess has a hook (`platform`, `resolveChannel`, `resolveTarget`, `reactionId`), beside every hook the built-in providers use. **Breaking:** `@vercel/board/sync/chat` and `ChatSyncProvider` are gone. Pass a subclass's `super()` options to `chatSdk()` instead, with its reaction `eventId` as `reactionId`, or extend `SyncProvider` from `@vercel/board/sync`.
+
+### Patch Changes
+
+- abb38bd: `@vercel/board/access` exports `compileAccess`, `union`, and `FULL_ACCESS`: what a `can` allows, evaluated on its own, with `narrow` and `summary()` as `compileRules` answers them. It also exports `DEFAULT_CAN`, the `can` a grant or a token gets when it names none. A backend that keeps its own copy of the access rules can test itself against these.
+- 2657ff4: `slack()`, `github()`, and `linear()` no longer lose a platform's retry of a webhook the board couldn't store. Chat SDK had already marked the message as handled, so the retry answered 200 and nothing was imported. The board now gives back what Chat SDK, or the adapter, claimed for a webhook it couldn't store, and fails the webhook even when an adapter caught the error itself.
+- f0560fd: `?all=false` means false. `GET /events` and `GET /schedules` read `all` as `true` or `1`, `false` or `0`, and answer 400 for anything else. Before, any value turned it on, so `all=false` showed delivery receipts and done schedules.
+- 4de1509: `slack()` keeps a message link's snapshot when Slack's unfurl reaches the board before the message itself. The unfurl's edit found nothing to edit and was dropped, so a link to a channel the app isn't in, or to a private one, ended up `not_in_channel` or `private_channel` even though Slack had unfurled it. On a busy board, about half of them arrived first. The board now reads the unfurl from the linking message when it imports that message. A custom provider's `fetchLink(link, linker)` gets that message, by its own IDs, as a second argument.
+
 ## 0.30.0
 
 ### Minor Changes

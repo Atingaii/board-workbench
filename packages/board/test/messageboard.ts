@@ -31,6 +31,7 @@ type Message = {
   from?: string
   origin?: Record<string, unknown>
   noSync?: boolean
+  links?: { url: string; message?: string | null; snapshot?: unknown; unavailable?: string | null }[]
 }
 type Schedule = {
   id: string
@@ -86,21 +87,58 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 
-export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }> } = {}) {
-  const accounts = options.accounts ?? ACCOUNTS
-  const teamId = options.teamId ?? 'team_test'
-  const slug = options.slug ?? 'test'
-  let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
+const principalId = (p: Principal) =>
+  p.type === 'external' ? p.id : p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`
+const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
+
+/** Who a request is: its bearer names a principal, or is a board token (`tokens`) that acts as one. */
+function actorOf(request: Request, tokens: Record<string, string> = {}): Actor {
+  const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+  // A board token acts as whoever it was minted for.
+  const token = tokens[bearer] ?? bearer
+  const [type, id, environment] = token.split(':')
+  const principal: Principal | null =
+    type === 'user' && id ? { type, userId: id } : type === 'app' && id ? { type, clientId: id } : type === 'project' && id && environment ? { type, projectId: id, environment } : null
+  if (!principal) throw new Refused(401, 'unauthorized')
+  const name = request.headers.get('x-board-profile') ?? undefined
+  const avatar = request.headers.get('x-board-avatar') ?? undefined
+  const session = request.headers.get('x-board-session') ?? undefined
+  const base = principalId(principal)
+  return {
+    id: name ? `${base}+${name.toLowerCase()}` : base,
+    principal,
+    ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
+    ...(session ? { session } : {}),
+  }
+}
+
+type Accounts = Record<string, { username: string; name: string }>
+
+/** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
+function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'> {
+  const p = actor.principal
+  if (p.type === 'external') return { id: actor.id, kind: 'external', handle: p.id }
+  const account = p.type === 'user' ? accounts[p.userId] : undefined
+  const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
+  if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
+  if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
+  return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
+}
+
+/** What every board in one fake API shares: its team, its accounts, its clock, and its bucket. */
+type Shared = { teamId: string; accounts: Accounts; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
+
+const STORAGE = 'http://storage.test/'
+
+/** One board in the fake API, with its own channels, threads, files, watchers, and schedules. */
+function fakeBoard(shared: Shared, boardId: string) {
+  const { teamId, accounts, now, stored } = shared
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
   const threads = new Map<string, Thread>()
   const posts = new Map<string, string>()
   const feeds = new Map<string, Change[]>()
   const actors = new Map<string, ActorView>()
-  const requests: string[] = []
   const attachments = new Map<string, Attachment>()
-  /** The bucket: bytes by attachment ID, as presigned PUTs leave them. */
-  const stored = new Map<string, Uint8Array<ArrayBuffer>>()
-  const STORAGE = 'http://storage.test/'
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
   type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; sync: { key: string; platform: string }[]; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
@@ -113,50 +151,17 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   const platformThreads = new Map<string, string>()
   const platformMessages = new Map<string, string>()
   const importIds = new Map<string, string>()
-  const bindings = new Map<string, { target: string; targetKind: 'channel' | 'thread'; cause: string }[]>()
+  /** A thread's targets: `external` is the platform thread it is there, a channel's once its root lands. */
+  const bindings = new Map<string, { target: string; targetKind: 'channel' | 'thread'; cause: string; external?: string }[]>()
   const copies = new Map<string, Record<string, { thread: string; message: string; files?: string[] | null; asUser?: true }>>()
   const failures = new Map<string, Record<string, string>>()
-  type InboxEntry = { id: string; eventId: string; thread: string; event?: unknown; raw?: unknown; pushedAt: number; attempts: number; lease?: string; leaseUntil?: number; done?: boolean }
+  type InboxEntry = { id: string; eventId: string; thread: string; event?: unknown; raw?: unknown; pushedAt: number; attempts: number; lease?: string; leaseUntil?: number; retryAt?: number; done?: boolean }
   const inboxes = new Map<string, InboxEntry[]>()
-  let clock = 0
-  const now = () => (clock = Math.max(Date.now(), clock + 1))
 
-  const principalId = (p: Principal) =>
-    p.type === 'external' ? p.id : p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`
-  const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
-
-  function actorOf(request: Request): Actor {
-    const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-    const [type, id, environment] = token.split(':')
-    const principal: Principal | null =
-      type === 'user' && id ? { type, userId: id } : type === 'app' && id ? { type, clientId: id } : type === 'project' && id && environment ? { type, projectId: id, environment } : null
-    if (!principal) throw new Refused(401, 'unauthorized')
-    const name = request.headers.get('x-board-profile') ?? undefined
-    const avatar = request.headers.get('x-board-avatar') ?? undefined
-    const session = request.headers.get('x-board-session') ?? undefined
-    const base = principalId(principal)
-    return {
-      id: name ? `${base}+${name.toLowerCase()}` : base,
-      principal,
-      ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
-      ...(session ? { session } : {}),
-    }
-  }
-
-  /** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
-  function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
-    const p = actor.principal
-    if (p.type === 'external') return { id: actor.id, kind: 'external', handle: p.id }
-    const account = p.type === 'user' ? accounts[p.userId] : undefined
-    const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
-    if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
-    if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
-    return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
-  }
   const seen = (actor: Actor) => {
     // A platform user is named by what its sync last said of them.
     if (actor.principal.type === 'external') return
-    actors.set(actor.id, { ...viewOf(actor), lastSeenAt: now() })
+    actors.set(actor.id, { ...viewOf(accounts, actor), lastSeenAt: now() })
   }
 
   /** A channel's feed position, as the API's `c1.` cursor carries it: shared by its messages and its events. */
@@ -191,6 +196,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     ...(m.from !== undefined ? { from: m.from } : {}),
     ...(m.origin ? { origin: m.origin } : {}),
     ...(m.noSync ? { noSync: true } : {}),
+    ...(m.links?.length ? { links: m.links } : {}),
   })
   const showThread = (t: Thread) => {
     const { messages, ...rest } = t
@@ -523,9 +529,13 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     const owner = principalId(actor.principal)
     let found: RegExpExecArray | null
     if (method === 'POST' && rest === '/sync/imports') {
-      const key: string = body.from ?? (body.origin?.thread ? prefixOf(body.origin.thread) : prefixOf(body.author.id))
+      // The key it came through, or for a write a sync makes as the user, the user's own.
+      const key: string = (body.op === 'seen' ? undefined : body.from) ?? prefixOf(body.author.id)
       requireKey(actor, key)
-      if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(400, 'invalid_import')
+      if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(403, 'foreign_author')
+      if (body.origin && !body.from) throw new Refused(400, 'invalid_import', 'An import with an origin names the sync key it came through: pass `from`.')
+      // A change it imported says which sync it came through, so that sync doesn't send it back.
+      const through = body.from ? { from: body.from } : {}
       const author: Actor = { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
       actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), lastSeenAt: now() })
       if (body.op === 'seen') return { message: null }
@@ -544,13 +554,22 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
           const to = messageNamed(body.re)
           if (!to) throw new Refused(404, 'message_not_found')
           thread = threadAt(to.threadId)
+          // A platform reply lands only in the thread its platform thread syncs with.
+          const bound = origin ? platformThreads.get(`${key}|${origin.thread}`) : undefined
+          if (origin && bound !== undefined && bound !== thread.id) throw new Refused(409, 'already_synced')
+          if (origin && bound === undefined) throw new Refused(409, 'not_synced')
         } else throw new Refused(400, 'invalid_import')
         const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.after !== undefined ? { after: body.after } : {}) })
         if (body.from !== undefined && body.from !== null) message.from = body.from
         if (origin) message.origin = origin
         if (body.noSync) message.noSync = true
+        if (body.links?.length) message.links = body.links
         if (origin) {
-          if (body.channelId !== undefined) platformThreads.set(`${key}|${origin.thread}`, thread.id)
+          // A platform root binds its thread to its platform thread, which announces nothing.
+          if (body.channelId !== undefined) {
+            platformThreads.set(`${key}|${origin.thread}`, thread.id)
+            bindings.set(thread.id, [{ target: origin.thread, targetKind: 'thread', cause: 'import', external: origin.thread }])
+          }
           platformMessages.set(`${key}|${origin.thread}|${origin.message}`, message.id)
         }
         if (body.id !== undefined) importIds.set(`${owner}|${body.id}`, message.id)
@@ -581,12 +600,12 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         message.revision++
         message.editedAt = now()
         message.changes++
-        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision }, author)
+        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision, ...through }, author)
       } else if (body.op === 'delete') {
         message.deletedAt = now()
         message.revision++
         message.changes++
-        emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, author)
+        emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision, ...through }, author)
       } else if (body.op === 'react') {
         const reactors = message.reactions.get(body.emoji) ?? new Map()
         if (body.remove) {
@@ -600,12 +619,24 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
           message.reactions.delete(body.emoji)
         }
         message.changes++
-        emit(thread.channelId, { type: body.remove ? 'message.reaction_removed' : 'message.reaction_added', ...ref, emoji: body.emoji }, author)
+        emit(thread.channelId, { type: body.remove ? 'message.reaction_removed' : 'message.reaction_added', ...ref, emoji: body.emoji, ...through }, author)
       } else if (body.op === 'labels') {
         for (const [label, value] of Object.entries(body.if ?? {})) if ((message.labels[label] ?? null) !== value) throw new Refused(409, 'label_conflict')
+        const before = { ...message.labels }
         for (const label of body.unset ?? []) delete message.labels[label]
         Object.assign(message.labels, body.set ?? {})
         message.changes++
+        const changed = Object.fromEntries(
+          [...new Set([...Object.keys(before), ...Object.keys(message.labels)])]
+            .filter((label) => before[label] !== message.labels[label])
+            .map((label) => [label, { ...(before[label] !== undefined ? { from: before[label] } : {}), ...(message.labels[label] !== undefined ? { to: message.labels[label] } : {}) }]),
+        )
+        if (Object.keys(changed).length) emit(thread.channelId, { type: 'message.labeled', ...ref, labels: changed, ...through }, author)
+      } else if (body.op === 'links') {
+        // The API keeps a message's links as an edit of it.
+        message.links = body.links
+        message.changes++
+        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision, ...through }, author)
       }
       return { message: message.id }
     }
@@ -623,7 +654,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
           platformThreads.set(`${prefixOf(body.target)}|${body.target}`, message.threadId)
         }
         const binding = { target: body.target, targetKind: body.targetKind, cause: body.cause }
-        list.push(binding)
+        list.push({ ...binding, ...(body.targetKind === 'thread' ? { external: body.target } : {}) })
         const thread = threadAt(message.threadId)
         emit(thread.channelId, { type: 'thread.synced', threadId: thread.id, messageId: thread.messages[0]!.id, binding }, actor)
         return { ok: true, attached: true }
@@ -632,6 +663,12 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       copies.set(message.id, mine)
       if (body.kind === 'message') {
         mine[body.target] ??= { thread: body.external.thread, message: body.external.message, ...(body.external.asUser ? { asUser: true as const } : {}), ...(body.files !== undefined ? { files: body.files } : {}) }
+        // A channel's platform thread is the one its root landed in.
+        const bound = message.sequence === 1 ? bindings.get(message.threadId)?.find((one) => one.target === body.target && one.targetKind === 'channel') : undefined
+        if (bound && bound.external === undefined) {
+          bound.external = body.external.thread
+          platformThreads.set(`${prefixOf(body.target)}|${body.external.thread}`, message.threadId)
+        }
         platformMessages.set(`${prefixOf(body.target)}|${body.external.thread}|${body.external.message}`, message.id)
         delete failures.get(message.id)?.[body.target]
       } else if (body.kind === 'files') {
@@ -661,8 +698,14 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
       const thread = threadAt(decodeURIComponent(found[1]!))
       const owned = ownedKeys(actor)
-      const targets = (bindings.get(thread.id) ?? []).filter((bound) => owned.has(prefixOf(bound.target))).map((bound) => bound.target)
-      return { thread: thread.id, root: thread.messages[0]!.id, channel: thread.channelId, targets, external: Object.fromEntries(targets.map((target) => [target, target])) }
+      const mine = (bindings.get(thread.id) ?? []).filter((bound) => owned.has(prefixOf(bound.target)))
+      return {
+        thread: thread.id,
+        root: thread.messages[0]!.id,
+        channel: thread.channelId,
+        targets: mine.map((bound) => bound.target),
+        external: Object.fromEntries(mine.flatMap((bound) => (bound.external !== undefined ? [[bound.target, bound.external]] : []))),
+      }
     }
     if (method === 'GET' && rest === '/sync/copies') {
       if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
@@ -712,7 +755,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         for (const thread of new Set(inbox.filter((entry) => !entry.done).map((entry) => entry.thread))) {
           if (items.length >= limit) break
           const head = inbox.find((entry) => !entry.done && entry.thread === thread)!
-          if (head.lease && head.leaseUntil! > Date.now()) continue
+          if ((head.lease && head.leaseUntil! > Date.now()) || (head.retryAt ?? 0) > Date.now()) continue
           if (head.lease) head.attempts++
           head.lease = randomUUID()
           head.leaseUntil = Date.now() + 5 * 60_000
@@ -724,8 +767,10 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         const entry = inbox.find((one) => one.id === decodeURIComponent(found![3]!) && !one.done)
         if (!entry) throw new Refused(404, 'no_item')
         if (entry.lease !== body.lease) throw new Refused(409, 'stale_lease')
-        if (body.error !== undefined) {
+        // After an error it waits a second, doubling to 30, and the fifth is its last try.
+        if (body.error !== undefined && entry.attempts + 1 < 5) {
           entry.attempts++
+          entry.retryAt = Date.now() + Math.min(30_000, 1000 * 2 ** (entry.attempts - 1))
           delete entry.lease
           delete entry.leaseUntil
         } else entry.done = true
@@ -739,33 +784,9 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     return undefined
   }
 
-  async function route(request: Request): Promise<unknown> {
-    const url = new URL(request.url)
-    if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
-    if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
-    const actor = actorOf(request)
-    const path = url.pathname.replace(/^\/v1\/messageboard/, '')
-    const method = request.method
-    requests.push(`${method} ${path}`)
-    // Completing an upload takes no body.
-    const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
-    // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
-    // Sync's routes take none either, but imports.
-    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
-    if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(actor) }
-    if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
-    if (method === 'POST' && path === '/boards/default') {
-      // Board creates record a person's event, so project tokens can't.
-      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
-      boardId ??= 'brd_default'
-      return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
-    }
-    const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
-    if (!onBoard || onBoard[1] !== boardId) throw new Refused(404, 'board_not_found')
-    const rest = onBoard[2] ?? ''
+  /** A request to this board, at `rest` under `/boards/:id`, from a caller who may use it. */
+  async function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor): Promise<unknown> {
     let found: RegExpExecArray | null
-
-    if (method === 'GET' && rest === '') return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
@@ -824,7 +845,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       if (answered !== undefined) return answered
     }
     if (method === 'POST' && rest === '/attachments') {
-      const attachment: Attachment = { id: `att_${randomUUID()}`, boardId: boardId!, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
+      const attachment: Attachment = { id: `att_${randomUUID()}`, boardId, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
       attachments.set(attachment.id, attachment)
       return { attachment, upload: { url: `${STORAGE}${attachment.id}`, method: 'PUT', headers: { 'content-type': body.type, 'x-amz-checksum-sha256': body.sha256 }, expiresAt: now() + 600_000 } }
     }
@@ -961,17 +982,168 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
         return { meta: meta(message) }
       }
     }
-    throw new Refused(404, 'not_found', `${method} ${path}`)
+    throw new Refused(404, 'not_found', `${method} ${rest}`)
   }
 
+  return { route, registrations, schedules, send }
+}
+
+/** A board the fake API keeps: who may use it, and what's on it. */
+type Kept = {
+  id: string
+  name: string
+  /** The projects granted it, as `prj_x:production`, or `all` for every project in the team. */
+  granted: Set<string> | 'all'
+  /** For a private board, the people who see it, by user ID; null for a team-visible one. */
+  members: Set<string> | null
+  data: ReturnType<typeof fakeBoard>
+}
+
+/** A name a board may have: 1 to 64 characters, no `/`. */
+const BOARD_NAME = /^[^/]{1,64}$/
+
+/** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
+type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
+
+/** A person's role on the team. */
+type Role = 'owner' | 'member' | 'developer' | 'viewer'
+
+/** Everything, in the protocol's order: what `GET /me` says an owner, member, or developer may do. */
+const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
+
+/**
+ * The team's API: its default board, `General` (`brd_test`, or none with `boardId: null` until a
+ * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
+ * uses every board in the team; a project, those granted it in its environment. A board made here
+ * takes no name another has, whatever its case, private ones included. A private board (`members`)
+ * is seen only by the people it lists.
+ * `notDefault`: this team isn't the token's default team, so a request reaches it only when it
+ * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
+ *
+ * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
+ * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
+ * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
+ * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
+ * of board tokens.
+ * `me: false` says neither, as Vercel's API answered before it sent them.
+ */
+export function fakeMessageboard(
+  options: {
+    teamId?: string
+    slug?: string
+    boardId?: string | null
+    accounts?: Accounts
+    boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
+    roles?: Record<string, Role>
+    me?: Record<string, MeSays> | false
+    notDefault?: boolean
+    /** Board tokens the API takes, by their secret, whatever it looks like: the principal each acts as, as `as()` names it. */
+    tokens?: Record<string, string>
+  } = {},
+) {
+  const accounts = options.accounts ?? ACCOUNTS
+  const teamId = options.teamId ?? 'team_test'
+  const slug = options.slug ?? 'test'
+  const requests: string[] = []
+  /** The bucket: bytes by attachment ID, as presigned PUTs leave them. */
+  const stored = new Map<string, Uint8Array<ArrayBuffer>>()
+  let clock = 0
+  const now = () => (clock = Math.max(Date.now(), clock + 1))
+  const shared: Shared = { teamId, accounts, now, stored }
+
+  const kept = (id: string, name: string, granted: Kept['granted'], members: Kept['members'] = null): Kept => ({ id, name, granted, members, data: fakeBoard(shared, id) })
+  // The default board is kept from the start, so what a test reads of it holds once a person makes it.
+  const general = kept(options.boardId === undefined ? 'brd_test' : (options.boardId ?? 'brd_default'), 'General', 'all')
+  let made = options.boardId !== null
+  const others = (options.boards ?? []).map((board) => kept(board.id ?? `brd_${randomUUID()}`, board.name, new Set(board.granted ?? []), board.members ? new Set(board.members) : null))
+  const boards = () => [...(made ? [general] : []), ...others]
+  /** What each ensure made, by its caller and operation ID, for a retry to answer again. */
+  const ensured = new Map<string, Kept>()
+
+  const grantOf = (principal: Extract<Principal, { type: 'project' }>) => `${principal.projectId}:${principal.environment}`
+  /**
+   * Who uses a board: a project, where it's granted in its environment; a person, a team-visible
+   * board, or a private one that lists them.
+   */
+  const mayUse = (actor: Actor, board: Kept) =>
+    actor.principal.type === 'project'
+      ? board.granted === 'all' || board.granted.has(grantOf(actor.principal))
+      : board.members === null || (actor.principal.type === 'user' && board.members.has(actor.principal.userId))
+  const show = (board: Kept) => ({ id: board.id, teamId, name: board.name, visibility: board.members === null ? 'team' : 'private' })
+  const named = (name: string) => boards().some((board) => board.name.toLowerCase() === name.toLowerCase())
+
+  async function route(request: Request): Promise<unknown> {
+    const url = new URL(request.url)
+    if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
+    if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
+    if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
+    const actor = actorOf(request, options.tokens)
+    const path = url.pathname.replace(/^\/v1\/messageboard/, '')
+    const method = request.method
+    requests.push(`${method} ${path}`)
+    // Completing an upload takes no body.
+    const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
+    // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
+    // Sync's routes take none either, but imports.
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    if (method === 'GET' && path === '/me') {
+      if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
+      const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+      const role = actor.principal.type === 'user' ? (options.roles?.[actor.principal.userId] ?? 'member') : null
+      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read'] : ALL
+      const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
+      return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
+    }
+    if (method === 'GET' && path === '/boards') {
+      // `name` matches whatever its case, among the boards the caller may use, in one answer.
+      const name = url.searchParams.get('name')
+      if (name !== null && !BOARD_NAME.test(name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
+      if (name !== null && url.searchParams.has('cursor')) throw new Refused(400, 'invalid_request', 'A name lookup takes no cursor.')
+      const listed = boards().filter((board) => mayUse(actor, board) && (name === null || board.name.toLowerCase() === name.toLowerCase()))
+      return { boards: listed.map(show), defaultBoardId: made && mayUse(actor, general) ? general.id : null, cursor: null }
+    }
+    if (method === 'POST' && path === '/boards/default') {
+      // Board creates record a person's event, so project tokens can't.
+      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
+      if (!made && named(general.name)) throw new Refused(409, 'board_name_taken')
+      made = true
+      return { board: show(general) }
+    }
+    if (method === 'POST' && path === '/boards/ensure') {
+      if (typeof body.name !== 'string' || !BOARD_NAME.test(body.name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
+      // A retry with the same operation ID answers what the first did, as one that made nothing.
+      const replayed = ensured.get(`${principalId(actor.principal)}|${body.operationId}`)
+      if (replayed) return { board: show(replayed), created: false }
+      const found = boards().filter((board) => board.name.toLowerCase() === body.name.toLowerCase())
+      if (found[0]) {
+        // A name is taken whoever can see its board: a private one stays unseen, and isn't made again.
+        if (found[0].members !== null && !mayUse(actor, found[0])) throw new Refused(409, 'board_name_taken', 'A board has that name.')
+        if (!mayUse(actor, found[0])) throw new Refused(403, 'board_not_granted', "This project isn't granted that board.")
+        return { board: show(found[0]), created: false }
+      }
+      // A new team-visible board, granted to the project that made it, in its own environment.
+      const board = kept(`brd_${randomUUID()}`, body.name, new Set(actor.principal.type === 'project' ? [grantOf(actor.principal)] : []))
+      others.push(board)
+      ensured.set(`${principalId(actor.principal)}|${body.operationId}`, board)
+      return { board: show(board), created: true }
+    }
+    const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
+    const board = onBoard ? boards().find((candidate) => candidate.id === decodeURIComponent(onBoard[1]!)) : undefined
+    if (!onBoard || !board || !mayUse(actor, board)) throw new Refused(404, 'board_not_found')
+    const rest = onBoard[2] ?? ''
+    if (method === 'GET' && rest === '') return { board: show(board) }
+    return board.data.route(method, rest, url, body, actor)
+  }
+
+  const { registrations, schedules, send } = general.data
   return {
     /** Every request it answered, as `METHOD /path`. */
     requests,
-    /** The watchers each principal registered, as the API keeps them. */
+    /** The watchers each principal registered on the default board, as the API keeps them. */
     registrations,
-    /** Every schedule, by ID, as the API keeps them. */
+    /** Every schedule on the default board, by ID, as the API keeps them. */
     schedules,
-    /** Posts a schedule's next send now, as its timer would: the message's ID. */
+    /** Posts a default board schedule's next send now, as its timer would: the message's ID. */
     send,
     /** The attachments bucket, as presigned URLs reach it: a PUT stores bytes, held to its signed SHA-256 as S3 holds it, and a GET reads them. */
     files: (async (input: RequestInfo | URL, init?: RequestInit) => {

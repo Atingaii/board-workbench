@@ -1,10 +1,9 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, truncate, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -61,15 +60,40 @@ describe('cli', () => {
     expect(JSON.parse((await vb(['read', id, '--json'])).stdout).message.text).toBe(text)
   })
 
+  it('takes the text from a file with --text-file, or from stdin with --text-file -', async () => {
+    const dir = await tmp('board-text-')
+    const note = join(dir, 'note.md')
+    await writeFile(note, '## Findings\n\n- export is broken\n- fixed in a1b2c3\n')
+    const id = (await vb(['post', 'text-files', '--text-file', note])).stdout.trim()
+    const read = async () => JSON.parse((await vb(['read', id, '--json'])).stdout) as { message: { text: string }; replies: { text: string }[] }
+    // As the file has it, but for the newline it ends with.
+    expect((await read()).message.text).toBe('## Findings\n\n- export is broken\n- fixed in a1b2c3')
+    expect(await vb(['reply', id, '--text-file', '-'], {}, 'from a pipe\n')).toMatchObject({ code: 0, stderr: '' })
+    expect((await read()).replies.map((m) => m.text)).toEqual(['from a pipe'])
+    await writeFile(note, 'edited from the file\n')
+    expect(await vb(['edit', id, '--text-file', note])).toMatchObject({ code: 0, stderr: '' })
+    expect((await read()).message.text).toBe('edited from the file')
+    // Text from two places is one too many, and a file that isn't there says so.
+    expect(await vb(['reply', id, 'hi', '--text-file', note])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --text-file with text: pass one or the other\.\n/) })
+    expect(failure(await vb(['reply', id, '--text-file', join(dir, 'missing.md'), '--json']))).toMatchObject({ reason: 'file_not_found' })
+    // One too big to attach says so of the text, not of --attach. Sparse: nothing is written.
+    const huge = join(dir, 'huge.log')
+    await writeFile(huge, '')
+    await truncate(huge, 101 * 1024 * 1024)
+    expect(await vb(['reply', id, '--text-file', huge])).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: Can't use .*huge\.log as the text\. A message's text is at most 10,000 characters\.\n/) })
+    expect((await read()).replies).toHaveLength(1)
+  }, 20_000)
+
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
-    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have.
+    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have, or a
+    // BOARD_TOKEN, which it would send there: this run has neither.
     const outside = await tmp('board-vercel-')
     await mkdir(join(outside, '.vercel'))
     await writeFile(join(outside, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_x', projectId: 'prj_x' }))
     const teamBoard = /^error: You're not logged in to Vercel\./
     const noBoard = /^error: No board to use\./
-    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
+    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, BOARD_TOKEN: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
     const checkout = join(outside, 'repo')
     await mkdir(join(checkout, '.git', 'x'), { recursive: true })
     await mkdir(join(checkout, 'src'))
@@ -334,6 +358,17 @@ describe('cli', () => {
     expect(await vb(['post', 'unknown-mentions', 'no mentions here'])).toMatchObject({ code: 0, stderr: '' })
   })
 
+  it('says what each write did, and to which message', async () => {
+    const id = (await vb(['post', 'confirmed', 'deploy failed'])).stdout.trim()
+    expect(await vb(['edit', id, 'deploy failed on a1b2c3'])).toEqual({ code: 0, stdout: `edited ${id}\n`, stderr: '' })
+    expect(await vb(['react', id, 'eyes'])).toEqual({ code: 0, stdout: `reacted ${id}\n`, stderr: '' })
+    expect(await vb(['react', id, 'eyes', '--remove'])).toEqual({ code: 0, stdout: `unreacted ${id}\n`, stderr: '' })
+    expect(await vb(['label', id, 'state=open'])).toEqual({ code: 0, stdout: `labeled ${id}\n`, stderr: '' })
+    expect(await vb(['delete', id])).toEqual({ code: 0, stdout: `deleted ${id}\n`, stderr: '' })
+    // With --json, it's the one document it always was.
+    expect(JSON.parse((await vb(['delete', id, '--json'])).stdout)).toEqual({ message: { id }, outcome: 'deleted' })
+  })
+
   it('posts to a message ID as a reply in its thread, labels and all', async () => {
     const id = (await vb(['post', 'post-replies', 'export is broken'])).stdout.trim()
     const reply = await vb(['post', id, 'fixed in a1b2c3', '--label', 'step=fix', '--json'])
@@ -345,6 +380,14 @@ describe('cli', () => {
     const synced = await vb(['post', id, 'x', '--sync', 'slack:#incidents'])
     expect(synced).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Can't use --sync on a reply\./) })
     expect(synced.stderr).toContain(`vb sync ${id} <TARGET>`)
+  })
+
+  it('labels a reply as it posts it', async () => {
+    const id = (await vb(['post', 'reply-labels', 'export is broken'])).stdout.trim()
+    const reply = await vb(['reply', id, 'fixed in a1b2c3', '--label', 'step=fix', '--label', 'owner=claude', '--json'])
+    expect(reply.code).toBe(0)
+    expect(JSON.parse(reply.stdout)).toMatchObject({ message: { re: id, text: 'fixed in a1b2c3', labels: { step: 'fix', owner: 'claude' } }, outcome: 'posted' })
+    expect(JSON.parse((await vb(['read', id, '--json'])).stdout).replies.map((m: { labels: object }) => m.labels)).toEqual([{ step: 'fix', owner: 'claude' }])
   })
 
   it('creates a channel before anything posts to it, and leaves one that is there as it is', async () => {
@@ -469,9 +512,9 @@ describe('cli', () => {
   })
 
   it('says what a token can do when it is less than everything', async () => {
-    const board = await serve(
-      testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })] }).fetch,
-    )
+    const granted = testBoard()
+    await granted.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
+    const board = await serve(granted.fetch)
     try {
       const { stdout, code } = await vb(['whoami'], { BOARD_URL: `${board.origin}/api/board`, BOARD_TOKEN: await workflowToken() })
       expect(code).toBe(0)
@@ -686,12 +729,18 @@ describe('cli', () => {
       await scheduled.close()
     }
     // Without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
-    const partial = await vb(['conformance'])
-    expect(partial.code).toBe(0)
-    expect(partial.stdout).toContain(
-      '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
-    )
-    expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    const unscheduled = await serve(testBoard({ url: undefined }).fetch)
+    const plain = `${unscheduled.origin}/api/board`
+    try {
+      const partial = await vb(['conformance'], { BOARD_URL: plain, BOARD_TOKEN: await personToken('u_julian', plain) })
+      expect(partial.code).toBe(0)
+      expect(partial.stdout).toContain(
+        '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler, so it can\'t send later\n',
+      )
+      expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    } finally {
+      await unscheduled.close()
+    }
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
   })
 
@@ -723,8 +772,8 @@ describe('cli', () => {
     const unknown = await vb(['read', 'dev', '--labl'])
     expect(unknown).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option --labl for vb read\. Did you mean --label\?\n/) })
     expect(unknown.stderr).toContain('vb read --help')
-    // Only what the command takes: `reply` takes no --label, so it guesses nothing.
-    expect(await vb(['reply', '12', 'hi', '--labl'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --labl for vb reply\.\n/) })
+    // Only what the command takes: `edit` takes no --label, so it guesses nothing.
+    expect(await vb(['edit', '12', 'hi', '--labl'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --labl for vb edit\.\n/) })
     // Text that starts with - goes after --, and the error says how, for this very command.
     const dashed = await vb(['post', 'dev', '-1'])
     expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option -1 for vb post\./) })
@@ -733,11 +782,23 @@ describe('cli', () => {
     expect((await vb(['--mentions', 'read', 'update'])).stderr).not.toContain('is gone')
   })
 
-  it('says `vb stuck` is gone, and where its dead letters are', async () => {
-    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({
-      code: 2,
-      stderr: "error: `vb stuck` is gone. A board on a2() keeps its dead letters in A2, on the backend's `servers`.\n",
-    })
+  it('names the whole argument an unknown option is in, when it holds several words', async () => {
+    // A shell variable that wasn't split: --as is real, but the argument it starts isn't an option.
+    const joined = await vb(['read', 'dev', '--as x --scope acme'])
+    expect(joined).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option "--as x --scope acme" for vb read\.\n/) })
+    // Text that starts with - is one argument too, and the way out moves all of it after --.
+    const dashed = await vb(['post', 'dev', '- check the deploy'])
+    expect(dashed).toMatchObject({ code: 2, stdout: '', stderr: expect.stringMatching(/^error: Unknown option "- check the deploy" for vb post\./) })
+    expect(dashed.stderr).toContain("vb post dev -- '- check the deploy'")
+    // Text after -- isn't an option, even one that starts like the one the parser rejected.
+    expect(await vb(['read', 'dev', '--limt', '3', '--', '--limt x'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --limt for vb read\. Did you mean --limit\?\n/) })
+    const after = await vb(['post', 'dev', '--bogus', '--', '--bogus thing'])
+    expect(after.stderr).toMatch(/^error: Unknown option --bogus for vb post\.\n/)
+    expect(after.stderr).not.toContain("vb post dev --bogus -- '--bogus thing'")
+  })
+
+  it('says `vb stuck` is gone', async () => {
+    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({ code: 2, stderr: 'error: `vb stuck` is gone.\n' })
   })
 
   it('follows a channel until Ctrl-C, and exits 130 for it, as a cancel', async () => {
