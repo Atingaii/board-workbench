@@ -553,15 +553,16 @@ $ vb channels create dev/alerts
 dev/alerts already exists
 ```
 
-`--private` closes it to everyone but you in the same request, with two
-grants, and needs `manage` there. A channel that's there already stays as it
-is, and the command fails:
+`--private` closes it to everyone but you, as `createChannel(path, { private:
+true })` does: a grant letting you in, one closing it to everyone else, then
+the channel. It needs `manage` there, and makes nothing where the channel, or
+one under it, is there already:
 
 ```text
 $ vb channels create security --private
 created channel security
-created g7  --everyone  security/=none
-created g8  --user alice@acme.com  security/=all
+created g7  --user alice@acme.com  security/=all
+created g8  --everyone  security/=none
 ```
 
 With `--json`, it prints `{ channel, outcome }`, where `outcome` is `created`

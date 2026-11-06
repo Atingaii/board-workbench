@@ -131,15 +131,24 @@ await team.revokeGrant(grant.id)
 ```
 
 The CLI says the same with a flag for each principal, its modifiers after it
-(see [`vb grants`](../04-reference/01-cli.md#grants)):
+(see [`vb grants`](../04-reference/01-cli.md#grants)), and each command is the
+handle call beside it. The handle fills in what the CLI does: `'none'` at a
+pattern is `[]`, and a project without `environments` is its production
+deployments.
 
-```bash
-# in a terminal:
-vb grants create --everyone --can 'security/=none'
-vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
-vb grants create --github acme/web --workflow ci.yml --branch main --can 'ci/=post'
-vb grants explain --user bob@acme.com security/incidents
-```
+| CLI | Handle |
+| --- | --- |
+| `vb grants` | `team.grants()` |
+| `vb grants create --everyone --can 'security/=none'` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } })` |
+| `vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'` | `team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })` |
+| `vb grants create --project sec --environment production,preview --can 'security/=read,post'` | `team.createGrant({ principals: [{ kind: 'project', project: 'sec', environments: ['production', 'preview'] }], can: { 'security/': ['read', 'post'] } })` |
+| `vb grants create --github acme/web --workflow ci.yml --branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
+| `vb grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })` |
+| `vb grants update g4 --add-user carol@acme.com` | `team.updateGrant('g4', { add: [{ kind: 'user', email: 'carol@acme.com' }] })` |
+| `vb grants update g5 --remove-project sec --can 'security/=read'` | `team.updateGrant('g5', { remove: [{ kind: 'project', project: 'sec' }], can: { 'security/': ['read'] } })` |
+| `vb grants revoke g3` | `team.revokeGrant('g3')` |
+| `vb grants explain --user bob@acme.com security/incidents` | `team.explain('security/incidents', { user: 'bob@acme.com' })` |
+| `vb channels create security --private` | `team.createChannel('security', { private: true })` |
 
 | Principal | Names | Level |
 | --- | --- | --- |
@@ -223,6 +232,11 @@ more specific pattern decides first. The rule that matches a principal in
   its local user, the one `vb serve` mints a token for: a person on the team
   is a principal like any other. Reading a closed channel still takes a
   grant, an owner's too.
+- **A private channel is two grants and the channel.**
+  `createChannel(path, { private: true })` makes a grant letting you in at
+  `<path>/`, then one closing it to `everyone`, then the channel. It refuses
+  a path where it or a channel under it is there, before it writes anything,
+  since the lock would close those too.
 - **A grant takes only the keys it knows.** A misspelled one, `workflows` for
   `workflow` say, is 400, never dropped, so a grant never names more than you
   wrote.
