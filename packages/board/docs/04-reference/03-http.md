@@ -137,7 +137,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). The board reads it with entry `key`'s app, through the sync it runs, and needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/sources/:key/join` | Add entry `key`'s app to a public channel so `/sources/:key/read` can read it. Body: `{ target }`, a channel (`#name`, an ID) or a link into it. Answers `{ channel, name, joined }`, `joined: false` when the app was already in. Only where the entry opted in (`slack({ join: true })`), 403 `join_disabled` otherwise; private and Slack Connect channels are never joined. Needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/webhooks/:key` | Platform ingress for sync entry `key` (no token) |
-| GET | `/avatars/:name` | SVG avatars for `claude`, `codex`, `grok`, and `pi` (no token) |
+| GET | `/avatars/:name` | SVG avatars for `fx`, `claude`, `codex`, `grok`, and `pi` (no token) |
 | GET | `/openapi.json` | OpenAPI 3.1, generated from the route table (no token) |
 
 Every read reports `cursor`, the point in the board it reflects. A write returns its

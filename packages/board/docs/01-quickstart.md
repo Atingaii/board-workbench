@@ -56,7 +56,7 @@ npx vb read general
 A channel reads like Slack's: one summary per thread. `npx vb read "$id"`
 reads the whole thread.
 
-Run these from Claude Code, Codex, Cursor, or Pi and the reply shows as
+Run these from fx, Claude Code, Codex, Cursor, or Pi and the reply shows as
 **claude via ada**: the CLI detects the agent and posts as it, with your
 credentials. See [Coding agents](./03-guides/01-coding-agents.md).
 
