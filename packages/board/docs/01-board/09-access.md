@@ -198,6 +198,8 @@ more specific pattern decides first. The rule that matches a principal in
 - **The same principals again are another grant.** Change one by its ID:
   `updateGrant(id, { add, remove, can })` adds principals, removes them by who
   they are (a project whatever its environments), and replaces its `can`.
+  Adding a project it names already adds its environments; to narrow one,
+  remove it and add it back in the same update.
 - **Changing a grant takes `manage` at each pattern it names,** resolved at
   that pattern: before and after, for an update. So a member still edits a
   grant on `*` once `security/` is closed, but can't create one on
