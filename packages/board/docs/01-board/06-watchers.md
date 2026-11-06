@@ -7,38 +7,31 @@ description: A watcher is a `vb tail` the board runs for you, durably, with noth
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }), // retries on a clock: see How it runs
-})
 
 const team = board({
-  backend,
-  // sync as in Sync
   watch: {
     triage: {
-      tail: 'firehose --source slack',
+      tail: 'support',
       run: async ({ event, board }) => {
         if (event.type === 'message.posted' && event.message?.re === null)
-          await board.reply(event.message.id, 'Thanks! Tracking it.') // synced to the Slack thread
+          await board.reply(event.message.id, 'Thanks! Tracking it.')
       },
     },
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 `tail` is what you'd type after `vb tail`. `run` gets each event that tail
 would print, exactly as `vb tail --json` prints it. Try it in a terminal first:
 
 ```bash
-vb tail firehose --source slack --json
+vb tail support --json
 ```
+
+That's your team's board in Vercel's API. Vercel's API matches each event
+against the tails, and wakes this route when one matches, so `run` happens in
+this deployment: see [How it runs](#how-it-runs).
 
 ## The expression
 
@@ -137,10 +130,12 @@ runs.
 ## Writing back
 
 `board` is the board's [handle](./01-mounting.md#the-handle), acting as the
-watcher, with no HTTP and no token.
+watcher.
 
-- **It writes as the watcher,** `board:watch:<id>`, with the id as its handle.
-  Its writes sync like anyone's.
+- **It writes as the watcher.** On Vercel's board, and on a board on `http()`,
+  that's this deployment with the watcher's ID as its profile:
+  `vercel:project:prj_v0:production+triage`. On `local()`, it's
+  `board:watch:<id>`, with the ID as its handle. Its writes sync like anyone's.
 - **Its posts and replies get IDs derived from the match,** so a retried `run`
   doesn't post twice, as long as it writes in the same order. Writes made in
   parallel (with `Promise.all`) need an explicit `id`, which is the watcher's
@@ -154,31 +149,37 @@ watcher, with no HTTP and no token.
 
 ## How it runs
 
-Each board event is matched against every watcher by one A2 consumer,
-`board-watchers`, on the thread's lane. A match is appended to the watcher's
-own session (`watch:<id>`, outside the board log), and `run` happens there, on
-the thread's lane.
+Where the match happens depends on the board:
+
+- **On Vercel's board, and on a board on `http()`,** the board that keeps the
+  log matches the tails, and wakes this deployment when one matches. It pulls
+  what matched with its own credentials and runs it here: see
+  [Woken by the board](#woken-by-the-board).
+- **On [`local()`](./10-local.md),** everything happens in this process. Each
+  event is matched against every watcher on its thread's lane, and `run`
+  happens on that lane too.
+
+Either way:
 
 - **A watcher sees a thread's events in order,** and threads run in parallel.
 - **Each watcher fails on its own.** A `run` that throws is tried again after
-  a wait (1 second, doubling to 30). After 5 tries it's logged and recorded as
-  `watch.failed`, and the thread goes on. Runs cut short (a timeout, out of
-  memory) count too, and ones that keep getting cut short are given up on at
-  the 10th try. Writes, other threads, and other watchers keep flowing.
-- **Retries need the scheduler,** as sync's do. Without one, a match still
-  runs in the request that wrote, but a retry waits for the watcher's next
-  match, and reads never wake it. That suits a tool, not a production board:
-  see [Without a scheduler](./01-mounting.md#without-a-scheduler) and
-  [the scheduler route](./01-mounting.md#the-scheduler-route).
+  a wait. After 5 tries it's logged and recorded as `watch.failed`, and the
+  thread goes on. Writes, other threads, and other watchers keep flowing.
 - **A watcher removed from config** skips the matches it left behind.
+
+On `local()`, the wait is 1 second, doubling to 30. Runs cut short (a timeout,
+out of memory) count as tries too, and ones that keep getting cut short are
+given up on at the 10th. Its retries wait on timers in the process, so a
+restart drops the ones pending.
 
 The [triage guide](../03-guides/04-triage.md) builds a full triage agent, first
 as a `tail` loop and then as a watcher.
 
-## On a board on `http()`
+## Woken by the board
 
-A board on [`http()`](./01-mounting.md#backends) runs its watchers too. The
-board it uses keeps the log and matches the tails, and this one runs `run`:
+Vercel's board keeps the log and matches the tails, and the route at the top
+of this page runs `run`. A board on [`http()`](./01-mounting.md#backends) does
+the same with the board at its URL:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
@@ -228,9 +229,8 @@ export const GET = team.fetch, POST = team.fetch
   retried `run` doesn't post twice.
 - **A thread's matches come one at a time, in order,** and threads run in
   parallel. A pulled match is leased for 5 minutes. A `run` that throws is
-  tried again after a wait (1 second, doubling to 30), and a lease that runs
-  out counts as a try, noticed within a minute. After 5 tries it's recorded as
-  `watch.failed`, and the thread goes on.
+  tried again after a wait, and a lease that runs out counts as a try. After
+  5 tries it's recorded as `watch.failed`, and the thread goes on.
 - **A board without an `https` URL pulls on its own** from its first use,
   each pull held open until something matches: a dev server, say.
 - **A wake-up carries no credential,** so behind Deployment Protection this
@@ -240,21 +240,16 @@ export const GET = team.fetch, POST = team.fetch
   makes this board pull with its own credentials. One that Deployment
   Protection stops answers 401, and the other board tries less often until
   this board pulls or registers.
-- **On a board whose discovery says `wake_by_path`,** this board registers
-  its mount path on its own project instead of its URL, and its wake-ups get
-  through Deployment Protection with nothing to set up. Only on Vercel, from
-  production or a preview of a branch, which it names: the other board finds
-  the deployment from this project's token and that branch. Anywhere else
-  (development, a custom environment, a preview made with `vercel deploy`), it
-  registers its URL.
-- **Retries need the other board's scheduler,** as its own watchers do.
-  Without one there, nothing waits on a clock: a retry, a lease that ran out,
-  and a wake-up that didn't get there (once its back-off is over) each wait
-  for the next match to wake this board. A board that pulls on its own
-  doesn't wait.
-- **Its [sync](../02-sync/01-overview.md#on-a-board-elsewhere) subscribes the
-  same way,** with its entries in its registration (`sync: [{ key, platform }]`):
-  it gets every post, change, and thread sync in the channels its deployment
+- **On Vercel's board, or a board whose discovery says `wake_by_path`,** this
+  board registers its mount path on its own project instead of its URL, and
+  its wake-ups get through Deployment Protection with nothing to set up. Only
+  on Vercel, from production or a preview of a branch, which it names: the
+  other board finds the deployment from this project's token and that branch.
+  Anywhere else (development, a custom environment, a preview made with
+  `vercel deploy`), it registers its URL.
+- **On `http()`, its [sync](../02-sync/01-overview.md#on-a-board-elsewhere)
+  subscribes the same way,** with its entries in its registration
+  (`sync: [{ key, platform }]`): it gets every post, change, and thread sync in the channels its deployment
   may `sync`, as matches of watcher `@sync`, and runs them here. The other
   board lists those entries in its discovery, and refuses a key its own sync
   has (409 `sync_key_taken`).

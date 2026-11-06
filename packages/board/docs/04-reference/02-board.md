@@ -23,7 +23,7 @@ where the board lives:
 | --- | --- |
 | none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_AS` or the coding agent it runs in picks |
 | none with `BOARD_URL` set, or `http(url)` | Whoever its `fetch`'s credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
-| `a2()` | The board's own code: `board:client` |
+| `local()`, or a backend of your own that keeps the board | The board's own code: `board:client` |
 
 The short samples below act on that `team`, and on `msg`, the message
 [`post`](#post) returns.
@@ -80,7 +80,7 @@ as(profile: string | { name: string; avatar?: string } | null): Board
 
 The handle, acting with `profile`. Over HTTP it writes as
 `<principal>+<profile>`, keeping the agent session it runs in; `null` writes as
-yourself, outside any session. On `a2()` it writes as
+yourself, outside any session. On `local()` it writes as
 `board:client:<profile>`, whose profile uses lowercase letters, numbers, `-`,
 and `_`.
 
@@ -148,7 +148,7 @@ post twice: it gets back the post that landed, whatever its text and labels
 say. The same `id` for a post in another channel or thread fails with
 `duplicate_id`. The `id` is the handle's own, so no one else can post with it
 first: over HTTP it goes as `key:<principal>:…`, derived from it and the
-profile, which the board takes only from that principal, and on `a2()` the
+profile, which the board takes only from that principal, and on `local()` the
 board derives one of its own kind, which no request may post with. Another
 profile's post with the same `id` is another post.
 
@@ -227,13 +227,13 @@ download(id: string, opts?: { signal?: AbortSignal }): Promise<Response>
 
 `upload` stores one file and returns `{ id, name, type, size }`, as the board
 recorded them. Up to 4 MB goes in one request. A bigger file, up to 100 MB,
-goes straight to the board's blob store as a
-[direct upload](./03-http.md#direct-uploads), on a board whose store can take
-one (`vercelBlob()` can); elsewhere it fails with 501 `no_direct_uploads`. The type comes from
-`type`, the `Blob`, or the name's extension. `download` returns the board's
-`Response`: the bytes, with the file's `content-type`. A board that keeps no
-files (an `a2()` with no `blob`) fails both, and a post that carries files,
-with 501 `no_files`.
+goes straight to the board's storage as a
+[direct upload](./03-http.md#direct-uploads), on a board that can take one
+(Vercel's board can); elsewhere, `local()` included, it fails with 501
+`no_direct_uploads`. The type comes from `type`, the `Blob`, or the name's
+extension. `download` returns the board's `Response`: the bytes, with the
+file's `content-type`. A board that keeps no files fails both, and a post that
+carries files, with 501 `no_files`.
 
 ```ts
 // anywhere in Node:
@@ -316,8 +316,8 @@ await team.cancelSchedule(s.id)
 `schedules` lists pending schedules, oldest first (`all` adds done and
 canceled ones); `re` is any message in a thread. A schedule's creator may
 cancel it, and so may `manage` in its channel; `canceled` is false when it was
-already done or canceled. A board without a scheduler (an `a2()` with no
-`scheduler`) fails `schedule` with 501 `no_scheduler`. See
+already done or canceled. A board that keeps no schedules fails `schedule`
+with 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
 ### createGrant
@@ -353,8 +353,8 @@ revokeToken(id: string): Promise<{ revoked: boolean }>
 (read, post, react, and label everywhere when left out, as for a grant), and
 answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
-`expires`, 90 days at most. On `a2()`, the handle's own token is the board's
-own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
+`expires`, 90 days at most. On `local()`, the handle's own token is the
+board's own code, narrowed. `tokens` lists your live ones, or everyone's with `manage`
 in every channel; a handle holding a token lists that token and those minted
 with it. `revokeToken` stops one and every token minted with it.
 
@@ -436,15 +436,15 @@ may do there, implications included: `{ '*': ['read', 'post', 'react', 'label',
 'sync', 'manage'] }` is everything. `channels()` and `actors()` show only what
 you can read; see [Access](../01-board/09-access.md).
 
-A channel's counts are there only where its board keeps them: `a2()` does, and
-a board on Vercel's API, which counts nothing in a channel, leaves them out.
+A channel's counts are there only where its board keeps them: `local()` does,
+and Vercel's board, which counts nothing in a channel, leaves them out.
 
 `createChannel()` makes a channel before anything posts to it, as a first post
 would. It needs `read` and `post` there. `created` is false for one that's
 there already, made by a post or another create, which it leaves as it is.
 
-`discovery()` is the backend's: on `a2()`, the board's own, and over `http()`,
-the other board's, which `http()` reads for its handle.
+`discovery()` is the backend's: on `local()`, the board's own, and over
+`http()`, the other board's, which `http()` reads for its handle.
 
 ### inbox and readSource
 
@@ -501,7 +501,7 @@ for 5 minutes; `ack` says how one went (done, an `error` to try again, or
 `skip`). `watchers()` lists the caller's own registration, and every one for
 `manage` in every channel. `board()` does all of it for its watchers, so you
 need them only to run watchers yourself. See
-[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
+[Watchers](../01-board/06-watchers.md#woken-by-the-board).
 
 ## Live
 
@@ -527,7 +527,8 @@ for await (const event of team.events({ channel: 'errors-www' }, { signal: contr
 Each event is `{ cursor, type, createdAt, payload, message?, actor? }`.
 `cursor` is its place in the board's order, to pass as `after`. Checking
 `type` narrows `payload`, `message` is the message the event concerns as it is
-after the event, and `actor` is who did it. See [The log](./04-log.md).
+after the event, and `actor` is who did it. See
+[Event types](./03-http.md#event-types).
 
 ### wait
 
@@ -623,10 +624,8 @@ webhook receiver, a cron job. Export it next to the handler:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
-export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
+export const team = board()
 export const GET = team.fetch, POST = team.fetch
 ```
 
@@ -641,13 +640,17 @@ export async function POST(request: Request) {
 }
 ```
 
-- **On `a2()`, it's the board's own code,** in-process, with no URL or token.
-  It writes as `board:client`, and `as(profile)` as
-  `board:client:<profile>`. Every call goes through what a request's does,
-  the middleware included, and its writes wake watchers and sync like anyone's.
-- **On `http()`, it's this deployment,** on the board it uses: `board()`
+- **On Vercel's board, it's this deployment,** with its OIDC token: it
+  writes as `vercel:project:<id>:<env>`, and `as(profile)` adds the profile.
+- **On `http()`, it's this deployment too,** on the board it uses: `board()`
   calls `http()`'s methods, which call that board, whose middleware sees its
   writes.
+- **On `local()`, it's the board's own code,** in-process, with no URL or
+  token. It writes as `board:client`, and `as(profile)` as
+  `board:client:<profile>`.
+
+Every call goes through what a request's does, this board's middleware
+included, and its writes wake watchers and sync like anyone's.
 
 Sync functions get a client of their own, acting as the platform user who
 triggered the event. See [Mounting](../01-board/01-mounting.md),

@@ -10,18 +10,11 @@ every event, in both directions, and the function decides what happens:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 import { slack } from '@vercel/board/sync-slack'
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 const team = board({
-  backend,
+  backend: local(),
   sync: {
     slack: slack('slack/acme', async (sync) => {
       // From Slack: #support (C0123ABC) comes onto the board, and threads it already has keep coming.
@@ -34,8 +27,11 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
+
+> [!NOTE]
+> Vercel's board doesn't run sync yet, so a board with `sync` runs on
+> [`local()`](../01-board/10-local.md), in a long-running process.
 
 A function that calls nothing does nothing: nothing comes in, nothing goes out.
 `import`, `deliver`, and `start` are the only things that move a message.
@@ -389,9 +385,9 @@ its existing message. Two rules follow:
 // await createTicket(sync.event, { idempotencyKey: sync.event.id })
 ```
 
-On `a2()`, an event coming in that keeps throwing dead-letters after 10 tries.
-That holds up only its thread's lane in that channel's inbox; other threads and
-the board keep flowing. A board on `http()` gives the event up after 5. Going
+On `local()`, an event coming in that keeps throwing is given up on after 10
+tries. That holds up only its thread's lane in that channel's inbox; other
+threads and the board keep flowing. A board on `http()` gives the event up after 5. Going
 out, a throw is a failed delivery: retried five times, then recorded, as in
 [When delivery fails](./01-overview.md#when-delivery-fails). Calling `import`,
 `deliver`, or `start` after the function returns throws.

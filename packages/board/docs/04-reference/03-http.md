@@ -118,7 +118,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/attachments/:id` | The file |
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
-| POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `a2()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
+| POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/grants` | `{ grants }`: each one's `id`, `issuer`, `claims`, `can`, `by`, and `at`. Needs `manage` in every channel. See [Grants and tokens](#grants-and-tokens) |
 | POST | `/grants` | `{ issuer, claims, can? }`: set a grant, or the `can` of the one with that issuer and claims. Answers `{ grant, created }` |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
@@ -147,14 +147,13 @@ Every board that keeps its own log answers every route here. The sync routes
 a person calls (`/webhooks/:key` and `/messages/:id/sync`) are `board()`'s, and work on any
 backend: the ones that need a sync entry answer 404 on a board that doesn't
 run it. `/sources/:key/read`, `/sources/:key/join`, `/messages/:id/typing`, `GET /messages/:id/sync`,
-and `/links` are the backend's methods, which `a2()` answers through the sync
-`board()` runs beside it. A
+and `/links` are the backend's methods, which `local()` answers through the
+sync `board()` runs beside it. A
 board on `http()` answers only wake-ups and webhooks,
 unless it has an `access` of its own: then it serves its callers as its
-project on the board it uses (see [A board on `http()`](../01-board/09-access.md#a-board-on-http)). There are no
+project on the board it uses (see [A gateway](../01-board/09-access.md#a-gateway)). There are no
 optional groups, so a client never asks a board what it does. A board that
-keeps no schedules or files (an `a2()` with no `scheduler` or no `blob`) still
-answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
+keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
 no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
 [Conformance](./05-conformance.md) checks a board against all of it, and
 reports those checks as skipped on such a board.
@@ -163,7 +162,7 @@ reports those checks as skipped on such a board.
 
 [Sync](../02-sync/01-overview.md) runs in `board()`, wherever the board lives,
 and keeps its records through these. Every backend answers them, so a board on
-`http()` syncs as one on `a2()` does. Each needs `sync`: where the message
+`http()` syncs as one on `local()` does. Each needs `sync`: where the message
 lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
@@ -177,11 +176,11 @@ lands or is, or somewhere for the lookups and the inbox.
 | GET | `/inbox/:key/next` | `{ items }`: the caller's next inbox events, each leased until it acks, one platform thread at a time and in order. Query: `limit` |
 | POST | `/inbox/:key/:id/ack` | `{ lease, error? }`: done, or an error to try again after a wait. After 5 tries it's given up on |
 
-On `a2()`, the board's own sync pushes to an inbox per platform channel, which
-`board-inbox` delivers back to it on the platform thread's lane. Anyone else's
+On `local()`, the board's own sync pushes to an inbox per platform channel,
+which it delivers back to itself in order per platform thread. Anyone else's
 pushes wait in their own queue for them to pull, and their sync gets what to
 deliver as matches of watcher `@sync` when it registers its sync entries: see
-[Watchers](../01-board/06-watchers.md#on-a-board-on-http).
+[Watchers](../01-board/06-watchers.md#woken-by-the-board).
 
 ### What `sync` grants
 
@@ -203,8 +202,8 @@ another, and a message it can't sync is as good as missing to it.
 
 Message IDs, schedule IDs, and cursors are strings of 1 to 128 characters.
 Compare them for equality and pass them back as you got them; don't count with
-them or order by them. Each backend picks its own, and a board on `a2()` uses
-[log indexes](./04-log.md#one-log) in decimal (`"812"`). In a path
+them or order by them. Each backend picks its own: a local board uses
+positions in its log, in decimal (`"812"`), and Vercel's board `msg_…` IDs. In a path
 (`/messages/:id`), an ID is URL-encoded. A message ID works as a cursor:
 `after` and `before` take either. One the board can't read as a cursor answers
 400 `invalid_cursor`.
@@ -249,9 +248,8 @@ gets back the reply that landed, whatever `after` says now.
 | `before` | messages before this cursor or message ID |
 | `limit` | 1 to 500, 50 by default. Without `after`, the latest `limit` |
 
-Messages come oldest first. On `a2()`, filters read the board's tables, where
-labels and mentions are an index lookup: see
-[Database](../01-board/02-database.md).
+Messages come oldest first. On `local()`, filters read tables the board keeps
+from its log, where labels and mentions are an index lookup.
 
 ### Listing threads
 
@@ -287,14 +285,13 @@ curl -X POST "$BOARD_URL/attachments" \
   `content-security-policy: sandbox`, `x-content-type-options: nosniff`, and
   an immutable cache header. Images (PNG, JPEG, GIF, WebP, AVIF), MP4 and WebM
   video, and plain text display inline; everything else downloads.
-- **A board that keeps no files** (an `a2()` with no `blob`) answers 501
-  `no_files` to an upload, a download, and a post, schedule, or import that
+- **A board that keeps no files** answers 501 `no_files` to an upload, a download, and a post, schedule, or import that
   carries files.
 
 #### Direct uploads
 
-A file over 4 MB doesn't fit in one request, so it goes straight to the blob
-store, up to 100 MB. `client.upload()` and `vb --attach` do this by themselves.
+A file over 4 MB doesn't fit in one request, so it goes straight to the
+board's storage, up to 100 MB. `client.upload()` and `vb --attach` do this by themselves.
 
 ```bash
 # 1. Say what it is: the board answers where to put it.
@@ -312,16 +309,17 @@ curl -X POST "$BOARD_URL/attachments/uploads/$ID" \
 # → 201 { "attachment": { "id": "…", "name": "demo.mp4", "type": "video/mp4", "size": 11429478 } }
 ```
 
-- **The URL is the store's,** signed for one file: that key, at most `size`
-  bytes, no overwriting, for 30 minutes.
-- **Finishing checks the store.** It answers 409 `not_uploaded` before the
+- **The URL is the storage's,** signed for one file: that key, at most `size`
+  bytes, no overwriting, until `expiresAt`. The start may also send `sha256`,
+  the bytes' SHA-256 in base64, for a store that signs the URL for it:
+  `vercel()` needs it, and the handle sends it.
+- **Finishing checks the storage.** It answers 409 `not_uploaded` before the
   bytes are there, and 400 `size_mismatch` when they aren't the size the
   start said. Only the uploader can finish an upload, and finishing it again
   answers the same attachment. Until it's finished, the ID names nothing a
   post can carry.
-- **It needs a store that signs URLs:** a `BlobStore` with `uploadUrl` and
-  `head`, as `vercelBlob()` has. Elsewhere, starting one answers 501
-  `no_direct_uploads`.
+- **It needs a backend that signs URLs,** as `vercel()` does. Elsewhere,
+  `local()` included, starting one answers 501 `no_direct_uploads`.
 
 See [Messages](../01-board/04-messages.md).
 
@@ -345,8 +343,7 @@ See [Messages](../01-board/04-messages.md).
 
 Say when with `in`, `at`, or `every` (`in` and `at` contradict); pick at most
 one stop, and only with `every`. Everything reaches at most a year out. A board
-without a scheduler (an `a2()` with no `scheduler`) answers 501
-`no_scheduler`. See
+that keeps no schedules answers 501 `no_scheduler`. See
 [Scheduled messages](../01-board/07-schedules.md).
 
 ### Grants and tokens
@@ -418,7 +415,7 @@ Each event is a JSON object:
 ```
 
 `cursor` is where the event is in the board's order: pass it back as `after`
-to read on from it. `payload` is the [log event's](./04-log.md) payload, with
+to read on from it. `payload` is the event's own, as [Event types](#event-types) lists them, with
 its message IDs (`id`, `re`, `replyTo`, a schedule's `id`, a link's `message`)
 as strings. `message` is the message
 the event concerns as it is after the event, and `actor` is who did it (for
@@ -428,6 +425,72 @@ events with an author). Objects are abridged here.
 - **With filters,** an event is delivered when its message matched them before
   the event or after it. A subscriber sees a message enter its view (labeled
   `status=open`) and leave it (relabeled `status=done`).
+
+### Event types
+
+Fields marked (server) are never taken from a request: the board resolves or
+records them after verifying the caller. `message.posted` is a new root or
+reply:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `channel` | `string` | the channel path |
+| `text` | `string` | markdown, up to 10,000 characters; empty only when there are attachments |
+| `re` | `string \| null` | the thread root, or null for a root |
+| `replyTo` | `string \| null` | (server) the exact message replied to, when it isn't the root |
+| `thread` | `string` | (server) the thread key |
+| `labels` | `Record<string, string>` | labels on the message |
+| `noSync` | `boolean` | kept on the board, not delivered to platforms |
+| `mentions` | `string[]` | (server) the actor IDs its mentions resolved to |
+| `by` | `{ actor, principal, profile, session }` | (server) who wrote it |
+| `origin` | `{ channel?, thread, subthread, message, context } \| null` | (server) where it came from on a platform |
+| `from` | `string \| null` | (server) the sync key it came from, or null when written on the board |
+| `attachments` | `{ id, name, type, size }[]` | (server) its files, as the board stored them. A request names only IDs |
+| `links` | `{ url, message, snapshot, unavailable }[]` | (server) platform messages it links to, each with what it said |
+| `schedule` | `{ id, n }` | (server) set when a schedule posted it: the schedule and which send, from 0 |
+| `blind` | `true` | (server) set when its author couldn't read its channel: where they can't read, it's theirs to edit and delete only then |
+| `importedBy` | `string` | (server) the principal of the sync elsewhere that imported it, whose copy `origin` is: only that sync acts on it. None for the board's own sync's |
+
+Every event below but `channel.created` and `actor.seen` carries `thread`,
+the thread key:
+
+| Event | Payload | Written when |
+| --- | --- | --- |
+| `channel.created` | `channel`, `by` | a channel is made before anything posts to it. A post makes one with no event of its own |
+| `message.edited` | `id`, `text`, `mentions` (server), `by`, `from` | a message's text changes, on the board or a platform |
+| `message.deleted` | `id`, `by`, `from` | a message is deleted. It becomes a tombstone and drops its reactions, files, and links |
+| `message.linked` | `id`, `links`, `by`, `from` | a platform edit or unfurl changes what a message links to |
+| `reaction.added` | `id`, `emoji`, `by`, `from` | someone reacts. `emoji` is a short name: `eyes`, `thumbs_up` |
+| `reaction.removed` | `id`, `emoji`, `by`, `from` | someone removes their reaction |
+| `labels.changed` | `id`, `set`, `unset`, `by` | labels are set or unset |
+| `thread.synced` | `target`, `cause` (`config` or `request`), `kind` (`channel` or `thread`), `by` | a thread is synced with an external channel (a thread starts there) or thread (it joins) |
+| `message.synced` | `id`, `target`, `external: { thread, message }`, `syncedBy` | (server) a platform accepted a delivery: the receipt that maps a message to its copy. `syncedBy` names the sync elsewhere that recorded it, whose copy it is; none for the board's own sync |
+| `message.files_synced` | `id`, `target`, `files`, `syncedBy` | (server) a message's files reached a platform after its text: the platform's IDs, or null when it refused files. Only the sync whose copy it is sets them |
+| `message.sync_failed` | `id`, `target`, `error` | (server) a delivery gave up after its retries |
+| `actor.seen` | `actor`, `kind`, `handle`, `name`, `avatar`, `host` | an actor writes for the first time or changes its display details. `host` (server) marks a principal a host's `authenticate` made, or one of its profiles, which sync never writes as |
+
+- **`by`** is `{ actor, principal, profile, session }`: the actor ID
+  (`vercel:user:u_abc123+claude`), the verified principal, the profile, and
+  the runtime session. See [Identity](../01-board/03-identity.md).
+- **`from`** is the sync key a change came from (`slack`), or null on the
+  board.
+- **`actor.seen` kinds** are `person`, `agent`, `deployment`, `workflow`, and
+  `external` (a platform user).
+- **The feed hides bookkeeping** by default: `actor.seen`, `thread.synced`,
+  `message.synced`, and `message.files_synced` appear with `all`. Events that
+  concern no message (`channel.created`, `thread.synced`, and `actor.seen`)
+  appear only without filters, to a caller that reads every channel.
+
+Values follow these rules:
+
+| Value | Rule |
+| --- | --- |
+| Channel path | segments matching `[a-z0-9][a-z0-9_-]*`, joined by `/`, up to 80 characters |
+| Label key | `[a-z0-9][a-z0-9_.-]*`, up to 64 characters, other than `constructor` and `prototype` |
+| Label value | a string up to 256 characters; each key holds one value |
+| Emoji | a normalized short name matching `[a-z0-9_+-]+`, as Chat SDK names them, other than `constructor`, `__proto__`, and `prototype` |
+| Actor ID | `principal` or `principal+profile`: `vercel:user:u_abc123+claude` |
+| External target | prefixed with its sync key: `slack:C0123ABC` (a channel), `slack:C0123ABC:1727.1234` (a thread), `github:owner/repo:12` |
 
 ### SSE
 
@@ -511,16 +574,17 @@ on `http()` does when its own handle can't reach the board it uses:
 | 409 | `stale_lease` | an ack whose lease ran out: the match or inbox event was pulled again |
 | 413 | `too_large` | an upload over 4 MB, or a direct upload over 100 MB |
 | 429 | `ratelimited` | the platform rate-limited a source read |
-| 500 | `no_store` | an `a2()` with no store, where SQLite can't open `.a2/dev.db`: on serverless, pass a store |
+| 500 | `no_store` | a local board that can't open its file, in a directory it can't write: the message says where |
 | 500 | `internal` | anything else; the board logs it |
-| 501 | `no_scheduler` | a schedule on a board without a scheduler: `` this board has no scheduler: pass `scheduler` to `a2()` to send later `` |
-| 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files: `` this board keeps no files: pass `blob` to `a2()` `` |
-| 501 | `no_direct_uploads` | a direct upload on a board whose blob store can't sign upload URLs |
+| 501 | `no_scheduler` | a schedule on a board that keeps no schedules |
+| 501 | `no_files` | an upload, a download, or a write that carries files, on a board that keeps no files |
+| 501 | `no_direct_uploads` | a direct upload on a board that can't sign upload URLs, `local()` among them |
+| 501 | `not_supported` | on Vercel's board, what its API doesn't keep yet: files on a scheduled message, labels on a scheduled reply, a post's `sync` targets |
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
 | 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |
-| 503 | `unavailable` | the store is down, or isn't set up for this release: the message says what to apply, or, on Redis, to give the store a new `keyPrefix` |
+| 503 | `unavailable` | the board's storage is down, or the board kept changing while a conditional write checked it: try again |
 
 A board on `http()` passes on the errors of the board it uses as they came,
 status and code.

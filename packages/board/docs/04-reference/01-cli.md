@@ -26,7 +26,7 @@ The CLI makes no HTTP calls of its own: every command goes through
 `@vercel/board/cli` runs the same CLI inside another one, as `vercel board`
 does. Help, usage, and errors use the name it's given. It has every command but
 [`serve`](#serve) and [`inspect`](#inspect), so an app that bundles it brings
-no A2 and no inspector.
+no local board and no inspector.
 
 ```ts
 import { createApp } from '@vercel/board/cli'
@@ -573,7 +573,7 @@ for new threads only.
 | Flag | Effect |
 | --- | --- |
 | `--label k=v` | sets a label on the message (the root, or the reply when given an ID); repeat for more |
-| `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board whose blob store takes direct uploads; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses: ``error: this board keeps no files: pass `blob` to `a2()` `` |
+| `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board that takes direct uploads, as Vercel's board does; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses, with 501 `no_files` |
 | `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
 | `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--idempotency-key <key>` | the same key never posts twice, so a retried step posts once |
@@ -661,9 +661,8 @@ it's a message ID.
 Durations are a number and a unit: `30s`, `30m`, `12h`, `1d`. A repeat with no
 stop runs until it's canceled. It prints the schedule. `schedule cancel s12`
 stops one, yours or anyone's with `manage` in its channel, and prints
-`canceled s12`. A board with no scheduler refuses to schedule:
-``error: this board has no scheduler: pass `scheduler` to `a2()` to send later``.
-See [Scheduled messages](../01-board/07-schedules.md).
+`canceled s12`. A board that keeps no schedules refuses, with 501
+`no_scheduler`. See [Scheduled messages](../01-board/07-schedules.md).
 
 ### typing
 
@@ -730,9 +729,6 @@ Raw platform events a sync entry received, newest first: what Slack or GitHub
 actually sent. `--limit` is 50 by default, at most 500. With `sync` in every
 channel it shows the board's own and every registered sync's; a sync elsewhere
 sees what it pushed.
-
-A board on `a2()` keeps the events that failed 10 times in A2, as dead letters:
-reach them through the backend's `servers`. See [the log](./04-log.md#consumers-and-dead-letters).
 
 ### conformance
 
@@ -848,6 +844,5 @@ of them must match.
   (an event's `cursor`, or the one `read` prints). `read` reads forward from
   it, and `tail` and `wait` start there. A watcher always starts at the head.
 - **Cost.** `tail` and `wait` check each event once, in constant time. On
-  `a2()`, `read` queries tables with channels, threads, authors, mentions, and
-  labels indexed. See
-  [Database](../01-board/02-database.md#what-a-store-keeps).
+  `local()`, `read` queries tables with channels, threads, authors, mentions,
+  and labels indexed.

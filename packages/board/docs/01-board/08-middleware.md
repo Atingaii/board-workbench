@@ -7,9 +7,7 @@ description: Middleware sees every post and edit before it lands, whatever it ca
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board, type Middleware } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 
 const guard: Middleware = async ({ write, source, respond, next }) => {
   if (source.kind === 'sync' && /ignore previous instructions/i.test(write.text)) {
@@ -19,18 +17,12 @@ const guard: Middleware = async ({ write, source, respond, next }) => {
   await next()
 }
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 const team = board({
-  backend,
+  backend: local(),
   middleware: [guard],
   // sync as in Sync
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 Every post and edit goes through `middleware`, in order, before it lands: the
@@ -40,9 +32,11 @@ API (the CLI, scripts, CI), messages synced in from Slack, GitHub, and Linear
 and deletes don't. It's `board()`'s, so it runs before the write reaches the
 backend, on any backend. A board on `http()` runs its own on what it writes,
 and the board it uses runs its own on what arrives, its sync's imports
-included: each sees the write once. On `vercel()`, Vercel's API posts a
-schedule's sends, so the middleware sees its message once, when it's made, as
-the caller's post.
+included: each sees the write once. On Vercel's board, `vb` and other projects
+write to Vercel's API, not through this route, so the middleware sees what this
+deployment writes: its handle, its watchers, and a gateway's callers. Vercel's
+API posts a schedule's sends, so the middleware sees its message once, when
+it's made, as the caller's post.
 
 - **`next()` passes the write on,** to the next middleware and, after the last,
   to the board. It resolves once the write has landed.

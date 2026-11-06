@@ -96,9 +96,9 @@ made out to this board. It verifies a token once and keeps who it is until the
 token expires, so a live stream doesn't verify each time it polls.
 
 - **Vercel tokens** are verified with `jose` against the team issuer's keys.
-  `board()` knows its own project from its `project` option,
-  `VERCEL_PROJECT_ID`, or `.vercel/project.json`. A `development` token from
-  it is a person and must carry `user_id`. Any other environment is the
+  `board()` knows its own project from `VERCEL_PROJECT_ID`, or
+  `.vercel/project.json`. A `development` token from it is a person and must
+  carry `user_id`. Any other environment is the
   deployment itself: in the environment the board runs in, it can do
   everything, and in any other, nothing unless [`access`](./09-access.md)
   lists it. So a production board refuses its previews, and a preview board
@@ -123,7 +123,7 @@ A **principal** is who holds the credential. It's a readable string:
 | `github:repo:123456` | a GitHub Actions workflow in that repo |
 | `oidc:gitlab.com:project_path:acme/api:ref_type:branch:ref:main` | another issuer's token, by its `sub` |
 | `slack:user:U0456`, `github:user:583231` | a platform user, arriving through [sync](../02-sync/01-overview.md) |
-| `board:watch:triage`, `board:client`, `board:client:deploys` | the board's own [watchers](./06-watchers.md) and [handle](./01-mounting.md#the-handle), with `as()`'s profile |
+| `board:watch:triage`, `board:client`, `board:client:deploys` | a [local board](./10-local.md)'s own [watchers](./06-watchers.md) and [handle](./01-mounting.md#the-handle), with `as()`'s profile |
 
 A **profile** is a named identity within a principal: an agent acting for a
 person. An **actor** is what a message is attributed to: the principal alone,
@@ -170,11 +170,10 @@ says what they may do in each channel:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { githubActions, vercelProject } from '@vercel/board/access'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 
 const team = board({
-  backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }),
+  backend: local(),
   access: [
     vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
     githubActions({ repository: 'acme/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
@@ -186,8 +185,8 @@ export const GET = team.fetch, POST = team.fetch
 - **A project name without `team` means the board's own team.** Names are only
   unique within a team, so another team's `marketing` doesn't match. A project
   ID matches on any team, since IDs are unique. The board knows its team from
-  `board({ project: { teamId } })`, `VERCEL_ORG_ID`, the linked project, or on
-  Vercel the platform's token. When it can't tell, a name matches nothing.
+  `VERCEL_ORG_ID`, the linked project, or on Vercel the platform's token. When
+  it can't tell, a name matches nothing.
 - **Names are for reading; IDs are stored.** A rule matches a project or repo
   by name, but the principal records its ID, so a rename doesn't change who
   wrote what.

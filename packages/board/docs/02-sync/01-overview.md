@@ -24,7 +24,7 @@ teams), each mapped to a board channel or to a function of your own.
 Sync runs in `board()`, wherever the board lives. It keeps its records on the
 backend through routes every backend answers: imports as platform authors,
 delivery receipts, lookups by platform ID, and an inbox of platform events. So
-it works the same on `a2()` and on a board on `http()`: see
+it works the same on `local()` and on a board on `http()`: see
 [On a board elsewhere](#on-a-board-elsewhere).
 
 ## Configure it
@@ -33,19 +33,12 @@ Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
+import { local } from '@vercel/board/local'
 import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
 
 const team = board({
-  backend,
+  backend: local(),
   sync: {
     // A Vercel Connect connector, and what each event does.
     slack: slack('slack/acme', channels({
@@ -58,25 +51,16 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
-On `a2()`, sync runs on two A2 consumers, `board-inbox` in and `board-sync`
-out. Without a scheduler they still run, in the request that wrote, but a
-delivery or an import that fails waits for the next write to be tried again
-(see [Without a scheduler](../01-board/01-mounting.md#without-a-scheduler)), so
-a production board passes one. Mount the backend's `scheduler` in a route of
-its own, outside the board's catch-all:
+> [!NOTE]
+> Vercel's board doesn't run sync yet: on it, `board({ sync })` throws when it's
+> created. A board with `sync` runs on [`local()`](../01-board/10-local.md), in a
+> long-running process, whose timers retry a delivery or an import that fails.
 
-```ts app/api/a2/scheduler/route.ts
-export { scheduler as POST } from '@/app/api/board/[[...path]]/route'
-```
-
-A Vercel Queues trigger makes that function private, which is why it can't share
-the board's public route. [Mounting](../01-board/01-mounting.md#the-scheduler-route)
-covers the store, the scheduler, and their routes. To pass your own Chat SDK
-adapter instead of a connector, see [Slack](./03-slack.md#your-own-adapter) and
-[GitHub](./04-github.md#setup). Any other Chat SDK adapter syncs through
+To pass your own Chat SDK adapter instead of a connector, see
+[Slack](./03-slack.md#your-own-adapter) and [GitHub](./04-github.md#setup). Any
+other Chat SDK adapter syncs through
 [`chatSdk()`](./06-providers.md#any-chat-sdk-adapter).
 
 ## Sync functions
@@ -205,7 +189,7 @@ export const GET = team.fetch, POST = team.fetch
   imports it there, in order per platform thread.
 - **What the other board's channels say goes out from here.** This board
   subscribes for sync beside its watchers, and the other board wakes it when
-  there's something to deliver, as it does for [watchers](../01-board/06-watchers.md#on-a-board-on-http).
+  there's something to deliver, as it does for [watchers](../01-board/06-watchers.md#woken-by-the-board).
   Receipts land on the other board.
 - **The other board must let this deployment `sync`** in the channels it syncs,
   and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
@@ -271,10 +255,10 @@ and logs why.
 
 On the way in, the webhook stores each event in the inbox before it answers,
 then sync imports it on the external thread's lane. If storing fails, the
-webhook answers the platform with a 500 so it retries. On `a2()`, a
-[sync function](./02-functions.md) that keeps throwing dead-letters after 10 tries,
-which holds up only that thread's lane in that channel's inbox. A board on
-`http()` gives the event up after 5 tries, as it does a watcher's match.
+webhook answers the platform with a 500 so it retries. On `local()`, a
+[sync function](./02-functions.md) that keeps throwing is given up on after 10
+tries, which holds up only that thread's lane in that channel's inbox. A board
+on `http()` gives the event up after 5 tries, as it does a watcher's match.
 
 ## Typing
 
@@ -303,5 +287,5 @@ vb tail --source slack --all              # board events from Slack, delivery re
 registered sync's, since raw events span all of them. It shows a sync elsewhere
 only what it pushed.
 To read a channel the board doesn't sync, see [Read on demand](./03-slack.md#read-on-demand).
-On `a2()`, each raw event lives in an inbox session per external channel, outside
-the board log; see [the log](../04-reference/04-log.md).
+Raw events live in an inbox per external channel, apart from the board's
+events, so they never reach a tail.

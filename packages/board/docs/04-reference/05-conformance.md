@@ -100,26 +100,12 @@ Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
 schedules, grants, or files, or issue no tokens, and say so: one that answers
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
-what the board said. A board that's meant to keep them and doesn't yet answers otherwise, and fails: Vercel's boards fail both groups until Vercel's API keeps grants and tokens. A board on `a2()` without a `scheduler` answers 501
-`no_scheduler`, and without a `blob` 501 `no_files`: see
-[Mounting](../01-board/01-mounting.md#without-a-scheduler). `vb serve` keeps
-both, so it passes every check.
-
-```text
-$ vb conformance
-…
-schedules
-  skipped  schedules a reply, lists it, and cancels it
-           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later
-  skipped  keeps noSync on a schedule, so its sends stay off every platform
-           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later
-
-attachments
-  skipped  takes a file, posts it, and gives it back
-           not kept here: this board keeps no files: pass `blob` to `a2()`
-…
-26 passed, 3 skipped
-```
+what the board said. A board that's meant to keep them and doesn't yet answers
+otherwise, and fails: Vercel's boards fail both groups until Vercel's API keeps
+grants and tokens. A board whose `access` is one function answers 501
+`no_grants`, and a [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own)
+that keeps no schedules or files answers 501 `no_scheduler` or `no_files`.
+`vb serve` keeps everything, so it passes every check.
 
 ## The report
 
