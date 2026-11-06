@@ -158,13 +158,6 @@ const SCAN_PAGES = 10
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
-/**
- * A team's board in Vercel's API by its ID, as its discovery names it and `vb --url` takes it,
- * with `<ID>` in place of one: what an ambiguous name's hint offers. `idUrlIn` finds it there.
- */
-const idUrl = (origin: string, teamId: string) => `${origin}/v1/messageboard/boards/<ID>?teamId=${encodeURIComponent(teamId)}`
-export const idUrlIn = (hint: string): string | null => /https:\/\/\S+\/v1\/messageboard\/boards\/<ID>\?teamId=[\w%-]+/.exec(hint)?.[0] ?? null
-
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
 
 /** What a caller board() verified may do. Null for this deployment's own code, which may do what its credentials may. */
@@ -306,25 +299,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
    * The board named `name` in the team: the one the API lists for it. Where it lists none, this
    * project's own code makes it (granted to the project, in its environment), and so does a person
    * who asks to (`ensure`); anyone else is told there's none they can see. Names are unique across
-   * the team's boards, the ones you can't see included. Older boards can share a name, and then none
-   * is picked.
+   * the team's boards, the ones you can't see included.
    */
   async function boardNamed(who: Who, name: string): Promise<string> {
     if (!/^[^/]{1,64}$/.test(name))
       throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(name)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
-    // One answer holds every board with the name, whatever its case.
+    // One answer holds the board with the name, whatever its case. Names are unique from now on; of
+    // the few older boards that share one, the API lists the oldest first, and that's the one.
     const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
-    if (boards.length > 1) {
-      // Their IDs as the API gave them, where they look like IDs: what picks one.
-      const ids = boards.map((found) => found.id).filter((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id))
-      // On the team this board is on, which a URL has to name: another one's default team is another.
-      const team = await teamId()
-      const id = team?.startsWith('team_') ? team : (await self(who)).teamId
-      throw new HttpError(409, 'ambiguous_board_name', `This team has ${boards.length} boards named ${name}${ids.length === boards.length ? `: ${ids.join(', ')}` : ''}.`, {
-        hint: `Give each a name of its own in Vercel's API, or reach one by its URL with vb --url: ${idUrl(origin, id)}`,
-        origin: 'handle',
-      })
-    }
     if (boards[0]) return boards[0].id
     const { principal } = (await self(who)).actor
     if (principal.type !== 'project' && !binding?.ensure)
@@ -339,14 +321,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(`board ${name}`, principal)
       // Names are unique across the team's boards, private ones included: this one is someone else's to show.
       if (error instanceof HttpError && error.code === 'board_name_taken')
-        throw new HttpError(409, 'board_name_taken', `there's a board named ${name} you can't see.`, { hint: 'Ask someone who can see it for access.', origin: 'handle' })
+        throw new HttpError(409, 'board_name_taken', `the board name ${name} is taken.`, { hint: 'Pick another name, or ask whoever can see it for access.', origin: 'handle' })
       throw error
     }
   }
 
   /** A project a board's grants don't let in: they were narrowed, since every project on the team gets in by default. */
   const notLetIn = (board: string, principal: ApiPrincipal) =>
-    new HttpError(403, 'board_not_granted', `${board} doesn't let this project in${principal.type === 'project' ? ` (${principal.projectId}, ${principal.environment})` : ''}.`, {
+    new HttpError(403, 'board_not_granted', `this project has no access to ${board}${principal.type === 'project' ? ` (${principal.projectId}, ${principal.environment})` : ''}.`, {
       hint: 'Someone who manages the board can grant it.',
       origin: 'handle',
     })
