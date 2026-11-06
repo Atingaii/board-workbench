@@ -86,6 +86,8 @@ export type BoardBinding = {
   name: string | null
   /** Whose board it is, as `board({ team })` says it, by the team's ID or slug: null for the team the environment finds. */
   team: string | null
+  /** Whether `board({ name, ensure })` asks to make the board `name` names, when the team has none of that name. */
+  ensure: boolean
   /** What runs on this board's events, by ID: this project's watchers, and sync's outbound at `SYNC` when it syncs. */
   subscriptions: Record<string, Subscription>
   /**
