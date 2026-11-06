@@ -372,8 +372,12 @@ export function createBoardClient(options: ClientOptions) {
       // A grant that already reaches it would still let in whoever it names, past the lock.
       const reaching = async () =>
         (await call<{ grants: GrantView[] }>('GET', '/grants')).grants.filter((grant) => Object.keys(grant.can).some((at) => at === path || at.startsWith(pattern)))
-      const granted = (grants: GrantView[]) => {
-        const named = grants.map((grant) => grant.id)
+      const granted = (grants: GrantView[], mine: GrantView[] = []) => {
+        // Its own grants, changed while it was made, are revoked by now: there's nothing to revoke.
+        const changed = grants.filter((grant) => mine.some((ours) => ours.id === grant.id)).map((grant) => grant.id)
+        if (changed.length === grants.length)
+          return new BoardError('channel_granted', `${changed.join(' and ')} changed while ${path} was being made, so a private ${path} wouldn't be yours alone: nothing was made.`, 409)
+        const named = grants.filter((grant) => !changed.includes(grant.id)).map((grant) => grant.id)
         const list = named.length === 1 ? named[0]! : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
         return new BoardError('channel_granted', `${list} already ${named.length === 1 ? 'grants' : 'grant'} in ${path}, so a private ${path} wouldn't be yours alone: nothing was made.`, 409, {
           // The message names them all; one command fits only one.
@@ -403,7 +407,7 @@ export function createBoardClient(options: ClientOptions) {
       const raced = others(await reaching(), [own.grant])
       if (raced.length > 0) {
         await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
-        throw granted(raced)
+        throw granted(raced, [own.grant])
       }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
       // Once the lock is there, no one it shuts out can grant themselves past it, so this listing is
@@ -412,7 +416,7 @@ export function createBoardClient(options: ClientOptions) {
       const late = others(await reaching(), [own.grant, closed.grant])
       if (late.length > 0) {
         for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
-        throw granted(late)
+        throw granted(late, [own.grant, closed.grant])
       }
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       return { ...made, grants: [own.grant, closed.grant] }
