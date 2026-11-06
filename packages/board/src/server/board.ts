@@ -21,9 +21,10 @@ export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
    */
   name?: string
   /**
-   * With `name`: makes that board when the team has none of that name, as a deployment's
-   * `board({ name })` always does. A person's `board({ name })` only finds one, unless this says to
-   * make it.
+   * With `name`: whether to make that board when the team has none by that name, whoever calls (a
+   * deployment, or a person: `next dev` with a login, a script). It does by default; `ensure: false`
+   * only finds one, and a name the team has none for fails with 404 `no_board`. `vb` passes false
+   * unless `--ensure` is given, so a typo at a terminal makes no board.
    */
   ensure?: boolean
   /**
@@ -242,7 +243,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   const binding: BoardBinding = {
     name: options.name ?? null,
     team: options.team ?? null,
-    ensure: options.ensure ?? false,
+    ensure: options.ensure ?? true,
     subscriptions,
     run: async (id, event, meta) => (await server()).run(id, event, meta),
     receive: async (key, item, meta) => (await server()).receive(key, item, meta),
