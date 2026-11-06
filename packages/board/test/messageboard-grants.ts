@@ -186,7 +186,7 @@ export function fakeGrants(options: {
   function decide(who: Who, target: string) {
     // Something other than everyone has to let it in: a person's place on the team, or a grant that names it.
     const admitted = (who.kind === 'user' && isMember(who.userId)) || [...grants.values()].some((grant) => grant.principals.some((principal) => principal.kind !== 'everyone' && names(principal, who, false)))
-    const nothing = { pattern: null, level: null, grants: [] as Grant[], capped: null as string | null, can: [] as Permission[] }
+    const nothing = { pattern: null, over: [] as string[], level: null, grants: [] as Grant[], capped: null as string | null, can: [] as Permission[] }
     if (!admitted) return nothing
     const candidates: { grant: Grant; level: Level; pattern: string }[] = []
     for (const grant of grants.values()) {
@@ -196,7 +196,7 @@ export function fakeGrants(options: {
       for (const pattern of Object.keys(grant.can)) if (covers(pattern, target)) candidates.push({ grant, level, pattern })
     }
     if (candidates.length === 0) return nothing
-    const pattern = candidates.map((candidate) => candidate.pattern).sort((a, b) => specificity(b) - specificity(a))[0]!
+    const [pattern, ...over] = [...new Set(candidates.map((candidate) => candidate.pattern))].sort((a, b) => specificity(b) - specificity(a)) as [string, ...string[]]
     const at = candidates.filter((candidate) => candidate.pattern === pattern)
     const level = at.map((candidate) => candidate.level).sort((a, b) => LEVEL[a] - LEVEL[b])[0]!
     const deciding = at.filter((candidate) => candidate.level === level)
@@ -209,7 +209,7 @@ export function fakeGrants(options: {
       can = can.filter((permission) => permission === 'read')
       capped = 'viewer'
     }
-    return { pattern, level, grants: deciding.map((candidate) => candidate.grant), capped, can }
+    return { pattern, over, level, grants: deciding.map((candidate) => candidate.grant), capped, can }
   }
 
   const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'OWNER'
@@ -303,7 +303,7 @@ export function fakeGrants(options: {
         if (other) mayChange(who, ['*'], 'explaining what someone else may do')
         const decided = decide(other ?? who, channel)
         const shown = manages(who, '*') ? decided.grants : []
-        return { channel, pattern: decided.pattern, level: decided.level, grants: shown.map(viewOf), rule: null, capped: decided.capped, can: decided.can }
+        return { channel, pattern: decided.pattern, over: decided.over, level: decided.level, grants: shown.map(viewOf), rule: null, capped: decided.capped, can: decided.can }
       }
       if ((found = /^\/grants\/([^/]+)$/.exec(rest)) && method === 'PATCH') {
         const grant = grants.get(decodeURIComponent(found[1]!))

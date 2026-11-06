@@ -768,6 +768,7 @@ describe('vercel()', () => {
     expect(await jb.explain('security/incidents', { user: 'bob@acme.com' })).toEqual({
       channel: 'security/incidents',
       pattern: 'security/',
+      over: ['*'],
       level: 'principal',
       grants: [updated.grant],
       rule: null,
