@@ -97,9 +97,9 @@ export function principalsIn(tokens: readonly OptionToken[], prefixes: readonly 
   return started.map((one) => ({ prefix: one.prefix, principal: inputOf(one) }))
 }
 
-/** A principal as the board takes it. A project's environments are production when left out, except on a removal, which goes by who it is. */
+/** A principal as the handle takes it, which makes a project's environments production when they're left out. */
 function inputOf(started: Started): PrincipalInput {
-  const environments = started.environments ?? (started.prefix === 'remove-' ? undefined : ['production'])
+  const { environments } = started
   const value = started.value!
   switch (started.kind) {
     case 'user':

@@ -636,6 +636,10 @@ function failureOf(error: unknown): Failure {
         return { ...own('platform', 'api_error'), message: "Couldn't tell which team's board to use.", details: [message] }
       case 'upload_failed':
         return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
+      case 'channel_exists':
+        return own('conflict', 'channel_exists')
+      case 'no_own_principal':
+        return own('usage', 'no_own_principal')
       case 'port_taken':
         return own('conflict', 'port_taken', [{ instruction: 'Pick another port', argv: [...cli(), current.command ?? 'serve', '--port', '<PORT>'] }])
     }

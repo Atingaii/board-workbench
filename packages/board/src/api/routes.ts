@@ -514,15 +514,22 @@ export type ScheduleInput = z.input<typeof ScheduleBody>
 export type ScheduleBodyOutput = z.output<typeof ScheduleBody>
 export type SchedulesQueryInput = z.input<typeof SchedulesQuery>
 /** A principal as `createGrant` and `updateGrant` take it. */
+/**
+ * A principal as a handle takes it. A project's environments, and every project's, are production
+ * when left out, so the board always gets them; a principal to remove goes by who it is, and keeps
+ * none.
+ */
 export type PrincipalInput = z.input<typeof PrincipalInput>
-/** A grant's `can`: each channel pattern and what it gives, `'all'` or a list, `[]` for none. */
-export type GrantCan = WrittenCan
+/** What a grant gives at a pattern, as a handle takes it: `'all'`, `'none'`, or permissions. `'none'` is `[]` on the wire. */
+export type CanAt = 'all' | 'none' | readonly Permission[]
+/** A grant's `can`, as a handle takes it: each channel pattern and what it gives. */
+export type GrantCan = Readonly<Record<string, CanAt>>
 /** What `createGrant` takes. */
 export type GrantInput = { principals: readonly PrincipalInput[]; can: GrantCan }
 /** What `updateGrant` takes: principals to add, principals to remove (by who they are, environments aside), and a `can` that replaces the grant's. */
 export type UpdateGrantInput = { add?: readonly PrincipalInput[]; remove?: readonly PrincipalInput[]; can?: GrantCan }
-/** What `token` takes: `can` as `access` writes it. */
-export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan }
+/** What `token` takes: `can` as `access` writes it, with `'none'` for a pattern it may do nothing in. */
+export type TokenInput = Omit<z.input<typeof TokenBody>, 'can'> & { can?: AccessCan | GrantCan }
 export type SchedulesQueryOutput = z.output<typeof SchedulesQuery>
 
 /** A scheduled message. It posts as `by`, its creator; each message it posts carries `schedule: { id, n }`. */

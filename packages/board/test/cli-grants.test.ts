@@ -151,10 +151,11 @@ describe('cli grants', () => {
   it('makes a private channel and the two grants that close it, in one request', async () => {
     const made = await vb(['channels', 'create', 'vault', '--private'])
     expect(made).toMatchObject({ code: 0, stderr: '' })
-    const [channel, lock, own] = made.stdout.trimEnd().split('\n')
+    // The channel, then the grant that lets you in, then the one that closes it to everyone else.
+    const [channel, own, lock] = made.stdout.trimEnd().split('\n')
     expect(channel).toBe('created channel vault')
-    expect(lock).toMatch(/^created g\d+  --everyone  vault\/=none$/)
     expect(own).toMatch(/^created g\d+  --user u_julian  vault\/=all$/)
+    expect(lock).toMatch(/^created g\d+  --everyone  vault\/=none$/)
     const again = await vb(['channels', 'create', 'vault', '--private', '--json'])
     expect(again.code).toBe(1)
     expect(JSON.parse(again.stderr)).toMatchObject({ reason: 'channel_exists' })
