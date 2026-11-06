@@ -272,8 +272,8 @@ function build(options: A2Options, binding: BoardBinding) {
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers: [inbound],
   })
-  // Who the board trusts beside its code's rules: grants, and the tokens it issued.
-  const access = createTrust({ store: log, issuers: () => binding.issuers(), accessNow: (principal, grants) => binding.accessNow(principal, grants) })
+  // Who the board trusts beside its defaults: grants, and the tokens it issued.
+  const access = createTrust({ store: log, accessNow: (principal, grants) => binding.accessNow(principal, grants), team: async () => (await binding.project()).teamId })
   const inboxes = inboxServer.session(INBOXES_SESSION)
   /** The inboxes this instance knows have an `inbox.opened`, so most pushes write nothing more. */
   const opened = new Set<string>()

@@ -1,14 +1,13 @@
-import type { Method, Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
+import type { Protocol } from '../api/protocol.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
-import { derivedId, sha256 } from '../client/ids.ts'
+import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import { compileAccess, parsePattern, PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
-import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
-import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
+import { compileAccess, parsePattern, PERMISSIONS, type AccessSummary, type Permission } from './access.ts'
+import { type Backend, type BoardBinding, type Caller, type ProtocolMethods } from './backend.ts'
 import { fileName, mediaType } from '../contract/files.ts'
-import { badRequest, forbidden, HttpError, json, notFound } from './errors.ts'
+import { badRequest, HttpError, json, notFound } from './errors.ts'
 import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
 import { compileWatcher } from './watch-spec.ts'
@@ -218,13 +217,8 @@ function expiryOf(at: unknown): string | null {
   return null
 }
 
-/** What a caller board() verified may do. Null for this deployment's own code, which may do what its credentials may. */
-const accessOf = (caller: Caller): Access | null => ('identity' in caller ? caller.identity.principal.access : null)
-
-/** A verified caller's grant, which the API can't check: it sees this deployment's credentials. */
-function need(access: Access | null, permission: Permission, channel: string): void {
-  if (access && !access.can(permission, channel)) throw forbidden(`this token can't ${permission} in ${channel}`)
-}
+/** What a caller board() verified gets: board() serves no requests for a board on Vercel's, so it never sends one. */
+const servesNone = () => new HttpError(404, 'not_found', "this board uses Vercel's, and answers only wake-ups and webhooks")
 
 const apiKind = (kind: ApiActorView['kind']): ActorView['kind'] => (kind === 'app' ? 'workflow' : kind)
 
@@ -461,14 +455,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
   /** A channel to post in, made the first time something posts to it, as on any board. */
   const channelToPost = async (who: Who, name: string): Promise<ApiChannel> => (await ensureChannel(who, name)).channel
-  /** The channels a filter names that `access` reads: one, a channel and those under it (`dev/`), or every one. */
-  async function channelsFor(who: Who, filter: string | undefined, access: Access | null): Promise<ApiChannel[]> {
-    const readable = (channel: ApiChannel) => access === null || access.readable(channel.name)
+  /** The channels a filter names: one, a channel and those under it (`dev/`), or every one. */
+  async function channelsFor(who: Who, filter: string | undefined): Promise<ApiChannel[]> {
     if (filter !== undefined && !filter.endsWith('/')) {
       const found = await channelNamed(who, filter)
-      return found && readable(found) ? [found] : []
+      return found ? [found] : []
     }
-    const listed = (await loadChannels(who, true)).filter(readable)
+    const listed = await loadChannels(who, true)
     if (filter === undefined) return listed
     const path = filter.slice(0, -1)
     return listed.filter((channel) => channel.name === path || channel.name.startsWith(filter))
@@ -483,12 +476,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw error
     }
   }
-  /** A message `access` may read, and its channel: one it can't is as missing as one that isn't there. */
-  async function readableMessage(who: Who, access: Access | null, id: string, signal?: AbortSignal) {
+  /** A message, and its channel. */
+  async function messageIn(who: Who, id: string, signal?: AbortSignal) {
     const found = await messageById(who, id, signal)
-    const channel = await channelById(who, found.thread.channelId)
-    if (access && !access.readable(channel.name)) throw notFound(`message not found: ${id}`, 'message_not_found')
-    return { ...found, channel }
+    return { ...found, channel: await channelById(who, found.thread.channelId) }
   }
 
   /**
@@ -737,10 +728,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** Who a caller acts as there: its profile and session, beside this deployment's credentials. */
   function whoOf(caller: Caller): Who {
-    if ('identity' in caller) {
-      const avatar = caller.identity.actor.avatar?.startsWith('https://') ? caller.identity.actor.avatar : undefined
-      return { profile: { name: callerProfile(caller.identity.actor.handle, own), ...(avatar ? { avatar } : {}) }, session: null }
-    }
+    if ('identity' in caller) throw servesNone()
     const named = (profile: ProfileOption): Who['profile'] => {
       if (profile === null) return null
       const name = typeof profile === 'string' ? profile : profile.name
@@ -758,25 +746,23 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /** A post's client ID, as the API takes one: its own when it fits, a hash of it when it doesn't. */
   const clientIdOf = async (id: string) => (CLIENT_ID.test(id) ? id : `h.${(await sha256(id)).slice(0, 64)}`)
-  /** A gateway caller's post IDs are its own, derived under who it is here, since the API sees this deployment. */
-  const postId = async (caller: Caller, id: string) => clientIdOf('identity' in caller ? await derivedId('board-gateway', caller.identity.principal.id, id) : id)
 
   /** Messages a read covers, newest last: every thread's in the channels it names, or one thread's. */
-  async function collect(who: Who, access: Access | null, filters: Filters, signal: AbortSignal) {
+  async function collect(who: Who, filters: Filters, signal: AbortSignal) {
     let listed: ApiChannel[]
     let threads: { thread: ApiThread; channel: ApiChannel }[]
     if (filters.re !== undefined) {
-      const found = await readableMessage(who, access, filters.re, signal).catch((error: unknown) => {
+      const found = await messageIn(who, filters.re, signal).catch((error: unknown) => {
         if (error instanceof HttpError && error.status === 404) return null
         throw error
       })
       if (!found) return { messages: [], feeds: {}, newest: 0 }
       const { channel } = found
-      if (filters.channel !== undefined && !(await channelsFor(who, filters.channel, access)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
+      if (filters.channel !== undefined && !(await channelsFor(who, filters.channel)).some((c) => c.id === channel.id)) return { messages: [], feeds: {}, newest: 0 }
       listed = [channel]
       threads = [{ thread: found.thread, channel }]
     } else {
-      listed = await channelsFor(who, filters.channel, access)
+      listed = await channelsFor(who, filters.channel)
       threads = (await Promise.all(listed.map(async (channel) => (await threadsOf(who, channel, filters, signal)).map((thread) => ({ thread, channel }))))).flat()
     }
     const feeds = await heads(who, listed)
@@ -995,64 +981,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /** The one channel a read names, when the API can read it directly: not a subtree, and from one of its cursors or now. */
-  async function oneChannel(who: Who, access: Access | null, query: { channel?: string; re?: string; after?: string }): Promise<ApiChannel | null> {
+  async function oneChannel(who: Who, query: { channel?: string; re?: string; after?: string }): Promise<ApiChannel | null> {
     if (query.channel === undefined || query.channel.endsWith('/') || query.re !== undefined) return null
     if (query.after !== undefined && !API_CURSOR.test(query.after)) return null
-    const [channel] = await channelsFor(who, query.channel, access)
+    const [channel] = await channelsFor(who, query.channel)
     return channel ?? null
-  }
-
-  /** Who wrote or reacted in the latest messages of each channel `access` reads. */
-  async function actorsSeen(who: Who, access: Access, signal: AbortSignal): Promise<Set<string>> {
-    const path = await onBoard(who, '/messages')
-    const seen = new Set<string>()
-    for (const channel of await channelsFor(who, undefined, access)) {
-      const { messages } = await api<{ messages: ApiMessage[] }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(PAGE_MAX) }, signal })
-      for (const message of messages) {
-        seen.add(message.createdBy.id)
-        for (const actors of Object.values(message.reactors ?? {})) for (const actor of actors) seen.add(actor)
-      }
-    }
-    return seen
-  }
-
-  /** What a gateway caller does here, as this deployment: never what's the project's own. */
-  function checkCaller(method: Method, caller: Caller): void {
-    if ('identity' in caller && PROJECTS_OWN.has(method)) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: ${method} is the project's own to do there`)
-  }
-
-  /**
-   * The API owns messages and schedules by principal, and sees every caller here as this project:
-   * a caller that is the project (its own deployment's token) changes what it wrote, as on any
-   * board, and anyone else would be changing what the project wrote for others.
-   */
-  /** Whether a caller is this project: the deployment's own code, or a caller verified as its principal. */
-  const isProject = async (caller: Caller, who: Who) => !('identity' in caller) || caller.identity.principal.id === principalId((await self(who)).actor.principal)
-  async function checkOwner(what: string, caller: Caller, who: Who): Promise<void> {
-    if (!(await isProject(caller, who))) throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${what} there`)
-  }
-
-  /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a local board. */
-  async function checkUploader(caller: Caller, who: Who): Promise<void> {
-    await checkOwner('upload', caller, who)
-    const access = accessOf(caller)
-    if (access && !access.anywhere('post') && !access.anywhere('sync')) throw forbidden("this token can't post anywhere, so it can't upload")
-  }
-
-  const meOf = (identity: Identity): Me => {
-    const { principal, author, actor } = identity
-    return {
-      actor: actor.id,
-      principal: principal.id,
-      kind: actor.kind,
-      handle: actor.handle,
-      name: actor.name,
-      avatar: actor.avatar,
-      profile: author.profile,
-      session: author.session,
-      expiresAt: principal.expiresAt?.toISOString() ?? null,
-      can: principal.access.summary(),
-    }
   }
 
   /** A watcher's tail registers with the API as its own: an API watcher, so a match is the API's to make. */
@@ -1160,14 +1093,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     })
   }
 
-  /**
-   * The API keeps one registration per principal, and this board reaches it as its own deployment:
-   * one a caller registered through it would replace the deployment's, and every other caller's.
-   */
-  function ownWatchers(caller: Caller, what: string) {
-    if ('identity' in caller) throw forbidden(`this board registers watchers as its own deployment, so it can't ${what} for you: run them in its config, or register with Vercel's API as yourself`)
-  }
-
   /** This deployment's own: what its config's watchers run as. */
   const deployment: Who = { profile: null, session: null }
   /** This board's config's watchers, which run here when the API wakes it. */
@@ -1229,7 +1154,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       } satisfies Discovery
     },
     async me(caller) {
-      if ('identity' in caller) return meOf(caller.identity)
       const who = whoOf(caller)
       const found = await api<ApiMe>(who, 'GET', '/me')
       const { view: named } = found
@@ -1252,17 +1176,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     async channels(caller) {
       const who = whoOf(caller)
       // The API counts neither messages nor threads in a channel, so a view says nothing of them.
-      const listed: ChannelView[] = (await channelsFor(who, undefined, accessOf(caller)))
+      const listed: ChannelView[] = (await channelsFor(who, undefined))
         .map((channel) => ({ path: channel.name }))
         .sort((a, b) => a.path.localeCompare(b.path))
       return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
     async createChannel(caller, { path }) {
-      checkCaller('createChannel', caller)
-      // As on any board: the answer says whether it was there, so it needs both, whether it was or not.
-      const access = accessOf(caller)
-      need(access, 'read', path)
-      need(access, 'post', path)
       const { created } = await ensureChannel(whoOf(caller), path)
       return { channel: { path }, created }
     },
@@ -1275,26 +1194,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         name: actor.name ?? actor.handle,
         avatar: actor.avatar ?? null,
       }))
-      const cursor = cursorOf({ t: Date.now(), feeds: {} })
-      // The API lists the whole board's. A reader of every channel sees everyone; anyone else, as on
-      // a2(), those it sees where it reads, and itself: here, who wrote or reacted in each readable
-      // channel's latest messages.
-      if (!('identity' in caller) || caller.identity.principal.access.readsAll) return { actors: listed, cursor }
-      const { actor: self, principal } = caller.identity
-      const seen = await actorsSeen(who, principal.access, signal)
-      const shown = listed.filter((actor) => seen.has(actor.id) && actor.id !== self.id)
-      return { actors: [...shown, { id: self.id, kind: self.kind, handle: self.handle, name: self.name, avatar: self.avatar }], cursor }
+      return { actors: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
     async messages(caller, query, signal) {
       const who = whoOf(caller)
-      const access = accessOf(caller)
-      const channel = query.before === undefined ? await oneChannel(who, access, query) : null
+      const channel = query.before === undefined ? await oneChannel(who, query) : null
       if (channel) {
         const page = await channelMessages(who, channel, query, signal)
         return { messages: await Promise.all(page.messages.map((message) => view(who, message, channel.name))), cursor: page.cursor }
       }
       if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
-      const { messages, feeds, newest } = await collect(who, access, query, signal)
+      const { messages, feeds, newest } = await collect(who, query, signal)
       const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
       const before = query.before !== undefined ? await timeOf(who, query.before) : undefined
       const limit = query.limit ?? 50
@@ -1316,7 +1226,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // A filter on what a message says, or who wrote it, reads every message in the channel.
       const byMessage = query.re !== undefined || query.by !== undefined || query.mentions !== undefined || query.text !== undefined || (query.from !== undefined && query.from !== 'board')
       if (byMessage) {
-        const { messages, feeds, newest } = await collect(who, accessOf(caller), query, signal)
+        const { messages, feeds, newest } = await collect(who, query, signal)
         // Each thread with a matching message, by its latest.
         const latest = new Map<string, { thread: ApiThread; channel: ApiChannel; at: number }>()
         for (const { message, thread, channel } of messages) latest.set(thread.id, { thread, channel, at: Math.max(latest.get(thread.id)?.at ?? 0, message.createdAt) })
@@ -1325,7 +1235,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
       // Otherwise the threads say enough: a label is matched on the root, whose labels the API
       // keeps on its thread. A reply's own labels aren't indexed, so they don't find its thread here.
-      const listed = await channelsFor(who, query.channel, accessOf(caller))
+      const listed = await channelsFor(who, query.channel)
       const feeds = await heads(who, listed)
       const label = indexed(query)
       const found = (
@@ -1352,7 +1262,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async message(caller, { id }, signal) {
       const who = whoOf(caller)
-      const { thread, channel } = await readableMessage(who, accessOf(caller), id, signal)
+      const { thread, channel } = await messageIn(who, id, signal)
       const [root, ...replies] = await threadMessages(who, thread.id, signal)
       if (!root) throw notFound(`message not found: ${id}`, 'message_not_found')
       return {
@@ -1363,7 +1273,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async upload(caller, { data, name, type }) {
       const who = whoOf(caller)
-      await checkUploader(caller, who)
       if (data.byteLength === 0) throw new HttpError(400, 'bad_request', 'the file is empty')
       // This deployment's own code (sync's imports among it) holds the bytes already, with no request to fit under.
       if (data.byteLength > IMPORT_BYTES_MAX) throw new HttpError(413, 'too_large', `attachments are at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB`)
@@ -1382,7 +1291,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // A file bigger than a request goes straight to Vercel's storage, on the URL the API signs for its size, type, and digest.
     async uploadStart(caller, { name, type, size, sha256 }) {
       const who = whoOf(caller)
-      await checkUploader(caller, who)
       if (sha256 === undefined) throw new HttpError(400, 'invalid_request', "Vercel's API signs a direct upload for its bytes' SHA-256: send `sha256`, as board's client does")
       const started = await api<{ attachment: ApiAttachment; upload: { url: string; headers: Record<string, string>; expiresAt: number } }>(who, 'POST', await onBoard(who, '/attachments'), {
         body: { operationId: operationId(), name: fileName(name ?? null), type: mediaType(type ?? null), size, sha256 },
@@ -1391,52 +1299,29 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async uploadFinish(caller, { id }) {
       const who = whoOf(caller)
-      await checkUploader(caller, who)
       const { attachment } = await api<{ attachment: ApiAttachment }>(who, 'POST', await onBoard(who, `/attachments/${encodeURIComponent(id)}/complete`))
       return { attachment: fileOf(attachment) }
     },
     async attachment(caller, { id }, signal) {
       const who = whoOf(caller)
-      const access = accessOf(caller)
       const found = await api<{ attachment: ApiAttachment; url: string }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`), signal ? { signal } : {})
-      // The API sees this project, which uploaded every file here: one not posted yet is the project's own,
-      // as an upload is its uploader's, and a caller reads any other only through a message it can.
-      if (access && !found.attachment.messageId) {
-        if (!(await isProject(caller, who))) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
-      } else if (access) {
-        const { message } = await readableMessage(who, access, found.attachment.messageId!, signal).catch((error: unknown) => {
-          if (error instanceof HttpError && error.status === 404) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
-          throw error
-        })
-        // The API reads a deleted message as its tombstone, and still hands this project, its uploader, the file.
-        if (message.deletedAt !== undefined) throw notFound(`no attachment: ${id}`, 'attachment_not_found')
-      }
       const response = await filesFetch(found.url, { redirect: 'error', ...(signal ? { signal } : {}) })
       if (!response.ok || !response.body) throw new HttpError(502, 'download_failed', `Vercel's storage answered ${response.status}`)
       return { attachment: fileOf(found.attachment), data: response.body }
     },
     async post(caller, input, signal) {
-      checkCaller('post', caller)
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
-      const access = accessOf(caller)
-      // Every file here is the project's, which uploaded them all: only the project itself posts them.
-      if (input.attachments?.length) await checkOwner('post files', caller, who)
-      const labeled = Object.keys(input.labels ?? {}).length > 0
-      const clientId = input.id !== undefined ? await postId(caller, input.id) : undefined
+      const clientId = input.id !== undefined ? await clientIdOf(input.id) : undefined
       let made: { thread: ApiThread; message: ApiMessage }
       if (input.channel !== undefined) {
-        need(access, 'post', input.channel)
-        if (labeled) need(access, 'label', input.channel)
         const channel = await channelToPost(who, input.channel)
         made = await api(who, 'POST', await onBoard(who, '/threads'), {
           body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}) },
           signal,
         })
       } else {
-        const { thread, message: to, channel } = await readableMessage(who, access, input.re!, signal)
-        need(access, 'post', channel.name)
-        if (labeled) need(access, 'label', channel.name)
+        const { thread, message: to, channel } = await messageIn(who, input.re!, signal)
         // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
         const after = input.after === undefined ? undefined : locate(input.after)
         if (after !== undefined && after?.threadId !== thread.id) {
@@ -1466,41 +1351,29 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { message: await view(who, made.message, channel.name) }
     },
     async posted(caller, { id }, signal) {
-      checkCaller('posted', caller)
       const who = whoOf(caller)
-      const found = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'GET', await onBoard(who, `/posts/${encodeURIComponent(await postId(caller, id))}`), { signal })
+      const found = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'GET', await onBoard(who, `/posts/${encodeURIComponent(await clientIdOf(id))}`), { signal })
       const channel = await channelById(who, found.thread.channelId)
-      const access = accessOf(caller)
-      if (access && !access.readable(channel.name)) throw notFound(`no post of yours has id ${id}`, 'post_not_found')
       return { message: await view(who, found.message, channel.name) }
     },
     async edit(caller, { id, text, revision }, signal) {
       const who = whoOf(caller)
-      await checkOwner('edit', caller, who)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
-      const access = accessOf(caller)
-      if (access) need(access, 'post', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'PATCH', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}`), { body: { operationId: operationId(), text, ...(revision !== undefined ? { revision } : {}) }, signal })
       return { ok: true }
     },
     async delete(caller, { id, revision }, signal) {
       const who = whoOf(caller)
-      await checkOwner('delete', caller, who)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
-      const access = accessOf(caller)
-      if (access) need(access, 'post', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/delete`), { body: { operationId: operationId(), ...(revision !== undefined ? { revision } : {}) }, signal })
       return { ok: true }
     },
     async react(caller, { id, emoji, remove }, signal) {
-      checkCaller('react', caller)
       const who = whoOf(caller)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
-      const access = accessOf(caller)
-      if (access) need(access, 'react', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/reactions`), {
         body: { operationId: operationId(), emoji, ...(remove ? { remove: true } : {}) },
         signal,
@@ -1508,12 +1381,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { ok: true }
     },
     async label(caller, { id, set, unset, if: expected }, signal) {
-      checkCaller('label', caller)
       const who = whoOf(caller)
       const at = locate(id)
       if (!at) throw notFound(`message not found: ${id}`, 'message_not_found')
-      const access = accessOf(caller)
-      if (access) need(access, 'label', (await readableMessage(who, access, id, signal)).channel.name)
       await api(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(at.threadId)}/messages/${at.sequence}/labels`), {
         // The API checks `if` against the labels in the same write that changes them.
         body: { operationId: operationId(), ...(set ? { set } : {}), ...(unset ? { unset } : {}), ...(expected && Object.keys(expected).length ? { if: expected } : {}) },
@@ -1522,53 +1392,41 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { ok: true }
     },
     // Grants and tokens are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
-    // A caller this board serves gets none of them, since it reaches the API as these credentials.
     async grants(caller, _input, signal) {
-      checkCaller('grants', caller)
       const who = whoOf(caller)
       return api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
     },
     async createGrant(caller, input, signal) {
-      checkCaller('createGrant', caller)
       const who = whoOf(caller)
       return api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
     },
     async revokeGrant(caller, { id }, signal) {
-      checkCaller('revokeGrant', caller)
       const who = whoOf(caller)
       return api<Protocol['revokeGrant']['output']>(who, 'POST', await onBoard(who, `/grants/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
     async tokens(caller, _input, signal) {
-      checkCaller('tokens', caller)
       const who = whoOf(caller)
       return api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
     },
     async createToken(caller, input, signal) {
-      checkCaller('createToken', caller)
       const who = whoOf(caller)
       return api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
     },
     async revokeToken(caller, { id }, signal) {
-      checkCaller('revokeToken', caller)
       const who = whoOf(caller)
       return api<Protocol['revokeToken']['output']>(who, 'POST', await onBoard(who, `/tokens/${encodeURIComponent(id)}/revoke`), { body: { operationId: operationId() }, ...(signal ? { signal } : {}) })
     },
     async schedule(caller, input, signal) {
       if (input.attachments?.length) throw notSupported('files on scheduled messages')
       const who = whoOf(caller)
-      await checkOwner('schedule', caller, who)
-      const access = accessOf(caller)
       const labels = input.labels && Object.keys(input.labels).length ? input.labels : undefined
       let target: { channelId: string } | { threadId: string }
       if (input.channel !== undefined) {
-        need(access, 'post', input.channel)
-        if (labels) need(access, 'label', input.channel)
         target = { channelId: (await channelToPost(who, input.channel)).id }
       } else {
         // The API labels a scheduled thread's root, and posts a scheduled reply with no labels.
         if (labels) throw notSupported('labels on a scheduled reply')
-        const { thread, channel } = await readableMessage(who, access, input.re!, signal)
-        need(access, 'post', channel.name)
+        const { thread } = await messageIn(who, input.re!, signal)
         target = { threadId: thread.id }
       }
       // The API takes whole milliseconds since the epoch: the first send, and the stop.
@@ -1592,10 +1450,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async schedules(caller, query, signal) {
       const who = whoOf(caller)
-      const access = accessOf(caller)
       const filter: Record<string, string | undefined> = { state: query.all ? undefined : 'pending' }
       if (query.re !== undefined) {
-        const found = await readableMessage(who, access, query.re, signal).catch((error: unknown) => {
+        const found = await messageIn(who, query.re, signal).catch((error: unknown) => {
           if (error instanceof HttpError && error.status === 404) return null
           throw error
         })
@@ -1614,19 +1471,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const created = (actor: ApiActor) => by === undefined || (me ? actor.id === me : [actor.id, principalId(actor.principal), actor.profile?.name].includes(by))
       const listed = await all<ApiSchedule>(who, await onBoard(who, '/schedules'), 'schedules', filter, signal)
       const views = await Promise.all(listed.filter((schedule) => created(schedule.createdBy)).map((schedule) => scheduleView(who, schedule)))
-      return { schedules: views.filter((schedule) => access === null || access.readable(schedule.channel)) }
+      return { schedules: views }
     },
     async cancelSchedule(caller, { id }, signal) {
       const who = whoOf(caller)
-      await checkOwner('cancelSchedule', caller, who)
-      const access = accessOf(caller)
-      if (access) {
-        // The API reads no one schedule by its ID: a caller here finds it among the board's.
-        const found = (await all<ApiSchedule>(who, await onBoard(who, '/schedules'), 'schedules', {}, signal)).find((schedule) => schedule.id === id)
-        const channel = found && (await channelById(who, found.channelId))
-        if (!channel || !access.readable(channel.name)) throw notFound(`no schedule: ${id}`, 'schedule_not_found')
-        need(access, 'post', channel.name)
-      }
       const { schedule, canceled } = await api<{ schedule: ApiSchedule; canceled: boolean }>(who, 'POST', await onBoard(who, `/schedules/${encodeURIComponent(id)}/cancel`), {
         body: { operationId: operationId() },
         signal,
@@ -1634,13 +1482,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       return { schedule: await scheduleView(who, schedule), canceled }
     },
     async events(caller, query, signal) {
-      checkCaller('events', caller)
       const who = whoOf(caller)
-      const access = accessOf(caller)
-      const channel = await oneChannel(who, access, query)
+      const channel = await oneChannel(who, query)
       if (channel) return channelEvents(who, channel, query, signal)
       if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
-      const listed = await channelsFor(who, query.channel, access)
+      const listed = await channelsFor(who, query.channel)
       // With no cursor, it starts now, as on any board.
       let position: Position =
         query.after === undefined
@@ -1670,7 +1516,6 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       throw notFound(`this board doesn't run sync entry ${key}`, 'not_synced_here')
     },
     async watchers(caller) {
-      ownWatchers(caller, 'list watchers')
       const who = whoOf(caller)
       const { watchers } = await api<{ watchers: ApiRegistration[] }>(who, 'GET', await onBoard(who, '/watchers'))
       return {
@@ -1686,28 +1531,27 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       }
     },
     async register(caller, body) {
-      ownWatchers(caller, 'register watchers')
       if ((body.sync?.length ?? 0) > 0) throw notSupported('sync')
       return registerAs(whoOf(caller), typeof body.path === 'string' ? { path: body.path, ...(body.branch ? { branch: body.branch } : {}) } : { url: body.url ?? null }, body.watch)
     },
     async matches(caller, query, signal) {
-      ownWatchers(caller, 'pull matches')
       return { matches: await pullAs(whoOf(caller), query, signal) }
     },
     async ack(caller, { id, ...body }) {
-      ownWatchers(caller, 'ack matches')
       await ackAs(whoOf(caller), id, body)
       return { ok: true }
     },
   }
 
   // Any use of the board is when its watchers can register: its URL is known from a request by then.
+  // board() serves no requests here, so every call is this deployment's own code's.
   const starting = Object.fromEntries(
     Object.entries(methods).map(([name, method]) => [
       name,
-      (...args: unknown[]) => {
+      (caller: Caller, ...args: unknown[]) => {
+        if ('identity' in caller) throw servesNone()
         if (binding) void runner.start()
-        return (method as (...input: unknown[]) => unknown)(...args)
+        return (method as (...input: unknown[]) => unknown)(caller, ...args)
       },
     ]),
   ) as unknown as ProtocolMethods
@@ -1716,7 +1560,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     ...starting,
     // Its own routes are wake-ups and registering: who may do what on the board is Vercel's API's to say.
     routes: runner.routes,
-    // The board is Vercel's: a board here serves requests only with an `access` of its own.
+    // The board is Vercel's: a board here answers only wake-ups and webhooks.
     keeps: false,
     // Vercel's API posts each send, so board()'s middleware screens a schedule when it's made.
     sendsSchedulesHere: false,

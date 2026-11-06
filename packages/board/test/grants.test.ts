@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { githubActions, oidc, vercelProject, type Known } from '../src/server/auth.ts'
 import { createServer } from 'experimental-a2/server'
 import { ACCESS_SESSION, accessContract } from '../src/contract/contract.ts'
 import { memory } from '../src/store/memory.ts'
@@ -77,17 +76,6 @@ describe('grants', () => {
     expect((await (await as(workflowToken()))('GET', '/me')).status).toBe(403)
     // A project on the team is let in by g2, and everyone's ci/ is more specific than g2's *.
     expect((await (await as(deploymentToken('web', 'prj_web', 'production')))('GET', '/me')).body.can).toEqual({ '*': ['read', 'post', 'react', 'label'], 'ci/': [] })
-  })
-
-  it("meets the code's rules as the principals they name", async () => {
-    const { person, as } = await setUp({
-      access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'] } }), vercelProject({ project: 'prj_web', can: { '*': ['read'] } })],
-    })
-    await person('POST', '/grants', { principals: [everyone], can: { '*': ['read'], 'ci/': [], 'ci/deploys': [] } })
-    // ci/ is the rule's, as a grant naming the repository would be; ci/deploys only everyone names.
-    expect((await (await as(workflowToken()))('GET', '/me')).body.can).toEqual({ '*': ['read'], 'ci/': ['read', 'post'], 'ci/deploys': [] })
-    // A rule naming a project is closer than g2's every project: at *, it alone decides.
-    expect((await (await as(deploymentToken('web', 'prj_web', 'production')))('GET', '/me')).body.can).toEqual({ '*': ['read'], 'ci/': [] })
   })
 
   it('lets a member grant on * once a channel is closed to everyone, which the grant then leaves closed', async () => {
@@ -290,7 +278,14 @@ describe('grants', () => {
     expect(await refused(`/grants/${id}`, { add: [{ kind: 'all-projects' }] })).toEqual([400, 'invalid_grant'])
   })
 
-  it('matches a GitHub run by its workflow, branch, and event, as githubActions() does', async () => {
+  it('keeps an app by its client ID, and lists it', async () => {
+    const { owner } = await setUp()
+    const made = await owner('POST', '/grants', { principals: [{ kind: 'app', app: 'cl_ship' }], can: { 'ship/': ['post'] } })
+    expect([made.status, made.body.grant?.principals]).toEqual([200, [{ kind: 'app', clientId: 'cl_ship', name: null }]])
+    expect((await owner('GET', '/grants')).body.grants.map((grant: { id: string }) => grant.id)).toEqual(['g1', 'g2', 'g3', made.body.grant.id])
+  })
+
+  it('matches a GitHub run by its workflow, branch, and event', async () => {
     const { person, as } = await setUp()
     await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'basehub-ai/www', workflow: 'deploy.yml', branch: 'main', event: 'push' }], can: { 'ci/': ['post'] } })
     const posts = async (claims: Record<string, unknown>) => (await (await as(workflowToken(claims)))('POST', '/messages', { channel: 'ci', text: 'run' })).status
@@ -383,7 +378,7 @@ describe('grants', () => {
   })
 
   it('refuses an issuer that names the same principals as one a grant trusts', async () => {
-    const board = testBoard({ access: [] })
+    const board = testBoard()
     const person = caller(board.fetch, await personToken())
     const gitlab = (issuer: string) => ({ principals: [{ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['post'] } })
     expect((await person('POST', '/grants', gitlab(OIDC_ISS))).status).toBe(200)
@@ -392,7 +387,7 @@ describe('grants', () => {
   })
 
   it('refuses two issuers that name the same principals within one grant, or added to it', async () => {
-    const { person } = await setUp({ access: [] })
+    const { person } = await setUp()
     const gitlab = (issuer: string) => ({ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } })
     const both = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS), gitlab(`${OIDC_ISS}/`)], can: { 'ci/': ['post'] } })
     expect([both.status, both.body.error.code]).toEqual([400, 'invalid_grant'])
@@ -413,7 +408,7 @@ describe('grants', () => {
   })
 
   it("trusts no stored grant's issuer that names another's principals or is on the board's own network, and nothing else breaks", async () => {
-    const { board, person, as } = await setUp({ access: [] })
+    const { board, person, as } = await setUp()
     // Grants a board refuses now, as one could hold from before it did.
     const log = createServer({ contract: accessContract, store: board.store.log }).session(ACCESS_SESSION)
     for (const issuer of [OIDC_ISS, `${OIDC_ISS}/`, 'https://169.254.169.254'])
@@ -432,26 +427,6 @@ describe('grants', () => {
       expect((await person('POST', '/messages', { channel: 'dev', text: 'still in' })).status).toBe(201)
     } finally {
       vi.unstubAllGlobals()
-    }
-  })
-
-  it("refuses an issuer that names the same principals as one the code's rules trust", async () => {
-    const board = testBoard({ access: [oidc({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: ['read'] })] })
-    const person = caller(board.fetch, await personToken())
-    const { status, body } = await person('POST', '/grants', { principals: [{ kind: 'oidc', issuer: `${OIDC_ISS}/`, claims: { project_path: 'acme/other' } }], can: { '*': ['read'] } })
-    expect([status, body.error.code]).toEqual([400, 'invalid_grant'])
-  })
-
-  it('keeps none on a board whose access is one function, which decides alone', async () => {
-    const board = testBoard({ access: async (principal: Known) => (principal.kind === 'person' ? 'all' : null) })
-    const person = caller(board.fetch, await personToken())
-    for (const [method, path, body] of [
-      ['GET', '/grants', undefined],
-      ['POST', '/grants', { principals: [everyone], can: { '*': ['read'] } }],
-      ['PATCH', '/grants/g1', { can: { '*': ['read'] } }],
-    ] as const) {
-      const answer = await person(method, path, body)
-      expect([method, answer.status, answer.body.error?.code]).toEqual([method, 501, 'no_grants'])
     }
   })
 })

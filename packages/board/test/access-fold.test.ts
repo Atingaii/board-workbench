@@ -22,7 +22,7 @@ function history() {
 describe("the access session's fold", () => {
   it('folds the grants of a log from before grants named principals into nothing, so they reach none made since', () => {
     const { state, at } = history()
-    at(T0, 'grant.set', { issuer: 'github', claims: { repository: 'acme/web' }, can: 'all', by: minter.id })
+    at(T0, 'grant.set', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' }, by: minter.id })
     // Grant 1 was that one; g1 now is the board's own, every person.
     at(T0 + 1, 'grant.revoked', { id: 1, by: minter.id })
     at(T0 + 2, 'grant.created', { principals: [{ kind: 'everyone' }], can: { 'security/': [] }, by: minter.id })

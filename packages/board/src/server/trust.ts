@@ -188,7 +188,7 @@ function principalView(principal: GrantPrincipal): PrincipalView {
     case 'user':
       return { kind: 'user', userId: principal.userId, email: principal.email ?? null }
     case 'project':
-      return { kind: 'project', projectId: principal.projectId, name: principal.name ?? null, environments: [...principal.environments] }
+      return { kind: 'project', projectId: principal.projectId, name: principal.name ?? null, environments: [...principal.environments], teamId: principal.teamId ?? null }
     case 'github':
       return { ...principal, repositoryId: principal.repositoryId ?? null }
     case 'oidc':
@@ -309,7 +309,7 @@ const namesIssuer = (principals: readonly GrantPrincipal[]) => principals.some((
  * name an oidc issuer. A removal goes by who a principal is; an add joins one the grant names
  * already. `issuers` are the ones the board's rules trust.
  */
-async function updated(identity: Identity, state: AccessState, { id, add, remove, can }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn) {
+async function updated(identity: Identity, state: AccessState, { id, add, remove, can }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn, team: string | null) {
   const index = indexOf(id, 'g')
   const row = index === null ? undefined : state.grants[index]
   if (!row) throw notFound(`grant not found: ${id}`, 'grant_not_found')
@@ -324,7 +324,7 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
   }
   for (const input of add ?? []) {
     // Checked against every issuer it would sit beside: its own grant's, and those it adds before it.
-    const added = checkPrincipal(input, [...issuers, ...others, ...grantIssuers([{ principals }])])
+    const added = checkPrincipal(input, [...issuers, ...others, ...grantIssuers([{ principals }])], false, team)
     const at = principals.findIndex((principal) => joined(added, principal) !== null)
     if (at === -1) principals.push(added)
     else principals[at] = joined(added, principals[at]!)!
@@ -342,15 +342,15 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
 
 /**
  * The board's grants and tokens, in session `access` of its log: what a local board answers for them, and
- * what board() checks requests against. `issuers`: the OIDC issuers the board's rules name, which no
- * grant's may share principals with. `accessNow`: what a principal may do now, under board()'s
- * rules and grants, which a token's listing shows.
+ * what board() checks requests against. `accessNow`: what a principal may do now, under board()'s
+ * defaults and the grants, which a token's listing shows.
  */
 export function createTrust(options: {
   store: Parameters<typeof createServer>[0]['store']
-  issuers: () => readonly string[]
   /** What a principal may do now, or under `grants`, the snapshot a grant write appends to. */
   accessNow: (principal: Known, grants?: readonly StoredGrant[]) => Promise<Access | null>
+  /** The board's own Vercel team, where it's known: a project a grant names is kept on it. */
+  team: () => Promise<string | null>
 }) {
   const accessIn: AccessIn = (principal, grants) => options.accessNow(principal, grants)
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
@@ -418,9 +418,10 @@ export function createTrust(options: {
     },
     async createGrant(identity: Identity, body: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
       // Checked against the grants as they are when it lands: another write in between makes it look again.
+      const team = await options.team()
       const [row] = await whileHeadMoves(async () => {
         const { state, index } = await latest()
-        const checked = checkGrant(body, [...options.issuers(), ...grantIssuers(Object.values(state.grants).map(storedGrant))])
+        const checked = checkGrant(body, grantIssuers(Object.values(state.grants).map(storedGrant)), team)
         const before = Object.values(state.grants).map(storedGrant)
         const after = [...before, checked]
         await mayGrant(identity, { changed: checked }, before, after, accessIn)
@@ -433,9 +434,10 @@ export function createTrust(options: {
     },
     async updateGrant(identity: Identity, input: Protocol['updateGrant']['input']): Promise<Protocol['updateGrant']['output']> {
       // On the grant as it is when it lands: an add or a remove in between makes it look again, so none is lost.
+      const team = await options.team()
       const id = await whileHeadMoves(async () => {
         const { state, index } = await latest()
-        const event = await updated(identity, state, input, options.issuers(), accessIn)
+        const event = await updated(identity, state, input, [], accessIn, team)
         await session.append.ifLastIndex(index, event)
         return event.payload.id
       })

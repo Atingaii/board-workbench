@@ -6,7 +6,7 @@ import type { GrantPrincipal } from './auth.ts'
 /** Who asks, as a verified token says, in the terms grants name them by. */
 export type Caller =
   | { kind: 'user'; userId: string }
-  | { kind: 'project'; projectId: string; environment: string }
+  | { kind: 'project'; projectId: string; environment: string; teamId?: string }
   | { kind: 'github'; repository: string; repositoryId?: string; workflowRef?: string; ref?: string; event?: string }
   | { kind: 'oidc'; issuer: string; claims: Readonly<Record<string, unknown>> }
   | { kind: 'app'; clientId: string }
@@ -19,25 +19,24 @@ export type GrantFacts<G extends DecidingGrant = DecidingGrant> = {
   caller: Caller
   /** The board's grants, as they are, or as a write is about to leave them. */
   grants: readonly G[]
-  /** Whether a user is a person on the board's team: `all-users` names them, and that lets them in. None is, without it. */
-  member?: (userId: string) => boolean
-  /** Whether a project is on the board's team: `all-projects` names it. None is, without it. */
-  teamProject?: (projectId: string) => boolean
-  /** Whether an app is installed on the board's team: `all-apps` names it. None is, without it. */
-  teamApp?: (clientId: string) => boolean
+  /** Whether the caller, a user, is a person on the board's team: `all-users` names them, and that lets them in. */
+  member?: boolean
+  /** Whether the caller, a project, is on the board's team: `all-projects` names it. */
+  teamProject?: boolean
+  /** Whether the caller, an app, is installed on the board's team: `all-apps` names it. */
+  teamApp?: boolean
   /**
    * The most the caller may do anywhere, whatever the grants say: what a backend makes of a
-   * person's team role (a viewer is `['read']`) or an app's scopes. Nothing caps it, without it.
+   * person's team role (a viewer is `['read', 'react']`) or an app's scopes. Nothing caps it,
+   * without it.
    */
   cap?: readonly Permission[]
   /** A token's `can`, which narrows what the grants give. */
   can?: Can
-  /** Rules in a board's own code that matched the caller, each one principal of its kind. */
-  rules?: readonly { rule: string; can: Can }[]
 }
 
-/** Where a matched grant came from: one the board keeps, or a rule in its code. */
-export type GrantSource<G extends DecidingGrant = DecidingGrant> = { grant: G } | { rule: string }
+/** Where a matched grant came from: one the board keeps. */
+export type GrantSource<G extends DecidingGrant = DecidingGrant> = { grant: G }
 
 /**
  * How close `principal` is to the caller, or null when it doesn't name it: `principal` for its own
@@ -50,13 +49,21 @@ export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'call
     case 'everyone':
       return 'everyone'
     case 'all-users':
-      return caller.kind === 'user' && (facts.member?.(caller.userId) ?? false) ? 'group' : null
+      return caller.kind === 'user' && facts.member === true ? 'group' : null
     case 'user':
       return caller.kind === 'user' && caller.userId === principal.userId ? 'principal' : null
     case 'all-projects':
-      return caller.kind === 'project' && (facts.teamProject?.(caller.projectId) ?? false) && principal.environments.includes(caller.environment) ? 'group' : null
+      return caller.kind === 'project' && facts.teamProject === true && principal.environments.includes(caller.environment) ? 'group' : null
     case 'project':
-      return caller.kind === 'project' && caller.projectId === principal.projectId && principal.environments.includes(caller.environment) ? 'principal' : null
+      // A project the grant knows the team of is that team's: moved to another, whose tokens name
+      // that team, it's no longer the grant's. A caller that names no team (a host's, or one
+      // stored before the board kept claims) is matched by its ID.
+      return caller.kind === 'project' &&
+        caller.projectId === principal.projectId &&
+        (principal.teamId === undefined || caller.teamId === undefined || caller.teamId === principal.teamId) &&
+        principal.environments.includes(caller.environment)
+        ? 'principal'
+        : null
     case 'github': {
       if (caller.kind !== 'github') return null
       const same = principal.repositoryId !== undefined ? caller.repositoryId === principal.repositoryId : caller.repository === principal.repository
@@ -68,7 +75,7 @@ export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'call
     case 'app':
       return caller.kind === 'app' && caller.clientId === principal.clientId ? 'principal' : null
     case 'all-apps':
-      return caller.kind === 'app' && (facts.teamApp?.(caller.clientId) ?? false) ? 'group' : null
+      return caller.kind === 'app' && facts.teamApp === true ? 'group' : null
     case 'oidc':
       return caller.kind === 'oidc' &&
         caller.issuer === principal.issuer &&
@@ -84,9 +91,9 @@ export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'call
 
 const RANK: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }
 
-/** The grants and rules that name the caller, each as close as its closest principal; without `everyone`'s, when `own`. */
+/** The grants that name the caller, each as close as its closest principal; without `everyone`'s, when `own`. */
 export function matchedFor<G extends DecidingGrant>(facts: GrantFacts<G>, own = false): Matched<GrantSource<G>>[] {
-  const matched: Matched<GrantSource<G>>[] = (facts.rules ?? []).map(({ rule, can }) => ({ level: 'principal', can, source: { rule } }))
+  const matched: Matched<GrantSource<G>>[] = []
   for (const grant of facts.grants) {
     let best: Level | null = null
     for (const principal of grant.principals) {
@@ -99,9 +106,9 @@ export function matchedFor<G extends DecidingGrant>(facts: GrantFacts<G>, own = 
   return matched
 }
 
-/** Whether anything but `everyone` lets the caller in: a rule, a grant, or, for a person, the team. */
+/** Whether anything but `everyone` lets the caller in: a grant, or, for a person, the team. */
 export function admits<G extends DecidingGrant>(facts: GrantFacts<G>, matched: readonly Matched<GrantSource<G>>[] = matchedFor(facts)): boolean {
-  if (facts.caller.kind === 'user' && (facts.member?.(facts.caller.userId) ?? false)) return true
+  if (facts.caller.kind === 'user' && facts.member === true) return true
   return matched.some((found) => found.level !== 'everyone')
 }
 

@@ -34,7 +34,7 @@ backend, on any backend. With `BOARD_URL` set, this board runs its own on what
 it writes, and the board at that URL runs its own on what arrives: each sees
 the write once. On Vercel's board, `vb` and other projects
 write to Vercel's API, not through this route, so the middleware sees what this
-deployment writes: its handle, its watchers, and a gateway's callers. Vercel's
+deployment writes: its handle and its watchers. Vercel's
 API posts a schedule's sends, so the middleware sees its message once, when
 it's made, as the caller's post.
 
@@ -47,7 +47,7 @@ it's made, as the caller's post.
   emptied to no text, with no files, is dropped.
 - **A middleware that throws fails the write.** The API answers 500, and a
   synced event is retried. To fail closed, catch and drop.
-- **It sees only a write the caller may make.** One `access` would refuse (a
+- **It sees only a write the caller may make.** One its access refuses (a
   channel it can't post in, someone else's message, a thread it can't read)
   answers 403 or 404 without running it.
 - **A retry of a post that landed skips it.** Before it runs, the board looks

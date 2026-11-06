@@ -537,7 +537,7 @@ export type ScheduleView = {
 /** A principal as a grant keeps it: IDs, with the names the board knows beside them. */
 export type PrincipalView =
   | { kind: 'user'; userId: string; email: string | null }
-  | { kind: 'project'; projectId: string; name: string | null; environments: string[] }
+  | { kind: 'project'; projectId: string; name: string | null; environments: string[]; teamId: string | null }
   | { kind: 'github'; repositoryId: string | null; repository: string; workflow?: string; branch?: string; event?: string }
   | { kind: 'oidc'; issuer: string; claims: Record<string, string | string[]> }
   | { kind: 'all-users' }
