@@ -202,7 +202,8 @@ more specific pattern decides first.
   `*`'s reaches (409 `channel_granted`, naming it), since that grant would
   still let in whom it names, and a path where it or a channel under it is
   there (409 `channel_exists`), since the lock would close those too. Two
-  people making the same one at once never both keep a way in.
+  people making the same one at once never both keep a way in, and a grant
+  someone makes before the lock lands undoes it, with nothing made.
 - **A grant takes only the keys it knows.** A misspelled one, `workflows` for
   `workflow` say, is 400, never dropped, so a grant never names more than you
   wrote.

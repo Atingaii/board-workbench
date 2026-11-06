@@ -116,6 +116,22 @@ describe('a private channel, from the handle', () => {
     expect(await team.channels()).toEqual([])
   })
 
+  it("takes its grants back, and makes nothing, when someone grants themselves in before its lock lands", async () => {
+    const team = testBoard()
+    let theirs: string | null = null
+    // Just before the lock reaches the board, Ada, who manages the still-open path, grants herself in.
+    const sneaking: Fetch = async (request) => {
+      if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/grants') && theirs === null && (await request.clone().text()).includes('"everyone"'))
+        theirs = (await caller(team.fetch, await personToken('u_ada'))('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_ada' }], can: { 'vault/': 'all' } })).body.grant.id
+      return team.fetch(request)
+    }
+    const refused = await handleAs(sneaking, () => personToken()).createChannel('vault', { private: true }).catch((error: unknown) => error)
+    expect(refused).toMatchObject({ status: 409, code: 'channel_granted', message: `${theirs} already grants in vault, so a private vault wouldn't be yours alone: nothing was made.` })
+    // Hers is the only one left: the lock and the creator's own are both gone, and no channel was made.
+    expect(await ids(team)).toEqual(['g1', 'g2', 'g3', theirs])
+    expect(await team.channels()).toEqual([])
+  })
+
   it('never shuts its creator out when a step fails part way', async () => {
     const team = testBoard()
     let grantsPosted = 0

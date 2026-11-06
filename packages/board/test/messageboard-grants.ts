@@ -258,20 +258,20 @@ export function fakeGrants(options: {
     const manages = (spot: string, own = false) => decide(who, spot, own).can.includes('manage')
     for (const pattern of patterns) {
       if (!manages(pattern) || !manages(pattern, true) || [...spots, ...everyone].some((spot) => spot !== pattern && covers(pattern, spot) && !manages(spot, true)))
-        throw new GrantRefused(403, 'forbidden', `${what} takes manage wherever the grant reaches`)
+        throw new GrantRefused(403, 'grant_forbidden', `${what} takes manage wherever the grant reaches`)
     }
     for (const spot of new Set([...everyone, ...spots])) {
       const has = new Set(decide(who, spot).can)
-      if ([...everyoneAt(after, spot)].some((permission) => !has.has(permission))) throw new GrantRefused(403, 'forbidden', `${what} would let someone in where everyone gets more than you have`)
+      if ([...everyoneAt(after, spot)].some((permission) => !has.has(permission))) throw new GrantRefused(403, 'grant_forbidden', `${what} would let someone in where everyone gets more than you have`)
     }
   }
   /** A 403 unless `who` manages each of `patterns`: what revoking a grant, or removing from one, takes. */
   function mayManage(who: Who, patterns: Iterable<string>, what: string) {
     if (isOwner(who)) return
-    for (const pattern of patterns) if (!decide(who, pattern).can.includes('manage')) throw new GrantRefused(403, 'forbidden', `${what} takes manage wherever the grant applies`)
+    for (const pattern of patterns) if (!decide(who, pattern).can.includes('manage')) throw new GrantRefused(403, 'grant_forbidden', `${what} takes manage wherever the grant applies`)
   }
   function mayList(who: Who, what: string) {
-    if (!lists(who)) throw new GrantRefused(403, 'forbidden', `${what} takes manage at *`)
+    if (!lists(who)) throw new GrantRefused(403, 'grant_forbidden', `${what} takes manage at *`)
   }
   /** Naming an issuer makes the API fetch its keys: it takes manage everywhere. */
   const namesIssuer = (principals: readonly Stored[]) => principals.some((principal) => principal.kind === 'oidc')

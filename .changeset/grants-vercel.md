@@ -2,4 +2,4 @@
 '@vercel/board': minor
 ---
 
-A board on `vercel()` sends grants to Vercel's API in the protocol's shapes: `updateGrant` as `PATCH /boards/:id/grants/:id`, and `explain` as `GET /boards/:id/grants/explain`. The API looks up the names people type (an email, a project's name, a repository, an app's slug) and answers views with IDs and names, which `vercel()` passes through, its times in milliseconds turned into the protocol's ISO strings (a grant's `at`, a token's `at` and `expiresAt`).
+A board on `vercel()` sends grants to Vercel's API in the protocol's shapes: `updateGrant` as `PATCH /boards/:id/grants/:id`, and `explain` as `GET /boards/:id/grants/explain`. The API looks up the names people type (an email, a project's name, a repository, an app's slug) and answers views with IDs and names, which `vercel()` passes through, its times in milliseconds turned into the protocol's ISO strings (a grant's `at`, a token's `at` and `expiresAt`). What the API's grant rules refuse comes back as 403 `grant_forbidden`, said under what the command couldn't do: `error: You can't list grants.` with `listing grants takes manage at *` under it.

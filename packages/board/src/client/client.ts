@@ -361,7 +361,8 @@ export function createBoardClient(options: ClientOptions) {
      * `channel_exists`), since closing `security/` closes `security/incidents` too. A board that
      * keeps no grants fails on the listing, with nothing made. Once its own grant is made it lists
      * them again, and takes its own back when another reaches the path, so of two callers making
-     * the same channel at once, at most one keeps a way in.
+     * the same channel at once, at most one keeps a way in; and once the lock is made, it lists them
+     * a last time, and takes both back when a grant made in between still reaches the path.
      */
     createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
       if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
@@ -397,6 +398,14 @@ export function createBoardClient(options: ClientOptions) {
         throw granted(raced)
       }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
+      // Once the lock is there, no one it shuts out can grant themselves past it, so this listing is
+      // the last word: a grant made before the lock landed would still let someone in, so it isn't
+      // private, and both of its grants go, the lock first.
+      const late = (await reaching()).filter((grant) => grant.id !== own.grant.id && grant.id !== closed.grant.id)
+      if (late.length > 0) {
+        for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
+        throw granted(late)
+      }
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       return { ...made, grants: [own.grant, closed.grant] }
     },
