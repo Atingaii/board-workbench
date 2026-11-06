@@ -16,7 +16,7 @@ connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { linear, teams } from '@vercel/board/sync-linear'
 
 const team = board({

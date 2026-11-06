@@ -100,8 +100,8 @@ describe('local() from the build', () => {
     // Resolved as an app resolves it, through the package's exports, to what the build put there.
     const require = createRequire(import.meta.url)
     const built = async <T,>(spec: string) => (await import(pathToFileURL(require.resolve(spec)).href)) as T
-    expect(require.resolve('@vercel/board/local')).toMatch(/dist\/local\.mjs$/)
-    const { local } = await built<typeof import('../src/local/index.ts')>('@vercel/board/local')
+    expect(require.resolve('@vercel/board/backend-local')).toMatch(/dist\/backend-local\.mjs$/)
+    const { local } = await built<typeof import('../src/backend-local/index.ts')>('@vercel/board/backend-local')
     const { board: mounted } = await built<typeof import('../src/server/index.ts')>('@vercel/board')
     const { oidcTokens } = await built<typeof import('../src/access/index.ts')>('@vercel/board/access')
     // In the test project, as a deployment of it finds itself.
