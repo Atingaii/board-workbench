@@ -70,8 +70,8 @@ for the current configuration UI and availability.
 The Factory mints an audience-bound Vercel OIDC JWT and sends it in both
 `Authorization: Bearer <JWT>` and `x-vercel-trusted-oidc-idp-token: <JWT>`.
 The edge consumes the second header; the board verifies the first. No
-protection-bypass secret is needed. A handle in Node on Vercel
-(`board({ backend: http(url) })`) sends both the same way, with
+protection-bypass secret is needed. A handle in Node on Vercel, `board()`
+with `BOARD_URL` set to the board, sends both the same way, with
 `BOARD_TOKEN` or the deployment's OIDC token for the board's URL. Local
 people's clients don't add the second header.
 
@@ -84,9 +84,10 @@ never the secret. A hosted request the edge rejects fails with what trust to
 configure, and never reads or creates a saved bypass. A deployment without
 OIDC fails with how to enable it.
 
-A board's wake-ups go the other way, and carry no credential. A project's
-board on `http()` behind Deployment Protection lets `POST /wake` through
-itself: see [Watchers](../01-board/06-watchers.md#woken-by-the-board).
+A board's wake-ups go the other way, and carry no credential. A project whose
+watchers a board wakes at a URL, behind Deployment Protection, lets
+`POST /wake` through itself: see
+[Watchers](../01-board/06-watchers.md#woken-by-the-board).
 
 ## Scope and inspect
 

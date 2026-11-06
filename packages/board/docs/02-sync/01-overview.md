@@ -24,8 +24,8 @@ teams), each mapped to a board channel or to a function of your own.
 Sync runs in `board()`, wherever the board lives. It keeps its records on the
 backend through routes every backend answers: imports as platform authors,
 delivery receipts, lookups by platform ID, and an inbox of platform events. So
-it works the same on `local()` and on a board on `http()`: see
-[On a board elsewhere](#on-a-board-elsewhere).
+it works the same on `local()` and on a
+[backend of your own](../01-board/01-mounting.md#a-backend-of-your-own).
 
 ## Configure it
 
@@ -165,51 +165,6 @@ mirrored channels, and a reply with it isn't delivered. `--sync` and `--no-sync`
 together are a usage error. A handle's `post` takes `sync: [...]` and
 `noSync: true`; see the [handle reference](../04-reference/02-board.md).
 
-## On a board elsewhere
-
-A board on [`http()`](../01-board/01-mounting.md#backends) keeps nothing, and
-its sync still runs here:
-
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-import { channels, slack } from '@vercel/board/sync-slack'
-
-const team = board({
-  backend: http('https://board.example.com/api/board'),
-  sync: {
-    slack: slack('slack/acme', channels({ '#support': 'support' })),
-  },
-})
-export const GET = team.fetch, POST = team.fetch
-```
-
-- **Webhooks land here.** The adapter verifies each one, and sync pushes the
-  event to this deployment's inbox on the other board, then pulls it back and
-  imports it there, in order per platform thread.
-- **What the other board's channels say goes out from here.** This board
-  subscribes for sync beside its watchers, and the other board wakes it when
-  there's something to deliver, as it does for [watchers](../01-board/06-watchers.md#woken-by-the-board).
-  Receipts land on the other board.
-- **The other board must let this deployment `sync`** in the channels it syncs,
-  and read them: `vercelProject({ project: 'prj_support', can: { support: 'all' } })`
-  in its `board({ access })`. See [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
-
-A [sync function](./02-functions.md)'s writes land on the other board as the
-platform user, and its reads are this deployment's. This board registers its
-entries there, so the other board lists them in its discovery. Two
-boards that sync the same platform channel into one board each import its
-events and each deliver to it, so give each channel one syncer.
-
-**A key is one sync's.** Its platform locations (`slack:C0123ABC:1727.1`) name
-the platform threads and messages that sync imports and delivers, so:
-
-- **The other board's own sync keeps its keys.** A board here can't register
-  one of them (409 `sync_key_taken`): name yours another (`acme`).
-- **Two that register one key** share its platform threads on the other
-  board, though each sees and changes only the copies it made, so give each
-  key one sync.
-
 ## Set up webhooks
 
 Every entry gets its webhook route automatically: `/webhooks/<key>` under the
@@ -257,8 +212,7 @@ On the way in, the webhook stores each event in the inbox before it answers,
 then sync imports it on the external thread's lane. If storing fails, the
 webhook answers the platform with a 500 so it retries. On `local()`, a
 [sync function](./02-functions.md) that keeps throwing is given up on after 10
-tries, which holds up only that thread's lane in that channel's inbox. A board
-on `http()` gives the event up after 5 tries, as it does a watcher's match.
+tries, which holds up only that thread's lane in that channel's inbox.
 
 ## Typing
 
@@ -269,8 +223,7 @@ await team.typing('812', 'running tests…')
 
 Shows typing in every platform thread the board thread is synced to, through
 the sync the board that keeps the log runs beside it, so `vb typing` on the
-board you link shows it there. A board on `http()` also shows it through its
-own sync. Slack shows the status under the thread, and GitHub has no typing.
+board you link shows it there. Slack shows the status under the thread, and GitHub has no typing.
 Nothing is written to the log. It needs `post` and `read` in the thread's channel.
 
 ## Debug it

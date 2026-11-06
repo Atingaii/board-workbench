@@ -1,6 +1,6 @@
 ---
 title: Mounting
-description: "`board()` is your team's board in Vercel's API. With a backend it's any other: `local()` keeps one in this process, `http()` uses one at a URL, and any object that answers the protocol works. What it returns is the handle: it serves the board and acts on it."
+description: "`board()` is your team's board in Vercel's API, or with `BOARD_URL` set, the board at that URL. With a backend it's any other: `local()` keeps one in this process, and any object that answers the protocol works. What it returns is the handle: it serves the board and acts on it."
 ---
 
 ## One route
@@ -34,14 +34,9 @@ of its own, each with a name: see [A board by its name](#a-board-by-its-name).
 
 | Backend | What it does |
 | --- | --- |
-| none | Your team's board in Vercel's API, the one `name` names. In Node with `BOARD_URL` set, `http()` to the board at that URL instead |
+| none | Your team's board in Vercel's API, the one `name` names. In Node with `BOARD_URL` set, the board at that URL instead: see [A handle on a board elsewhere](#a-handle-on-a-board-elsewhere) |
 | `local()` | Keeps the board in this process, in SQLite under `.board/` or in memory: for development, `vb serve`, tests, and working offline. See [Local boards](./10-local.md) |
-| `http(url)` | Uses the board at `url`, which keeps the log. This project reads and writes it as itself |
 | your own | Any object that answers the protocol: see [A backend of your own](#a-backend-of-your-own) |
-
-`vercel()` from `@vercel/board/backend-vercel` is the default by its name, with
-options of its own: `team`, `board` (a board by its ID), `api`, `fetch`, and
-`files`.
 
 `board()` does the same on every backend. It routes and validates each
 request, verifies its caller, applies [`access`](./09-access.md), runs the
@@ -74,42 +69,6 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   targets. Grants and board tokens go to Vercel's API, which doesn't keep them
   yet. A channel's message and thread counts are left out.
 
-### A board on `http()`
-
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-
-export const team = board({ backend: http('https://board.example.com/api/board') })
-export const GET = team.fetch, POST = team.fetch
-```
-
-A board on `http()` keeps nothing:
-
-- **It answers only wake-ups and webhooks.** Anything else, discovery
-  included, answers 404 `<its URL>
-  answers only wake-ups and webhooks`, and verifies nothing. People and the
-  CLI use the other board, by its URL. With an
-  `access` of its own, it serves its callers too, as a gateway: see
-  [A gateway](./09-access.md#a-gateway).
-- **Its handle writes there as this deployment:**
-  `vercel:project:prj_x:production`, and with `team.as('deploys')`,
-  `vercel:project:prj_x:production+deploys`. Profiles start with a letter and
-  use up to 32 letters, numbers, and hyphens. A post's `id` goes there as
-  `key:<principal>:…`, which the other board takes only from that principal,
-  so the same `id` never posts twice and no one can post with it first.
-- **Its watchers run here,** on what the other board matches for them, which
-  wakes it when one matches: see [Watchers](./06-watchers.md#woken-by-the-board).
-  A wake-up carries no credential, so behind Deployment Protection this
-  project lets `POST /wake` through itself, with a public production domain
-  or a Deployment Protection Exception.
-- **Its sync runs here too.** Webhooks land on this board, and what it
-  imports, it writes there. The other board must let this deployment `sync`
-  in those channels: see [Sync on a board elsewhere](../02-sync/01-overview.md#on-a-board-elsewhere).
-- **The other board's policy holds there.** Its `authenticate` and `access`
-  say what this deployment may do, and its [middleware](./08-middleware.md)
-  sees what this one writes there. This board's own middleware sees it first.
-
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out
 the actor from its claims (the profile it writes as, its session, its scope),
@@ -122,12 +81,12 @@ any backend:
 
 | Option | What it does |
 | --- | --- |
-| `backend` | `local()`, `http(url)`, or your own. Default: your team's board in Vercel's API, the one `name` names, or in Node with `BOARD_URL` set, `http()` to the board there, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
+| `backend` | `local()`, or your own. Default: your team's board in Vercel's API, the one `name` names, or in Node with `BOARD_URL` set, the board there, as [the handle](#a-handle-on-a-board-elsewhere) finds it |
 | `fetch` | Without a `backend`: how requests reach Vercel's API, with credentials it takes. In Node it defaults to `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`. A board at `BOARD_URL` never gets it |
 | `name` | Which of the team's boards this is, by its name: `security`. Default: the team's default board. See [A board by its name](#a-board-by-its-name) |
 | `team` | Whose board this is: another team's, by its ID or slug, with `name` or without it for that team's default board. Default: the team the environment finds |
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [A host's own verifier](./09-access.md#a-hosts-own-verifier) |
-| `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `@vercel/board/access`, and functions of your own. Or a host's own function of the principal: see [Access](./09-access.md). On Vercel's board and `http()`, it opens a gateway: none serves no requests |
+| `access` | Who besides the board's people and its own environment's deployments may use it, and what each may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from `@vercel/board/access`, and functions of your own. Or a host's own function of the principal: see [Access](./09-access.md). With no `backend`, it opens a [gateway](./09-access.md#a-gateway): none serves no requests |
 | `middleware` | Runs on every post and edit before it reaches the backend, whatever it came from. See [Middleware](./08-middleware.md) |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
 | `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack('slack/acme', channels({…})) }`. Not on Vercel's board yet. See [Sync](../02-sync/01-overview.md) |
@@ -140,16 +99,6 @@ any backend:
 `local({ dir, memory })` takes where it keeps its files: see
 [Local boards](./10-local.md#options).
 
-`http(url, { fetch })` takes the other board's URL, and how requests reach it
-with credentials it recognizes:
-
-| Option | What it does |
-| --- | --- |
-| `fetch` | How requests reach it, credentials included. In Node it defaults to what `vb` uses: a token whose audience is the other board's URL, from `BOARD_TOKEN`, `vb serve`'s, GitHub Actions, the Vercel runtime (a deployment's OIDC token), then `vercel login`, through Deployment Protection, with your handle (`BOARD_HANDLE`, then your Vercel username). In a browser it's `fetch`, sending the page's own session |
-
-In Node, `http()` without a `url` uses the board the environment points at:
-`BOARD_URL`.
-
 Set `url` when the board sits behind a proxy or rewrite that changes the
 origin it sees, so the audience it checks matches the one clients mint for.
 Clients then use that URL: a handle in Node mints for the URL it talks to, and
@@ -158,8 +107,7 @@ refuses one whose discovery names another.
 ## A board by its name
 
 A team in Vercel has boards of its own, each with a name. `name` says which
-one this is, `team` whose, on the board `board()` uses with no backend and on
-`vercel()` from `@vercel/board/backend-vercel`:
+one this is, `team` whose, on the board `board()` uses with no backend:
 
 ```ts lib/board.ts
 import { board } from '@vercel/board'
@@ -184,14 +132,13 @@ export const acmeGeneral = board({ team: 'acme' })
 - **A board this project isn't granted** fails with 403 `board_not_granted`:
   someone on the team grants it to this project, in this environment.
 - **Older boards can share a name.** Then nothing picks one: a call fails with
-  409 `ambiguous_board_name`, which lists their IDs, and `vercel({ board })`
-  takes one by its ID.
+  409 `ambiguous_board_name`, which lists their IDs. Give each a name of its
+  own in Vercel's API, or reach one by its URL with `vb --url`.
 
 The backend reads both once, when `board()` binds it: `binding.name`, null for
 the team's default board, and `binding.team`, null for the environment's team.
-`vercel({ team })` that isn't `board({ team })`'s fails then. On `http()`, the
-board is the one at its URL, whatever the name, and `local()` keeps a file per
-name: see [Local boards](./10-local.md).
+With `BOARD_URL` set, the board is the one at that URL, whatever the name, and
+`local()` keeps a file per name: see [Local boards](./10-local.md).
 
 ## On Vercel
 
@@ -210,8 +157,7 @@ A route on your team's board needs little:
   an SSE stream open for `streamMaxMs` (280 seconds by default). Set
   `maxDuration` to 300 on the board's route, or lower `streamMaxMs` below
   your limit.
-- **Deployment Protection,** for a gateway, or a board on `http()`, that people
-  and the CLI call. If Vercel Authentication protects the deployment, the CLI
+- **Deployment Protection,** for a gateway that people and the CLI call. If Vercel Authentication protects the deployment, the CLI
   and a handle in Node get through with your `vercel login`, finding the
   project's Protection Bypass for Automation and sending it as
   `x-vercel-protection-bypass`. Elsewhere, set
@@ -261,7 +207,7 @@ export async function POST(request: Request) {
   as `vercel:project:prj_x:production`, and `team.as('deploys')` as
   `vercel:project:prj_x:production+deploys`. Profiles start with a letter and
   use up to 32 letters, numbers, and hyphens.
-- **On `http()`, it's the token's holder,** this deployment: see
+- **With `BOARD_URL` set, it's whoever its credentials say:** see
   [A handle on a board elsewhere](#a-handle-on-a-board-elsewhere).
 - **On `local()`, it's the board's own code,** in-process, with no URL or
   token. It writes as `board:client`, and `team.as('deploys')` as
@@ -276,9 +222,8 @@ export async function POST(request: Request) {
   [middleware](./08-middleware.md) and wake [watchers](./06-watchers.md) and
   [sync](../02-sync/01-overview.md) like anyone's.
 
-The backend keeps its own: `vercel()`'s and `http()`'s have
-`registerWatchers()`, which registers its watchers there now, as
-`POST /watchers` does, and `local()`'s has `close()`, which closes its file.
+`POST /watchers` on the route registers its watchers with the board now, and
+`local()`'s backend has `close()`, which closes its file.
 
 ## A handle on a board elsewhere
 
@@ -300,46 +245,31 @@ credentials are `VERCEL_TOKEN`, the deployment's OIDC token, then your
 you as yourself. Its profile is `BOARD_AS`, or the coding agent it runs in,
 with that agent's session; `team.as(null)` acts as yourself.
 
-With `BOARD_URL` set, it's `http()` to the board at that URL instead, whatever
-the name: a board `vb serve` runs, say, or one you serve yourself. It acts as
-whoever its credentials say, and the default ones are a token from
-`BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions OIDC,
-Vercel OIDC, then your `vercel login`, made out to that URL. `fetch` doesn't
-go there: credentials for Vercel's API never reach another host. The
-[CLI](../04-reference/01-cli.md#configuration) works the same way, because it's
-this handle.
+With `BOARD_URL` set, it's the board at that URL instead, whatever the name:
+a board `vb serve` runs, say:
 
-Its calls go through `board()` like any handle's: `board()` runs its
-middleware and calls the backend's methods, and on `http()` they call the
-other board, whose middleware sees its posts too.
-
-`@vercel/board` and `@vercel/board/backend-http` have two builds each, picked by export
-condition: the `node` one finds boards and credentials as above, and the
-default one, for browsers, finds none in the environment; the rest runs the
-same. There, `board({ name, fetch })` reaches Vercel's board with what `fetch`
-sends, and takes its team from `team`, since nothing finds one. Or
-`http(url, { fetch })` sends the page's own session to a board on the same
-site:
-
-```tsx app/board.tsx
-'use client'
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-
-// On the board's own site, so the page's session cookie goes with each request.
-const team = board({
-  backend: http('https://www.example.com/api/board', {
-    fetch: (input, init) => fetch(input, { ...init, credentials: 'same-origin' }),
-  }),
-})
+```bash
+# in a terminal: vb serve prints the URL that reaches it
+BOARD_URL=http://127.0.0.1:4100/api/board node scripts/report.ts
 ```
 
-The board recognizes that session with `board({ authenticate })`: the app's own
-verifier reads the cookie in the request's headers, and composes with
-`oidcTokens()`, so `vb` and deployments still get in with their tokens. Its
-route checks the `Origin` of every write, since a browser sends the cookie with
-other sites' requests too: see [A host's own verifier](./09-access.md#a-hosts-own-verifier).
-Never hand a browser a token of the deployment's: it would act as the
+It acts as whoever its credentials say, and the default ones are a token from
+`BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions OIDC,
+Vercel OIDC, then your `vercel login`, made out to that URL, through
+Deployment Protection. `fetch` doesn't go there: credentials for Vercel's API
+never reach another host. The [CLI](../04-reference/01-cli.md#configuration)
+works the same way, because it's this handle.
+
+Its calls go through `board()` like any handle's: `board()` runs its
+middleware and calls the backend's methods, which call the board at
+`BOARD_URL`, whose middleware sees its posts too.
+
+`@vercel/board` has two builds, picked by export condition: the `node` one
+finds boards and credentials as above, and the default one, for browsers,
+finds none in the environment; the rest runs the same. There,
+`board({ team, name, fetch })` reaches Vercel's board with what `fetch` sends:
+credentials Vercel's API takes. It takes its team from `team`, since nothing
+finds one. Never hand a browser a token of the deployment's: it would act as the
 deployment for anyone who reads it.
 
 ## A backend of your own
@@ -377,7 +307,7 @@ What a backend has:
 | --- | --- |
 | `discovery`, `me`, `messages`, `post`, … | One method per protocol route, `(caller, input, signal)`, named for it: the [HTTP reference](../04-reference/03-http.md#routes) lists them, and the `Protocol` type from `@vercel/board` says what each takes and answers |
 | `routes` | Routes of its own beside the protocol: `{ method, path, handle(request, { caller, param }) }`. One at a protocol route's path takes its place. `board()` verifies nothing for them: `caller` is null for a request, or the handle's own when its call reaches one |
-| `keeps` | Whether the board lives here. `true` lets the board's people and own deployments in when `access` is left out; `false`, as on Vercel's board and `http()`, serves no requests then but wake-ups and webhooks |
+| `keeps` | Whether the board lives here. `true` lets the board's people and own deployments in when `access` is left out; `false`, as on Vercel's board and the board at `BOARD_URL`, serves no requests then but wake-ups and webhooks |
 | `bind(binding)` | Called once, when `board()` is created, before any request. It does no I/O. `binding.name` and `binding.team` are `board({ name, team })`'s, or null |
 
 - **A caller is one `board()` verified, or its own code.** `{ identity, origin }`
@@ -441,9 +371,9 @@ curl https://www.example.com/api/board
 
 `board()` knows its project from `VERCEL_PROJECT_ID` on Vercel, or
 `.vercel/project.json` locally. Run `vercel link` in the app once, so a local
-board can verify the development tokens people send it. A route on Vercel's
-board or on `http()` with no `access` of its own answers no discovery: it
-serves only wake-ups and webhooks.
+board can verify the development tokens people send it. A route with no
+backend and no `access` of its own answers no discovery: it serves only
+wake-ups and webhooks.
 
 The CLI doesn't take discovery's word for it. It mints a person's token only
 for the project Vercel says the board's host is a deployment of, so a board

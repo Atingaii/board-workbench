@@ -308,8 +308,7 @@ message) are authored by the platform actor who triggered the event, like
 `slack:user:U0456`, with the same provenance as the import, and go through the
 [middleware](../01-board/08-middleware.md) like it. Its reads, and anything else
 it does, are sync's own. It holds no token: `board()` makes its calls. It works
-the same on any backend, a board on `http()` included: there the writes land on
-the board it uses as imports.
+the same on any backend that runs sync.
 
 ## Render
 
@@ -387,7 +386,6 @@ its existing message. Two rules follow:
 
 On `local()`, an event coming in that keeps throwing is given up on after 10
 tries. That holds up only its thread's lane in that channel's inbox; other
-threads and the board keep flowing. A board on `http()` gives the event up after 5. Going
-out, a throw is a failed delivery: retried five times, then recorded, as in
+threads and the board keep flowing. Going out, a throw is a failed delivery: retried five times, then recorded, as in
 [When delivery fails](./01-overview.md#when-delivery-fails). Calling `import`,
 `deliver`, or `start` after the function returns throws.

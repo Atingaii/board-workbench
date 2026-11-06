@@ -14,8 +14,8 @@ a host can recognize its own credentials too: see
 
 Only a few routes take no token: discovery, the built-in avatars, the OpenAPI
 document, and `/webhooks/:key`, which the platform's adapter authenticates instead. A
-board on `http()` also answers `POST /wake` without one: a wake-up only says
-to pull.
+route whose watchers another board runs (Vercel's board, say) also answers
+`POST /wake` without one: a wake-up only says to pull.
 
 ## Where tokens come from
 
@@ -34,9 +34,8 @@ discovery there names another URL, they get no token and fail with
 `wrong_audience`: use the URL the error names. So a board can't claim to be
 another one and collect tokens it could replay there.
 
-Other runtimes bring their own credentials in `http(url, { fetch })`: a page,
-its own session, which the board's `board({ authenticate })` recognizes. See the
-[handle reference](../04-reference/02-board.md).
+Outside Node, `board({ fetch })` brings its own credentials for Vercel's board,
+since nothing finds them. See the [handle reference](../04-reference/02-board.md).
 
 ### From your terminal
 

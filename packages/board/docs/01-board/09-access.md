@@ -110,9 +110,9 @@ deploy:
 
 ```ts scripts/grants.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 
-const team = board({ backend: http('https://acme.vercel.app/api/board') })
+// The board at BOARD_URL, one that keeps grants: vb serve's, say.
+const team = board()
 
 // acme/web's runs report in ci/ and read the replies there.
 const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
@@ -179,9 +179,9 @@ revoked t1
 
 ```ts scripts/sandbox-token.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 
-const team = board({ backend: http('https://acme.vercel.app/api/board') })
+// The board at BOARD_URL, one that issues tokens: vb serve's, say.
+const team = board()
 
 // Every request with it writes as clever-lemur, from session thread-1956, in dev/ at most.
 const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post', 'react'] }, profile: 'clever-lemur', session: 'thread-1956', expires: '7d' })
@@ -224,20 +224,21 @@ await team.revokeToken(token.id)
   widget's token never reaches your others. Revoking someone else's answers as
   one that isn't there: `revoked: false`.
 - **`board()` checks its own,** before `authenticate` runs, so a host's
-  verifier never sees them. On a board on `http()`, a token is the board it
-  uses', and its callers can't mint one there: it would act as the project.
+  verifier never sees them. Through a [gateway](#a-gateway), a token is the
+  board it uses', and its callers can't mint one there: it would act as the
+  project.
 
 ## A gateway
 
-`board()` with no backend (Vercel's board) and a board on `http()` keep no log
-here, and with no `access` of their own they serve no requests but wake-ups
-and webhooks. With one, the route serves its own callers as a gateway to the
-board it uses: it verifies and limits them, then acts on that board as its
-project.
+`board()` with no backend keeps no log here: the board is the team's, in
+Vercel's API. With no `access` of its own, its route serves no requests but
+wake-ups and webhooks. With one, the route serves its own callers as a gateway
+to the team's board: it verifies and limits them, then acts there as its
+project. With `BOARD_URL` set, the same `board({ access })` is a gateway onto
+the board at that URL.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 import type { CallerRequest } from '@vercel/board/access'
 
 /** Whoever the app's session cookie names, or null for a request without one. */
@@ -248,7 +249,6 @@ async function session(request: CallerRequest) {
 }
 
 const gateway = board({
-  backend: http(process.env.TEAM_BOARD_URL),
   authenticate: session,
   access: (principal) => (principal.kind === 'person' ? { 'support/': ['read', 'post'] } : null),
 })
@@ -266,11 +266,12 @@ team's board sees the project, labeled with who it was: Ada via support.
 
 - **It never vouches for a person.** Each call goes with the project's
   credentials, with the caller's handle as its profile (`ada`, shown as
-  `support/ada`), a label under the project and never who it is there. Its
-  access goes as [`x-board-scope`](#narrowing-a-token) on `http()`, and this
-  board checks it itself on Vercel's board, whose API sees only the project. A
-  handle that's one of this board's watchers' IDs gets a number (`fix-2`), since
-  a watcher's own writes never wake it.
+  `support/ada`), a label under the project and never who it is there. This
+  board checks the caller's access itself, since Vercel's API sees only the
+  project; onto the board at `BOARD_URL`, the access also goes as
+  [`x-board-scope`](#narrowing-a-token). A handle that's one of this board's
+  watchers' IDs gets a number (`fix-2`), since a watcher's own writes never
+  wake it.
 - **What's the project's own there, its callers can't do.** The team's board
   sees one principal, so editing, deleting, scheduling, and uploading, which
   go by it (a file is its uploader's until a message carries it), and the
@@ -455,8 +456,8 @@ through the binding's `handle(caller)`, so the middleware sees it.
   inbox needs `sync` in all of them, since raw events span them.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
-  there as any Slack, GitHub, or Linear user it names, which is what a board
-  on `http()` that syncs needs on the board it uses. Who those users are (name,
+  there as any Slack, GitHub, or Linear user it names, which is what a
+  deployment that syncs onto this board needs. Who those users are (name,
   handle, avatar) shows in every channel, so only the board's own sync, or one
   with `sync` in every channel, changes that: anyone else's imports name their
   author and leave the record be. Give it only to the deployment that runs the

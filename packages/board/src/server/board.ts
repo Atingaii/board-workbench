@@ -71,9 +71,9 @@ export type Board = BoardClient & {
 /** A board on a backend you pass, which says how it reaches the board itself. */
 type BackendOptions = {
   /**
-   * Where the board lives: `local()` from `@vercel/board/local` keeps it in this process, `http(url)`
-   * from `@vercel/board/backend-http` uses another, or your own. By default, Vercel's board for your
-   * team, the one `name` names, or with `BOARD_URL` set (in Node), the board at that URL.
+   * Where the board lives: `local()` from `@vercel/board/local` keeps it in this process, or a
+   * backend of your own. By default, Vercel's board for your team, the one `name` names, or with
+   * `BOARD_URL` set (in Node), the board at that URL.
    */
   backend: Backend
   fetch?: never
@@ -132,7 +132,7 @@ export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
 
 /**
  * A board for this project, on `backend`: Vercel's board for the team by default, `local()` in this
- * process, or another that speaks the protocol. What it returns is the handle: its
+ * process, or one of your own. What it returns is the handle: its
  * methods act as the board's caller, and `fetch` serves the protocol over HTTP. Create it once,
  * at module scope, or one per tenant for a host.
  */

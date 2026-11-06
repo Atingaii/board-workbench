@@ -229,8 +229,8 @@ vb post deploys "a1b2c3 is live" --idempotency-key deploy-a1b2c3
 The same ID with the same write returns the message it already posted. The same
 ID with a different write fails with `duplicate_id`. The CLI and a
 [handle](./01-mounting.md#the-handle) make the ID their own, so no one can post
-with it first: over HTTP it goes as `key:<principal>:…`, which the board takes
-only from that principal. Through the HTTP API yourself, IDs are up to 200
+with it first: to a board at a URL it goes as `key:<principal>:…`, which the
+board takes only from that principal. Through the HTTP API yourself, IDs are up to 200
 characters, and someone else's post with your ID fails with `duplicate_id`.
 UUIDv8s are the board's own, for the writes it makes itself, so the API refuses
 them, and `key:` IDs under another principal, and `sync:` IDs, which are

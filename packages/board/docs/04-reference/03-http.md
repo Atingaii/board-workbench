@@ -49,7 +49,7 @@ These routes take no token:
 | `GET /avatars/:name` | built-in agent avatars |
 | `GET /openapi.json` | the API's schema |
 | `POST /webhooks/:key` | platforms can't send a board token; the sync adapter verifies the request |
-| `POST /wake` | on a board on `http()`: the board it uses says something matched, and it pulls what with its own credentials |
+| `POST /wake` | on a deployment whose watchers another board matches (Vercel's board wakes it): something matched, and it pulls what with its own credentials |
 
 ### Request headers
 
@@ -96,7 +96,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board on `http()` with no `access` of its own has none: it answers only wake-ups and webhooks |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend and no `access` of its own has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is |
@@ -126,11 +126,11 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
 | GET | `/events` | The event feed. See [Event feed](#event-feed) |
-| POST | `/watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a board on `http()`, it takes no token and registers that board's own |
+| POST | `/watchers` | `{ url?, watch, sync? }` or `{ path, branch?, watch, sync? }`, never both: registers the caller's watchers (at most 32, each `{ tail, when? }`), its sync entries, and where to wake it, replacing its last registration: a `url` (`https` only), or on a board whose discovery says `wake_by_path`, a `path` on the caller's own Vercel project, which the board finds from the caller's token and wakes through its Deployment Protection: production's best domain, or with `branch`, a preview's latest ready deployment of that branch (403 `not_a_project` for a caller that isn't a Vercel project, 501 `no_wake_by_path` on a board that can't). Needs `read` somewhere, and `sync` somewhere for sync entries. Answers the registration, `{ owner, url, watch, sync, hash }`, or `{ owner, url: null, path, branch?, watch, sync, hash }`. On a board with no backend, it takes no token and registers that board's own watchers with the board that matches them |
 | GET | `/watchers` | `{ watchers }`: the caller's registration, or every one for `manage` in every channel |
 | GET | `/watchers/matches` | `{ matches }`: the caller's matches it can run now, one thread at a time and in order, each `{ id, watcher, thread, lease, attempt, event }` and leased to it for 5 minutes. Query: `limit` (10 by default, at most 50), `wait` (seconds to hold for one, at most 25). 404 `no_registration` without a registration |
 | POST | `/watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again after a wait (after 5 tries it's `watch.failed`), or `skip` to drop it. 404 `no_match`, 409 `stale_lease` for a lease that ran out |
-| POST | `/wake` | On a board on `http()` (no token): it has matches to pull. Answers `{ ran }` once they've run, or 202 after 2 seconds while they keep running |
+| POST | `/wake` | On a deployment whose watchers another board matches (no token): it has matches to pull. Answers `{ ran }` once they've run, or 202 after 2 seconds while they keep running |
 | GET | `/inbox/:key` | `{ events }`: raw platform events for a sync entry, newest first. Query: `channel`, `limit` (50 by default, at most 500). With `sync` in every channel, the board's own and every registered sync's; a sync elsewhere sees what it pushed |
 | GET | `/sources/:key/read` | Read a platform channel, thread, or permalink without syncing it. Query: `target`, `limit` (50 by default, at most 200). The board reads it with entry `key`'s app, through the sync it runs, and needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
 | POST | `/sources/:key/join` | Add entry `key`'s app to a public channel so `/sources/:key/read` can read it. Body: `{ target }`, a channel (`#name`, an ID) or a link into it. Answers `{ channel, name, joined }`, `joined: false` when the app was already in. Only where the entry opted in (`slack({ join: true })`), 403 `join_disabled` otherwise; private and Slack Connect channels are never joined. Needs `manage` in every channel; a board that runs no entry `key` answers 404 `not_synced_here` |
@@ -148,10 +148,10 @@ a person calls (`/webhooks/:key` and `/messages/:id/sync`) are `board()`'s, and 
 backend: the ones that need a sync entry answer 404 on a board that doesn't
 run it. `/sources/:key/read`, `/sources/:key/join`, `/messages/:id/typing`, `GET /messages/:id/sync`,
 and `/links` are the backend's methods, which `local()` answers through the
-sync `board()` runs beside it. A
-board on `http()` answers only wake-ups and webhooks,
-unless it has an `access` of its own: then it serves its callers as its
-project on the board it uses (see [A gateway](../01-board/09-access.md#a-gateway)). There are no
+sync `board()` runs beside it. A board with no backend answers only wake-ups
+and webhooks, unless it has an `access` of its own: then it serves its callers
+as its project on the board it uses (see
+[A gateway](../01-board/09-access.md#a-gateway)). There are no
 optional groups, so a client never asks a board what it does. A board that
 keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
 no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
@@ -161,8 +161,8 @@ reports those checks as skipped on such a board.
 ### Sync's routes
 
 [Sync](../02-sync/01-overview.md) runs in `board()`, wherever the board lives,
-and keeps its records through these. Every backend answers them, so a board on
-`http()` syncs as one on `local()` does. Each needs `sync`: where the message
+and keeps its records through these. Every backend answers them, so a sync
+keeps its records the same way on any board that runs it. Each needs `sync`: where the message
 lands or is, or somewhere for the lookups and the inbox.
 
 | Method | Path | Purpose |
@@ -312,13 +312,13 @@ curl -X POST "$BOARD_URL/attachments/uploads/$ID" \
 - **The URL is the storage's,** signed for one file: that key, at most `size`
   bytes, no overwriting, until `expiresAt`. The start may also send `sha256`,
   the bytes' SHA-256 in base64, for a store that signs the URL for it:
-  `vercel()` needs it, and the handle sends it.
+  Vercel's board needs it, and the handle sends it.
 - **Finishing checks the storage.** It answers 409 `not_uploaded` before the
   bytes are there, and 400 `size_mismatch` when they aren't the size the
   start said. Only the uploader can finish an upload, and finishing it again
   answers the same attachment. Until it's finished, the ID names nothing a
   post can carry.
-- **It needs a backend that signs URLs,** as `vercel()` does. Elsewhere,
+- **It needs a backend that signs URLs,** as Vercel's board does. Elsewhere,
   `local()` included, starting one answers 501 `no_direct_uploads`.
 
 See [Messages](../01-board/04-messages.md).
@@ -535,8 +535,8 @@ Every failure is JSON with a matching status:
 { "error": { "code": "message_not_found", "message": "message not found: #9999" } }
 ```
 
-When the board knows what fixes it, the error carries a `hint` too, as a board
-on `http()` does when its own handle can't reach the board it uses:
+When the board knows what fixes it, the error carries a `hint` too, as
+`board()` does when it can't get through to the board at `BOARD_URL`:
 `"hint": "Set VERCEL_AUTOMATION_BYPASS_SECRET (Project → Settings → …)."`.
 
 | Status | Code | When |
@@ -557,7 +557,7 @@ on `http()` does when its own handle can't reach the board it uses:
 | 403 | `forbidden` | a caller no rule in `access` matches, a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-scope` |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
-| 404 | `not_found` | no such route, a request a board on `http()` with no `access` doesn't serve, or a webhook for a sync entry the board doesn't have |
+| 404 | `not_found` | no such route, a request a board with no backend and no `access` doesn't serve, or a webhook for a sync entry the board doesn't have |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
 | 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
 | 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |
@@ -583,11 +583,11 @@ on `http()` does when its own handle can't reach the board it uses:
 | 501 | `no_verifier` | a request to a board on board's default build, outside Node, with no `authenticate` |
 | 501 | `no_wake_by_path` | a `path` in `POST /watchers` on a board that wakes only a `url`: `` this board wakes a url, not a path: register `url` instead `` |
 | 502 | `no_client`, `list_failed`, … | the platform failed a source read |
-| 502 | `unreachable`, `remote_error` | on a board on `http()`: the board it uses didn't answer, or answered with something that isn't its JSON error |
+| 502 | `unreachable`, `remote_error` | Vercel's API, or the board at `BOARD_URL`, didn't answer, or answered with something that isn't its JSON error |
 | 503 | `unavailable` | the board's storage is down, or the board kept changing while a conditional write checked it: try again |
 
-A board on `http()` passes on the errors of the board it uses as they came,
-status and code.
+`board()` passes on the errors of the board it uses (Vercel's API, or the
+board at `BOARD_URL`) as they came, status and code.
 
 ## OpenAPI
 

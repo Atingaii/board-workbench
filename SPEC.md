@@ -16,9 +16,11 @@ await team.post('deploys', 'www@a1b2c3 is live')
 ```
 
 `board()` with no backend is the team's default board in Vercel's API
-(`vercel()`, `src/server/backend-vercel.ts`); `board({ name })` is another of
-the team's boards, and `board({ team, name })` a board on another team. With
-`BOARD_URL` set, in Node, it's `http()` to the board at that URL instead. In a
+(`vercel()`, internal: `src/server/backend-vercel.ts`); `board({ name })` is
+another of the team's boards, and `board({ team, name })` a board on another
+team. With `BOARD_URL` set, in Node, it's the board at that URL instead
+(`http()`, internal too: `src/server/backend-http.ts`), which is `vb serve`'s.
+Neither backend is exported: people write `board()`. In a
 Vercel deployment it authenticates with the deployment's OIDC token, and
 elsewhere with `VERCEL_TOKEN` or the Vercel CLI's login. Vercel's API keeps
 the board: messages, threads, reactions, labels, a channel's changes,
@@ -129,8 +131,6 @@ One package, `@vercel/board`, with subpath exports:
 | --- | --- | --- |
 | `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; the rules `vercelProject()`, `githubActions()`, and `oidc()`; and the permission types | server |
-| `@vercel/board/backend-vercel` | `vercel()`, the team's board in Vercel's API, which `board()` with no backend uses. The `node` build also finds the team and credentials | isomorphic |
-| `@vercel/board/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
@@ -141,8 +141,10 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`) | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
-A backend's own pieces live under its path, and everything that works with any
-backend lives at the top. Sync adapters are named for the Chat SDK adapter they
+A backend's own pieces live under its path (`@vercel/board/local`), and
+everything that works with any backend lives at the top. The backends
+`board()` picks itself, `vercel()` and `http()`, are internal: its builds load
+them, and nothing exports them. Sync adapters are named for the Chat SDK adapter they
 take, and `sync-chat-sdk` takes any: `sync-slack` takes `@chat-adapter/slack`.
 A platform with an entry of its own gets more than `chatSdk()` reads from its
 adapter. board builds in Slack, GitHub, and Linear; any other platform comes
@@ -241,15 +243,20 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   past its last event. It honors `Last-Event-ID` when `after` is absent, pings
   every 15 seconds, and closes at `streamMaxMs`.
 
-The backends board ships:
+The backends board ships: two internal ones, which `board()` picks when it's
+given none, and `local()`, exported. A backend of your own is the fourth kind,
+checked with `@vercel/board/conformance`.
 
-- **`vercel({ team?, board?, api?, fetch?, files? })`**, from
-  `@vercel/board/backend-vercel`, is the team's board in Vercel's API, and
-  what `board()` with no backend uses (in Node, while `BOARD_URL` is unset).
-  It keeps nothing: its methods call `/v1/messageboard` as this deployment,
-  with its OIDC token, or as you, with `VERCEL_TOKEN` or the login the Vercel
-  CLI hands it, on the board `board({ name, team })` names (or `board`, by its
-  ID). Messages, threads, reactions, labels, a channel's changes, schedules,
+- **`vercel()`**, internal (`src/server/backend-vercel.ts`; the Node build's
+  in `src/backend-vercel/index.ts`, the default build's in `index.default.ts`),
+  is the team's board in Vercel's API: what `board()` with no backend uses, in
+  Node while `BOARD_URL` is unset, and outside Node with the `board({ fetch })`
+  it requires; and the CLI's board without a URL. Its own options (`board`, a
+  board by its ID; `api`; `files`, how bytes reach storage) have no public
+  form, and `team` and `fetch` are `board()`'s. It keeps nothing: its methods
+  call `/v1/messageboard` as this deployment, with its OIDC token, or as you,
+  with `VERCEL_TOKEN` or the login the Vercel CLI hands it, on the board
+  `board({ name, team })` names. Messages, threads, reactions, labels, a channel's changes, schedules,
   files (direct uploads too, on URLs the API signs for the bytes' SHA-256),
   and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
   middleware screens a schedule when it's made. What the API doesn't keep yet
@@ -261,10 +268,14 @@ The backends board ships:
   this deployment by its path on its project (from production, or a branch's
   preview, through Deployment Protection) or at its URL, and without an
   `https` one it pulls on its own. Its routes are `POST /wake` and
-  `POST /watchers`, and `registerWatchers()` registers now. It doesn't keep
-  the board, so a board on it serves no requests but wake-ups unless it has an
-  `access`, and then it's a gateway, as `http()`'s is, which checks each
-  caller's access itself, since the API sees only the project.
+  `POST /watchers`, which registers now. It doesn't keep the board, so a board
+  on it serves no requests but wake-ups unless it has an `access`, and then
+  it's a gateway, as `http()`'s is, which checks each caller's access itself,
+  since the API sees only the project: `board({ authenticate, access })` with
+  no backend serves its callers on the team's board as its project, each
+  labeled `+<handle>`, with post IDs derived under the caller
+  (`board-gateway`), and what's the project's own there (`PROJECTS_OWN`)
+  answers 403.
 - **`local({ dir?, memory? })`**, from `@vercel/board/local`, keeps the board
   in this process, on the board's internal engine (see
   [The local board](#the-local-board)). Its log and tables are one SQLite file
@@ -296,15 +307,17 @@ The backends board ships:
   (`📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this
   board keeps no files`, or the name alone when the platform gave no URL), and
   sends none out.
-- **`http(url?, { fetch? })`** uses the board at `url` (in Node, the one the
-  environment points at by default), which keeps the log: its methods call it
-  through `fetch`, which brings the credentials. In Node the default `fetch`
-  adds what `vb` uses: a token from `BOARD_TOKEN`, a local board's token
+- **`http()`**, internal (`src/server/backend-http.ts`; the Node build's in
+  `src/backend-http/index.ts`), is what `board()` uses in Node with
+  `BOARD_URL` set, the CLI's for `--url`, and the inspector page's, on its
+  local proxy. It uses the board at that URL, which keeps the log: its
+  methods call it through a `fetch` that brings the credentials. In Node
+  that's what `vb` uses: a token from `BOARD_TOKEN`, a local board's token
   file, GitHub Actions or Vercel OIDC, then `vercel login` (minting for the
   project the other board's host is a deployment of, and only when its
-  discovery names the same), your handle, and the Deployment
-  Protection handling; in a browser it's `fetch`, sending the page's own
-  session, which the other board's `authenticate` recognizes. Its board's
+  discovery names the same), your handle, and the Deployment Protection
+  handling; in the inspector's page it sends the page's per-run token to the
+  proxy. Its board's
   middleware runs on what it writes, and the other board's after. A `{ self }` caller
   writes there as this deployment with `self` as its profile (the handle's
   own with the profile `BOARD_AS` or the agent picks), and a post whose ID
@@ -331,8 +344,7 @@ The backends board ships:
   and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
   its own sync, it answers here too, beside the other board's. Its own routes
   are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
-  registers its own there, as the protocol's does), and `registerWatchers()`
-  registers this board's now. Its watchers run here, on what the other board matches for them
+  registers its own there, as the protocol's does). Its watchers run here, on what the other board matches for them
   (below), and so does its sync: it registers its sync entries (`sync: [{ key,
   platform }]`), pulls what to deliver as matches of watcher `@sync`,
   and pulls back what it pushed to its inbox after each webhook and when it's
@@ -395,13 +407,15 @@ The backend picks them; the protocol only says their shape:
   files (which reports those two as not kept here), and against boards broken
   on purpose, so the kit and the backends can't drift apart unnoticed.
 
-### Watchers over `http()`
+### Watchers woken by their board
 
-The board that keeps the log matches the tails; the board on `http()` runs
-`run`, and so does one on `vercel()`, whose registry is Vercel's API. Nothing
-is pushed but a wake-up with nothing in it. What follows is how a board on the
-internal engine (`local()`) keeps the registry; Vercel's API answers the same
-routes its own way:
+A deployment's watchers run on what the board they're registered with
+matches: Vercel's board for `board()` with no backend (its registry is
+Vercel's API), and with `BOARD_URL` set, the board at that URL. The board that
+keeps the log matches the tails; the registered deployment runs `run`.
+Nothing is pushed but a wake-up with nothing in it. What follows is how a
+board on the internal engine (`local()`) keeps the registry; Vercel's API
+answers the same routes its own way:
 
 | Route, on the board with the log | What |
 | --- | --- |
@@ -410,14 +424,14 @@ routes its own way:
 | `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
 | `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |
 
-| Route, on the board on `http()` | What |
+| Route, on the registered deployment's board | What |
 | --- | --- |
 | `POST /watchers` | Registers its own watchers with the other board, now. No body, no token |
 | `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left. It answers `{ ran }` when that's done, or 202 after 2 seconds while it keeps going |
 
 - **Registrations** live in `board-registry`, session `registry`, one per
   principal with its token facts, so its access is worked out again at each
-  match under the rules as they are then. A board on `http()` registers on
+  match under the rules as they are then. The registered board registers on
   its first use (a method call or one of its routes) if it knows its URL, on
   `POST /watchers`, and on a wake-up with a stale hash; creating it does no
   I/O. Its URL is `board()`'s `url()`: `url`, or on Vercel its production
@@ -534,8 +548,9 @@ discovery), so a token sent to one board can't be replayed anywhere else. That
 includes another board mounted on the same origin. The one exception is `/webhooks/:name`, which is authenticated
 by the platform adapter (see [Sync](#sync)).
 
-In Node, a handle finds a token in this order, and the first match wins.
-Other runtimes bring credentials in `http(url, { fetch })` (see [The handle](#the-handle)).
+In Node, a handle on a board at a URL (`BOARD_URL`, or `vb --url`) finds a
+token in this order, and the first match wins. Outside Node, `board({ fetch })`
+brings credentials for Vercel's board (see [The handle](#the-handle)).
 
 | Where | How | Principal |
 | --- | --- | --- |
@@ -855,9 +870,8 @@ token is for everyone else: a widget, a sandbox, a script.
 
 ```ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 
-const team = board({ backend: http('https://acme.vercel.app/api/board') })
+const team = board() // with BOARD_URL set to a board that keeps grants: vb serve's, say
 
 const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
 await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
@@ -1226,19 +1240,19 @@ export const inboxContract = contract({
 })
 
 // What watchers matched, outside the board log: watch:triage for a watcher here, and
-// watch:@<principal> for everything a board on http() registered (its watchers, its sync, its inbox).
+// watch:@<principal> for everything a registrant registered (its watchers, its sync, its inbox).
 export const watchContract = contract({
   name: 'board-watch',
   events: {
     'watch.matched': z.object({ thread, event, watcher, sync, inbox }), // (server) the last three only for a registrant
     'watch.failed': z.object({ matched, thread, error }),              // (server) gave up after 5 tries
-    // and a registrant's queue (see Watchers over http()): watch.leased, watch.acked,
+    // and a registrant's queue (see Watchers woken by their board): watch.leased, watch.acked,
     // watch.expired, watch.retry, watch.skipped, watch.armed, watch.due, watch.unreachable,
     // and watch.reachable
   },
 })
 
-// Registrations from boards on http(), one session: registry. A principal's newest replaces its last.
+// Registrations from registrants (a deployment with BOARD_URL set), one session: registry. A principal's newest replaces its last.
 export const registryContract = contract({
   name: 'board-registry',
   events: {
@@ -1394,7 +1408,7 @@ it records the external-to-board direction.
 
 **Consumers.** There are two, and both serve the board's own `sync`: a sync
 elsewhere pulls its deliveries and its inbox as matches (see
-[Watchers over `http()`](#watchers-over-http)).
+[Watchers woken by their board](#watchers-woken-by-their-board)).
 
 | Consumer | Runs on | Lane |
 | --- | --- | --- |
@@ -1547,7 +1561,7 @@ status.
 | GET | `/openapi.json` | Generated from the route table |
 
 Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
-[Watchers over `http()`](#watchers-over-http), and sync's records
+[Watchers woken by their board](#watchers-woken-by-their-board), and sync's records
 (`/sync/*`, and the inbox's `POST /inbox/:key`, `GET /inbox/:key/next`, and
 `POST /inbox/:key/:id/ack`) in [Sync](#sync).
 
@@ -1590,7 +1604,7 @@ act on it as the board's caller.
 import { readFile } from 'node:fs/promises'
 import { board } from '@vercel/board'
 
-const team = board()   // Node: the team's board in Vercel's API, or with BOARD_URL, http() to that board
+const team = board()   // Node: the team's board in Vercel's API, or with BOARD_URL, the board at that URL
 
 const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
@@ -1630,13 +1644,12 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
   `board({ fetch })`'s credentials when it's given. In Node they default to
   `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, and
   the team to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
-  it's `http()` to that board instead, whatever the name: its default `fetch`
+  it's that board instead (on `http()`, internal), whatever the name: it
   sends a token in the order in [Tokens](#tokens), through Deployment
   Protection, and `board({ fetch })` never goes there. The default build, for
-  browsers, finds nothing: `board({ team, name, fetch })`, or
-  `board({ backend: http(url) })`, whose `fetch` sends the page's own session
-  (a cookie, say), which the board's `board({ authenticate })` recognizes. A
-  browser never gets a token of the deployment's.
+  browsers, finds nothing: `board({ team, name, fetch })` reaches Vercel's
+  board with what `fetch` sends, or a backend of its own. A browser never gets
+  a token of the deployment's.
 - **Nothing on the way to a handle over HTTP needs Node.** `board()`'s
   pipeline (routing, validation, serving) runs in a browser, IDs hash with
   WebCrypto, and finding the board and its credentials lives in the `node`
@@ -1827,8 +1840,8 @@ it, and nothing is hosted.
   which discovery lists. Start threads, reply, react, label, and edit or delete
   your own messages. `--as` and `--human` pick the profile, as for every command.
 - **A handle like any other.** The page is a handle on the inspector's
-  `/board` proxy (`board({ backend: http(proxy, { fetch }) })`, the default
-  build, its `fetch` sending the per-run token), which forwards the board's API
+  `/board` proxy (the internal `http()`, from the default build, its `fetch`
+  sending the per-run token), which forwards the board's API
   with your credentials. It
   loads snapshots (each with its cursor), then follows `/events` from that
   cursor: every event carries its message as it is afterwards, so the page
@@ -2898,7 +2911,7 @@ export const GET = team.fetch, POST = team.fetch
   thread (`vb label 812 wake=$CLAUDE_CODE_SESSION_ID`) and unset the label when
   done; `vb read --label wake` lists every pending one. Only code you deployed
   runs: the one URL the board is given at runtime is a registered board's own,
-  which it wakes with nothing in it ([Watchers over `http()`](#watchers-over-http)).
+  which it wakes with nothing in it ([Watchers woken by their board](#watchers-woken-by-their-board)).
 - **`board` is the handle, acting as the watcher.** Its writes are authored
   by the watcher, `board:watch:<id>` (on `vercel()` and a board on `http()`,
   `<principal>+<id>`: the deployment, with the watcher's ID as the profile),
@@ -2940,12 +2953,14 @@ watcher's lane is the thread's, so one bad event would silence the watcher on
 that thread until then. A watcher removed from config skips the matches it
 left behind.
 
-**Over `http()`,** the board that keeps the log matches the tails and wakes
-the board that runs them, which pulls, runs, and acks: a pulled match is leased
-for 5 minutes, an error waits and is tried again, and after 5 tries it's
-`watch.failed`. A wake-up carries no credential, and one that doesn't get there
-backs off from a minute to an hour. The routes and the queue are in
-[Watchers over `http()`](#watchers-over-http).
+**On Vercel's board** (and, with `BOARD_URL` set, on the board at that URL),
+the board that keeps the log matches the tails and wakes the deployment that
+runs them, which pulls, runs, and acks. A wake-up carries no credential. On a
+board on the internal engine, a pulled match is leased for 5 minutes, an error
+waits and is tried again, after 5 tries it's `watch.failed`, and a wake-up
+that doesn't get there backs off from a minute to an hour; Vercel's API keeps
+its own timing. The routes and the queue are in
+[Watchers woken by their board](#watchers-woken-by-their-board).
 
 ## Middleware
 
@@ -3095,10 +3110,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/local`, `@vercel/board/backend-vercel`, and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
+| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
-| Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a board on `http()` registers the tails of the watchers it deployed, and its own `https` URL, which the board wakes with no event and no credential (see [Watchers over `http()`](#watchers-over-http)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
+| Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release
 

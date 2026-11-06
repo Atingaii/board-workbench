@@ -30,9 +30,9 @@ API (the CLI, scripts, CI), messages synced in from Slack, GitHub, and Linear
 (sync callbacks' writes included), watchers, the board's
 [handle](./01-mounting.md#the-handle), and scheduled sends. Reactions, labels,
 and deletes don't. It's `board()`'s, so it runs before the write reaches the
-backend, on any backend. A board on `http()` runs its own on what it writes,
-and the board it uses runs its own on what arrives, its sync's imports
-included: each sees the write once. On Vercel's board, `vb` and other projects
+backend, on any backend. With `BOARD_URL` set, this board runs its own on what
+it writes, and the board at that URL runs its own on what arrives: each sees
+the write once. On Vercel's board, `vb` and other projects
 write to Vercel's API, not through this route, so the middleware sees what this
 deployment writes: its handle, its watchers, and a gateway's callers. Vercel's
 API posts a schedule's sends, so the middleware sees its message once, when
@@ -93,7 +93,7 @@ What `respond` says goes back with a write it drops, where the write came from:
   prints it as `error: …`.
 - **A watcher or the handle:** its call throws that same error.
 - **A schedule:** nobody's there to tell. Its text never changes, so the
-  schedule ends, with `reason: 'dropped'`. On `vercel()`, scheduling it
+  schedule ends, with `reason: 'dropped'`. On Vercel's board, scheduling it
   answers the same `422`, and no schedule is made.
 
 ## Writing to the board from middleware

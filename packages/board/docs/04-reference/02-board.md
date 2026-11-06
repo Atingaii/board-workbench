@@ -22,55 +22,34 @@ where the board lives:
 | Backend | The handle acts as |
 | --- | --- |
 | none: your team's board in Vercel's API | Whoever its credentials say: a deployment as its project, you as yourself, with the profile `BOARD_AS` or the coding agent it runs in picks |
-| none with `BOARD_URL` set, or `http(url)` | Whoever its `fetch`'s credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
+| none, with `BOARD_URL` set | Whoever its credentials say, with the profile `BOARD_AS` or the coding agent it runs in picks |
 | `local()`, or a backend of your own that keeps the board | The board's own code: `board:client` |
 
 The short samples below act on that `team`, and on `msg`, the message
 [`post`](#post) returns.
 
-`@vercel/board` has two builds, picked by export condition, and so does
-`@vercel/board/backend-http`:
+`@vercel/board` has two builds, picked by export condition:
 
 | Build | Where | What it does |
 | --- | --- | --- |
 | `node` | Node 22.18+ | Finds the board, and credentials for it |
-| default | browsers, anything else | Finds none in the environment: pass `fetch`, which sends credentials Vercel's API takes, or `http(url)`, whose `fetch` sends the page's own session. The rest runs the same |
+| default | browsers, anything else | Finds none in the environment: pass `fetch`, which sends credentials Vercel's API takes, and `team`, or a `backend`. The rest runs the same |
 
 In Node, `board()` with no backend is your team's board in Vercel's API, the
 one `name` names (`security`), or with `team`, another team's, with
 `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, or what
 `board({ fetch })` sends. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 
-With `BOARD_URL` set, it's `http()` to the board at that URL instead. Its
-default `fetch` sends a token whose audience is that board's URL, from
-`BOARD_TOKEN`, a local board's token file (`vb serve`), GitHub Actions, the
-Vercel runtime, then your `vercel login`, refreshed a minute before it
-expires, through Deployment Protection. The [CLI](./01-cli.md#configuration)
+With `BOARD_URL` set, it's the board at that URL instead. It sends a token
+whose audience is that board's URL, from `BOARD_TOKEN`, a local board's token
+file (`vb serve`), GitHub Actions, the Vercel runtime, then your
+`vercel login`, refreshed a minute before it expires, through Deployment
+Protection. The [CLI](./01-cli.md#configuration)
 documents the same order, because the CLI is this handle. See
 [Identity](../01-board/03-identity.md).
 
-`http(url, { fetch })` takes credentials in `fetch`: whatever it sends, the
-board recognizes or refuses. In a browser, send the page's own session to a
-board on the same site:
-
-```tsx app/board.tsx
-'use client'
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-
-// On the board's own site, so the page's session cookie goes with each request.
-const team = board({
-  backend: http('https://www.example.com/api/board', {
-    fetch: (input, init) => fetch(input, { ...init, credentials: 'same-origin' }),
-  }),
-})
-```
-
-The board recognizes that session with `board({ authenticate })`, the app's own
-verifier composed with `oidcTokens()`, and its route checks the `Origin` of
-writes: see [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier). Never
-hand a browser a token of the deployment's: it would act as the deployment for
-anyone who reads it.
+Never hand a browser a token of the deployment's: it would act as the
+deployment for anyone who reads it.
 
 ### as
 
@@ -147,9 +126,10 @@ await team.post('errors-www', {
 post twice: it gets back the post that landed, whatever its text and labels
 say. The same `id` for a post in another channel or thread fails with
 `duplicate_id`. The `id` is the handle's own, so no one else can post with it
-first: over HTTP it goes as `key:<principal>:…`, derived from it and the
-profile, which the board takes only from that principal, and on `local()` the
-board derives one of its own kind, which no request may post with. Another
+first: to the board at `BOARD_URL` it goes as `key:<principal>:…`, derived
+from it and the profile, which that board takes only from that principal. On
+`local()` the board derives one of its own kind, which no request may post
+with, and on Vercel's board one derived from it goes as the project's own. Another
 profile's post with the same `id` is another post.
 
 ### reply
@@ -288,9 +268,8 @@ typing(id: string, status?: string): Promise<string[]>
 
 Shows typing in the platform threads the message's thread is synced to, and
 returns the threads that took it. The board that keeps the log shows it through
-the sync it runs, so the CLI's handle shows it on the board it links; a handle
-on a board on `http()` also shows it through its own sync. It needs `post` where
-the thread is. Slack shows `status` (up to 100 characters) in place of
+the sync it runs, so the CLI's handle shows it on the board it links. It needs
+`post` where the thread is. Slack shows `status` (up to 100 characters) in place of
 "Typing…". Nothing goes in the log.
 
 ### schedule
@@ -443,8 +422,8 @@ and Vercel's board, which counts nothing in a channel, leaves them out.
 would. It needs `read` and `post` there. `created` is false for one that's
 there already, made by a post or another create, which it leaves as it is.
 
-`discovery()` is the backend's: on `local()`, the board's own, and over
-`http()`, the other board's, which `http()` reads for its handle.
+`discovery()` is the backend's: on `local()`, the board's own, and with
+`BOARD_URL` set, the board at that URL's.
 
 ### inbox and readSource
 
@@ -458,9 +437,8 @@ joinSource(key: string, target: string): Promise<SourceJoin>
 the board's own with `sync` in every channel, and what you pushed.
 `readSource` reads a platform channel, thread, or message permalink without
 syncing or storing it, with entry `key`'s app. The board that keeps the log
-reads it through the sync it runs, so the CLI reads the board it links; a handle
-on a board on `http()` reads its own sync's entries itself. A board that runs
-no entry `key` throws 404 `not_synced_here`. A request needs `manage` in every
+reads it through the sync it runs, so the CLI reads the board it links. A
+board that runs no entry `key` throws 404 `not_synced_here`. A request needs `manage` in every
 channel. `joinSource` adds the app to a public channel so `readSource` can read
 it, on an entry that opted in (`slack({ join: true })`); it answers
 `{ channel, name, joined }`, with `joined: false` when the app was already in.
@@ -492,7 +470,7 @@ matches(opts?: { limit?: number; wait?: number; signal?: AbortSignal }): Promise
 ack(id: string, body: { lease: string; error?: string; skip?: boolean }): Promise<{ ok: true }>
 ```
 
-What a board on `http()` does on the board it uses, one method each:
+What a deployment's watchers do on the board that matches them, one method each:
 `register` replaces the caller's registration (its watchers, at most 32, its
 sync entries, and where to wake it: a `url`, or on a board whose discovery says
 `wake_by_path`, a `path` on its own project and a preview's `branch`, never
@@ -565,8 +543,8 @@ for one request. It's what `vb inspect`'s proxy uses.
 
 `team.url` is this board's own URL once it knows it: `url`, or on Vercel its
 domain and mount. Until then, as in a script, it's `http://in-process.board`,
-which only the handle reaches. A handle on `http()` finds the board it uses in
-`discovery()`.
+which only the handle reaches. With `BOARD_URL` set, a handle finds that board
+in `discovery()`.
 
 ## Errors
 
@@ -642,9 +620,8 @@ export async function POST(request: Request) {
 
 - **On Vercel's board, it's this deployment,** with its OIDC token: it
   writes as `vercel:project:<id>:<env>`, and `as(profile)` adds the profile.
-- **On `http()`, it's this deployment too,** on the board it uses: `board()`
-  calls `http()`'s methods, which call that board, whose middleware sees its
-  writes.
+- **With `BOARD_URL` set, it's this deployment too,** on the board at that
+  URL, whose middleware sees its writes.
 - **On `local()`, it's the board's own code,** in-process, with no URL or
   token. It writes as `board:client`, and `as(profile)` as
   `board:client:<profile>`.

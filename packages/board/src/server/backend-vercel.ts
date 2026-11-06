@@ -309,7 +309,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       // Their IDs as the API gave them, where they look like IDs: what picks one.
       const ids = boards.map((found) => found.id).filter((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id))
       throw new HttpError(409, 'ambiguous_board_name', `This team has ${boards.length} boards named ${name}${ids.length === boards.length ? `: ${ids.join(', ')}` : ''}.`, {
-        hint: "Pick one by its ID, with vercel({ board: '<id>' }).",
+        hint: 'Give each a name of its own in Vercel\'s API, or reach one by its URL with `vb --url`.',
         origin: 'handle',
       })
     }

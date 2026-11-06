@@ -306,8 +306,10 @@ for the service contract.
 
 ## pong (`apps/pong`)
 
-A project's board on the factory's: `board({ backend: http(BOARD_URL) })`
-keeps no log, and the factory's board keeps it. Its one watcher, `ping`, tails
+A project's board on the factory's, on `@vercel/board` 0.32.0 like the factory:
+`board({ backend: http(BOARD_URL) })` keeps no log, and the factory's board
+keeps it. `http()` isn't exported after 0.32, so unpinned it moves to `board()`
+or `board({ name })` on Vercel's board, with a grant. Its one watcher, `ping`, tails
 `pings`, which nothing syncs and no factory watcher reads, and replies `pong
 from <sha>` to each new thread as this project. Its page (`app/page.tsx`)
 pings from a browser through server actions that use the same handle
@@ -380,8 +382,8 @@ included, post to Slack and GitHub.
 
 - **The page is just another handle.** `server.ts` serves the page, its
   bundle, and `/board/*`, a proxy that adds your credentials; the page is
-  `board({ backend: http(proxy, { fetch }) })`, from the default builds, its
-  `fetch` sending the per-run token. The page needs no inspector-specific API; if
+  `board({ backend: http(proxy, { fetch }) })`, on the internal `http()` of the
+  default builds, its `fetch` sending the per-run token. The page needs no inspector-specific API; if
   it wants something, add it to the board's API.
 - **State lives in `app/store.ts`, pure and tested.** Views merge by their
   `version` (an older view never replaces a newer one); your writes are
@@ -454,7 +456,8 @@ applies `access`, runs the `middleware`, and calls the backend with the caller
 it verified (`{ identity, origin }`), which the backend trusts because only
 `board()` makes one. Nothing with side effects runs for a request before
 `access` allows it. With no backend, `board()` is the team's board in Vercel's
-API (`vercel()`, internal to the default), or `http()` to `BOARD_URL`.
+API (`vercel()`), or with `BOARD_URL` set, `http()` to that board: both
+internal, and neither exported.
 `local()` keeps a board in this process on an internal engine, A2's log
 (`src/server/a2.ts`, never in the public API or its types): SQLite under
 `.board/` or memory, its files beside it, and a scheduler in the process. The
@@ -464,20 +467,20 @@ blob store, it keeps no files (501 `no_files`). What it does outside requests
 asks `board()`'s policy through the binding (`accessNow`), and what it writes
 for someone (a schedule's send) goes through the binding's handle, so the
 middleware sees every write once. A board
-on `http()` with no `access` answers only wake-ups and webhooks, so a repo
-links the team's board itself; with one, it's a gateway, whose callers act on
-the team's board as its project, labeled with their handle and narrowed to
-their access. Request
+on another one (Vercel's, or `BOARD_URL`'s) with no `access` answers only
+wake-ups and webhooks, so a repo links the team's board itself; with one, it's
+a gateway, whose callers act on the team's board as its project, labeled with
+their handle and narrowed to their access. Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
-handle. Nothing on the way to a handle over `http()` imports Node: credentials
-go in `http(url, { fetch })`, whose Node default (`vb`'s) lives in the `node`
-builds of `@vercel/board` and `@vercel/board/backend-http`. Watchers and sync run in either
+handle. Nothing on the way to a handle on Vercel's board imports Node:
+credentials go in `board({ fetch })`, whose Node default (`vb`'s) lives in the
+`node` build of `@vercel/board`. Watchers and sync run in either
 build: the engine loads when it's first used, and it and `SyncProvider` import
 nothing from Node; the Chat SDK adapters do (`test/browser.test.ts` checks).
 A2 is bundled: tsdown inlines what board runs of it into `dist` (`deps.alwaysBundle`), so
 installing board installs no `experimental-a2`, and only `local()` loads it. The Chat SDK,
 its adapters, and `@vercel/connect` are optional peers that only the `sync-*` subpaths load.
-Neither reaches a handle over `http()`, its types included (`test/browser.test.ts` and
+Neither reaches a handle on Vercel's board, its types included (`test/browser.test.ts` and
 `test/types.test.ts` check), and the factory's own A2 (Pi's token refreshes) runs apart
 from board's, on its own store and queue.
 

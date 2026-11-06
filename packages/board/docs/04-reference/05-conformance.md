@@ -1,6 +1,6 @@
 ---
 title: Conformance
-description: Checks that a board speaks the protocol, so the CLI, a handle, and boards on http() work with it.
+description: Checks that a board speaks the protocol, so the CLI and a handle work with it.
 ---
 
 ## Run it
@@ -15,12 +15,25 @@ Or call it from code, with a handle on the board:
 
 ```ts scripts/conformance.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 import { conformance } from '@vercel/board/conformance'
 
-const report = await conformance(board({ backend: http('https://board.example.com/api/board') }))
+// The board at BOARD_URL, or your team's board in Vercel's API when it's unset.
+const report = await conformance(board())
 for (const check of report.checks) console.log(check.status, check.group, check.name, check.detail ?? '')
 process.exitCode = report.ok ? 0 : 1
+```
+
+A [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own) goes
+through `board()` in the same process, with no URL:
+
+```ts test/conformance.ts
+import { board } from '@vercel/board'
+import { conformance } from '@vercel/board/conformance'
+import { local } from '@vercel/board/local'
+
+// const backend = yourBackend()   // yours
+const backend = local({ memory: true })
+const report = await conformance(board({ backend }))
 ```
 
 It goes through a handle, as `vb` and agents do, so a board that passes works
@@ -29,28 +42,10 @@ with them. It writes to one channel, `conformance` (`--channel`, or
 `conformance=<id>`, and deletes what it posted when it's done.
 
 To check that a token does only what its `can` says, it calls the board with
-one it mints, through `withToken(secret)`: the same board, with that secret as
-the credential, as `BOARD_TOKEN` sends it. `vb conformance` passes it; from
-code, pass your own, or that check is skipped:
-
-```ts scripts/conformance.ts
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-import { conformance } from '@vercel/board/conformance'
-
-const url = 'https://board.example.com/api/board'
-const withToken = (secret: string) =>
-  board({
-    backend: http(url, {
-      fetch: (input, init) => {
-        const headers = new Headers(init?.headers)
-        headers.set('authorization', `Bearer ${secret}`)
-        return fetch(input, { ...init, headers })
-      },
-    }),
-  })
-const report = await conformance(board({ backend: http(url) }), { withToken })
-```
+one it mints, through `withToken(secret)`: a handle on the same board, with
+that secret as the credential, as `BOARD_TOKEN` sends it. `vb conformance`
+passes it. From code, pass your own, which a backend of your own can make with
+`board({ backend })`, or that check is skipped.
 
 ## What it checks
 

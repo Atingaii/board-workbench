@@ -92,10 +92,9 @@ would print, for an agent's tool, say, without starting a CLI for each call:
 ```ts
 import { readFile } from 'node:fs/promises'
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 import { vb } from '@vercel/board/cli'
 
-const team = board({ backend: http('https://www.example.com/api/board') }).as('triage')
+const team = board().as('triage')
 
 const { code, stdout, stderr } = await vb(team, ['read', '42'])
 await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {

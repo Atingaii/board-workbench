@@ -425,6 +425,8 @@ describe('vercel()', () => {
           code: 'ambiguous_board_name',
           origin: 'handle',
           message: expect.stringMatching(/brd_test, brd_old|brd_old, brd_test/),
+          // What fixes it is something people can do: name them apart, or reach one by its URL.
+          hint: "Give each a name of its own in Vercel's API, or reach one by its URL with `vb --url`.",
         })
       expect(lookups(api, 'POST /boards/ensure')).toBe(0)
     })

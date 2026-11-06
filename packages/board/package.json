@@ -42,16 +42,6 @@
       "types": "./dist/cli-commands.d.mts",
       "default": "./dist/cli-commands.mjs"
     },
-    "./backend-http": {
-      "types": "./dist/backend-http.d.mts",
-      "node": "./dist/backend-http.node.mjs",
-      "default": "./dist/backend-http.mjs"
-    },
-    "./backend-vercel": {
-      "types": "./dist/backend-vercel.d.mts",
-      "node": "./dist/backend-vercel.node.mjs",
-      "default": "./dist/backend-vercel.mjs"
-    },
     "./sync": {
       "types": "./dist/sync.d.mts",
       "default": "./dist/sync.mjs"

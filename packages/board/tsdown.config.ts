@@ -3,18 +3,14 @@ import { defineConfig } from 'tsdown'
 export default defineConfig([
   {
     entry: {
-      // `@vercel/board` and `@vercel/board/backend-http` have a `node` build, which finds boards in the environment
-      // and serves them, and a default one with nothing that needs Node, for browsers.
+      // `@vercel/board` has a `node` build, which finds boards and credentials in the environment and
+      // serves them, and a default one with nothing that needs Node, for browsers.
       index: 'src/server/index.default.ts',
       'index.node': 'src/server/index.ts',
       access: 'src/access/index.ts',
       conformance: 'src/conformance/index.ts',
       // `@vercel/board/local`: a board kept in this process, Node only.
       local: 'src/local/index.ts',
-      'backend-http': 'src/backend-http/index.default.ts',
-      'backend-http.node': 'src/backend-http/index.ts',
-      'backend-vercel': 'src/backend-vercel/index.default.ts',
-      'backend-vercel.node': 'src/backend-vercel/index.ts',
       sync: 'src/sync/index.ts',
       'sync-chat-sdk': 'src/sync/chat-sdk.ts',
       'sync-slack': 'src/sync/slack.ts',
