@@ -137,18 +137,21 @@ describe('a private channel, from the handle', () => {
     // Ada manages the still-open path, so she can add herself to the creator's grant: once it's
     // made, before it's listed again, or just before the lock reaches the board.
     for (const [path, when] of [['vault', 'listing'], ['safe', 'lock']] as const) {
-      let added = false
+      let added: string | null = null
       const adding: Fetch = async (request) => {
         const onGrants = new URL(request.url).pathname.endsWith('/grants')
         const locking = request.method === 'POST' && onGrants && (await request.clone().text()).includes('"everyone"')
         const own = (await team.grants()).find((grant) => Object.hasOwn(grant.can, `${path}/`) && grant.principals.some((principal) => principal.kind === 'user'))
         if (!added && own && (when === 'lock' ? locking : request.method === 'GET' && onGrants)) {
-          added = (await caller(team.fetch, await personToken('u_ada'))('PATCH', `/grants/${own.id}`, { add: [{ kind: 'user', userId: 'u_ada' }] })).status === 200
+          if ((await caller(team.fetch, await personToken('u_ada'))('PATCH', `/grants/${own.id}`, { add: [{ kind: 'user', userId: 'u_ada' }] })).status === 200) added = own.id
         }
         return team.fetch(request)
       }
-      await expect(handleAs(adding, () => personToken()).createChannel(path, { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_granted' })
-      expect(added).toBe(true)
+      const refused = await handleAs(adding, () => personToken()).createChannel(path, { private: true }).catch((error: unknown) => error)
+      // Its own grant is revoked by now, so it names no grant to revoke.
+      expect(added).not.toBeNull()
+      expect(refused).toMatchObject({ status: 409, code: 'channel_granted', message: `${added} changed while ${path} was being made, so a private ${path} wouldn't be yours alone: nothing was made.` })
+      expect((refused as { hint?: string }).hint).toBeUndefined()
       // The grant she's on and the lock are both gone, and no channel was made.
       expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
       expect(await team.channels()).toEqual([])
