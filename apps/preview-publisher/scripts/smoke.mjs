@@ -45,7 +45,7 @@ try {
     [
       '--input-type=module',
       '-e',
-      "import assert from 'node:assert/strict'; import { board } from '@vercel/board'; import { local } from '@vercel/board/local'; assert.equal(typeof board, 'function'); assert.equal(typeof local, 'function')",
+      "import assert from 'node:assert/strict'; import { board } from '@vercel/board'; import { local } from '@vercel/board/backend-local'; assert.equal(typeof board, 'function'); assert.equal(typeof local, 'function')",
     ],
     { cwd: directory, stdio: 'inherit' },
   )
