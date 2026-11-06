@@ -179,16 +179,25 @@ export const acmeGeneral = board({ team: 'acme' })
 - **This project's own code makes the board** the first time it uses a name
   the team has none for. Vercel's API grants the new board to this project, in
   the environment it runs in, and anyone on the team can use it.
-- **A person's call never makes one.** `vb` and a script you run as yourself
-  fail with 404 `no_board` until the board is there.
-- **A board this project isn't granted** fails with 403 `board_not_granted`:
-  someone on the team grants it to this project, in this environment.
+- **A person's call makes one only when it asks to,** with
+  `board({ name, ensure: true })` or `vb --ensure`. Without it, `vb` and a
+  script you run as yourself fail with 404 `no_board`,
+  `no board named security on this team, or none you can see.`
+- **Names are unique across the team's boards,** private ones included. One a
+  board you can't see has fails with 409 `board_name_taken`, and makes
+  nothing: ask someone who can see it for access.
+- **A board whose grants don't let this project in** fails with 403
+  `board_not_granted`, `board security doesn't let this project in (prj_pong, preview).`
+  Every project on the team gets in unless the board's grants were narrowed,
+  so someone who manages the board grants it. The team's default board says
+  the same.
 - **Older boards can share a name.** Then nothing picks one: a call fails with
   409 `ambiguous_board_name`, which lists their IDs, and `vercel({ board })`
   takes one by its ID.
 
-The backend reads both once, when `board()` binds it: `binding.name`, null for
-the team's default board, and `binding.team`, null for the environment's team.
+The backend reads them once, when `board()` binds it: `binding.name`, null for
+the team's default board, `binding.team`, null for the environment's team, and
+`binding.ensure`. `board({ ensure: true })` without a `name` throws.
 `vercel({ team })` that isn't `board({ team })`'s fails then. On `http()`, the
 board is the one at its URL, whatever the name, and `local()` keeps a file per
 name: see [Local boards](./10-local.md).
