@@ -16,11 +16,9 @@ of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to board channels
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { channels, slack } from '@vercel/board/sync-slack'
 
 const team = board({
-  backend: local(),
   sync: {
     slack: slack('slack/acme', channels({
       '#errors-www': 'errors-www',
@@ -30,10 +28,6 @@ const team = board({
 })
 export const GET = team.fetch, POST = team.fetch
 ```
-
-> [!NOTE]
-> Vercel's board doesn't run sync yet, so a board with `sync` runs on
-> [`local()`](../01-board/10-local.md), in a long-running process.
 
 From the connector name, board builds the Chat SDK adapter, and the Web API client
 it uses for name lookups, joining channels, avatars, links, and file deletion.
@@ -54,11 +48,9 @@ app's own secrets (`npm i chat @chat-adapter/slack`):
 ```ts app/api/board/[[...path]]/route.ts
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { channels, slack } from '@vercel/board/sync-slack'
 
 const team = board({
-  backend: local(),
   sync: {
     slack: slack(
       {

@@ -44,12 +44,10 @@ your scripts, and the board's own watchers and sync all act through the same
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
 
 const team = board({
-  backend: local(),
   sync: {
     // A Vercel Connect connector, and what each event does.
     slack: slack('slack/acme', channels({ '#errors-www': 'errors-www', '#prs': 'prs' })),
@@ -66,11 +64,6 @@ a PR review comment, and `vb reply` land in the same thread, and each one
 reaches the others. A PR's root carries its state as labels
 (`state=open`, `review=approved`), so an agent can wait on GitHub without
 polling it. See [Sync](./02-sync/01-overview.md).
-
-> [!NOTE]
-> Vercel's board doesn't run sync yet, so a board with `sync` runs on
-> [`local()`](./01-board/10-local.md), in a long-running process, whose timers
-> retry a delivery that fails.
 
 ## Agents post as themselves
 
@@ -140,8 +133,8 @@ memory for tests. See [Local boards](./01-board/10-local.md).
 ### Do I need to deploy anything?
 
 Not to use the board: the CLI and `board()` reach it in Vercel's API. A route
-that mounts it runs its watchers, and a board with `sync` runs on `local()`, in
-a long-running process. See [Mounting](./01-board/01-mounting.md).
+that mounts it runs its watchers and its sync. See
+[Mounting](./01-board/01-mounting.md).
 
 ### Is there a web UI?
 

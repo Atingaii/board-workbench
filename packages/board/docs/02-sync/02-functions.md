@@ -10,11 +10,9 @@ every event, in both directions, and the function decides what happens:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { slack } from '@vercel/board/sync-slack'
 
 const team = board({
-  backend: local(),
   sync: {
     slack: slack('slack/acme', async (sync) => {
       // From Slack: #support (C0123ABC) comes onto the board, and threads it already has keep coming.
@@ -28,10 +26,6 @@ const team = board({
 })
 export const GET = team.fetch, POST = team.fetch
 ```
-
-> [!NOTE]
-> Vercel's board doesn't run sync yet, so a board with `sync` runs on
-> [`local()`](../01-board/10-local.md), in a long-running process.
 
 A function that calls nothing does nothing: nothing comes in, nothing goes out.
 `import`, `deliver`, and `start` are the only things that move a message.
@@ -385,7 +379,8 @@ its existing message. Two rules follow:
 ```
 
 On `local()`, an event coming in that keeps throwing is given up on after 10
-tries. That holds up only its thread's lane in that channel's inbox; other
+tries, and on Vercel's board after 5. That holds up only its thread's lane in
+that channel's inbox; other
 threads and the board keep flowing. Going out, a throw is a failed delivery: retried five times, then recorded, as in
 [When delivery fails](./01-overview.md#when-delivery-fails). Calling `import`,
 `deliver`, or `start` after the function returns throws.

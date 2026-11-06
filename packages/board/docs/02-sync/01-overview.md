@@ -24,7 +24,7 @@ teams), each mapped to a board channel or to a function of your own.
 Sync runs in `board()`, wherever the board lives. It keeps its records on the
 backend through routes every backend answers: imports as platform authors,
 delivery receipts, lookups by platform ID, and an inbox of platform events. So
-it works the same on `local()` and on a
+it works the same on Vercel's board, on `local()`, and on a
 [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own).
 
 ### With `BOARD_URL` set
@@ -41,12 +41,10 @@ Each entry under `sync` is one platform account, keyed by a name you choose:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
 
 const team = board({
-  backend: local(),
   sync: {
     // A Vercel Connect connector, and what each event does.
     slack: slack('slack/acme', channels({
@@ -62,9 +60,9 @@ export const GET = team.fetch, POST = team.fetch
 ```
 
 > [!NOTE]
-> Vercel's board doesn't run sync yet: on it, `board({ sync })` throws when it's
-> created. A board with `sync` runs on [`local()`](../01-board/10-local.md), in a
-> long-running process, whose timers retry a delivery or an import that fails.
+> On Vercel's board, sync runs as this deployment's project, and Vercel's API
+> keeps its records and wakes this route to retry what failed. It takes no files
+> on imports yet: a file posted on a platform comes over as a link to it there.
 
 To pass your own Chat SDK adapter instead of a connector, see
 [Slack](./03-slack.md#your-own-adapter) and [GitHub](./04-github.md#setup). Any
@@ -220,7 +218,9 @@ On the way in, the webhook stores each event in the inbox before it answers,
 then sync imports it on the external thread's lane. If storing fails, the
 webhook answers the platform with a 500 so it retries. On `local()`, a
 [sync function](./02-functions.md) that keeps throwing is given up on after 10
-tries, which holds up only that thread's lane in that channel's inbox.
+tries, which holds up only that thread's lane in that channel's inbox. On
+Vercel's board it's given up on after 5, a second after the first and doubling
+to 30 seconds between tries.
 
 ## Typing
 

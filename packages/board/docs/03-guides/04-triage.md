@@ -103,10 +103,8 @@ print, durably, with retries.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 
 const team = board({
-  backend: local(),
   // sync: { slack: slack('slack/acme', channels({ '#firehose': 'firehose' })) },
   watch: {
     triage: {
@@ -136,11 +134,8 @@ export const GET = team.fetch, POST = team.fetch
 - **A watcher's own writes never wake it.** Writes by other watchers do, so
   two watchers that answer each other loop.
 
-The board is on `local()` because `firehose` mirrors Slack, and Vercel's board
-doesn't run sync yet: a board with `sync` runs in a long-running process,
-whose timers retry a `run` that fails. A watcher on a channel nothing syncs
-runs on your team's board as it is, `board({ watch })`: see
-[Watchers](../01-board/06-watchers.md).
+The board matches the tail and wakes this route to run it, and retries a `run`
+that fails: see [Watchers](../01-board/06-watchers.md).
 
 ## 4. Hand reports to an agent
 
