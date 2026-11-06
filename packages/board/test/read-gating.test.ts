@@ -14,12 +14,12 @@ import { fakeQueue } from './queue.ts'
 /** The front project's feedback intake: it starts threads in feedback/ and reads nothing. */
 const intake = { principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { 'feedback/': ['post'] } } satisfies GrantInput
 
-/** What basehub-ai/www's workflows may do. */
-const www = (can: GrantInput['can']) => ({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can }) satisfies GrantInput
+/** What acme/web's workflows may do. */
+const www = (can: GrantInput['can']) => ({ principals: [{ kind: 'github', repository: 'acme/web' }], can }) satisfies GrantInput
 
-/** Sets what the grant naming basehub-ai/www gives: it changes that one grant. */
+/** Sets what the grant naming acme/web gives: it changes that one grant. */
 async function setWww(board: ReturnType<typeof testBoard>, can: GrantInput['can']) {
-  const named = (await board.grants()).find((one) => one.principals.some((principal) => principal.kind === 'github' && principal.repository === 'basehub-ai/www'))
+  const named = (await board.grants()).find((one) => one.principals.some((principal) => principal.kind === 'github' && principal.repository === 'acme/web'))
   await board.updateGrant(named!.id, { can })
 }
 
@@ -354,13 +354,13 @@ describe('sync', () => {
 
 describe('one principal, two grants', () => {
   // A repo's workflows share `github:repo:<id>`: deploy.yml reads and posts in ci/, a pull request's run only posts there.
-  const deployYml = { kind: 'github' as const, repository: 'basehub-ai/www', event: 'push', workflow: 'deploy.yml', branch: 'main' }
-  const pullRequests = { kind: 'github' as const, repository: 'basehub-ai/www', event: 'pull_request' }
+  const deployYml = { kind: 'github' as const, repository: 'acme/web', event: 'push', workflow: 'deploy.yml', branch: 'main' }
+  const pullRequests = { kind: 'github' as const, repository: 'acme/web', event: 'pull_request' }
   const grants = [
     { principals: [deployYml], can: { 'ci/': ['read', 'post'] } },
     { principals: [pullRequests], can: { 'ci/': ['post'] } },
   ] satisfies GrantInput[]
-  const pullRequest = { event_name: 'pull_request', ref: 'refs/pull/7/merge', workflow_ref: 'basehub-ai/www/.github/workflows/test.yml@refs/pull/7/merge' }
+  const pullRequest = { event_name: 'pull_request', ref: 'refs/pull/7/merge', workflow_ref: 'acme/web/.github/workflows/test.yml@refs/pull/7/merge' }
 
   it('keep what the one that reads wrote from the one that can’t', async () => {
     const board = await granting(grants, { scheduler: fakeQueue().scheduler })
@@ -522,8 +522,8 @@ describe('schedules', () => {
   it('keep plain data in their state, which A2 clones and snapshots', () => {
     const as = {
       author: { actor: 'github:repo:123456', principal: 'github:repo:123456', profile: null, session: null },
-      principal: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'basehub-ai/www', scope: 'ci=post' },
-      actor: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'basehub-ai/www', name: 'basehub-ai/www', avatar: null },
+      principal: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'acme/web', scope: 'ci=post' },
+      actor: { id: 'github:repo:123456', kind: 'workflow' as const, handle: 'acme/web', name: 'acme/web', avatar: null },
     }
     const payload = { channel: 'ci', re: null, text: 'nightly', labels: {}, noSync: false, first: T0, every: null, until: null, times: null, as }
     const event = { index: 1, type: 'schedule.created', createdAt: T0, payload } as unknown as Parameters<typeof foldSchedules>[1]

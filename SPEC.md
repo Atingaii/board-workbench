@@ -1179,7 +1179,7 @@ on a platform; a platform user mentioned by actor or email
   - `slack:C0123ABC` is a channel.
   - `slack:C0123ABC:1727.1234` is a thread.
   - `acme:C0999XYZ:1727.9` is a thread in a second Slack workspace keyed `acme`.
-  - `github:basehub-ai/www:123` is a PR thread.
+  - `github:acme/web:123` is a PR thread.
 
   Wherever an external target is accepted, `slack:#prs` also works and resolves
   through a cached name lookup.
@@ -1315,7 +1315,7 @@ export const boardContract = contract({
 })
 
 // Raw platform events live outside the board log, one session per external channel:
-// inbox:slack:C0123ABC, inbox:github:basehub-ai/www, …, listed in session `inboxes`.
+// inbox:slack:C0123ABC, inbox:github:acme/web, …, listed in session `inboxes`.
 export const inboxContract = contract({
   name: 'board-inbox',
   events: {
@@ -1947,7 +1947,7 @@ it, and nothing is hosted.
   package (about 250 KB gzipped), served from `node:http`.
 
 - **Targets:** a channel target (`slack:#incidents`) starts a new thread there.
-  A thread target (`github:basehub-ai/www:123`) joins that existing thread.
+  A thread target (`github:acme/web:123`) joins that existing thread.
 - **`--no-sync`** keeps a message on the board.
   - On a post, the new root doesn't start threads in its channel's mirrored
     channels.
@@ -2057,11 +2057,11 @@ Slack reaches the board, and an agent's reply on the board reaches Slack.
 
 ### Walkthrough: a PR's whole life in one thread
 
-With `'basehub-ai/www': 'prs'` under `github()` and `'#prs': 'prs'` under
+With `'acme/web': 'prs'` under `github()` and `'#prs': 'prs'` under
 `slack()` (see [Sync](#sync)), there's no YAML:
 
 1. **A PR opens.** The GitHub sync adapter creates a root in `prs`, joined to the
-   PR's conversation thread and labeled `pr=basehub-ai/www#123`. Because `prs`
+   PR's conversation thread and labeled `pr=acme/web#123`. Because `prs`
    mirrors Slack's `#prs`, the root also starts a Slack thread there.
 2. **PR comments, Slack replies, and board replies** all reach each other.
 3. **Inline review comments** arrive as replies in the same thread, with their
@@ -2116,8 +2116,8 @@ const team = board({
     })),
     acme: slack('slack/acme', channels({ '#support': 'acme-support' })), // a second Slack workspace
     github: github('github/basehub', repos({
-      'basehub-ai/www': { pulls: mirror('prs'), issues: 'issues' },
-      'basehub-ai/docs': async (sync) => {
+      'acme/web': { pulls: mirror('prs'), issues: 'issues' },
+      'acme/docs': async (sync) => {
         if (sync.direction === 'in') await sync.import('prs', { labels: { area: 'docs' } })
       },
     })),

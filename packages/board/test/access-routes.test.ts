@@ -183,7 +183,7 @@ const WALK: Record<RouteName, Walk> = {
 
 async function setup() {
   const board = testBoard({ scheduler: fakeQueue().scheduler })
-  await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { open: ['read'] } })
+  await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
   const keeper = caller(board.fetch, await personToken('u_keeper'), { 'x-board-handle': 'keeper' })
   const host = caller(board.fetch, await personToken('u_host'), { 'x-board-handle': 'host' })
   const upload = await board.fetch(
@@ -201,7 +201,7 @@ async function setup() {
   // A channel made before anything posted to it: an event that names no message.
   expect((await keeper('POST', '/channels', { path: 'secret/empty' })).body).toMatchObject({ created: true })
   // A grant decides open for the walker too, beside its rule: one it may not see when it asks what decides.
-  await keeper('POST', '/grants', { principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { open: ['read'] } })
+  await keeper('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
   const openRoot = (await host('POST', '/messages', { channel: 'open', text: 'hello' })).body.message.id
   const openSchedule = (await host('POST', '/schedules', { re: openRoot, text: 'hello later', in: '1d' })).body.schedule.id
   const fixture: Fixture = { secret: { root, reply, schedule, file }, open: { root: openRoot, schedule: openSchedule } }

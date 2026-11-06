@@ -85,11 +85,11 @@ export const deploymentToken = (
 export const workflowToken = (claims: Record<string, unknown> = {}) =>
   sign(
     {
-      repository: 'basehub-ai/www',
+      repository: 'acme/web',
       repository_id: '123456',
       event_name: 'push',
       ref: 'refs/heads/main',
-      workflow_ref: 'basehub-ai/www/.github/workflows/deploy.yml@refs/heads/main',
+      workflow_ref: 'acme/web/.github/workflows/deploy.yml@refs/heads/main',
       ...claims,
     },
     GITHUB_ISS,
