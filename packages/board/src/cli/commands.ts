@@ -101,7 +101,7 @@ export const options = {
   can: { type: 'string', multiple: true, value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
   // Grants: whom one names, each flag a principal, with the modifiers after it.
   user: { type: 'string', multiple: true, value: 'email', description: 'a person on the team' },
-  project: { type: 'string', multiple: true, value: 'name|id', description: "a project's deployments" },
+  project: { type: 'string', multiple: true, short: 'p', value: 'name|id', description: "a project's deployments" },
   github: { type: 'string', multiple: true, value: 'owner/repo', description: "GitHub Actions' runs in a repository" },
   oidc: { type: 'string', multiple: true, value: 'issuer', description: "an issuer's tokens, by its URL" },
   'all-users': { type: 'boolean', description: 'every person on the team' },
@@ -109,9 +109,9 @@ export const options = {
   app: { type: 'string', multiple: true, value: 'slug|id', description: 'an app installed on the team' },
   'all-apps': { type: 'boolean', description: 'every app installed on the team' },
   everyone: { type: 'boolean', description: 'everyone let in some other way, and no one new' },
-  environment: { type: 'string', multiple: true, value: 'envs', description: 'where its --project runs' },
+  environment: { type: 'string', multiple: true, short: 'e', value: 'environment', description: 'where its --project runs' },
   workflow: { type: 'string', multiple: true, value: 'file', description: "its --github's workflow, e.g. ci.yml" },
-  branch: { type: 'string', multiple: true, value: 'branch', description: "its --github's branch" },
+  'git-branch': { type: 'string', multiple: true, value: 'branch', description: "its --github's branch" },
   event: { type: 'string', multiple: true, value: 'event', description: "its --github's event, e.g. push" },
   claim: { type: 'string', multiple: true, value: 'k=v', description: "a claim its --oidc's tokens carry" },
   'add-user': { type: 'string', multiple: true, value: 'email', description: 'add a person' },
@@ -244,14 +244,14 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         options: [
           ...(['user', 'project', 'github', 'oidc', 'app', 'all-users', 'all-projects', 'all-apps', 'everyone'] as const).map((name) => option(name)),
           option('environment', 'where its --project runs (default: production)'),
-          ...(['workflow', 'branch', 'event', 'claim'] as const).map((name) => option(name)),
+          ...(['workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
           option('can', 'what they may do, repeated: perms, all, or none', 'pattern=perms'),
         ],
         examples: [
           { name: 'close security/ to everyone', value: "grants create --everyone --can 'security/=none'" },
           { name: 'and let two people in', value: "grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'" },
           { name: "a project's production and previews", value: "grants create --project sec --environment production,preview --can 'security/=read,post'" },
-          { name: "two repositories' workflows", value: "grants create --github acme/web --workflow ci.yml --branch main --github acme/api --workflow deploy.yml --can 'ci/=post'" },
+          { name: "two repositories' workflows", value: "grants create --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml --can 'ci/=post'" },
           { name: "another issuer's tokens", value: "grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'" },
         ],
       },
@@ -260,7 +260,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         description: 'add or remove principals, or replace its --can',
         arguments: [{ name: 'grant', required: true, description: 'its ID, as grants shows it (g3)' }],
         options: [
-          ...(['add-user', 'add-project', 'add-github', 'add-oidc', 'add-app', 'add-all-users', 'add-all-projects', 'add-all-apps', 'add-everyone', 'remove-user', 'remove-project', 'remove-github', 'remove-oidc', 'remove-app', 'remove-all-users', 'remove-all-projects', 'remove-all-apps', 'remove-everyone', 'environment', 'workflow', 'branch', 'event', 'claim'] as const).map((name) => option(name)),
+          ...(['add-user', 'add-project', 'add-github', 'add-oidc', 'add-app', 'add-all-users', 'add-all-projects', 'add-all-apps', 'add-everyone', 'remove-user', 'remove-project', 'remove-github', 'remove-oidc', 'remove-app', 'remove-all-users', 'remove-all-projects', 'remove-all-apps', 'remove-everyone', 'environment', 'workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name)),
           option('can', 'replaces what it lets them do', 'pattern=perms'),
         ],
         examples: [
@@ -272,7 +272,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'explain',
         description: 'which grant decides a channel, for you or anyone',
         arguments: [{ name: 'channel', required: true, description: 'a channel, such as security/incidents' }],
-        options: [...(['user', 'project', 'github', 'oidc', 'app', 'environment', 'workflow', 'branch', 'event', 'claim'] as const).map((name) => option(name))],
+        options: [...(['user', 'project', 'github', 'oidc', 'app', 'environment', 'workflow', 'git-branch', 'event', 'claim'] as const).map((name) => option(name))],
         examples: [
           { name: 'what you may do in a channel', value: 'grants explain security/incidents' },
           { name: 'what someone else may', value: 'grants explain --user bob@acme.com security/incidents' },

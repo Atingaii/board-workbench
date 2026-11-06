@@ -88,7 +88,7 @@ deployments.
 | `vb grants create --everyone --can 'security/=none'` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } })` |
 | `vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'` | `team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })` |
 | `vb grants create --project sec --environment production,preview --can 'security/=read,post'` | `team.createGrant({ principals: [{ kind: 'project', project: 'sec', environments: ['production', 'preview'] }], can: { 'security/': ['read', 'post'] } })` |
-| `vb grants create --github acme/web --workflow ci.yml --branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
+| `vb grants create --github acme/web --workflow ci.yml --git-branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
 | `vb grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })` |
 | `vb grants create --app ship --can 'ship/=post'` | `team.createGrant({ principals: [{ kind: 'app', app: 'ship' }], can: { 'ship/': ['post'] } })` |
 | `vb grants update g5 --add-user carol@acme.com` | `team.updateGrant('g5', { add: [{ kind: 'user', email: 'carol@acme.com' }] })` |

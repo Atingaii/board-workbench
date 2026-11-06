@@ -502,12 +502,12 @@ A principal is a flag, and repeating flags names several:
 | Flag | Names | Its modifiers |
 | --- | --- | --- |
 | `--user <email>` | a person on the team | |
-| `--project <name\|id>` | a project's deployments | `--environment` |
-| `--github <owner/repo>` | GitHub Actions runs in a repository | `--workflow`, `--branch`, `--event` |
+| `-p, --project <name\|id>` | a project's deployments | `-e, --environment` |
+| `--github <owner/repo>` | GitHub Actions runs in a repository | `--workflow`, `--git-branch`, `--event` |
 | `--oidc <issuer>` | an issuer's tokens | `--claim name=value` |
 | `--app <slug\|id>` | an app installed on the team | |
 | `--all-users` | every person on the team | |
-| `--all-projects` | every project's deployments on the team | `--environment` |
+| `--all-projects` | every project's deployments on the team | `-e, --environment` |
 | `--all-apps` | every app installed on the team | |
 | `--everyone` | everyone something else lets in | |
 
@@ -515,7 +515,7 @@ A modifier goes after the principal it's for, so one grant mixes them:
 `--github acme/web --workflow ci.yml --github acme/api --workflow deploy.yml`.
 `--environment` takes a comma-separated list and is `production` when left
 out. `--workflow` matches the run's workflow file (`ci.yml` is
-`.github/workflows/ci.yml`), `--branch` its `refs/heads/` branch, and
+`.github/workflows/ci.yml`), `--git-branch` its `refs/heads/` branch, and
 `--event` its event. `--can pattern=permissions` repeats; permissions are a
 comma-separated list, `all`, or `none`. A board that verifies tokens itself,
 as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an

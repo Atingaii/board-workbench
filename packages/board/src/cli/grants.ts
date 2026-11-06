@@ -32,7 +32,7 @@ export type Prefix = '' | 'add-' | 'remove-'
 const MODIFIERS: Record<string, readonly Kind[]> = {
   environment: ['project', 'all-projects'],
   workflow: ['github'],
-  branch: ['github'],
+  'git-branch': ['github'],
   event: ['github'],
   claim: ['oidc'],
 }
@@ -78,11 +78,14 @@ export function principalsIn(tokens: readonly OptionToken[], prefixes: readonly 
         break
       }
       case 'workflow':
-      case 'branch':
-      case 'event':
-        if (last[name] !== undefined) throw new GrantMisuse(`${flagOf(last)} takes one --${name}: name the repository again for another.`)
-        last[name] = given
+      case 'git-branch':
+      case 'event': {
+        // `--git-branch` is the principal's `branch`, as the Vercel CLI names a Git branch.
+        const field = name === 'git-branch' ? 'branch' : name
+        if (last[field] !== undefined) throw new GrantMisuse(`${flagOf(last)} takes one --${name}: name the repository again for another.`)
+        last[field] = given
         break
+      }
       case 'claim': {
         const at = given.indexOf('=')
         if (at <= 0) throw new GrantMisuse(`--claim takes name=value, like project_id=42: got ${JSON.stringify(given)}.`)
