@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as esbuild from 'esbuild'
 import { build } from 'tsdown'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, type Failure } from '../src/cli/embedded.ts'
@@ -859,11 +860,40 @@ describe('the embedded CLI', () => {
       expect(await app.text()).toBe(await readFile(handed, 'utf8'))
       expect(await served.stop()).toBe(0)
 
-      // Without one, there's no page beside the bundle: it says what's missing, and serves nothing.
+      // Without one, there's no page of board's beside the bundle: it says what's missing, and serves
+      // nothing, not even a file where board's would be, which isn't the page board's build made.
+      await mkdir(join(dir, 'inspect'))
+      await writeFile(join(dir, 'inspect/app.js'), "document.body.dataset.page = 'stray'")
       const without = await inspecting([join(dir, 'app.mjs')])
       expect(without.address).toBeNull()
       expect(await without.exited).toBe(1)
       expect(without.stderr()).toMatch(/^error: The inspector's page isn't beside board's CLI\.\n[\s\S]*inspectorPage/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('serves the page it is handed in an app that bundles the published CLI as CommonJS, with no import.meta.url', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'board-cli-'))
+    try {
+      const entry = join(dir, 'entry.mjs')
+      await writeFile(
+        entry,
+        [
+          "import { readFile } from 'node:fs/promises'",
+          `import { createApp } from ${JSON.stringify(join(import.meta.dirname, '../dist/cli-embedded.mjs'))}`,
+          "const inspectorPage = () => readFile(process.env.PAGE_FROM, 'utf8')",
+          "createApp({ appName: 'vercel board', inspectorPage }).run(process.argv.slice(2)).then((code) => { process.exitCode = code })",
+        ].join('\n'),
+      )
+      // As esbuild bundles for CommonJS: `import.meta` is an empty object there.
+      await esbuild.build({ entryPoints: [entry], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: join(dir, 'app.cjs'), logLevel: 'silent' })
+      const handed = join(dir, 'page.js')
+      await writeFile(handed, "document.body.dataset.page = 'the app\\'s'")
+      const served = await inspecting([join(dir, 'app.cjs')], { PAGE_FROM: handed })
+      expect(served.address, served.stderr()).not.toBeNull()
+      expect(await (await fetch(`${served.address}/app.js`)).text()).toBe(await readFile(handed, 'utf8'))
+      expect(await served.stop()).toBe(0)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

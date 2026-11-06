@@ -24,7 +24,9 @@ async function pageOf(provided: (() => Promise<string>) | undefined): Promise<st
     try {
       return await provided()
     } catch (error) {
-      throw new Failed({ class: 'network', reason: 'inspector_page_unavailable', message: `Couldn't get the inspector's page: ${(error as Error).message}` })
+      // Not `network`: the app's likeliest other failure is a page that didn't check out, which
+      // trying again doesn't fix.
+      throw new Failed({ class: 'unknown', reason: 'inspector_page_unavailable', message: `Couldn't get the inspector's page: ${(error as Error).message}` })
     }
   const found = await installed()
   if (found === null)
