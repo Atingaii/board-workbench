@@ -147,9 +147,7 @@ itself.
   is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't; beside
   `BOARD_URL`, which names another board, it's misuse, so unset one. A
   board's URL names its team, so `--scope` beside `--url` is misuse too. A
-  name several boards share says how to use one by its URL, on its team
-  (`…/boards/<ID>?teamId=team_…`). A name you use
-  as yourself finds a board, and `--ensure` makes it if the team has none by
+  name you use as yourself finds a board, and `--ensure` makes it if the team has none by
   that name. Without it, a name the team has no board for, or none you can
   see, fails with `board_not_found`, and the command with `--ensure` added is
   the way out. A name a board you can't see already has fails with
@@ -163,24 +161,27 @@ itself.
 
     Check the name, or make it:
       vb read dev --name nope --ensure
-  $ vb post dev first --name nope --ensure
-  msg_4a846d0a-3554-465d-ab57-69bae07fce3f_1
-  $ vb read dev --name vault --ensure
-  error: there's a board named vault you can't see.
 
-    Ask someone who can see it for access.
+  $ vb post dev first --name nope --ensure
+  msg_61368189-4911-4293-9105-0b5a804f41bf_1
+
+  $ vb read dev --name vault --ensure
+  error: the board name vault is taken.
+
+    Pick another name, or ask whoever can see it for access.
   ```
 
-  A project's own code makes the board it names. One the board's grants don't
-  let in fails with `board_not_granted`, the team's default board too:
+  A project's own code makes the board it names. A board it has no access to
+  fails with `board_not_granted`, the team's default board too:
 
   ```text
   $ vb read dev --name security
-  error: board security doesn't let this project in (prj_pong, preview).
+  error: this project has no access to board security (prj_pong, preview).
 
     Someone who manages the board can grant it.
+
   $ vb read dev
-  error: the team's board doesn't let this project in (prj_pong, preview).
+  error: this project has no access to the team's board (prj_pong, preview).
 
     Someone who manages the board can grant it.
   ```
@@ -296,7 +297,7 @@ error document:
 
 - **`reason` is what a program branches on:** `missing_scope`,
   `login_required`, `permission_denied`, `deployment_protected`,
-  `board_not_found`, `board_not_granted`, `board_name_taken`, `ambiguous_board_name`,
+  `board_not_found`, `board_not_granted`, `board_name_taken`,
   `message_not_found`, `channel_not_found`,
   `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
   the board's own codes, such as `already_synced` or `no_scheduler`.
