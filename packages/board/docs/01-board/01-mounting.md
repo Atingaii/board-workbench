@@ -164,16 +164,15 @@ export const acmeGeneral = board({ backend: vercel(), team: 'acme' })
   script you run as yourself fail with 404 `no_board`,
   `no board named security on this team, or none you can see.`
 - **Names are unique across the team's boards,** private ones included. One a
-  board you can't see has fails with 409 `board_name_taken`, and makes
-  nothing: ask someone who can see it for access.
-- **A board whose grants don't let this project in** fails with 403
-  `board_not_granted`, `board security doesn't let this project in (prj_pong, preview).`
-  Every project on the team gets in unless the board's grants were narrowed,
-  so someone who manages the board grants it. The team's default board says
-  the same.
-- **Older boards can share a name.** Then nothing picks one: a call fails with
-  409 `ambiguous_board_name`, which lists their IDs, and `vercel({ board })`
-  takes one by its ID.
+  board you can't see has fails with 409 `board_name_taken`,
+  `the board name vault is taken.`, and makes nothing: pick another name, or
+  ask whoever can see it for access.
+- **A board this project has no access to** fails with 403
+  `board_not_granted`,
+  `this project has no access to board security (prj_pong, preview).` Every
+  project on the team gets in unless the board's grants were narrowed, so
+  someone who manages the board grants it. The team's default board says the
+  same.
 
 The backend reads them once, when `board()` binds it: `binding.name`, null for
 the team's default board, `binding.team`, null for the environment's team, and
