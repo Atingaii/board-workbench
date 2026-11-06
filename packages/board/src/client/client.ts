@@ -346,22 +346,29 @@ export function createBoardClient(options: ClientOptions) {
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
     /**
      * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
-     * there. `created` is false when it was there already; it's left as it is. `private` makes it
-     * closed to everyone but you: the channel, then a grant letting you in at `<path>/`, then one
-     * closing it to everyone else, which it answers as `grants`. A channel that's there already is
-     * 409 `channel_exists` before any grant, and a caller that's neither a person nor a project's
-     * deployment is 400 `no_own_principal` before anything.
+     * there. `created` is false when it was there already; it's left as it is.
+     *
+     * `private` makes it closed to everyone but you, from the protocol's own methods: a grant
+     * letting you in at `<path>/`, then one closing `<path>/` to everyone else, then the channel,
+     * answering the two grants as `grants`. A failure part way leaves the channel open with a grant
+     * too many, or closed and not made yet, and never shuts you out. Before it writes anything, it
+     * refuses a caller that's neither a person nor a project's deployment (400 `no_own_principal`),
+     * and a path where it or a channel under it is there already (409 `channel_exists`), since
+     * closing `security/` closes `security/incidents` too. A board that keeps no grants fails on the
+     * first, with nothing made.
      */
     createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
       if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
-      // The channel, then a grant that lets you in, then one that closes it to everyone else: a
-      // failure between them leaves it open, with a grant too many, and never shuts you out.
       const creator = creatorOf(await call<Me>('GET', '/me'), path)
-      const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
-      if (!made.created) throw new BoardError('channel_exists', `${path} is a channel already, so it stays as it is.`, 409, { hint: `Close it with a grant: everyone at ${path}/ with 'none'.` })
       const pattern = `${path}/`
+      const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      if (there)
+        throw new BoardError('channel_exists', `${there.path} is a channel already, and a private ${path} would close it too, so nothing was made.`, 409, {
+          hint: `Close it with a grant: everyone at ${pattern} with 'none'.`,
+        })
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
+      const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       return { ...made, grants: [own.grant, closed.grant] }
     },
     actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
