@@ -390,27 +390,27 @@ describe('vercel()', () => {
       })
     })
 
-    it('tells a person there is no board with that name, and makes none', async () => {
+    it('makes the board for a person too, by default, once, as the team sees it', async () => {
       const api = fakeMessageboard()
-      await expect(named(api, 'security').post('dev', { text: 'hi' })).rejects.toMatchObject({
-        status: 404,
-        code: 'no_board',
-        origin: 'handle',
-        message: 'no board named security on this team, or none you can see.',
-      })
-      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
-      await expect(named(api, 'security', 'project:prj_pong:production').messages({ channel: 'dev' })).resolves.toMatchObject({ messages: [] })
+      await named(api, 'security').post('dev', { text: 'rotate the keys' })
+      // Another process finds it by its name, and makes nothing more.
+      await named(api, 'security').post('dev', { text: 'done' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // It's the team's: someone else reads it by its name.
+      expect((await named(api, 'security', 'user:u_ada').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
     })
 
-    it('makes the board for a person who asks to, once, as the team sees it', async () => {
+    it('makes none for a caller that says ensure: false, and says there is none it can see', async () => {
       const api = fakeMessageboard()
-      const ensured = () => board({ name: 'security', ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') }) })
-      await ensured().post('dev', { text: 'rotate the keys' })
-      // Another process finds it by its name, and makes nothing more.
-      await ensured().post('dev', { text: 'done' })
-      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
-      // It's the team's: someone who didn't ask to make it reads it by its name.
-      expect((await named(api, 'security', 'user:u_ada').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+      const found = (principal: string) => board({ name: 'security', ensure: false, backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
+      for (const principal of ['user:u_jb', 'project:prj_pong:production'])
+        await expect(found(principal).post('dev', { text: 'hi' })).rejects.toMatchObject({
+          status: 404,
+          code: 'no_board',
+          origin: 'handle',
+          message: 'no board named security on this team, or none you can see.',
+        })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
     })
 
     it("says a name is another board's that you can't see, and makes none", async () => {
