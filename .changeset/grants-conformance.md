@@ -1,7 +1,0 @@
----
-'@vercel/board': minor
----
-
-`conformance()` checks how grants combine, through `explain`: the most specific pattern decides, then the closest principal there, ties add up, `everyone` lets no one in, and a viewer reads but neither posts nor manages. It checks that an app is kept by its client ID, and every app as a group. It checks that changing a grant takes `manage` at its patterns, and that a token grants no one past its own `can`, even under a lock, and lets no one in where `everyone` gets more than it has. Every grant it makes is in `conformance/grants/`, the same for every run, so it leaves no channel behind; it revokes them all, and a revoke that fails fails the check. Two runs on one board at once see each other's grants, so run it on a scratch board. A board that looks names up needs real ones: pass `principals: { project, repository, viewer, app }`, none of them the run's own, which it refuses before it writes, or, for a project named by name, after one grant that changes nothing for the run, which it revokes. Grants across teams are skipped, since they aren't specified yet.
-
-On a board token, `conformance()` skips the watchers checks, `a board token can't register watchers yet`, as Vercel's API answers for now. `vb conformance` sends the tokens it mints to the board it checks by its URL, so on a team's board in Vercel's API they reach it by its ID, as a board token must.
