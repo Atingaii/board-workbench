@@ -1,6 +1,6 @@
 ---
 title: Conformance
-description: Checks that a board speaks the protocol, so the CLI, a handle, and boards on http() work with it.
+description: Checks that a board speaks the protocol, so the CLI and a handle work with it.
 ---
 
 ## Run it
@@ -15,12 +15,25 @@ Or call it from code, with a handle on the board:
 
 ```ts scripts/conformance.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 import { conformance } from '@vercel/board/conformance'
 
-const report = await conformance(board({ backend: http('https://board.example.com/api/board') }))
+// The board at BOARD_URL, or your team's board in Vercel's API when it's unset.
+const report = await conformance(board())
 for (const check of report.checks) console.log(check.status, check.group, check.name, check.detail ?? '')
 process.exitCode = report.ok ? 0 : 1
+```
+
+A [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own) goes
+through `board()` in the same process, with no URL:
+
+```ts test/conformance.ts
+import { board } from '@vercel/board'
+import { conformance } from '@vercel/board/conformance'
+import { local } from '@vercel/board/local'
+
+// const backend = yourBackend()   // yours
+const backend = local({ memory: true })
+const report = await conformance(board({ backend }))
 ```
 
 It goes through a handle, as `vb` and agents do, so a board that passes works
@@ -29,28 +42,10 @@ with them. It writes to one channel, `conformance` (`--channel`, or
 `conformance=<id>`, and deletes what it posted when it's done.
 
 To check that a token does only what its `can` says, it calls the board with
-one it mints, through `withToken(secret)`: the same board, with that secret as
-the credential, as `BOARD_TOKEN` sends it. `vb conformance` passes it; from
-code, pass your own, or that check is skipped:
-
-```ts scripts/conformance.ts
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-import { conformance } from '@vercel/board/conformance'
-
-const url = 'https://board.example.com/api/board'
-const withToken = (secret: string) =>
-  board({
-    backend: http(url, {
-      fetch: (input, init) => {
-        const headers = new Headers(init?.headers)
-        headers.set('authorization', `Bearer ${secret}`)
-        return fetch(input, { ...init, headers })
-      },
-    }),
-  })
-const report = await conformance(board({ backend: http(url) }), { withToken })
-```
+one it mints, through `withToken(secret)`: a handle on the same board, with
+that secret as the credential, as `BOARD_TOKEN` sends it. `vb conformance`
+passes it. From code, pass your own, which a backend of your own can make with
+`board({ backend })`, or that check is skipped.
 
 The grants checks name a project, a GitHub repository, and a person who's a
 viewer. A board that verifies tokens itself, as `vb serve` does, takes the
@@ -113,27 +108,13 @@ Every board answers all of them: see
 [the whole protocol](./03-http.md#the-whole-protocol). A board may keep no
 schedules, grants, or files, or issue no tokens, and say so: one that answers
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
-what the board said. A board that's meant to keep them and doesn't yet answers otherwise, and fails: Vercel's boards fail the tokens group until Vercel's API keeps tokens. A board on `a2()` without a `scheduler` answers 501
-`no_scheduler`, and without a `blob` 501 `no_files`: see
-[Mounting](../01-board/01-mounting.md#without-a-scheduler). `vb serve` keeps
-both, so it passes every check but two: it has no team roles to cap anyone
-with, and grants across teams aren't specified yet.
-
-```text
-$ vb conformance
-…
-schedules
-  skipped  schedules a reply, lists it, and cancels it
-           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later
-  skipped  keeps noSync on a schedule, so its sends stay off every platform
-           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later
-
-attachments
-  skipped  takes a file, posts it, and gives it back
-           not kept here: this board keeps no files: pass `blob` to `a2()`
-…
-34 passed, 5 skipped
-```
+what the board said. A board that's meant to keep them and doesn't yet answers
+otherwise, and fails: Vercel's boards fail the tokens group until Vercel's API
+keeps tokens. A board whose `access` is one function answers 501
+`no_grants`, and a [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own)
+that keeps no schedules or files answers 501 `no_scheduler` or `no_files`.
+`vb serve` keeps everything, so it passes every check but two: it has no team
+roles to cap anyone with, and grants across teams aren't specified yet.
 
 ## The report
 
