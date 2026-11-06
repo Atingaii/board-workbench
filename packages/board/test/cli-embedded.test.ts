@@ -318,7 +318,7 @@ describe('the embedded CLI', () => {
       const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toMatch(/^token +expires in 1h 30m$/m)
-      expect(whoami.stdout).toMatch(/^can +dev\/  read post\n +ci\/ +read$/m)
+      expect(whoami.stdout).toMatch(/^can +ci\/ +read\n +dev\/  read post$/m)
       // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads.
       const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
       fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
@@ -438,7 +438,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("picks the team's board by its name with --name or BOARD_NAME, ahead of BOARD_URL, and only a name", async () => {
+  it("picks the team's board by its name with --name or BOARD_NAME, --name ahead of BOARD_URL, and only a name", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     const api = fakeMessageboard({ boards: [{ name: 'security' }] })
@@ -456,6 +456,18 @@ describe('the embedded CLI', () => {
       vi.stubEnv('BOARD_URL', undefined)
       vi.stubEnv('BOARD_NAME', 'security')
       expect((await run('read', 'dev', '--scope', 'test')).stdout).toContain('rotate the keys')
+      // On its own, as --name is: the team the environment finds, or the login's.
+      expect((await run('read', 'dev')).stdout).toContain('rotate the keys')
+      // Beside BOARD_URL, which names another board, nothing says which: misuse, not a guess.
+      vi.stubEnv('BOARD_URL', 'https://elsewhere.example/api/board')
+      expect(await run('read', 'dev')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: BOARD_NAME names a team's board, and BOARD_URL a board by its URL: unset one\.\n/) })
+      vi.stubEnv('BOARD_URL', undefined)
+      vi.stubEnv('BOARD_NAME', undefined)
+      // A board's URL names its team, so --scope beside it would pick nothing.
+      expect(await run('read', 'dev', '--scope', 'test', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --url names its board, its team included, and --scope a team's board/) })
+      // A BOARD_NAME a run doesn't use isn't read: --url picks the board.
+      vi.stubEnv('BOARD_NAME', 'acme/security')
+      expect(await run('whoami', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')).toMatchObject({ code: 0, stdout: expect.stringContaining('brd_test') })
       vi.stubEnv('BOARD_NAME', undefined)
       // A board no one made yet: a person is told, and nothing makes it.
       expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: There's no board named nope on this team/) })
@@ -467,6 +479,32 @@ describe('the embedded CLI', () => {
       vi.stubEnv('BOARD_NAME', 'acme/security')
       expect(await run('read', 'dev')).toMatchObject({ code: 2, stderr: expect.stringContaining('pass its team with --scope') })
       vi.stubEnv('BOARD_NAME', undefined)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("says how to use one of a team's boards that share a name, on that team", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    // acme isn't the login's default team: a request reaches it only when it names it.
+    const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'ops', id: 'brd_ops1' }, { name: 'Ops', id: 'brd_ops2' }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const ambiguous = await run('read', 'dev', '--scope', 'acme', '--name', 'ops')
+      expect(ambiguous).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: This team has 2 boards named ops: brd_ops1, brd_ops2\.\n/) })
+      // Its way out names the team in the URL, and drops --scope, which a URL would leave unread.
+      const way = "    vb read dev --url 'https://api.vercel.com/v1/messageboard/boards/<ID>?teamId=team_acme'\n"
+      expect(ambiguous.stderr).toContain(way)
+      // Which works, on acme.
+      const at = 'https://api.vercel.com/v1/messageboard/boards/brd_ops1?teamId=team_acme'
+      expect((await run('post', 'dev', 'on ops one', '--url', at)).code).toBe(0)
+      expect((await run('read', 'dev', '--url', at)).stdout).toContain('on ops one')
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)

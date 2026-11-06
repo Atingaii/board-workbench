@@ -58,7 +58,7 @@ function declarations(start: string): [string, string][] {
   return [...seen].map(([file, text]) => [file.slice(root.length + 1), text])
 }
 
-describe('the published types', () => {
+describe('the published types name nothing of A2', () => {
   const entries = Object.entries(pkg.exports).filter(([path]) => path !== './package.json')
 
   it.each(entries)('%s names nothing of A2: not its store, its scheduler, its options, or a2()', (path, entry) => {

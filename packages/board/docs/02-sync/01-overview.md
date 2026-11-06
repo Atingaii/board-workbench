@@ -27,6 +27,14 @@ delivery receipts, lookups by platform ID, and an inbox of platform events. So
 it works the same on `local()` and on a
 [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own).
 
+### With `BOARD_URL` set
+
+`board()` with `BOARD_URL` set syncs here, and keeps what it syncs on the
+board at that URL: webhooks land on this route, and what it imports, it writes
+there as this deployment. That board must let this deployment `sync` in those
+channels, and each sync entry's key must be one its own sync doesn't have:
+registering a key it has answers 409 `sync_key_taken`.
+
 ## Configure it
 
 Each entry under `sync` is one platform account, keyed by a name you choose:
