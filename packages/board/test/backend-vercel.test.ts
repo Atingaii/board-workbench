@@ -984,6 +984,9 @@ describe("board tokens on Vercel's API", () => {
     await expect(token.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
     await expect(token.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
     expect((await handleOn(api, 'user:u_ada').createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).grant.id).toEqual(expect.any(String))
+    // An owner's token too.
+    const owners = holding(api, (await handleOn(api, 'user:u_jb').createToken({ name: 'ci', can: { '*': ['read'] } })).secret)
+    await expect(owners.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
   })
 
   it('lists and revokes, for a token, only itself and the tokens made from it, and answers a bad scope 400 invalid_scope', async () => {
