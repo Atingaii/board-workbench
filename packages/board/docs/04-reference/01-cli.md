@@ -25,8 +25,8 @@ The CLI makes no HTTP calls of its own: every command goes through
 
 `@vercel/board/cli` runs the same CLI inside another one, as `vercel board`
 does. Help, usage, and errors use the name it's given. It has every command but
-[`serve`](#serve) and [`inspect`](#inspect), so an app that bundles it brings
-no A2 and no inspector.
+[`serve`](#serve), so an app that bundles it brings no A2. [`inspect`](#inspect)
+and its page are in a chunk of their own, which loads only when `inspect` runs.
 
 ```ts
 import { createApp } from '@vercel/board/cli'

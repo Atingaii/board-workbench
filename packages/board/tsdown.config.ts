@@ -1,4 +1,29 @@
-import { defineConfig } from 'tsdown'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { build, defineConfig, type InlineConfig, type Rolldown } from 'tsdown'
+
+const here = (path: string) => fileURLToPath(new URL(path, import.meta.url))
+
+// `inspect`'s page: one prebuilt file, React included, so installing the
+// package installs no UI dependencies.
+const page = {
+  config: false,
+  cwd: here('.'),
+  entry: { app: 'src/inspect/app/main.tsx' },
+  outDir: 'dist/inspect',
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  minify: true,
+  dts: false,
+  clean: true,
+  hash: false,
+  fixedExtension: false,
+  outExtensions: () => ({ js: '.js' }),
+  deps: { alwaysBundle: [/.*/], onlyBundle: false },
+  define: { 'process.env.NODE_ENV': '"production"' },
+  logLevel: 'warn',
+} satisfies InlineConfig
 
 export default defineConfig([
   {
@@ -30,7 +55,7 @@ export default defineConfig([
       'sync-github': 'src/sync/github.ts',
       'sync-linear': 'src/sync/linear.ts',
       cli: 'src/cli/bin.ts',
-      // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `serve` or `inspect`.
+      // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `serve`.
       'cli-embedded': 'src/cli/embedded.ts',
       // `@vercel/board/cli/commands`: the CLI's commands as data, for a host to render, with no imports.
       'cli-commands': 'src/cli/commands.ts',
@@ -49,23 +74,26 @@ export default defineConfig([
       onlyBundle: [/^experimental-a2(\/|$)/],
       dts: { alwaysBundle: [/^experimental-a2(\/|$)/] },
     },
-    clean: ['dist/*', '!dist/inspect'],
-  },
-  // `vb inspect`'s page: one prebuilt file, React included, so installing the
-  // package installs no UI dependencies.
-  {
-    entry: { app: 'src/inspect/app/main.tsx' },
-    outDir: 'dist/inspect',
-    format: 'esm',
-    platform: 'browser',
-    target: 'es2022',
-    minify: true,
-    dts: false,
+    plugins: [inlinePage()],
     clean: true,
-    hash: false,
-    fixedExtension: false,
-    outExtensions: () => ({ js: '.js' }),
-    deps: { alwaysBundle: [/.*/], onlyBundle: false },
-    define: { 'process.env.NODE_ENV': '"production"' },
   },
 ])
+
+/**
+ * `inspect`'s page goes in the CLI in place of `src/inspect/page.ts`, as a string in a chunk only
+ * `inspect` loads: a CLI that bundles board's (`vercel board`) carries it that way, where a file
+ * next to board's chunks would stay behind. It's built first, into `dist/inspect/app.js`, which
+ * running from source reads.
+ */
+function inlinePage(): Rolldown.Plugin {
+  const module = here('src/inspect/page.ts')
+  let built: Promise<string> | undefined
+  return {
+    name: 'board:inspector-page',
+    async load(id) {
+      if (id !== module) return null
+      built ??= build(page).then(() => readFile(here('dist/inspect/app.js'), 'utf8'))
+      return `export const page = async () => ${JSON.stringify(await built)}`
+    },
+  }
+}

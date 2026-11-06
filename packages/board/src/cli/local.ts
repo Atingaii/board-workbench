@@ -1,44 +1,12 @@
-// The standalone `board` CLI's own commands, which run something on this machine: `serve` (a board
-// on A2) and `inspect` (the inspector's page). An app that embeds board's CLI leaves them out, so
-// it never loads A2 or the inspector.
+// The standalone `board` CLI's own command, which runs a board on this machine: `serve`, on A2. An
+// app that embeds board's CLI leaves it out, so it never loads A2.
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectDir } from '../client/node.ts'
 import { startInspector } from '../inspect/server.ts'
 import { option } from './commands.ts'
+import { stopped } from './inspect.ts'
 import type { Command, CommandContext } from './main.ts'
-import { who } from './format.ts'
-
-/** Until Ctrl-C or a SIGTERM, whichever comes first: then neither is listened for. */
-const stopped = () =>
-  new Promise<void>((resolve) => {
-    const done = () => {
-      process.off('SIGINT', done)
-      process.off('SIGTERM', done)
-      resolve()
-    }
-    process.once('SIGINT', done)
-    process.once('SIGTERM', done)
-  })
-
-const inspect: Command = {
-  spec: {
-    name: 'inspect',
-    description: 'the board in your browser, as you: read, post, react (local only)',
-    arguments: [],
-    options: [option('port', 'the port to listen on (default: a free one)'), option('no-open')],
-    examples: [{ name: 'open the board in your browser', value: 'inspect' }],
-  },
-  async run(_args, { flags, out, portFlag, client, openBrowser }: CommandContext) {
-    const port = portFlag()
-    const inspector = await startInspector({ client: client(), ...(port !== undefined ? { port } : {}) })
-    out(`inspecting ${inspector.board} as ${who(inspector.me)} at ${inspector.url}  (Ctrl-C to stop)`)
-    if (!flags['no-open']) openBrowser(inspector.url)
-    await stopped()
-    await inspector.close()
-    return 0
-  },
-}
 
 /** Keeps the local board's log (`.board/`) out of the project's Git. */
 async function ignoreLog(root: string) {
@@ -93,4 +61,4 @@ const serve: Command = {
 }
 
 /** The commands only the standalone `board` has, in the order its help lists them. */
-export const local: Record<string, Command> = { inspect, serve }
+export const local: Record<string, Command> = { serve }

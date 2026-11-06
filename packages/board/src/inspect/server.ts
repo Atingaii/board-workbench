@@ -1,5 +1,4 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Me } from '../api/routes.ts'
@@ -17,16 +16,8 @@ export type Inspector = {
 
 export const DEFAULT_PORT = 4747
 
-/** The prebuilt UI: next to the CLI in `dist`, or in `dist` when running from source. */
-const BUNDLES = [new URL('./inspect/app.js', import.meta.url), new URL('../../dist/inspect/app.js', import.meta.url)]
-
-async function bundle(): Promise<string | null> {
-  for (const candidate of BUNDLES)
-    try {
-      return await readFile(candidate, 'utf8')
-    } catch {}
-  return null
-}
+/** The prebuilt UI, loaded only when an inspector starts: it's most of what the CLI ships. */
+const bundle = async () => (await import('./page.ts')).page()
 
 const shell = (token: string) => `<!doctype html>
 <html lang="en">
