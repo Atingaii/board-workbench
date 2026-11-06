@@ -363,9 +363,12 @@ export function createBoardClient(options: ClientOptions) {
       const pattern = `${path}/`
       const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
       if (there)
-        throw new BoardError('channel_exists', `${there.path} is a channel already, and a private ${path} would close it too, so nothing was made.`, 409, {
-          hint: `Close it with a grant: everyone at ${pattern} with 'none'.`,
-        })
+        throw new BoardError(
+          'channel_exists',
+          there.path === path ? `${path} is a channel already, so it stays as it is.` : `${there.path} is a channel already, and a private ${path} would close it too, so nothing was made.`,
+          409,
+          { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
+        )
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
