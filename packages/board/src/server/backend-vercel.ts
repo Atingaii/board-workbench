@@ -346,10 +346,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   }
 
   /**
-   * The board named `name` in the team: the one the API lists for it. Where it lists none, this
-   * project's own code makes it (granted to the project, in its environment), and so does a person
-   * who asks to (`ensure`); anyone else is told there's none they can see. Names are unique across
-   * the team's boards, the ones you can't see included.
+   * The board named `name` in the team: the one the API lists for it. Where it lists none, the
+   * caller makes it (a project's is granted to that project, in its environment), unless it says
+   * not to (`ensure: false`) and is told there's none it can see. Names are unique across the
+   * team's boards, the ones you can't see included.
    */
   async function boardNamed(who: Who, name: string): Promise<string> {
     if (!/^[^/]{1,64}$/.test(name))
@@ -359,9 +359,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
     if (boards[0]) return boards[0].id
     const { principal } = (await self(who)).actor
-    if (principal.type !== 'project' && !binding?.ensure)
+    if (binding?.ensure === false)
       throw new HttpError(404, 'no_board', `no board named ${name} on this team, or none you can see.`, {
-        hint: 'Check the name, or make it: board({ name, ensure: true })',
+        hint: 'Check the name, or make it: leave out ensure: false',
         origin: 'handle',
       })
     try {
