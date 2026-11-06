@@ -9,6 +9,7 @@ import { boardUrl, connect, handFetch, handLogin, vercelProjectFile } from '../c
 import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
+import { isBoardName } from '../server/board.ts'
 import { isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
@@ -49,6 +50,10 @@ function rerun(...extra: string[]): string[] {
   const at = typed.indexOf('--')
   return [...cli(), ...(at === -1 ? [...typed, ...extra] : [...typed.slice(0, at), ...extra, ...typed.slice(at)])]
 }
+
+/** A command line without `options` and their values. */
+const without = (argv: string[], ...options: string[]): string[] =>
+  argv.filter((arg, at) => !options.some((option) => arg === option || argv[at - 1] === option || arg.startsWith(`${option}=`)))
 
 /** What the parser accepts: every option, by name (`commands.ts`). */
 const OPTIONS = options
@@ -108,7 +113,7 @@ function removedCommand(word: string): Failed | undefined {
         { instruction: "Reply in the thread you're working in", argv: [...cli(), 'reply', '<ID>', '<TEXT>'] },
         { instruction: 'Or post where it fits', argv: [...cli(), 'post', '<CHANNEL>', '<TEXT>'] },
       ]),
-    stuck: () => gone([], " A board on a2() keeps its dead letters in A2, on the backend's `servers`."),
+    stuck: () => gone([]),
     link: () => gone(url),
     use: () => gone(url),
   }
@@ -565,6 +570,13 @@ function failureOf(error: unknown): Failure {
         return own('auth', 'token_unavailable')
       case 'no_board':
         return own('not_found', 'board_not_found')
+      case 'board_not_granted':
+        return own('permission', 'board_not_granted')
+      case 'ambiguous_board_name':
+        // The CLI picks one by its URL, which names its ID, in place of the name.
+        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: without(rerun('--url', 'https://api.vercel.com/v1/messageboard/boards/<ID>'), '--name') }])
+      case 'invalid_board_name':
+        return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
         return own('network', 'network_error')
       case 'invalid_duration':
@@ -679,9 +691,11 @@ function profileFlag(): ProfileOption | undefined {
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
-  const configured = url ?? (team === undefined ? configuredUrl() : null)
+  const name = boardNameFlag(url)
+  // --name names a team's board as --scope does, so it goes before BOARD_URL too.
+  const configured = url ?? (team === undefined && flags.name === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }), ...(name !== undefined ? { name } : {}) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -696,6 +710,28 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   const transport = connect(at, { ...(options.token !== undefined ? { token: options.token } : {}), ...(handle ? { handle } : {}) })
   const board = boardAt({ backend: http(at, { fetch: transport.fetch }) })
   return { url: at as string | null, transport: transport as { source(): string | null }, board: profile !== undefined ? board.as(profile) : board }
+}
+
+/**
+ * The team's board this run names: `--name`, or `BOARD_NAME`, on `--scope`'s team or the one the
+ * environment finds. A URL names a board itself.
+ */
+function boardNameFlag(url: string | undefined): string | undefined {
+  if (flags.name !== undefined && flags.url !== undefined)
+    throw usage("--name names a team's board, and --url a board by its URL: pass one of them.", { reason: 'conflicting_options' })
+  const given = flags.name ?? (process.env.BOARD_NAME || undefined)
+  if (given === undefined || url !== undefined) return undefined
+  const from = flags.name !== undefined ? '--name' : 'BOARD_NAME'
+  if (given.includes('/')) {
+    // Another team's board is its team, with --scope, and its name.
+    const [owner, ...rest] = given.split('/')
+    const argv = [...without(rerun(), '--name', '--scope', '--team'), '--scope', owner || '<TEAM>', '--name', rest.join('/') || '<NAME>']
+    throw usage(`${from} takes a board's name alone, not its team's.`, {
+      next: [flags.name !== undefined ? { instruction: 'Pass its team with --scope', argv } : { instruction: 'Set BOARD_NAME to the name alone, and pass its team with --scope' }],
+    })
+  }
+  if (!isBoardName(given)) throw usage(`${from} ${given} isn't a board's name: one is 1 to 64 characters.`)
+  return given
 }
 
 /** For Vercel's API, `token` in place of your own credentials: a board token's secret. */
@@ -1347,8 +1383,8 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     const command = canonical(word)
     current = { command, args }
     if (io.board) {
-      if (flags.url || flags.handle)
-        throw usage(`--${flags.url ? 'url' : 'handle'} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
+      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.handle ? 'handle' : null
+      if (given) throw usage(`--${given} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
       if (command !== undefined && MACHINE.has(command))
         throw usage(`${command} isn't available in-process: it's about the machine ${named()} runs on.`, { reason: 'not_available', next: [] })
     }

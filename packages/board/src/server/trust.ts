@@ -182,7 +182,7 @@ function indexOf(id: string, prefix: 'g' | 't'): number | null {
   return found ? Number(found[1]) : null
 }
 
-/** A principal as views show it: the IDs, and the names the board knows, which on `a2()` are none. */
+/** A principal as views show it: the IDs, and the names the board knows, which on a local board are none. */
 function principalView(principal: GrantPrincipal): PrincipalView {
   switch (principal.kind) {
     case 'user':
@@ -204,7 +204,7 @@ const grantView = (row: GrantRow): GrantView => ({
   id: grantId(row.id),
   principals: row.principals.map(principalView),
   can: Object.fromEntries(Object.entries(row.can).map(([pattern, grant]) => [pattern, grant === 'all' ? 'all' : [...grant]])) as GrantView['can'],
-  // A board on `a2()` has no team roles.
+  // A local board has no team roles.
   capped: false,
   by: row.by,
   at: row.at === null ? null : new Date(row.at).toISOString(),
@@ -290,7 +290,7 @@ function mayChange(identity: Identity, patterns: Iterable<string>, what: string)
 }
 
 /**
- * The board's grants and tokens, in session `access` of its log: what `a2()` answers for them, and
+ * The board's grants and tokens, in session `access` of its log: what a local board answers for them, and
  * what board() checks requests against. `issuers`: the OIDC issuers the board's rules name, which no
  * grant's may share principals with. `accessNow`: what a principal may do now, under board()'s
  * rules and grants, which a token's listing shows.

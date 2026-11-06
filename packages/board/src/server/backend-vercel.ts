@@ -4,10 +4,10 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import type { Access, Permission } from './access.ts'
+import { PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
-import { fileName, mediaType } from './blob.ts'
+import { fileName, mediaType } from '../contract/files.ts'
 import { badRequest, forbidden, HttpError, json, notFound } from './errors.ts'
 import { registrant, wakePath, type WakeAt } from './registrant.ts'
 import { METHODS } from './routing.ts'
@@ -89,7 +89,19 @@ type ApiChange = {
   /** With `include=message`, the message as it is now. */
   currentMessage?: ApiMessage
 }
-type ApiMe = { teamId: string; actor: ApiActor; view?: ApiActorView; project?: { id: string; environment: string } }
+/**
+ * Who these credentials are, as the API says: `can`, what they may do in each channel pattern, in
+ * board's words, and `expiresAt`, when they stop working, in milliseconds. An API that says neither
+ * leaves them out.
+ */
+type ApiMe = {
+  teamId: string
+  actor: ApiActor
+  view?: ApiActorView
+  project?: { id: string; environment: string }
+  can?: Record<string, string[]>
+  expiresAt?: number | string | null
+}
 /** Which messages a watcher sees, in the API's terms: a tail is translated into one. */
 type ApiWatcherFilter = {
   channelIds?: string[]
@@ -104,9 +116,16 @@ type ApiRegistration = { owner: string; url: string | null; path?: string; branc
 type ApiMatch = { id: string; watcher: string; threadId: string; lease: string; attempt: number; event: ApiChange & { messageId: string } }
 
 export type VercelOptions = {
-  /** The team whose board it is: its ID (`team_…`) or its slug. In Node, by default your deployment's, or `VERCEL_ORG_ID`. */
+  /**
+   * The team whose board it is: its ID (`team_…`) or its slug. By default the one `board({ team })`
+   * names, or in Node your deployment's, or `VERCEL_ORG_ID`. One that isn't `board({ team })`'s
+   * fails when board() binds it.
+   */
   team?: string
-  /** The board's ID. By default the team's board, which `GET /boards` names. */
+  /**
+   * The board's ID, which wins over `board({ name })`. By default the board that name names, or
+   * the team's default board, which `GET /boards` names.
+   */
   board?: string
   /** Vercel's API, `https://api.vercel.com` by default. */
   api?: string
@@ -153,6 +172,29 @@ const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name
 
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
 
+/** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
+const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
+
+/**
+ * What the API says these credentials may do, in board's words: each channel pattern's permissions
+ * board knows, the rest dropped. `DEFAULT_CAN` when it says nothing board reads as one.
+ */
+function canOf(can: unknown): AccessSummary {
+  if (typeof can !== 'object' || can === null || Array.isArray(can)) return DEFAULT_CAN
+  const known = new Set<string>(PERMISSIONS)
+  const out: Record<string, Permission[]> = {}
+  for (const [pattern, permissions] of Object.entries(can))
+    if (Array.isArray(permissions)) out[pattern] = permissions.filter((permission): permission is Permission => known.has(permission))
+  return out
+}
+
+/** When the API says these credentials stop working, as an ISO time: from milliseconds or a time it gives, null for none. */
+function expiryOf(at: unknown): string | null {
+  if (typeof at === 'number' && Number.isFinite(at)) return new Date(at).toISOString()
+  if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) return new Date(at).toISOString()
+  return null
+}
+
 /** What a caller board() verified may do. Null for this deployment's own code, which may do what its credentials may. */
 const accessOf = (caller: Caller): Access | null => ('identity' in caller ? caller.identity.principal.access : null)
 
@@ -197,7 +239,7 @@ const authorOf = (actor: ApiActor): Author => ({
   session: actor.session ?? null,
 })
 
-/** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a2()'s scheduler. */
+/** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a local board's scheduler. */
 const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null }
 
 /** The API names nobody, so an actor's handle is its profile, or a short form of its principal. */
@@ -233,8 +275,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** This board's own code's names, which a caller here never takes as its profile. */
   const own = new Set<string>()
 
+  /** The board `board({ name })` names: null for the team's default board, or when `board` names one by its ID. */
+  const boardName = (): string | null => (options.board ? null : (binding?.name ?? null))
+
   let team: Promise<string | null> | null = null
-  const teamId = () => (team ??= options.team ? Promise.resolve(options.team) : (environment?.team() ?? Promise.resolve(null)))
+  const teamId = () => {
+    const given = binding?.team ?? options.team
+    return (team ??= given ? Promise.resolve(given) : (environment?.team() ?? Promise.resolve(null)))
+  }
 
   /** One request to the API, as `who`. Its errors are the API's own, with its status and code. */
   async function api<T>(who: Who, method: string, path: string, init: { query?: Record<string, string | undefined>; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
@@ -282,22 +330,62 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     return out
   }
 
+  /**
+   * The board named `name` in the team: the one the API lists for it. Where it lists none, this
+   * project's own code makes it (granted to the project, in its environment), and a person is
+   * told there's none to use. Older boards can share a name, and then none is picked.
+   */
+  async function boardNamed(who: Who, name: string): Promise<string> {
+    if (!/^[^/]{1,64}$/.test(name))
+      throw new HttpError(400, 'invalid_board_name', `${JSON.stringify(name)} isn't a board's name: one is 1 to 64 characters with no /.`, { origin: 'handle' })
+    // One answer holds every board with the name, whatever its case.
+    const { boards } = await api<{ boards: { id: string; name: string }[] }>(who, 'GET', '/boards', { query: { name } })
+    if (boards.length > 1) {
+      // Their IDs as the API gave them, where they look like IDs: what picks one.
+      const ids = boards.map((found) => found.id).filter((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id))
+      throw new HttpError(409, 'ambiguous_board_name', `This team has ${boards.length} boards named ${name}${ids.length === boards.length ? `: ${ids.join(', ')}` : ''}.`, {
+        hint: 'Give each a name of its own in Vercel\'s API, or reach one by its URL with `vb --url`.',
+        origin: 'handle',
+      })
+    }
+    if (boards[0]) return boards[0].id
+    if ((await self(who)).actor.principal.type !== 'project')
+      throw new HttpError(404, 'no_board', `There's no board named ${name} on this team that you can use.`, {
+        hint: 'Check the name, or run the project that uses it: it makes the board.',
+        origin: 'handle',
+      })
+    try {
+      const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
+      return made.id
+    } catch (error) {
+      if (error instanceof HttpError && error.code === 'board_not_granted')
+        throw new HttpError(403, 'board_not_granted', `This project isn't granted the board named ${name}.`, {
+          hint: 'Ask someone on the team to grant it to this project in this environment.',
+          origin: 'handle',
+        })
+      throw error
+    }
+  }
+
   let board: Promise<string> | null = null
   /**
-   * The board's ID: the one given, or the team's, which the API names only to those it lets in. A
-   * team with none gets one the first time a person uses it, as the API asks of its clients; a
-   * project can't make it, and needs a person to grant it the board anyway.
+   * The board's ID: the one given, the one `board({ name })` names, or the team's, which the API
+   * names only to those it lets in. A team with none gets one the first time a person uses it, as
+   * the API asks of its clients; a project can't make it, and needs a person to grant it the board
+   * anyway. Each is asked for once.
    */
   const boardId = (who: Who) =>
     (board ??= options.board
       ? Promise.resolve(options.board)
-      : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
-          if (defaultBoardId) return defaultBoardId
-          if ((await self(who)).actor.principal.type === 'project')
-            throw new HttpError(404, 'no_board', "Vercel's API names no board this project may use: ask someone on the team to grant it the team's board, or pass `board`")
-          const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
-          return made.id
-        })).catch((error: unknown) => {
+      : boardName()
+        ? boardNamed(who, boardName()!)
+        : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
+            if (defaultBoardId) return defaultBoardId
+            if ((await self(who)).actor.principal.type === 'project')
+              throw new HttpError(404, 'no_board', "Vercel's API names no board this project may use: ask someone on the team to grant it the team's board, or pass `board`")
+            const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
+            return made.id
+          })).catch((error: unknown) => {
       board = null
       throw error
     })
@@ -918,7 +1006,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!(await isProject(caller, who))) throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${what} there`)
   }
 
-  /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a2(). */
+  /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a local board. */
   async function checkUploader(caller: Caller, who: Who): Promise<void> {
     await checkOwner('upload', caller, who)
     const access = accessOf(caller)
@@ -1121,7 +1209,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { view: named } = found
       // The API names you by your account: your username, and an agent's profile under it.
       const shown = named ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null } : actorView(found.actor)
-      // The API lists no permissions: a board that lets you in lets you read, post, react, and label everywhere.
+      // What these credentials may do, and until when, as the API says; without a word, what any it lets in may.
       return {
         actor: found.actor.id,
         principal: principalId(found.actor.principal),
@@ -1131,8 +1219,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         avatar: shown.avatar,
         profile: found.actor.profile?.name ?? null,
         session: found.actor.session ?? null,
-        expiresAt: null,
-        can: { '*': ['read', 'post', 'react', 'label'] },
+        expiresAt: expiryOf(found.expiresAt),
+        can: canOf(found.can),
       }
     },
     async channels(caller) {
@@ -1610,6 +1698,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (binding) throw new Error('vercel: this backend already serves a board: create one vercel() per board()')
       const kinds = Object.values(next.subscriptions).map((subscription) => subscription.kind)
       if (kinds.includes('sync')) throw new Error("vercel: Vercel's boards don't run sync yet: leave `sync` out")
+      // board({ team }) says whose board it is: a team of vercel()'s own must be the same one.
+      if (options.team && next.team && options.team !== next.team)
+        throw new Error(`vercel: board() names team ${next.team}, and vercel() team ${options.team}: name the team once`)
       for (const id of Object.keys(next.subscriptions)) own.add(id)
       tails = Object.fromEntries(
         Object.entries(next.subscriptions).flatMap(([id, subscription]) => (subscription.kind === 'tail' ? [[id, { tail: subscription.tail, when: subscription.when }]] : [])),

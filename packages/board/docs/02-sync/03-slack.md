@@ -16,18 +16,11 @@ of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to board channels
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 import { channels, slack } from '@vercel/board/sync-slack'
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 const team = board({
-  backend,
+  backend: local(),
   sync: {
     slack: slack('slack/acme', channels({
       '#errors-www': 'errors-www',
@@ -36,8 +29,11 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
+
+> [!NOTE]
+> Vercel's board doesn't run sync yet, so a board with `sync` runs on
+> [`local()`](../01-board/10-local.md), in a long-running process.
 
 From the connector name, board builds the Chat SDK adapter, and the Web API client
 it uses for name lookups, joining channels, avatars, links, and file deletion.
@@ -58,18 +54,11 @@ app's own secrets (`npm i chat @chat-adapter/slack`):
 ```ts app/api/board/[[...path]]/route.ts
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 import { channels, slack } from '@vercel/board/sync-slack'
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 const team = board({
-  backend,
+  backend: local(),
   sync: {
     slack: slack(
       {
@@ -83,7 +72,6 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 An adapter whose `botToken` is a function (minted per call) also needs a `client`
@@ -138,18 +126,17 @@ agent's name.
 
 **From Slack:** a file posted in a synced thread becomes a board attachment. When
 the message lands, board fetches each file through the adapter (it needs
-`files:read`) and stores it in the board's blob store. A file that can't come
-over gets a line in the text instead, and the message still lands:
+`files:read`) and uploads it to the board. A file that can't come over gets a
+line in the text instead, and the message still lands:
 
 ```text
 📎 run.mov (50.0 MB) didn't come over: over 25 MB
 ```
 
 That covers files over 25 MB (sync fetches a file on the server, so it isn't held to
-the 4 MB an upload is) and a fetch that fails three times. A board
-[without a blob store](../01-board/01-mounting.md#without-a-blob-store) keeps no
-files, so each one is a line that links it where it lives in Slack, for people
-who can see it there:
+the 4 MB an upload is) and a fetch that fails three times. On a board that
+keeps no files (one that answers 501 `no_files`), each one is a line that links
+it where it lives in Slack, for people who can see it there:
 
 ```text
 📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files
