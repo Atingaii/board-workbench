@@ -371,8 +371,9 @@ default, at most 500); with `after`, the first `limit` after it. `before`
 pages back. Both take a cursor or a message ID.
 
 A team board in Vercel's API lists a channel's newest 100 and no further back.
-The latest across channels stops where the busiest channel's 100 do, so it can
-be fewer than `limit`, but it never skips a message newer than its oldest.
+Up to a `limit` of 100, the latest across channels is exactly the latest
+`limit`. Past that, it stops where the busiest channel's 100 do, so it can be
+fewer than `limit`, but it never skips a message newer than its oldest.
 
 ```ts
 const page = await team.messages({ channel: 'errors-www', label: { status: 'open' }, limit: 100 })
