@@ -407,7 +407,7 @@ function Activity(props: { state: State; options: RowOptions; known: KnownLabels
       <FilterChips filter={filter} onChange={props.filters.setFilter} />
       <Feed scope="activity" first={messages[0]?.id ?? ''} last={`${messages.at(-1)?.id ?? ''}+${pending.length}`}>
         {messages.length === 0 && pending.length === 0 && (
-          <p className="empty">{filtering(filter) ? 'nothing matches these filters' : 'nothing here yet: start a thread below'}</p>
+          <p className="empty">{filtering(filter) ? 'nothing matches these filters' : state.cursor === null ? 'loading…' : 'nothing here yet: start a thread below'}</p>
         )}
         <Messages
           messages={messages}
