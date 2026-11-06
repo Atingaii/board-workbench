@@ -21,8 +21,8 @@ disk it can write: a serverless function can't keep one.
   A board with a `name` gets a file named for it: `board({ backend: local(),
   name: 'security' })` is `.board/security.db`, whatever the name's case. Any
   other name, `Security Team` say, gets letters and dashes, a `.`, and a hash
-  (`security-team.83f2a9a1e050b6c257f82d1bf439cc90.db`). No plain name has a `.`, so no two names
-  share a file.
+  (`security-team.83f2a9a1e050b6c257f82d1bf439cc90.db`). No plain name has
+  a `.`, so no two names share a file.
 - **`team` is ignored.** There's one team on this machine: `board({ team:
   'acme', name: 'security' })` is `.board/security.db` too, and
   `board({ team: 'acme' })` is the default board.
