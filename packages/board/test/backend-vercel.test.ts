@@ -61,9 +61,10 @@ const verified = (can: Can, who: { id: string; kind: string; handle: string; nam
   }) as unknown as Caller
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
+  it("passes the conformance kit's core, grants, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
     const api = fakeMessageboard()
-    const report = await conformance(handleOn(api), { withToken: () => handleOn(api) })
+    // The API looks names up, so the grants checks name a project, a repository, and a viewer its team has.
+    const report = await conformance(handleOn(api), { withToken: () => handleOn(api), principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com' } })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -87,10 +88,16 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
-      // The grants checks name a project and a repository made up for the run, which the API's team doesn't have.
-      'grants: grants a project, lists it, and revokes it': 'failed',
-      'grants: makes another grant for the same principals, and changes one by its ID': 'failed',
-      "grants: keeps a grant's can as written, a pattern with no permissions included": 'failed',
+      'grants: grants a principal, lists it, and revokes it': 'passed',
+      'grants: makes another grant for the same principals, and changes one by its ID': 'passed',
+      "grants: keeps a grant's can as written, a pattern with no permissions included": 'passed',
+      'grants: lets the most specific pattern decide, then the closest principal there, and adds up ties': 'passed',
+      'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'passed',
+      'grants: caps a person by their team role, so a viewer only reads': 'passed',
+      // The API mints no tokens to change grants with yet.
+      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'skipped',
+      'grants: makes a private channel with the two grants that close it to everyone but its creator': 'passed',
+      'grants: lets a project on another team in, in its environments': 'skipped',
       // Vercel's API keeps no tokens in the protocol's shapes yet.
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
       "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
@@ -102,6 +109,8 @@ describe('vercel()', () => {
       'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
     })
+    // It leaves the grants as it found them.
+    expect([...api.grants.keys()]).toEqual(['g1', 'g2'])
   }, 30_000)
 
   it("refuses a reply after a message in another thread, which as a sequence would name one in its own", async () => {

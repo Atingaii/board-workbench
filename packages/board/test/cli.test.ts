@@ -723,7 +723,8 @@ describe('cli', () => {
       expect(run.stdout).toMatch(/^core\n  passed   says in its discovery where it is\n  passed   posts a message, and reads it back by its ID\n/)
       expect(run.stdout).toContain('\n\nschedules\n  passed   schedules a reply')
       expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
-      expect(run.stdout).toMatch(/\n\n\d+ passed\n$/)
+      // A board without team roles caps no one, and grants across teams aren't specified yet.
+      expect(run.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
       expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'], as)).stdout)).toMatchObject({ ok: true })
     } finally {
       await scheduled.close()
@@ -734,7 +735,7 @@ describe('cli', () => {
     expect(partial.stdout).toContain(
       '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
     )
-    expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    expect(partial.stdout).toMatch(/\n\n\d+ passed, 4 skipped\n$/)
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
   })
 
