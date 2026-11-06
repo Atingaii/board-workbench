@@ -1,5 +1,78 @@
 # vboard
 
+## 0.33.0
+
+### Minor Changes
+
+- 318a94d: `board()` with no backend uses your team's board in Vercel's API, the one `name` names, where it threw `no_board` without `BOARD_URL`. In Node it finds the team and credentials as the Vercel CLI and a deployment do (`VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`), and with `BOARD_URL` set, it's the board at that URL, as before.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const team = board()                          // the team's default board
+  const security = board({ name: 'security' })  // its board named security
+  const acme = board({ team: 'acme' })          // team acme's default board
+  ```
+  
+  `board({ fetch })` sends the credentials Vercel's API takes in place of the environment's, so a browser reaches Vercel's board with credentials of its own. It never goes to a board at `BOARD_URL`, and TypeScript rejects it beside a `backend`.
+  
+  `vb conformance` checks only a board you name (`--name`, `--url`, `BOARD_URL`, or `BOARD_NAME`): it posts and changes grants, so with none it exits 2 and says to name a scratch board, rather than check the team's.
+- f28c166: `local()` from `@vercel/board/backend-local` keeps a board in this process, for development, `vb serve`, tests, and working offline: SQLite under `.board/` (or `dir`), its attachments beside it, and a scheduler in the process, so it passes the whole conformance kit. Each `board({ name })` gets its own file, whatever its `team`, which a local board ignores: `.board/local.db` for the default board, `.board/security.db` for `security`. `memory: true` keeps it all in memory, for tests.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  import { local } from '@vercel/board/backend-local'
+  
+  const team = board({ backend: local() })
+  const test = board({ backend: local({ memory: true }) })
+  ```
+  
+  `vb serve` runs on it: its log is `.board/local.db` and its files `.board/local/`, where they were `.board/board.db` and `.board/attachments/`. An earlier run's files move there on the next start.
+- b261ac3: `board({ name })` picks one of the team's boards in Vercel's API by its name, and `board({ team })` another team's: `{ name: 'security' }` is this team's board named security, `{ team: 'acme', name: 'security' }` team acme's, `{ team: 'acme' }` acme's default board, and neither is the team's default board, as before. `board()` looks the name up once, whatever its case. The first time anyone uses a name the team has no board for, `board({ name })` makes it, for a person (`next dev` with a login, a script) as for a deployment, and Vercel's API grants a project's new board to that project in its environment. `board({ name, ensure: false })` only finds one, and fails with 404 `no_board` where the team has none by that name. A name a board you can't see already has fails with 409 `board_name_taken`. A board the project has no access to fails with 403 `board_not_granted`, the team's default board too.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  const security = board({ name: 'security' })
+  const acme = board({ team: 'acme', name: 'security' })
+  ```
+  
+  `vb --name <board>` (or `BOARD_NAME`) picks it from the CLI, a name alone on `--scope`'s team. `vb` only finds it, so a typo at a terminal makes no board, and `--ensure` makes it; `board_not_found`'s way out is the same command with `--ensure`. `--name` goes ahead of `BOARD_URL`; `BOARD_NAME` and `BOARD_URL` both set is misuse, since each names another board, and `vb` asks you to unset one. `--scope` beside `--url` is misuse too: a board's URL names its team.
+  
+  A backend of your own reads them once, as `binding.name` and `binding.team` in `bind` (each null when left out), and `binding.ensure`.
+- fa8cadb: **Breaking:** `a2()` and its stores are gone, and with them a board you host on your own database. `@vercel/board/backend-a2` and every subpath under it (`contract`, `blob-vercel`, `store-postgres`, `store-redis`, `store-redis-http`, `store-sqlite`, `store-memory`, `scheduler-vercel`, `scheduler-qstash`, `scheduler-local`) no longer exist, nor does the package's `sql/` schema. `pg`, `ioredis`, `@upstash/qstash`, `@vercel/queue`, and `@vercel/blob` are no longer peers. `board({ project })` is gone too: a board's own Vercel project comes from `VERCEL_PROJECT_ID` or `.vercel/project.json`.
+  
+  What to do instead:
+  
+  - In production, use your team's board in Vercel's API: `board()`, or `board({ name })` for another of the team's boards. Messages, schedules, files, and watchers work there.
+  - For development, tests, `vb serve`, and working offline, use `board({ backend: local() })` from `@vercel/board/backend-local`.
+  - A board that syncs Slack, GitHub, or Linear stays on `@vercel/board@0.32` until Vercel's board runs sync, or syncs on `local()` in a long-running process.
+  - A board on `a2()` keeps its log in its own store: nothing moves it to Vercel's board.
+  
+  `no_scheduler` and `no_files` errors no longer tell you to pass anything to `a2()`.
+- b56703a: **Breaking:** `board({ access })` is gone, and with it every board that serves callers through another board. `vercelProject()`, `githubActions()`, `oidc()`, and `compileRules` are no longer in `@vercel/board/access`, nor are the `AccessRule`, `RuleFunction`, and `AccessFunction` types. A board on Vercel's board (`board()` with no backend) or at `BOARD_URL` answers only wake-ups and webhooks.
+  
+  Who may use a board is now its people, its own deployments in the environment it runs in, and whoever its grants and board tokens let in. What to do instead:
+  
+  - A rule that let in a project's deployments or a GitHub workflow becomes a grant: `vb grants create vercel --claim project_id=prj_… --claim environment=production --can …`, or `vb grants create github --claim repository=acme/web --can ci/=read,post`.
+  - A rule for another CI's OIDC tokens becomes a grant on its issuer URL, with the claims the rule matched.
+  - A gateway's callers use the team's board directly: a grant for their project or workflow, or a board token (`vb tokens create`). Until cross-team access exists, a caller on another team needs a board token minted on the board's team.
+  - A token no grant lets in gets 403 with the `vb grants create …` line that would.
+  
+  `authenticate` and `oidcTokens()`, `middleware`, and `compileAccess`, `union`, `FULL_ACCESS`, `DEFAULT_CAN`, and `resolveActor` from `@vercel/board/access` stay. A custom backend's `BoardBinding` no longer has `issuers`.
+- d6d9e2c: **Breaking:** `@vercel/board/backend-http` (`http()`) and `@vercel/board/backend-vercel` (`vercel()`) are no longer exported, nor are their types (`HttpBackend`, `HttpOptions`, `VercelBackend`, `VercelOptions`). `board()` still uses both inside: Vercel's board by default, and the board at `BOARD_URL` when it's set.
+  
+  What to write instead:
+  
+  - `board({ backend: vercel({ team }) })` is `board({ team })`, `vercel({ fetch })` is `board({ fetch })`, and a board by its ID is one by its name, `board({ name })`.
+  - A server that acts as its users through `vercel({ team, board, fetch })` moves to `board({ team, name, fetch })`, and picks the board by its name, since nothing picks one by its ID anymore. Its reads pass `ensure: false`, since `board({ name })` makes a missing board by default.
+  - `board({ backend: http(url) })` is your team's board, `board()` or `board({ name })`, once the project is granted it. For a board at a URL, `vb serve`'s say, set `BOARD_URL`.
+
+### Patch Changes
+
+- 7e258dc: A board token in `BOARD_TOKEN` reaches a team's board in Vercel's API as `Authorization: Bearer <token>`, as it is, whatever its format, ahead of `VERCEL_TOKEN`, a deployment's OIDC token, and your Vercel login, as it does a board at a URL. `vb`, `vercel board`, and `board()` in Node sent the login or the deployment's token instead. `vb whoami` says `source  BOARD_TOKEN`.
+- 308566a: On a team's board in Vercel's API, `me()` and `vb whoami` say what Vercel's API says your credentials may do in each channel, and when they stop working, where they always said read, post, react, and label everywhere, with no expiry. A person may do what their team role lets them: an owner, a member, or a developer everything, and a viewer only read. A project may read, post, react, and label everywhere. Where the API says nothing, that's still what they say.
+
 ## 0.32.0
 
 ### Minor Changes
