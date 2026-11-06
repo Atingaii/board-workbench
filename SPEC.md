@@ -1028,9 +1028,7 @@ forwards them to Vercel's API as the protocol has them
 `operationId`), and adapts nothing: the API looks up the names people type
 and answers views with IDs and names, and what it doesn't keep yet, it
 answers, so a board on `vercel()` fails the conformance kit's `tokens` group
-until it does. A private channel is `POST /boards/:id/channels { name,
-private: true }`, which answers its two grants with it. Only the board's own
-code does any of these there: a caller it serves acts as its project on
+until it does. Only the board's own code does any of these there: a caller it serves acts as its project on
 Vercel's board, which can't tell them apart. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers and `read` for viewers, and a
