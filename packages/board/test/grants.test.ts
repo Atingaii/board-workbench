@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { githubActions, oidc, vercelProject, type Known } from '../src/server/auth.ts'
 import { createServer } from 'experimental-a2/server'
 import { ACCESS_SESSION, accessContract } from '../src/contract/contract.ts'
+import { memory } from '../src/store/memory.ts'
 import { caller, deploymentToken, localUserToken, oidcToken, OIDC_ISS, personToken, testBoard, testKeys, workflowToken } from './harness.ts'
 
 /**
@@ -119,6 +120,34 @@ describe('grants', () => {
     expect((await carol('POST', '/grants', { principals: [run], can: { 'dev/': ['post'] } })).status).toBe(403)
   })
 
+  it('judges a grant on the grants it lands on, so a change that narrows its maker in between counts', async () => {
+    // Just before Bob's grant first lands, the owner closes security/ to him: his write finds the log moved on, and looks again.
+    const base = memory()
+    let between: (() => Promise<unknown>) | null = null
+    const log = new Proxy(base.log, {
+      get(target, key) {
+        if (key !== 'append') {
+          const value = Reflect.get(target, key)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+        return async (...args: Parameters<typeof base.log.append>) => {
+          const hook = between
+          if (hook && /grant\.created.*u_bob/.test(JSON.stringify(args[1]))) {
+            between = null
+            await hook()
+          }
+          return target.append(...args)
+        }
+      },
+    })
+    const { owner, as } = await setUp({ store: { ...base, log, close: () => base.close() } })
+    const bob = await as(personToken('u_bob'))
+    between = () => owner('POST', '/grants', { principals: [user('u_bob')], can: { 'security/': [] } })
+    const made = await bob('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
+    expect(between).toBeNull()
+    expect([made.status, made.body.error?.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
+  })
+
   it('revokes, or removes from, a grant with manage where it applies, however narrow the caller is elsewhere', async () => {
     const { owner, as } = await setUp()
     await owner('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })
@@ -131,13 +160,17 @@ describe('grants', () => {
   })
 
   it('lets no token reach past its own can by granting someone else', async () => {
-    const { person, as } = await setUp()
-    // Manage at *, but nothing in security/, where no grant closes it to everyone: a grant on * for a run it controls would be all of security/ too.
+    const { owner, person, as } = await setUp()
+    // Manage at *, but nothing in security/: a grant on * for a run it controls would be all of security/ too.
     const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'security/': [] } })
     const scoped = await as(minted.body.secret)
     const run = { kind: 'github', repository: 'acme/web' }
     expect((await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })).status).toBe(403)
     expect((await scoped('POST', '/grants', { principals: [run], can: { 'dev/': 'all' } })).status).toBe(200)
+    // Not even once security/ is closed to everyone: whoever lifts the lock would open it to the run, and not to the token.
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    const locked = await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })
+    expect([locked.status, locked.body.error.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
   })
 
   it("lets no token let in a principal it controls where everyone gets more than the token has", async () => {

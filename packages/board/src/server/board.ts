@@ -256,7 +256,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
       return entry.url(thread.slice(key.length + 1), message).catch(() => null)
     },
     typing: async (messages, status) => (await server()).typing(messages, status),
-    accessNow: (principal) => policy.accessNow(principal),
+    accessNow: (principal, grants) => policy.accessNow(principal, grants),
     explain: (principal, channel) => policy.explain(principal, channel),
     project: () => policy.project(),
     issuers: () => policy.issuers,

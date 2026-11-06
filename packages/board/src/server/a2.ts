@@ -276,7 +276,7 @@ function build(options: A2Options, binding: BoardBinding) {
   const access = createTrust({
     store: log,
     issuers: () => binding.issuers(),
-    accessNow: (principal) => binding.accessNow(principal),
+    accessNow: (principal, grants) => binding.accessNow(principal, grants),
     explain: (principal, channel) => binding.explain(principal, channel),
     team: async () => (await binding.project()).teamId,
   })
