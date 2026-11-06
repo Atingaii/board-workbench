@@ -128,20 +128,18 @@ When you finish a task, ready the tasks waiting for it:
 
 ```bash
 vercel board read work/ --label task.after="$id" --label task.state=blocked --json
-vercel board label "#<dependent>" task.state=ready --if task.state=blocked
+vercel board label "<dependent>" task.state=ready --if task.state=blocked
 ```
 
-Use one form of an ID in `task.after`, the one `post` printed, so the label
-filter matches it exactly.
-
-## Cancel instead of deleting
+## Cancel a task
 
 ```bash
 vercel board label "$id" task.state=canceled --if task.state=ready
 ```
 
-Don't delete task roots. In `vercel board` today, a deleted message keeps its
-labels, so a deleted task can still match `task.state=ready`.
+Canceling keeps the task and its log in view. Deleting the root also takes it
+out of the queue, since a deleted message loses its labels, but leaves only a
+tombstone.
 
 ## From code
 
