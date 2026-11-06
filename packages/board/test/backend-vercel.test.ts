@@ -787,6 +787,8 @@ describe('vercel()', () => {
     })
     // A viewer's role caps what g1 gives them.
     expect(await jb.explain('dev', { user: 'val@acme.com' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g1' }], capped: 'viewer', can: ['read', 'react'] })
+    // An app on the team, by its slug: g3 lets every one in.
+    expect(await jb.explain('dev', { app: 'ship' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g3' }], can: ['read', 'post', 'react', 'label'] })
     // Its grant lets the run in, and says nothing of ci.
     expect(await jb.explain('ci', { github: 'acme/web', workflow: 'ci.yml' })).toMatchObject({ pattern: null, level: null, grants: [], can: [] })
     await jb.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })

@@ -234,8 +234,9 @@ export const ExplainQuery = z
     event: z.string().min(1).max(64).optional(),
     oidc: z.string().min(1).max(1000).optional(),
     claim: repeated.optional(),
+    app: z.string().min(1).max(200).optional(),
   })
-  .refine((query) => [query.user, query.project, query.github, query.oidc].filter((value) => value !== undefined).length <= 1, 'name one principal: user, project, github, or oidc')
+  .refine((query) => [query.user, query.project, query.github, query.oidc, query.app].filter((value) => value !== undefined).length <= 1, 'name one principal: user, project, github, oidc, or app')
   .refine((query) => query.environment === undefined || query.project !== undefined, 'environment goes with project')
   .refine((query) => (query.workflow === undefined && query.branch === undefined && query.event === undefined) || query.github !== undefined, 'workflow, branch, and event go with github')
   .refine((query) => query.claim === undefined || query.oidc !== undefined, 'claim goes with oidc')

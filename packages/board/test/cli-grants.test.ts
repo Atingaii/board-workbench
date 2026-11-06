@@ -149,6 +149,8 @@ describe('cli grants', () => {
     expect(await explain('--user', 'u_dan', 'dev')).toBe('* wins. Closest grant for u_dan: g1 (--all-users): all.\n')
     expect(await explain('--project', 'prj_web', '--environment', 'preview', 'dev')).toBe('* wins. Closest grant for prj_web in preview: g2 (--all-projects): read,post,react,label.\n')
     expect(await explain('--github', 'acme/other', 'dev')).toBe('Nothing lets acme/other into dev.\n')
+    // A local board has no apps.
+    expect(await explain('--app', 'cl_ship', 'dev')).toBe('Nothing lets cl_ship into dev.\n')
     // Even a team owner reads a closed channel only by a grant.
     expect(await explain('security/incidents')).toBe(`security/ wins over *. Closest grant for you: ${closed.id} (--everyone): none.\n`)
     expect(JSON.parse(await explain('--user', 'u_bob', 'security', '--json'))).toEqual({
@@ -163,7 +165,7 @@ describe('cli grants', () => {
       return [code, stderr.split('\n')[0]]
     }
     expect(await refused('--user', 'u_a', '--user', 'u_b', 'dev')).toEqual([2, 'error: explain asks about one principal at a time.'])
-    expect(await refused('--all-users', 'dev')).toEqual([2, 'error: explain asks about someone: --user, --project, --github, or --oidc, not --all-users.'])
+    expect(await refused('--all-users', 'dev')).toEqual([2, 'error: explain asks about someone: --user, --project, --github, --oidc, or --app, not --all-users.'])
     expect(await refused('--project', 'prj_web', '--environment', 'production,preview', 'dev')).toEqual([2, 'error: explain asks about one environment at a time: --environment production.'])
     expect(await refused('--user', 'u_a')).toEqual([2, 'error: Missing the channel to explain, such as security/incidents.'])
   }, 30_000)

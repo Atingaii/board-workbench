@@ -449,6 +449,10 @@ describe('explain', () => {
     await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })
     const explain = async (query: string) => (await person('GET', `/grants/explain?${query}`)).body
     expect(await explain('channel=ci&github=acme/other')).toEqual({ channel: 'ci', pattern: null, over: [], level: null, grants: [], capped: null, can: [] })
+    // A local board has no apps: nothing lets one in, even one a grant names.
+    await person('POST', '/grants', { principals: [{ kind: 'app', app: 'cl_ship' }], can: { 'ci/': ['post'] } })
+    expect(await explain('channel=ci&app=cl_ship')).toEqual({ channel: 'ci', pattern: null, over: [], level: null, grants: [], capped: null, can: [] })
+    expect((await person('GET', '/grants/explain?channel=ci&app=cl_ship&user=u_bob')).status).toBe(400)
     // A run asks about itself: what decides, without the grants, which it may not list.
     const run = await as(workflowToken({ repository: 'acme/web', repository_id: '99' }))
     expect((await run('GET', '/grants/explain?channel=ci')).body).toEqual({ channel: 'ci', pattern: 'ci/', over: [], level: 'principal', grants: [], capped: null, can: ['post'] })
@@ -458,6 +462,7 @@ describe('explain', () => {
     expect((await explain('channel=ci&github=acme/api&workflow=ci.yml')).can).toEqual(['read'])
     expect((await explain('channel=ci&github=acme/api&workflow=ci.yml&branch=dev')).can).toEqual([])
     expect((await run('GET', '/grants/explain?channel=ci&user=u_julian')).status).toBe(403)
+    expect((await run('GET', '/grants/explain?channel=ci&app=cl_ship')).status).toBe(403)
     // A token says what it may do, narrowed.
     const reader = await as((await person('POST', '/tokens', { name: 'reader', can: { 'ci/': ['read'] } })).body.secret)
     expect((await reader('GET', '/grants/explain?channel=ci')).body).toMatchObject({ pattern: '*', level: 'group', can: ['read'] })

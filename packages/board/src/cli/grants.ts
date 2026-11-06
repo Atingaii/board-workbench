@@ -181,8 +181,10 @@ export function explainPrincipalOf(tokens: readonly OptionToken[]): { principal:
       }
       return { principal: { oidc: principal.issuer, claims }, subject: principal.issuer, kind: 'oidc' }
     }
+    case 'app':
+      return { principal: { app: principal.app }, subject: principal.app, kind: 'app' }
     default:
-      throw new GrantMisuse(`explain asks about someone: --user, --project, --github, or --oidc, not --${principal.kind}.`)
+      throw new GrantMisuse(`explain asks about someone: --user, --project, --github, --oidc, or --app, not --${principal.kind}.`)
   }
 }
 
@@ -198,6 +200,7 @@ function levelFlag(level: NonNullable<Explanation['level']>, kind: Kind | null, 
   if (group) {
     if (kind === 'user') return '--all-users'
     if (kind === 'project') return '--all-projects'
+    if (kind === 'app') return '--all-apps'
     return of.length === 1 ? `--${of[0]}` : null
   }
   if (kind !== null) return `--${kind}`

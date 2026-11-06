@@ -516,7 +516,8 @@ revoked g4
 `explain` says which grant decides a channel: the pattern that won and those
 it won over, the closest grants there, and what they give. It explains you, or
 with `manage` at `*`, the one `--user`, `--project` (in one `--environment`),
-`--github`, or `--oidc` it names. A caller that can't list grants sees that
+`--github`, `--oidc`, or `--app` it names. A local board has no apps, so
+nothing lets one in there. A caller that can't list grants sees that
 one decides, not which:
 
 ```text
