@@ -80,49 +80,56 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 
-/** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
-type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
+const principalId = (p: Principal) => (p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`)
+const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
 
-/** A person's role on the team. */
-type Role = 'owner' | 'member' | 'developer' | 'viewer'
+/** Who a request is: its bearer names a principal, or is a board token (`tokens`) that acts as one. */
+function actorOf(request: Request, tokens: Record<string, string> = {}): Actor {
+  const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+  // A board token acts as whoever it was minted for.
+  const token = tokens[bearer] ?? bearer
+  const [type, id, environment] = token.split(':')
+  const principal: Principal | null =
+    type === 'user' && id ? { type, userId: id } : type === 'app' && id ? { type, clientId: id } : type === 'project' && id && environment ? { type, projectId: id, environment } : null
+  if (!principal) throw new Refused(401, 'unauthorized')
+  const name = request.headers.get('x-board-profile') ?? undefined
+  const avatar = request.headers.get('x-board-avatar') ?? undefined
+  const session = request.headers.get('x-board-session') ?? undefined
+  const base = principalId(principal)
+  return {
+    id: name ? `${base}+${name.toLowerCase()}` : base,
+    principal,
+    ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
+    ...(session ? { session } : {}),
+  }
+}
 
-/** Everything, in the protocol's order: what `GET /me` says an owner, member, or developer may do. */
-const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
+type Accounts = Record<string, { username: string; name: string }>
 
-/**
- * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
- * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
- * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
- * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
- * of board tokens.
- * `me: false` says neither, as Vercel's API answered before it sent them.
- */
-export function fakeMessageboard(
-  options: {
-    teamId?: string
-    slug?: string
-    boardId?: string | null
-    accounts?: Record<string, { username: string; name: string }>
-    roles?: Record<string, Role>
-    me?: Record<string, MeSays> | false
-    /** Board tokens the API takes, by their secret (`board_…`): the principal each acts as, as `as()` names it. */
-    tokens?: Record<string, string>
-  } = {},
-) {
-  const accounts = options.accounts ?? ACCOUNTS
-  const teamId = options.teamId ?? 'team_test'
-  const slug = options.slug ?? 'test'
-  let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
+/** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
+function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'> {
+  const p = actor.principal
+  const account = p.type === 'user' ? accounts[p.userId] : undefined
+  const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
+  if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
+  if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
+  return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
+}
+
+/** What every board in one fake API shares: its team, its accounts, its clock, and its bucket. */
+type Shared = { teamId: string; accounts: Accounts; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
+
+const STORAGE = 'http://storage.test/'
+
+/** One board in the fake API, with its own channels, threads, files, watchers, and schedules. */
+function fakeBoard(shared: Shared, boardId: string) {
+  const { teamId, accounts, now, stored } = shared
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
   const threads = new Map<string, Thread>()
   const posts = new Map<string, string>()
   const feeds = new Map<string, Change[]>()
   const actors = new Map<string, ActorView>()
-  const requests: string[] = []
   const attachments = new Map<string, Attachment>()
-  /** The bucket: bytes by attachment ID, as presigned PUTs leave them. */
-  const stored = new Map<string, Uint8Array<ArrayBuffer>>()
-  const STORAGE = 'http://storage.test/'
   type Filter = { channelIds?: string[]; channelTree?: string; threadId?: string; authors?: string[]; text?: string; labels?: { key: string; values?: string[] }[] }
   type Registration = { owner: string; url: string | null; path?: string; branch?: string; watch: Record<string, { filter: Filter; when: 'matches' | 'enters' }>; hash: string }
   type Match = { id: string; watcher: string; threadId: string; change: Change; lease?: string; leaseUntil?: number; attempts: number }
@@ -130,42 +137,8 @@ export function fakeMessageboard(
   const registrations = new Map<string, Registration>()
   const queued = new Map<string, Match[]>()
   const schedules = new Map<string, Schedule>()
-  let clock = 0
-  const now = () => (clock = Math.max(Date.now(), clock + 1))
 
-  const principalId = (p: Principal) => (p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`)
-  const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
-
-  function actorOf(request: Request): Actor {
-    const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-    // A board token acts as whoever it was minted for.
-    const token = options.tokens?.[bearer] ?? bearer
-    const [type, id, environment] = token.split(':')
-    const principal: Principal | null =
-      type === 'user' && id ? { type, userId: id } : type === 'app' && id ? { type, clientId: id } : type === 'project' && id && environment ? { type, projectId: id, environment } : null
-    if (!principal) throw new Refused(401, 'unauthorized')
-    const name = request.headers.get('x-board-profile') ?? undefined
-    const avatar = request.headers.get('x-board-avatar') ?? undefined
-    const session = request.headers.get('x-board-session') ?? undefined
-    const base = principalId(principal)
-    return {
-      id: name ? `${base}+${name.toLowerCase()}` : base,
-      principal,
-      ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
-      ...(session ? { session } : {}),
-    }
-  }
-
-  /** An actor as the API names them (`viewFor` in api-messageboard): a person by their account. */
-  function viewOf(actor: Actor): Omit<ActorView, 'lastSeenAt'> {
-    const p = actor.principal
-    const account = p.type === 'user' ? accounts[p.userId] : undefined
-    const base = p.type === 'user' ? (account?.username ?? p.userId) : p.type === 'app' ? p.clientId : `project:${p.projectId}:${p.environment}`
-    if (actor.profile) return { id: actor.id, kind: 'agent', handle: `${base}/${actor.profile.name.toLowerCase()}`, name: actor.profile.name }
-    if (p.type === 'user') return { id: actor.id, kind: 'person', handle: base, ...(account ? { name: account.name } : {}) }
-    return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
-  }
-  const seen = (actor: Actor) => actors.set(actor.id, { ...viewOf(actor), lastSeenAt: now() })
+  const seen = (actor: Actor) => actors.set(actor.id, { ...viewOf(accounts, actor), lastSeenAt: now() })
 
   /** A channel's feed position, as the API's `c1.` cursor carries it: shared by its messages and its events. */
   const cursorAt = (channelId: string, position: number) => `c1.${position}.${channelId}`
@@ -484,39 +457,9 @@ export function fakeMessageboard(
     return undefined
   }
 
-  async function route(request: Request): Promise<unknown> {
-    const url = new URL(request.url)
-    if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
-    if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
-    const actor = actorOf(request)
-    const path = url.pathname.replace(/^\/v1\/messageboard/, '')
-    const method = request.method
-    requests.push(`${method} ${path}`)
-    // Completing an upload takes no body.
-    const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
-    // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
-    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
-    if (method === 'GET' && path === '/me') {
-      if (options.me === false) return { teamId, actor, view: viewOf(actor) }
-      const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-      const role = actor.principal.type === 'user' ? (options.roles?.[actor.principal.userId] ?? 'member') : null
-      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read'] : ALL
-      const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
-      return { teamId, actor, view: viewOf(actor), can: says.can, expiresAt: says.expiresAt }
-    }
-    if (method === 'GET' && path === '/boards') return { boards: boardId ? [{ id: boardId, teamId, name: 'General', visibility: 'team' }] : [], defaultBoardId: boardId, cursor: null }
-    if (method === 'POST' && path === '/boards/default') {
-      // Board creates record a person's event, so project tokens can't.
-      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
-      boardId ??= 'brd_default'
-      return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
-    }
-    const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
-    if (!onBoard || onBoard[1] !== boardId) throw new Refused(404, 'board_not_found')
-    const rest = onBoard[2] ?? ''
+  /** A request to this board, at `rest` under `/boards/:id`, from a caller who may use it. */
+  async function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor): Promise<unknown> {
     let found: RegExpExecArray | null
-
-    if (method === 'GET' && rest === '') return { board: { id: boardId, teamId, name: 'General', visibility: 'team' } }
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
@@ -571,7 +514,7 @@ export function fakeMessageboard(
       if (answered !== undefined) return answered
     }
     if (method === 'POST' && rest === '/attachments') {
-      const attachment: Attachment = { id: `att_${randomUUID()}`, boardId: boardId!, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
+      const attachment: Attachment = { id: `att_${randomUUID()}`, boardId, name: body.name, type: body.type, size: body.size, sha256: body.sha256, state: 'pending', createdAt: now(), createdBy: actor }
       attachments.set(attachment.id, attachment)
       return { attachment, upload: { url: `${STORAGE}${attachment.id}`, method: 'PUT', headers: { 'content-type': body.type, 'x-amz-checksum-sha256': body.sha256 }, expiresAt: now() + 600_000 } }
     }
@@ -708,17 +651,154 @@ export function fakeMessageboard(
         return { meta: meta(message) }
       }
     }
-    throw new Refused(404, 'not_found', `${method} ${path}`)
+    throw new Refused(404, 'not_found', `${method} ${rest}`)
   }
 
+  return { route, registrations, schedules, send }
+}
+
+/** A board the fake API keeps: who may use it, and what's on it. */
+type Kept = {
+  id: string
+  name: string
+  /** The projects granted it, as `prj_x:production`, or `all` for every project in the team. */
+  granted: Set<string> | 'all'
+  data: ReturnType<typeof fakeBoard>
+}
+
+/** A name a board may have: 1 to 64 characters, no `/`. */
+const BOARD_NAME = /^[^/]{1,64}$/
+
+/** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
+type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
+
+/** A person's role on the team. */
+type Role = 'owner' | 'member' | 'developer' | 'viewer'
+
+/** Everything, in the protocol's order: what `GET /me` says an owner, member, or developer may do. */
+const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
+
+/**
+ * The team's API: its default board, `General` (`brd_test`, or none with `boardId: null` until a
+ * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
+ * uses every board in the team; a project, those granted it in its environment. A board made here
+ * takes no name another has, whatever its case; `boards` may share one, as older boards can.
+ *
+ * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
+ * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
+ * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
+ * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
+ * of board tokens.
+ * `me: false` says neither, as Vercel's API answered before it sent them.
+ */
+export function fakeMessageboard(
+  options: {
+    teamId?: string
+    slug?: string
+    boardId?: string | null
+    accounts?: Accounts
+    boards?: { name: string; id?: string; granted?: string[] }[]
+    roles?: Record<string, Role>
+    me?: Record<string, MeSays> | false
+    /** Board tokens the API takes, by their secret (`board_…`): the principal each acts as, as `as()` names it. */
+    tokens?: Record<string, string>
+  } = {},
+) {
+  const accounts = options.accounts ?? ACCOUNTS
+  const teamId = options.teamId ?? 'team_test'
+  const slug = options.slug ?? 'test'
+  const requests: string[] = []
+  /** The bucket: bytes by attachment ID, as presigned PUTs leave them. */
+  const stored = new Map<string, Uint8Array<ArrayBuffer>>()
+  let clock = 0
+  const now = () => (clock = Math.max(Date.now(), clock + 1))
+  const shared: Shared = { teamId, accounts, now, stored }
+
+  const kept = (id: string, name: string, granted: Kept['granted']): Kept => ({ id, name, granted, data: fakeBoard(shared, id) })
+  // The default board is kept from the start, so what a test reads of it holds once a person makes it.
+  const general = kept(options.boardId === undefined ? 'brd_test' : (options.boardId ?? 'brd_default'), 'General', 'all')
+  let made = options.boardId !== null
+  const others = (options.boards ?? []).map((board) => kept(board.id ?? `brd_${randomUUID()}`, board.name, new Set(board.granted ?? [])))
+  const boards = () => [...(made ? [general] : []), ...others]
+  /** What each ensure made, by its caller and operation ID, for a retry to answer again. */
+  const ensured = new Map<string, Kept>()
+
+  const grantOf = (principal: Extract<Principal, { type: 'project' }>) => `${principal.projectId}:${principal.environment}`
+  /** A board is team-visible: anyone in the team uses it but a project, which needs it granted in its environment. */
+  const mayUse = (actor: Actor, board: Kept) => actor.principal.type !== 'project' || board.granted === 'all' || board.granted.has(grantOf(actor.principal))
+  const show = (board: Kept) => ({ id: board.id, teamId, name: board.name, visibility: 'team' })
+  const named = (name: string) => boards().some((board) => board.name.toLowerCase() === name.toLowerCase())
+
+  async function route(request: Request): Promise<unknown> {
+    const url = new URL(request.url)
+    if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
+    if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
+    const actor = actorOf(request, options.tokens)
+    const path = url.pathname.replace(/^\/v1\/messageboard/, '')
+    const method = request.method
+    requests.push(`${method} ${path}`)
+    // Completing an upload takes no body.
+    const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
+    // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
+    if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
+    if (method === 'GET' && path === '/me') {
+      if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
+      const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+      const role = actor.principal.type === 'user' ? (options.roles?.[actor.principal.userId] ?? 'member') : null
+      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read'] : ALL
+      const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
+      return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
+    }
+    if (method === 'GET' && path === '/boards') {
+      // `name` matches whatever its case, among the boards the caller may use, all in one answer:
+      // older boards can share one.
+      const name = url.searchParams.get('name')
+      if (name !== null && !BOARD_NAME.test(name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
+      if (name !== null && url.searchParams.has('cursor')) throw new Refused(400, 'invalid_request', 'A name lookup takes no cursor.')
+      const listed = boards().filter((board) => mayUse(actor, board) && (name === null || board.name.toLowerCase() === name.toLowerCase()))
+      return { boards: listed.map(show), defaultBoardId: made && mayUse(actor, general) ? general.id : null, cursor: null }
+    }
+    if (method === 'POST' && path === '/boards/default') {
+      // Board creates record a person's event, so project tokens can't.
+      if (actor.principal.type === 'project') throw new Refused(403, 'forbidden')
+      if (!made && named(general.name)) throw new Refused(409, 'board_name_taken')
+      made = true
+      return { board: show(general) }
+    }
+    if (method === 'POST' && path === '/boards/ensure') {
+      if (typeof body.name !== 'string' || !BOARD_NAME.test(body.name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
+      // A retry with the same operation ID answers what the first did, as one that made nothing.
+      const replayed = ensured.get(`${principalId(actor.principal)}|${body.operationId}`)
+      if (replayed) return { board: show(replayed), created: false }
+      const found = boards().filter((board) => board.name.toLowerCase() === body.name.toLowerCase())
+      if (found.length > 1) throw new Refused(409, 'ambiguous_board_name', 'Several boards have that name.')
+      if (found[0]) {
+        if (!mayUse(actor, found[0])) throw new Refused(403, 'board_not_granted', "This project isn't granted that board.")
+        return { board: show(found[0]), created: false }
+      }
+      // A new team-visible board, granted to the project that made it, in its own environment.
+      const board = kept(`brd_${randomUUID()}`, body.name, new Set(actor.principal.type === 'project' ? [grantOf(actor.principal)] : []))
+      others.push(board)
+      ensured.set(`${principalId(actor.principal)}|${body.operationId}`, board)
+      return { board: show(board), created: true }
+    }
+    const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
+    const board = onBoard ? boards().find((candidate) => candidate.id === decodeURIComponent(onBoard[1]!)) : undefined
+    if (!onBoard || !board || !mayUse(actor, board)) throw new Refused(404, 'board_not_found')
+    const rest = onBoard[2] ?? ''
+    if (method === 'GET' && rest === '') return { board: show(board) }
+    return board.data.route(method, rest, url, body, actor)
+  }
+
+  const { registrations, schedules, send } = general.data
   return {
     /** Every request it answered, as `METHOD /path`. */
     requests,
-    /** The watchers each principal registered, as the API keeps them. */
+    /** The watchers each principal registered on the default board, as the API keeps them. */
     registrations,
-    /** Every schedule, by ID, as the API keeps them. */
+    /** Every schedule on the default board, by ID, as the API keeps them. */
     schedules,
-    /** Posts a schedule's next send now, as its timer would: the message's ID. */
+    /** Posts a default board schedule's next send now, as its timer would: the message's ID. */
     send,
     /** The attachments bucket, as presigned URLs reach it: a PUT stores bytes, held to its signed SHA-256 as S3 holds it, and a GET reads them. */
     files: (async (input: RequestInfo | URL, init?: RequestInit) => {
