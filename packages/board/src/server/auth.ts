@@ -465,7 +465,14 @@ export const principalKey = (principal: GrantPrincipal) => JSON.stringify(princi
 export function checkGrant(body: { principals: readonly PrincipalInput[]; can: unknown }, trusted: readonly string[]): { principals: GrantPrincipal[]; can: WrittenCan } {
   if (body.principals.length === 0) throw invalidGrant('a grant names at least one principal')
   if (body.principals.length > GRANT_PRINCIPALS_MAX) throw invalidGrant(`a grant names at most ${GRANT_PRINCIPALS_MAX} principals`)
-  const principals = [...new Map(body.principals.map((input) => checkPrincipal(input, trusted)).map((principal) => [principalKey(principal), principal])).values()]
+  // Each against the issuers before it in the grant too: two that name the same principals can't sit side by side.
+  const seen = [...trusted]
+  const checked = body.principals.map((input) => {
+    const principal = checkPrincipal(input, seen)
+    if (principal.kind === 'oidc') seen.push(principal.issuer)
+    return principal
+  })
+  const principals = [...new Map(checked.map((principal) => [principalKey(principal), principal])).values()]
   return { principals, can: checkCan(body.can) }
 }
 
@@ -577,6 +584,27 @@ export function grantLevel(grant: Pick<StoredGrant, 'principals'>, caller: Known
     if (level !== null && (best === null || LEVELS.indexOf(level) < LEVELS.indexOf(best))) best = level
   }
   return best
+}
+
+/**
+ * The issuers a verifier trusts for grants, beside the rules': a grant's issuer only while it's an
+ * https URL on the internet and names principals no issuer before it does. A board refuses any
+ * other when it's granted; one stored before it did is never asked for keys, and never breaks the
+ * verifier for everyone else.
+ */
+export function verifiedIssuers(rules: readonly string[], granted: readonly string[]): string[] {
+  const taken = new Set(rules.map(issuerName))
+  const issuers = [...rules]
+  for (const issuer of granted) {
+    if (rules.includes(issuer)) continue
+    const url = URL.parse(issuer)
+    if (url?.protocol !== 'https:' || privateHost(url.hostname)) continue
+    const name = issuerName(issuer)
+    if (taken.has(name)) continue
+    taken.add(name)
+    issuers.push(issuer)
+  }
+  return issuers
 }
 
 /** The OIDC issuers grants name: their tokens are verified too. */

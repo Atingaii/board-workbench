@@ -99,7 +99,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend and no `access` of its own has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
-| POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is |
+| POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is. A key it doesn't know is 400, so `private` makes nothing |
 | GET | `/actors` | `{ actors, cursor }`: each `{ id, kind, handle, name, avatar }`, sorted by handle |
 | GET | `/messages` | `{ messages, cursor }`, filtered. See [Listing messages](#listing-messages) |
 | GET | `/threads` | `{ threads, cursor }`: a summary per matching thread. See [Listing threads](#listing-threads) |
@@ -120,10 +120,10 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `local()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
 | GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants and tokens](#grants-and-tokens) |
-| POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`. Answers `{ grant }` |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs `manage` at each pattern it names, before and after. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
+| POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`, and under each wherever your access is narrower; `manage` everywhere to name an `oidc` principal. A key it doesn't know is 400. Answers `{ grant }` |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs `manage` wherever it applies, before and after. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
 | GET | `/grants/explain` | Which grants decide a channel: `{ channel, pattern, over, level, grants, rule, capped, can }`, `over` the other patterns that cover it, most specific first. Query: `channel`, and for someone else (with `manage` at `*`) `user`, `project` and `environment`, `github` and `workflow`, `branch`, `event`, or `oidc` and `claim=name=value`. `grants` is empty for a caller that can't list them |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone. Needs `manage` at each pattern it names |
+| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone. Needs `manage` wherever it applies |
 | GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |

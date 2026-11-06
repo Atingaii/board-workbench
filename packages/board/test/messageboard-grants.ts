@@ -214,10 +214,27 @@ export function fakeGrants(options: {
   }
 
   const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'owner'
-  const manages = (who: Who, pattern: string) => isOwner(who) || decide(who, pattern).can.includes('manage')
-  function mayChange(who: Who, patterns: Iterable<string>, what: string) {
-    for (const pattern of patterns) if (!manages(who, pattern)) throw new GrantRefused(403, 'forbidden', `${what} takes manage at ${pattern}`)
+  /** Whether `who` may list the grants, or explain anyone: manage at `*`, or a team owner. */
+  const lists = (who: Who) => isOwner(who) || decide(who, '*').can.includes('manage')
+  /**
+   * Whether `who` may make or change a grant at `pattern`: manage there, and at every more specific
+   * pattern under it that the grants naming `who` give it otherwise. A team owner always may.
+   */
+  function manages(who: Who, pattern: string) {
+    if (isOwner(who)) return true
+    if (!decide(who, pattern).can.includes('manage')) return false
+    const named = [...grants.values()].filter((grant) => grant.principals.some((principal) => names(principal, who, true)))
+    const under = named.flatMap((grant) => Object.keys(grant.can)).filter((other) => other !== pattern && covers(pattern, other))
+    return under.every((other) => decide(who, other).can.includes('manage'))
   }
+  function mayChange(who: Who, patterns: Iterable<string>, what: string) {
+    for (const pattern of patterns) if (!manages(who, pattern)) throw new GrantRefused(403, 'forbidden', `${what} takes manage wherever the grant applies`)
+  }
+  function mayList(who: Who, what: string) {
+    if (!lists(who)) throw new GrantRefused(403, 'forbidden', `${what} takes manage at *`)
+  }
+  /** Naming an issuer makes the API fetch its keys: it takes manage everywhere. */
+  const namesIssuer = (principals: readonly Stored[]) => principals.some((principal) => principal.kind === 'oidc')
 
   function viewOf(grant: Grant) {
     return {
@@ -261,8 +278,9 @@ export function fakeGrants(options: {
         kind: 'github',
         repositoryId,
         repository,
+        // A run on main unless the query says.
         ...(workflow ? { workflowRef: `${repository}/${workflowPath(workflow)}@refs/heads/${branch ?? 'main'}` } : {}),
-        ...(branch ? { ref: `refs/heads/${branch}` } : {}),
+        ref: `refs/heads/${branch ?? 'main'}`,
         ...(event ? { event } : {}),
       }
     }
@@ -279,7 +297,7 @@ export function fakeGrants(options: {
     route(method: string, rest: string, who: Who, by: string, body: Record<string, any>, url: URL): unknown {
       let found: RegExpExecArray | null
       if (method === 'GET' && rest === '/grants') {
-        mayChange(who, ['*'], 'listing grants')
+        mayList(who, 'listing grants')
         return { grants: [...grants.values()].map(viewOf) }
       }
       if (method === 'POST' && rest === '/grants') {
@@ -287,15 +305,16 @@ export function fakeGrants(options: {
         const principals = body.principals.map((input: Record<string, any>) => resolve(input))
         const can = checkCan(body.can)
         mayChange(who, patternsOf(can), 'granting')
+        if (namesIssuer(principals)) mayChange(who, ['*'], 'naming an oidc issuer')
         return { grant: viewOf(add(principals, can, by)) }
       }
       if (method === 'GET' && rest === '/grants/explain') {
         const channel = url.searchParams.get('channel')
         if (!channel) throw new GrantRefused(400, 'invalid_request', 'explain takes a channel')
         const other = named(url)
-        if (other) mayChange(who, ['*'], 'explaining what someone else may do')
+        if (other) mayList(who, 'explaining what someone else may do')
         const decided = decide(other ?? who, channel)
-        const shown = manages(who, '*') ? decided.grants : []
+        const shown = lists(who) ? decided.grants : []
         return { channel, pattern: decided.pattern, over: decided.over, level: decided.level, grants: shown.map(viewOf), rule: null, capped: decided.capped, can: decided.can }
       }
       if ((found = /^\/grants\/([^/]+)$/.exec(rest)) && method === 'PATCH') {
@@ -311,6 +330,7 @@ export function fakeGrants(options: {
         }
         for (const input of body.add ?? []) {
           const added = resolve(input)
+          if (added.kind === 'oidc') mayChange(who, ['*'], 'naming an oidc issuer')
           // One it names already gets the new environments: an add never narrows.
           const at = principals.findIndex((principal) => principal.kind === added.kind && (added.kind === 'project' ? (principal as typeof added).projectId === added.projectId : added.kind === 'all-projects' || sameKey(principal, added)))
           const found = principals[at]
@@ -326,7 +346,7 @@ export function fakeGrants(options: {
       if ((found = /^\/grants\/([^/]+)\/revoke$/.exec(rest)) && method === 'POST') {
         const grant = grants.get(decodeURIComponent(found[1]!))
         if (!grant) {
-          mayChange(who, ['*'], 'revoking grants')
+          mayList(who, 'revoking grants')
           return { revoked: false }
         }
         mayChange(who, patternsOf(grant.can), `revoking ${grant.id}`)

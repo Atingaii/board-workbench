@@ -184,29 +184,31 @@ const Environments = z.array(z.string().min(1).max(100)).min(1).max(16)
  * Who a grant names, as people write it: a user by email (or, where the board can't look one up,
  * by ID), a project by name or ID, a repository by `owner/name`. The board resolves names and keeps
  * IDs; a board that verifies tokens itself takes IDs only. A `user` names `email` or `userId`.
+ * Nothing else: a key it doesn't know (a misspelled `workflows`, say) is a 400, never dropped,
+ * since dropping it would name more than was meant.
  */
 export const PrincipalInput = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('user'), email: z.string().min(3).max(320).optional(), userId: z.string().min(1).max(200).optional() }),
+  z.strictObject({ kind: z.literal('user'), email: z.string().min(3).max(320).optional(), userId: z.string().min(1).max(200).optional() }),
   // Its environments are where its deployments get in; a principal to remove leaves them out.
-  z.object({ kind: z.literal('project'), project: z.string().min(1).max(200), environments: Environments.optional() }),
-  z.object({
+  z.strictObject({ kind: z.literal('project'), project: z.string().min(1).max(200), environments: Environments.optional() }),
+  z.strictObject({
     kind: z.literal('github'),
     repository: z.string().min(3).max(200),
     workflow: z.string().min(1).max(300).optional(),
     branch: z.string().min(1).max(255).optional(),
     event: z.string().min(1).max(64).optional(),
   }),
-  z.object({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
-  z.object({ kind: z.literal('all-users') }),
-  z.object({ kind: z.literal('all-projects'), environments: Environments.optional() }),
-  z.object({ kind: z.literal('everyone') }),
+  z.strictObject({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
+  z.strictObject({ kind: z.literal('all-users') }),
+  z.strictObject({ kind: z.literal('all-projects'), environments: Environments.optional() }),
+  z.strictObject({ kind: z.literal('everyone') }),
 ])
 
 /** What a grant lets its principals do: a map from channel pattern to `'all'` or a list, `[]` for none. Kept as written. */
 export const GrantCan = z.record(z.string().min(1).max(300), CanGrant)
 
 /** A grant: who it names, and one `can` for all of them. The same principals again are another grant. */
-export const GrantBody = z.object({
+export const GrantBody = z.strictObject({
   principals: z.array(PrincipalInput).min(1).max(32),
   can: GrantCan,
 })
@@ -237,7 +239,7 @@ export const ExplainQuery = z
 
 /** A grant's change: principals to add and to remove, and a `can` to replace its own. */
 export const UpdateGrantBody = z
-  .object({
+  .strictObject({
     add: z.array(PrincipalInput).min(1).max(32).optional(),
     remove: z.array(PrincipalInput).min(1).max(32).optional(),
     can: GrantCan.optional(),
@@ -480,8 +482,12 @@ export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
-/** A channel to make before anything posts to it. */
-export const CreateChannelBody = z.object({ path: ChannelPath })
+/**
+ * A channel to make before anything posts to it, and nothing else: a key it doesn't know is a 400,
+ * so a client that asks for more than a channel (one that expects `private: true` to close it, say)
+ * is told, never handed an open one.
+ */
+export const CreateChannelBody = z.strictObject({ path: ChannelPath })
 /** At most this many labels in a label write's `if`. */
 export const LABEL_CONDITIONS_MAX = 16
 
