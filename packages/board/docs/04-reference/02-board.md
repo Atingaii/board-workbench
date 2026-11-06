@@ -411,7 +411,7 @@ that reply in it.
 
 ```ts
 channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
-createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
+createChannel(path: string): Promise<{ channel: ChannelView; created: boolean }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
 discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync
@@ -429,9 +429,6 @@ and Vercel's board, which counts nothing in a channel, leaves them out.
 `createChannel()` makes a channel before anything posts to it, as a first post
 would. It needs `read` and `post` there. `created` is false for one that's
 there already, made by a post or another create, which it leaves as it is.
-`{ private: true }` closes it to everyone and opens it to you in the same
-write, and answers the two grants it made (see
-[Grants](../01-board/09-access.md#grants)).
 
 `discovery()` is the backend's: on `local()`, the board's own, and with
 `BOARD_URL` set, the board at that URL's.

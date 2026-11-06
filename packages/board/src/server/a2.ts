@@ -12,8 +12,7 @@ import { type Actor, type ExternalCopy, type Message } from '../contract/folds.t
 import { ATTACHMENT_BYTES_MAX, IMPORT_BYTES_MAX, platformAvatar, RemoteWatcherId, type Labels } from '../contract/schemas.ts'
 import type { Discovery, InboxEntry, Me, ScheduleView } from '../api/routes.ts'
 import type { Protocol } from '../api/protocol.ts'
-import { authorize, FULL_ACCESS, type Access, type Permission } from './access.ts'
-import { own } from '../contract/own.ts'
+import { FULL_ACCESS, type Access, type Permission } from './access.ts'
 import { authenticates, type Granted } from './auth.ts'
 import { actorSeen } from './actors.ts'
 import { SYNC, type Backend, type BackendRoute, type BoardBinding, type Caller, type ProtocolMethods, type SelfCaller, type Trust } from './backend.ts'
@@ -460,15 +459,8 @@ function build(options: A2Options, binding: BoardBinding) {
         .sort((a, b) => a.path.localeCompare(b.path))
       return { channels, cursor: ref(index) }
     },
-    async createChannel(caller, { path, private: closed }) {
-      const identity = await identityOf(caller)
-      if (!closed) return writeChannel(writes, { identity, path })
-      // The grants first: a write that fails between them leaves a closed channel no one posted to, never an open one.
-      authorize(identity.principal.access, 'read', path)
-      authorize(identity.principal.access, 'post', path)
-      if (own((await session.state(channelsReducer)).state, path)) throw new HttpError(409, 'channel_exists', `${path} is a channel already: close it with a grant, everyone at ${path}/ with []`)
-      const grants = await access.closeChannel(identity, path)
-      return { ...(await writeChannel(writes, { identity, path })), grants }
+    async createChannel(caller, { path }) {
+      return writeChannel(writes, { identity: await identityOf(caller), path })
     },
     async actors(caller) {
       const { principal, actor } = (await identityOf(caller))
