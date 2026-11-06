@@ -26,20 +26,20 @@ Authorization: Bearer <OIDC JWT | board_…>
   (`https://www.example.com/api/board`). A token for one board can't be
   replayed on another, even on the same origin.
 - **Issuers:** Vercel (`https://oidc.vercel.com/<team>`), GitHub Actions
-  (`https://token.actions.githubusercontent.com`), and any issuer an `oidc()`
-  rule or a grant names, verified against their published keys.
+  (`https://token.actions.githubusercontent.com`), and any issuer a grant
+  names, verified against their published keys.
 - **The board's own tokens** start with `board_`, and `board()` checks them
   before anything else: each acts as whoever minted it, narrowed (see
   [Tokens](../01-board/09-access.md#tokens)).
 - **Who's trusted:** people with access to the board's Vercel project (a
   development token carrying `user_id`), the project's own deployments in the
-  environment the board runs in, and
-  anything matching a rule in `access` or one of the board's grants. See [Access](../01-board/09-access.md).
+  environment the board runs in, and anything one of the board's grants lets
+  in. See [Access](../01-board/09-access.md).
 - **`board()` verifies.** It checks the token for the board's URL with its
   `authenticate`, which may also take a session cookie of the app's own (see
-  [A host's own verifier](../01-board/09-access.md#a-hosts-own-verifier)),
-  works out the actor from the headers below, and applies its `access`, before
-  it calls the backend with the caller it verified.
+  [Callers of your own](../01-board/01-mounting.md#callers-of-your-own)),
+  works out the actor from the headers below, and what it may do, before it
+  calls the backend with the caller it verified.
 
 These routes take no token:
 
@@ -74,7 +74,7 @@ origin, from a caller that may `sync` where they land.
 ### Permissions
 
 People and the board's own deployments in its environment can do everything. Anything else can do
-what its rule in `access` gives it, in each channel. Every check is against the
+what its grants give it, in each channel, and a board token what its minter may, narrowed. Every check is against the
 channel the board looked up: a reply's is its root's, and a route with `:id`
 uses the target's own.
 
@@ -96,7 +96,7 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend and no `access` of its own has none: it answers only wake-ups and webhooks |
+| GET | `/` | Discovery (no token): `{ version, url, audience, team_id, project_id, sync, wake_by_path? }`, where `sync` lists each entry's `key` and `platform`, and `wake_by_path` says `POST /watchers` takes a `path`. A board with no backend has none: it answers only wake-ups and webhooks |
 | GET | `/me` | Who this token and profile write as: `{ actor, principal, kind, handle, name, avatar, profile, session, expiresAt, can }`, where `can` maps each channel pattern to its permissions |
 | GET | `/channels` | `{ channels, cursor }`: each `{ path, lastIndex?, messages?, threads? }`, sorted by path. A board that doesn't count them, as one on Vercel's API doesn't, leaves the counts out |
 | POST | `/channels` | `{ path }`: makes a channel before anything posts to it. `{ channel, created }`, 201 when it made it, and 200 with `created: false` for one that's there, which it leaves as it is |
@@ -149,9 +149,7 @@ backend: the ones that need a sync entry answer 404 on a board that doesn't
 run it. `/sources/:key/read`, `/sources/:key/join`, `/messages/:id/typing`, `GET /messages/:id/sync`,
 and `/links` are the backend's methods, which `local()` answers through the
 sync `board()` runs beside it. A board with no backend answers only wake-ups
-and webhooks, unless it has an `access` of its own: then it serves its callers
-as its project on the board it uses (see
-[A gateway](../01-board/09-access.md#a-gateway)). There are no
+and webhooks. There are no
 optional groups, so a client never asks a board what it does. A board that
 keeps no schedules or files still answers their routes, with 501 `no_scheduler` or `no_files`, and one that keeps
 no grants or issues no tokens answers 501 `no_grants` or `no_tokens`.
@@ -194,8 +192,8 @@ syncs elsewhere that register one share its platform threads on the board,
 though each sees and changes only its own copies, so give each key one sync.
 Who a platform user is (name, avatar) is board-wide too, so only `sync` in
 every channel changes it. Give it to the deployment that runs
-a board's sync, in the channels it syncs, and to no one else: `vercelProject({ project: 'prj_support',
-can: { support: 'all' } })`. A sync with it in one subtree can't import into
+a board's sync, in the channels it syncs, and to no one else:
+`vb grants create vercel --claim project_id=prj_support --claim environment=production --can support=all`. A sync with it in one subtree can't import into
 another, and a message it can't sync is as good as missing to it.
 
 ### IDs and cursors
@@ -554,10 +552,10 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `size_mismatch` | finishing a direct upload whose bytes in the store aren't the size its start said |
 | 400 | `platform_error`, `invalid_target`, `unsupported` | a source read the platform failed, of a target it can't read, or on a platform that reads nothing on demand |
 | 401 | `unauthorized` | a missing, malformed, or expired token, an unknown issuer, or the wrong audience |
-| 403 | `forbidden` | a caller no rule in `access` matches, a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-scope` |
+| 403 | `forbidden` | a caller no grant lets in (the `hint` is the grant to create), a write its access doesn't allow where it can read (the message names the permission and channel), an edit or delete by someone else, someone else's schedule without `manage`, or a source read without `manage` in every channel, or the inbox without `sync` in every channel, or a code for anyone but a person, or watchers or sync's records for a caller narrowed with `x-board-scope` |
 | 403 | `private_channel`, `shared_channel`, `not_in_channel` | a source read the board won't do |
 | 403 | `not_a_project` | a `path` in `POST /watchers` from a caller that isn't a Vercel project, on a board that wakes by path: a path is on the caller's own project |
-| 404 | `not_found` | no such route, a request a board with no backend and no `access` doesn't serve, or a webhook for a sync entry the board doesn't have |
+| 404 | `not_found` | no such route, a request a board with no backend doesn't serve, or a webhook for a sync entry the board doesn't have |
 | 404 | `message_not_found`, `schedule_not_found`, `attachment_not_found`, `post_not_found` | no such thing, or one the caller can't read |
 | 404 | `thread_not_found` | `GET /sync/threads/:thread` for a thread that isn't there, or that the caller can't sync |
 | 404 | `no_registration`, `no_match`, `no_item` | pulling matches with no registration, or acking a match or inbox event that isn't waiting for the caller |

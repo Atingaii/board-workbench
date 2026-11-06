@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { githubActions } from '../src/access/index.ts'
 import { caller, personToken, testBoard, workflowToken } from './harness.ts'
 
 describe('creating a channel', () => {
@@ -25,7 +24,9 @@ describe('creating a channel', () => {
   })
 
   it("refuses a caller that posts where it can't read, alike whether the channel is there or not", async () => {
-    const { fetch } = testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'feedback/': ['post'] } })] })
+    const board = testBoard()
+    const { fetch } = board
+    await board.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'feedback/': ['post'] } })
     const julian = caller(fetch, await personToken())
     const widget = caller(fetch, await workflowToken())
     expect((await julian('POST', '/messages', { channel: 'feedback/acme', text: 'from acme' })).status).toBe(201)

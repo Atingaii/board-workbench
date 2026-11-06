@@ -101,9 +101,10 @@ schedules, grants, or files, or issue no tokens, and say so: one that answers
 one of those groups' checks with a 501 has it skipped, `not kept here`, with
 what the board said. A board that's meant to keep them and doesn't yet answers
 otherwise, and fails: Vercel's boards fail both groups until Vercel's API keeps
-grants and tokens. A board whose `access` is one function answers 501
-`no_grants`, and a [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own)
-that keeps no schedules or files answers 501 `no_scheduler` or `no_files`.
+grants and tokens. A
+[backend of your own](../01-board/01-mounting.md#a-backend-of-your-own) that
+keeps no grants, schedules, or files answers 501 `no_grants`, `no_scheduler`,
+or `no_files`.
 `vb serve` keeps everything, so it passes every check.
 
 ## The report

@@ -75,16 +75,14 @@ principal ID can stand for callers with different access. Canceling one that's
 done is a no-op. A reply schedule ends on its own when its thread is deleted.
 
 Each send runs with its creator's [access](./09-access.md) as it is when the
-send is due, under the rules as they are then. A creator that can no longer
+send is due, under the grants as they are then. A creator that can no longer
 post there (or read the thread, for a reply) has the schedule canceled with
 `revoked`, and `vb schedules --all` says `ended: its creator can no longer post
 it`. A schedule from before board kept its creator's claims is worked out from
 the principal ID alone, which names a deployment's project ID and environment
 and nothing of a workflow's run. So the board's own deployments in its
-environment, and a project its rule names by ID, keep sending; a workflow's, or a project's matched by
-name, is `revoked` at its next send. A newer schedule also keeps the board's
-own team as the board knew it then, so a rule that names a project without its
-`team` still matches at the send, which never sees a request.
+environment, and a project a Vercel grant names, keep sending; a workflow's is
+`revoked` at its next send.
 
 ## In code
 

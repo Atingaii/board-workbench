@@ -65,10 +65,9 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
    `authenticate` can take its own credentials). People get theirs from their
    `vercel login`, and machines get theirs from their platform. Vercel's API
    lets the team's people use its boards, and the projects each is granted
-   to. A board `board()` serves (one it keeps, or a gateway onto another)
-   trusts its own project's people and its deployments in the environment it
-   runs in, plus whatever `access` lists, and `access` says what each may do
-   in each channel.
+   to. A board `board()` keeps trusts its own project's people and its
+   deployments in the environment it runs in, plus whatever its grants and
+   board tokens let in, and they say what each may do in each channel.
 3. **Every event records who wrote it**: a verified principal, plus an
    optional profile, such as an agent acting for a person.
 4. **A thread syncs with a set of external threads.** A message written in the
@@ -82,13 +81,15 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
 
 ## Principles
 
-- **Access is per channel, and code says it.** `board({ access })` says what
-  each kind of principal may do in each channel: `read`, `post`, `react`,
-  `label`, `sync`, or `manage`. Reads are gated, so a write-only caller is
-  `['post']`, and what a caller can't read answers 404. Nothing is minted or
-  stored: a credential lives as long as its OIDC token. The board has no roles
-  or member list, and nothing restricts the project's own people, so content
-  that needs privacy from them still needs a second board.
+- **Access is per channel.** People and the board's own deployments in its
+  environment may do everything; a grant says what other principals may do in
+  each channel: `read`, `post`, `react`, `label`, `sync`, or `manage`. Reads
+  are gated, so a write-only caller is `['post']`, and what a caller can't
+  read answers 404. A grant lets tokens in by their claims, so a credential
+  lives as long as its OIDC token; a board token, for callers without one,
+  lives 90 days at most. The board has no roles or member list, and nothing
+  restricts the project's own people, so content that needs privacy from them
+  still needs a second board.
 - **No accounts.** The board has no login page, sessions, or user table.
   Principals are strings derived from verified OIDC claims, from verified
   platform webhooks, or from a host's own `authenticate`.
@@ -96,7 +97,7 @@ board post errors-www "deploy failed on a1b2c3"   # in a linked project: the tea
   sync receipt fields are never taken from the request body. This is the same
   rule as Just Chat's trusted message metadata.
 - **Wiring is code; the log holds facts.** Sync functions, watchers,
-  and access live in `board()` and its backend's config, where they're reviewed and deployed.
+  and the verifier live in `board()` and its backend's config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
   read: folds stay global, and filters are per reader. On a local board, log
   indexes still show how busy the board is.
@@ -130,7 +131,7 @@ One package, `@vercel/board`, with subpath exports:
 | Import | Contents | Runtime |
 | --- | --- | --- |
 | `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
-| `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; the rules `vercelProject()`, `githubActions()`, and `oidc()`; and the permission types | server |
+| `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; and the permission types | server |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
 | `@vercel/board/local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
@@ -161,11 +162,11 @@ its ID or slug, or none for the team the environment finds. A name is 1 to
 each request, validates it with the schemas in `src/api/routes.ts`, checks the
 shape of its `x-board-*` claims, verifies its caller with `authenticate`
 (`oidcTokens()` from `@vercel/board/access` by default), works out the actor (the
-principal plus its claimed profile, `vercel:user:u_123+claude`), applies
-`access`, runs the [middleware](#middleware), maps errors, and serves
+principal plus its claimed profile, `vercel:user:u_123+claude`), works out
+what it may do, runs the [middleware](#middleware), maps errors, and serves
 `/avatars/:name`, `/openapi.json`, discovery, and SSE. It calls the backend's
 method of the same name as the route with the caller it verified. Nothing with
-side effects runs for a request before `access` allows it: it resolves a sync
+side effects runs for a request before its access allows it: it resolves a sync
 target on a platform (which can join a Slack channel), looks up an email,
 records who that is, reads an upload, or runs the middleware only for a caller
 that may (`post`, and `sync` for targets, where the write lands). A request it
@@ -206,10 +207,11 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   nothing for them: a request's `caller` is null, and the route checks what it
   needs. One at a protocol route's path takes its place.
 - **`keeps`** says whether the board lives in the backend. One that keeps it
-  (`local()`) takes `board()`'s defaults when `access` is left out (people, and
-  the board's own deployments in its environment); one that doesn't
-  (`vercel()`, `http()`) serves no request then but wake-ups and webhooks, and
-  verifies none.
+  (`local()`) serves requests: people, the board's own deployments in its
+  environment, and whoever its grants and board tokens let in, which it hands
+  `board()` as `trust` (`grants()`, `token(hash)`, `live(id)`). One that
+  doesn't (`vercel()`, `http()`) serves no request but wake-ups and webhooks,
+  and verifies none.
 - **`bind(binding)`** is called once, when `board()` is created, before any
   request, and does no I/O. It's what background work needs from the board:
   `name` and `team`, `board({ name, team })`'s or null, which `vercel()`
@@ -269,13 +271,9 @@ checked with `@vercel/board/conformance`.
   preview, through Deployment Protection) or at its URL, and without an
   `https` one it pulls on its own. Its routes are `POST /wake` and
   `POST /watchers`, which registers now. It doesn't keep the board, so a board
-  on it serves no requests but wake-ups unless it has an `access`, and then
-  it's a gateway, as `http()`'s is, which checks each caller's access itself,
-  since the API sees only the project: `board({ authenticate, access })` with
-  no backend serves its callers on the team's board as its project, each
-  labeled `+<handle>`, with post IDs derived under the caller
-  (`board-gateway`), and what's the project's own there (`PROJECTS_OWN`)
-  answers 403.
+  on it serves no requests but wake-ups and webhooks: any other answers 404
+  `this board uses Vercel's, and answers only wake-ups and webhooks`, and none
+  is verified.
 - **`local({ dir?, memory? })`**, from `@vercel/board/local`, keeps the board
   in this process, on the board's internal engine (see
   [The local board](#the-local-board)). Its log and tables are one SQLite file
@@ -327,21 +325,10 @@ checked with `@vercel/board/conformance`.
   `:`, and 32 hex characters, since one principal's ID can be the start of
   another's), so the same `id` never posts
   twice and no one can post with one first (and `posted`, a retry's lookup,
-  asks for the same). Without an `access` on its board, it answers only
-  wake-ups and webhooks: a request, discovery
-  included, answers 404 `<url> answers only wake-ups and webhooks`, and none is
-  verified. Its `discovery` for its own handle reads the other board's. With
-  one, its board is a gateway: it verifies and limits its own callers, and
-  each acts on the other board as this deployment, never vouching for a
-  person, with the caller's handle as its profile (`<principal>+ada`, a label,
-  numbered `fix-2` when it's one of this board's watchers' IDs, since a
-  watcher's own writes never wake it) and its access as `x-board-scope`, so
-  the other board grants only what both allow. A caller's post IDs are under
-  its own principal, `me` is answered here, and what's the project's own there
-  by principal answers 403: `edit`, `delete`, `schedule`,
-  `cancelSchedule`, `upload` (a file is its uploader's, the project's there,
-  to read and attach until a message carries it), the registration's methods,
-  and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
+  asks for the same). Its board answers only wake-ups and webhooks: a
+  request, discovery included, answers 404 `<url> answers only wake-ups and
+  webhooks`, and none is verified. Its `discovery` for its own handle reads
+  the other board's. `readSource` for one of its own sync's entries, and `typing` through
   its own sync, it answers here too, beside the other board's. Its own routes
   are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
   registers its own there, as the protocol's does). Its watchers run here, on what the other board matches for them
@@ -431,7 +418,7 @@ answers the same routes its own way:
 
 - **Registrations** live in `board-registry`, session `registry`, one per
   principal with its token facts, so its access is worked out again at each
-  match under the rules as they are then. The registered board registers on
+  match under the grants as they are then. The registered board registers on
   its first use (a method call or one of its routes) if it knows its URL, on
   `POST /watchers`, and on a wake-up with a stale hash; creating it does no
   I/O. Its URL is `board()`'s `url()`: `url`, or on Vercel its production
@@ -595,7 +582,7 @@ brings credentials for Vercel's board (see [The handle](#the-handle)).
   otherwise it mints an edge token with the configured board URL as audience. Local person clients do not add the trusted-OIDC
   header. Configure Deployment Protection Trusted
   Sources for the calling project and environment separately from the board's
-  `access` rules. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence, without
+  grants. `VERCEL_AUTOMATION_BYPASS_SECRET` takes precedence, without
   requiring runtime OIDC for discovery. On Vercel it's a system variable holding
   the deployment's own project's secret, so a hosted client sends it only to the
   deployment's own hosts (`VERCEL_URL`, `VERCEL_BRANCH_URL`,
@@ -633,23 +620,29 @@ talking to.
     `VERCEL_PROJECT_ID`, or `.vercel/project.json` in local development.
   - A `development` token from it is a person and must carry `user_id`. Any
     other environment is the deployment itself. The one the board runs in
-    (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
-    matches it, and any other gets nothing unless one does: a production board
-    refuses its previews, which run any branch's code, and a preview board
+    (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything, and any other
+    gets what grants give it: a production board refuses its previews, which
+    run any branch's code, until a grant names them, and a preview board
     accepts its own previews. Outside Vercel no environment is the board's, so
-    only people get in without a rule.
+    only people get in without a grant.
 - **GitHub tokens:** verify against `https://token.actions.githubusercontent.com`.
-  A GitHub token is accepted only if it matches an `access` rule.
-- **Tokens from other Vercel projects** are accepted only if they match an
-  `access` rule.
+  A GitHub token is accepted only if a grant matches it.
+- **Tokens from other Vercel projects** are accepted only if a grant matches
+  them.
 - **Who verifies, who decides: `board()`.** `board({ authenticate })` says who
   the caller is, from the request's credential, claims, audience, and headers,
-  and `board({ access })` holds the rules below, past its defaults (people, its
-  own deployments in its environment, and its own code get everything), and
-  works access out for each request and, through the binding, for each
-  principal its backend stored (a schedule's creator, a registrant) under the
-  rules as they are then. A principal carries its token's claims and its
-  `x-board-scope`, never what it may do. The backend gets the caller verified.
+  and `board()` decides what it may do (`createAuthority` in
+  `src/server/auth.ts`): people, its own deployments in its environment, and
+  its own code get everything, and anyone else what every grant that matches
+  its token gives, added up. It works access out for each request and,
+  through the binding, for each principal its backend stored (a schedule's
+  creator, a registrant) under the grants as they are then. A principal
+  carries its token's claims and its `x-board-scope`, never what it may do.
+  The backend gets the caller verified. A token no grant lets in is 403, with
+  the grant that would as the `hint` (`Grant it: vb grants create github
+  --claim repository=acme/www`), and one from an issuer no grant names is 401
+  `untrusted issuer`. There's no `access` option: who gets in beyond the
+  defaults is data, kept on the board, not code.
 - **`authenticate` is one function,** `oidcTokens()` from `@vercel/board/access` by
   default, and verifiers compose in plain code: each answers null when the
   request carries nothing it recognizes and a 401 when its credential fails,
@@ -660,22 +653,22 @@ talking to.
   `x-board-handle` fills in only where a token verified them, since a token
   names just an ID, and a verifier that wants it returns
   `request.claims.handle`. A host's principals get what
-  their kind does, under the rules or the host's function as `access`: a
-  `person` is a full member (everything), so the verifier decides who counts
-  as one, and anyone else, `external` included, gets what a function among
-  the rules gives it, since no token rule matches a host's IDs; a board
-  whose verifier is `oidcTokens()` alone takes none, so schedules a host's
-  principals made before it switched are revoked. A verifier gets the request
-  with `board`, what the board knows that verifying needs (its project, and
-  its rules' OIDC issuers). A route that takes a cookie checks `Origin` on its
+  their kind does: a `person` is a full member (everything), so the verifier
+  decides who counts as one, and anyone else, `external` included, gets what
+  grants give its ID. A host's principal carries no claims, so only a
+  deployment's ID, `vercel:project:<id>:<env>`, says anything a grant matches
+  (`factsFromId`), and any other is 403. A board whose verifier is
+  `oidcTokens()` alone takes none, so schedules a host's principals made
+  before it switched are revoked. A verifier gets the request with `board`,
+  what the board knows that verifying needs (its project, and the OIDC
+  issuers its grants name). A route that takes a cookie checks `Origin` on its
   writes in userland, since a cookie rides along on other sites' requests.
-- **Any other issuer** is trusted only when an `oidc()` rule names it, pinned
-  in code as an https URL: board() hands its rules' issuers to its verifier. The
-  board fetches keys only for issuers a rule names, and a rule matches exact claims, at least one. Its principal is
-  `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
-  percent-encoded (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at
-  the first `:`. Two rules whose issuers would name the same principals
-  (`https://ci.test/a` and `https://ci.test/a/`) are an error at boot.
+- **Any other issuer** is trusted only when a grant names it, as an https URL:
+  board() hands its grants' issuers to its verifier (`board.issuers`). The
+  board fetches keys only for issuers a grant names, and a grant matches exact
+  claims, at least one. Its principal is `oidc:<issuer host and path>:<sub>`,
+  with a `:` or `%` in the issuer part percent-encoded
+  (`oidc:ci.test%3A8443:<sub>`), so the ID ends its issuer at the first `:`.
 - **Tests** pass `board({ authenticate: oidcTokens(testIssuers) })` in code,
   which points verification at a local test issuer. Verification still runs `jose` against a real JWKS, and
   there's no bypass reachable through env. Local development needs no bypass
@@ -683,39 +676,30 @@ talking to.
 
 ```ts
 import { board } from '@vercel/board'
-import { githubActions, oidc, vercelProject } from '@vercel/board/access'
 import { local } from '@vercel/board/local'
 
-board({
-  backend: local(),
-  access: [
-    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
-    oidc({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } }),
-    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-  ],
-})
+const team = board({ backend: local() })
+
+await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
+await team.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www', event_name: 'push' }, can: { 'ci/': ['read', 'post'] } })
+await team.createGrant({ issuer: 'https://gitlab.com', claims: { project_id: '42' }, can: { 'ci/': ['post'] } })
+// On a production board, its own previews read dev/.
+await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_self', environment: 'preview' }, can: { 'dev/': ['read'] } })
 ```
 
-- **Matching uses names for readability** (`project`, `repository`, `workflow`).
-  Renaming a project or repo changes those claims, so the principal is stored by
-  ID (`project_id`, `repository_id`).
-- **A Vercel project name is scoped to a team.** Anyone can make a project
-  named `marketing` on their own team and mint a token for the board's
-  audience, so `vercelProject({ project })` without `team` matches only the board's own
-  team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
-  knows its team from `VERCEL_ORG_ID`, or `.vercel/project.json`, and on
-  Vercel from the platform's
-  `x-vercel-oidc-token`, verified and for its own `project_id`. When none of
-  them says, a name without `team` matches nothing.
-- **`githubActions()` matches the `repository`, `event`, `workflow`, and `ref`
-  claims.** A `pull_request` run's token carries `ref: refs/pull/<n>/merge`, so a
-  rule pinned to `refs/heads/main` rejects it. Match on `event` and `workflow`
-  instead.
-- **Keep `can` narrow for `pull_request` rules.** For `pull_request`, GitHub runs
-  the workflow file from the PR's merge commit, so anyone who can open a PR can
-  change what it posts. Fork PRs get no OIDC token at all. For PR activity, the
-  GitHub sync adapter is usually the better tool (see [GitHub](#github)).
+- **Grants match claims; principals are stored by ID.** A GitHub grant may
+  name its repository by `repository`, which a rename changes, or by
+  `repository_id`; the principal is `github:repo:<repository_id>` either way,
+  and a Vercel one `vercel:project:<project_id>:<env>`.
+- **A `pull_request` run's token carries `ref: refs/pull/<n>/merge`,** so a
+  grant pinned to `refs/heads/main` doesn't match it. Match on `event_name`
+  instead. A grant on `repository` alone matches every run in the repo, pull
+  requests included.
+- **Keep `can` narrow for grants that match `pull_request` runs.** For
+  `pull_request`, GitHub runs the workflow file from the PR's merge commit, so
+  anyone who can open a PR can change what it posts. Fork PRs get no OIDC
+  token at all. For PR activity, the GitHub sync adapter is usually the better
+  tool (see [GitHub](#github)).
 
 ### Principals, profiles, actors
 
@@ -759,11 +743,10 @@ board({
 
 **Authorization in v1:**
 
-- The first `access` rule that matches decides: a token's rule by its
-  claims, or a function of the principal, which answers a `can`, null for
-  nothing, or undefined for the next rule. A function is never asked about a
-  person or the board's own deployments in its environment, so it can't take
-  the defaults away; one function as `access` decides for everyone. `can` is `'all'`, a list
+- People, the board's own deployments in its environment, and the board's own
+  code get everything; anyone else gets what every grant that matches its
+  token gives, added up (`union`), and a board token what its minter may,
+  narrowed by its `can`. `can` is `'all'`, a list
   (`['post']` means `{ '*': ['post'] }`), or a map from channel pattern to
   permissions. A pattern is `*`, a channel (`feedback`), or a channel and its
   subtree (`feedback/`); any other `*` is a config error that says what to
@@ -863,10 +846,11 @@ board({
 
 ### Grants and tokens
 
-`access` is the board's code. Grants and tokens are the same trust kept as
-data, so people change who gets in while the board runs, from the handle or
+Past its people and its own deployments, who may use a board is data kept on
+it, so people change who gets in while the board runs, from the handle or
 `vb`, without a deploy. A grant lets in callers that have an OIDC token. A
-token is for everyone else: a widget, a sandbox, a script.
+token is for everyone else: a widget, a sandbox, a script, and a caller on
+another team.
 
 ```ts
 import { board } from '@vercel/board'
@@ -888,33 +872,30 @@ await team.revokeToken(token.id)
 - **A grant is an issuer, the claims a token must carry, and `can`:**
   `{ issuer, claims, can? }`. `vercel` and `github` name their issuers; any
   other is an https URL. Every claim must match exactly, and a list is any of
-  its values. It's plain data, so Vercel's API keeps the same shape: the rule
-  builders (`vercelProject()`, `githubActions()`) match more loosely (a name or
-  an ID, a workflow by its path) and stay in code.
+  its values. It's plain data, so Vercel's API keeps the same shape.
 - **It names who it lets in.** A Vercel grant names `project_id` and
   `environment` (a preview runs any branch, so a grant says outright whether
   previews get in), and a GitHub grant `repository` or `repository_id`, since
   those issuers sign tokens for everyone they serve. Any other issuer's names
-  at least one claim, as `oidc()` does. Anything else is 400 `invalid_grant`.
-  `owner_id` keeps a project's grant to its team; without it, a project ID
-  matches on any team, as it does in a rule.
+  at least one claim. Anything else is 400 `invalid_grant`. The board checks
+  no team of its own: a grant matches the claims it names, and `owner_id`
+  names a team. Cross-team access isn't designed yet, so the docs send a
+  caller on another team to a board token minted on the board's team.
 - **A grant is its issuer and claims.** Setting one again changes its `can`
   and answers `created: false`; claims that differ (another environment) are
   another grant. `can` left out is `{ '*': ['read', 'post', 'react', 'label'] }`,
   what Vercel's API gives a project it lets use a board.
-- **Grants add to the rules.** A principal gets what the first rule that
-  matches it gives, and what every grant that matches gives, combined: grants
-  only add, so none goes unused because a rule matched first. The defaults
-  (people, the board's own deployments in its environment, its own code) are
-  never a grant's, and a rule function that answers `null` refuses, grants or
-  not. A board whose `access` is one function decides alone and keeps no
-  grants (501 `no_grants`).
+- **Grants add up.** A principal gets what every grant that matches it gives,
+  combined. The defaults (people, the board's own deployments in its
+  environment, its own code) are never a grant's. A backend that keeps no
+  grants answers their methods with 501 `no_grants`, and gives `board()` no
+  `trust`, so no grant lets anyone in there.
 - **Setting, revoking, and listing need `manage` in every channel.** Grants
   say who the board trusts, so they're the board's bookkeeping. Each records
   who set it and when. Revoking one holds from the next request, and a
   schedule its principals made stops as any creator's does when it loses
   access. Revoking one that's gone answers `revoked: false`.
-- **The board fetches keys only for issuers its rules or grants name,** and
+- **The board fetches keys only for issuers its grants name,** and
   verifies a token from an issuer only a grant names once it has read the
   grants for it. A grant's issuer is an https URL on the internet: no IP
   literal, no single-label host, and none of the private suffixes (`.local`,
@@ -923,8 +904,8 @@ await team.revokeToken(token.id)
   it names it as `issuer` (§4.3) and an https `jwks_uri` (§3), held to the
   same rule, and neither fetch follows a redirect (jose's own key fetch
   doesn't). One that would name the same principals as an issuer
-  the rules or another grant trust (`https://ci.test/a` and
-  `https://ci.test/a/`) is `invalid_grant`.
+  another grant trusts (`https://ci.test/a` and `https://ci.test/a/`) is
+  `invalid_grant`.
 
 **Tokens:**
 
@@ -941,7 +922,7 @@ await team.revokeToken(token.id)
   or, from the handle on `local()`, the board's own code. The board keeps what a
   schedule keeps of its creator (the principal, its token's claims, its scope
   narrowed by the token's `can`) and works its access out again on every
-  request, under the rules and grants as they are then. So minting takes no
+  request, under the grants as they are then. So minting takes no
   permission: a token never does more than its minter could at that moment.
   A request's own `x-board-scope` narrows it further. `can` left out is a
   grant's default, read, post, react, and label everywhere, so a token has
@@ -985,8 +966,8 @@ await team.revokeToken(token.id)
 **On each backend:** `local()` keeps grants and tokens on its log, in a session
 of their own, `access`, beside `board`, as it keeps schedules, so none reaches the message tables, `/events`, watchers, or sync. A
 grant's or token's ID is the index of the event that made it (`g3`, `t12`). `http()`
-forwards them to the board it uses: they're that board's, and its callers
-can't create them there (403), since they'd act as its project. `vercel()`
+forwards them to the board it uses, for its own handle: they're that board's.
+`vercel()`
 forwards them to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `/boards/:id/tokens`, each with an `operationId`), and
 adapts nothing: what the API doesn't keep yet, it answers, so a board on
@@ -1525,7 +1506,7 @@ status.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Discovery (unauthenticated): `version`, `url`, `audience`, `team_id`, `project_id`, `sync` (each entry's `key` and `platform`), and `wake_by_path` on a board that takes a `path` in `POST /watchers`. A board on `http()` with no `access` answers 404 there |
+| GET | `/` | Discovery (unauthenticated): `version`, `url`, `audience`, `team_id`, `project_id`, `sync` (each entry's `key` and `platform`), and `wake_by_path` on a board that takes a `path` in `POST /watchers`. A board with no backend answers 404 there |
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | The channels you can read, sorted by path: `{ path, lastIndex?, messages?, threads? }` each, and `cursor`. The counts are there where the board keeps them: a board on Vercel's API leaves them out |
@@ -2970,7 +2951,7 @@ its own timing. The routes and the queue are in
 the backend, from every source: the HTTP API (a board on `http()` using this
 one included), sync (default imports and sync functions' writes, as imports),
 watchers, the handle, and scheduled sends, which `local()` sends through
-`board()` as their creator. It's `board()`'s, beside `access`, so it sees every write
+`board()` as their creator. It's `board()`'s, beside its policy, so it sees every write
 once on any backend, its backend's own writes for someone included. A board on
 `http()` runs its own on what it writes there, and the board it uses runs its
 own on what arrives. It is the one place to filter what reaches the board,
@@ -3028,12 +3009,9 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   token that created it expires; cancel it to stop it.
 - **Each send re-checks its creator.** The schedule stores the token's
   verified claims and the scope it was narrowed by, never the token. Each send
-  works out the creator's access from them under the rules as they are then,
+  works out the creator's access from them under the grants as they are then,
   and needs `post` there (and `read`, for a reply; `label`, with labels). A
-  creator that no longer has it has the schedule canceled with `revoked`. The
-  claims keep the board's own team as the board knew it then (`team`), so a
-  rule naming a project without its team still matches at the send, which
-  never sees a request to learn it from.
+  creator that no longer has it has the schedule canceled with `revoked`.
 - **Mentions** are checked when you schedule: a handle that matches no one is
   reported then (`unknownMentions`, to a creator that reads the channel), and
   an ambiguous one fails then. At send
@@ -3065,8 +3043,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 
 - Full-text search
 - Accounts, login, sessions, roles, and moderating others' messages
-- Restricting the board's own people, minted or stored tokens and grants, and
-  per-thread access rules
+- Restricting the board's own people, and per-thread access
 - Hiding volume: on a local board, message IDs and cursors still show how busy
   the board is
 - A hosted web UI: the CLI, `tail`, and `vb inspect` (a page on your own
@@ -3112,7 +3089,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
+| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for verifying callers and what they may do, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
