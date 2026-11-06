@@ -22,7 +22,7 @@ import { ExternalEvent, ExternalTarget, Link, LINKS_PER_MESSAGE_MAX, Origin } fr
 import { boardEvents } from './events.ts'
 
 // A2's contracts. The board log's events are plain zod in `events.ts`, so a handle on any backend
-// reads them without loading A2; this module and what imports it run only on `a2()`.
+// reads them without loading A2; this module and what imports it run only on the local board's engine.
 
 /** The board's one log. Every board fact is an event in session `board`. */
 export const boardContract = contract({ name: 'board', events: boardEvents })

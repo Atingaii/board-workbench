@@ -390,20 +390,30 @@ describe('vercel()', () => {
     const expiresAt = Date.now() + 59 * 60_000
     const narrowed = fakeMessageboard({ me: { 'user:u_jb': { can: { 'pings/': ['read', 'post'], 'dev/': ['read', 'fly'] }, expiresAt } } })
     expect(await said(handleOn(narrowed))).toEqual({ can: { 'pings/': ['read', 'post'], 'dev/': ['read'] }, expiresAt: new Date(expiresAt).toISOString() })
+    // As board's own me says it: a pattern board can't read dropped, so the summary compiles, what
+    // each permission implies, as label does read, and a pattern left with nothing left out.
+    const odd = fakeMessageboard({ me: { 'user:u_jb': { can: { 'dev*': ['label'], ops: ['label'], 'ci/': ['fly'] }, expiresAt: null } } })
+    const { can } = await said(handleOn(odd))
+    expect(can).toEqual({ ops: ['read', 'label'] })
+    expect(compileAccess(can).summary()).toEqual(can)
+    // Epoch seconds, as a JWT's exp, aren't 1970: under 10^12, a number is read as seconds.
+    const seconds = Math.floor(expiresAt / 1000)
+    const jwtStyle = fakeMessageboard({ me: { 'user:u_jb': { can: { '*': ['read'] }, expiresAt: seconds } } })
+    expect((await said(handleOn(jwtStyle))).expiresAt).toBe(new Date(seconds * 1000).toISOString())
     // An API that says neither, as before it sent them: what any credentials it lets in may do, with no expiry.
     expect(await said(handleOn(fakeMessageboard({ me: false }), 'user:u_jb'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
   })
 
   it("sends a board token you set, in Node, ahead of VERCEL_TOKEN and the deployment's OIDC token", async () => {
     for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
-    const api = fakeMessageboard({ tokens: { board_ada3: 'user:u_ada' } })
+    const api = fakeMessageboard({ tokens: { k7Qe2mXa9vLp: 'user:u_ada' } })
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
     const who = async () => (await board({ backend: nodeVercel() }).me()).principal
     try {
       vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
       expect(await who()).toBe('vercel:project:prj_pong:production')
-      vi.stubEnv('BOARD_TOKEN', 'board_ada3')
+      vi.stubEnv('BOARD_TOKEN', 'k7Qe2mXa9vLp')
       expect(await who()).toBe('vercel:user:u_ada')
       // On a deployment, with no VERCEL_TOKEN: its OIDC token, which isn't one here, is never read.
       vi.stubEnv('VERCEL_TOKEN', '')
@@ -468,8 +478,9 @@ describe('vercel()', () => {
           code: 'ambiguous_board_name',
           origin: 'handle',
           message: expect.stringMatching(/brd_test, brd_old|brd_old, brd_test/),
-          // What fixes it is something people can do: name them apart, or reach one by its URL.
-          hint: "Give each a name of its own in Vercel's API, or reach one by its URL with `vb --url`.",
+          // What fixes it is something people can do: name them apart, or reach one by its URL, on this team:
+          // a URL that named none would reach the login's default team.
+          hint: `Give each a name of its own in Vercel's API, or reach one by its URL with vb --url: ${API}/v1/messageboard/boards/<ID>?teamId=team_test`,
         })
       expect(lookups(api, 'POST /boards/ensure')).toBe(0)
     })

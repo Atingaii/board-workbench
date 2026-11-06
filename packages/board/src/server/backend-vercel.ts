@@ -4,7 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import { PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
+import { compileAccess, parsePattern, PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { fileName, mediaType } from '../contract/files.ts'
@@ -170,27 +170,50 @@ const SCAN_PAGES = 10
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
+/**
+ * A team's board in Vercel's API by its ID, as its discovery names it and `vb --url` takes it,
+ * with `<ID>` in place of one: what an ambiguous name's hint offers. `idUrlIn` finds it there.
+ */
+const idUrl = (origin: string, teamId: string) => `${origin}/v1/messageboard/boards/<ID>?teamId=${encodeURIComponent(teamId)}`
+export const idUrlIn = (hint: string): string | null => /https:\/\/\S+\/v1\/messageboard\/boards\/<ID>\?teamId=[\w%-]+/.exec(hint)?.[0] ?? null
+
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
 
 /** What credentials may do when the API doesn't say: read, post, react, and label everywhere, as any it lets in. */
 const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
 
 /**
- * What the API says these credentials may do, in board's words: each channel pattern's permissions
- * board knows, the rest dropped. `DEFAULT_CAN` when it says nothing board reads as one.
+ * What the API says these credentials may do, in board's words: each channel pattern board can
+ * read, with the permissions board knows, the rest dropped, and what those imply. `DEFAULT_CAN`
+ * when it says nothing board reads as one.
  */
 function canOf(can: unknown): AccessSummary {
   if (typeof can !== 'object' || can === null || Array.isArray(can)) return DEFAULT_CAN
   const known = new Set<string>(PERMISSIONS)
   const out: Record<string, Permission[]> = {}
-  for (const [pattern, permissions] of Object.entries(can))
-    if (Array.isArray(permissions)) out[pattern] = permissions.filter((permission): permission is Permission => known.has(permission))
-  return out
+  for (const [pattern, permissions] of Object.entries(can)) {
+    if (!Array.isArray(permissions)) continue
+    // A pattern board can't read would make whatever compiles this summary throw: it's dropped.
+    try {
+      parsePattern(pattern)
+    } catch {
+      continue
+    }
+    out[pattern] = permissions.filter((permission): permission is Permission => known.has(permission))
+  }
+  // Implications closed and in board's order, as board's own `me` says it.
+  return compileAccess(out).summary()
 }
 
-/** When the API says these credentials stop working, as an ISO time: from milliseconds or a time it gives, null for none. */
+/** Epoch milliseconds before this are the year 2001: a number under it is epoch seconds, as a JWT's `exp` is. */
+const SECONDS_BEFORE = 1e12
+
+/**
+ * When the API says these credentials stop working, as an ISO time: from epoch milliseconds (or
+ * epoch seconds, under `SECONDS_BEFORE`) or a time it gives, null for none.
+ */
 function expiryOf(at: unknown): string | null {
-  if (typeof at === 'number' && Number.isFinite(at)) return new Date(at).toISOString()
+  if (typeof at === 'number' && Number.isFinite(at)) return new Date(at < SECONDS_BEFORE ? at * 1000 : at).toISOString()
   if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) return new Date(at).toISOString()
   return null
 }
@@ -348,8 +371,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (boards.length > 1) {
       // Their IDs as the API gave them, where they look like IDs: what picks one.
       const ids = boards.map((found) => found.id).filter((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id))
+      // On the team this board is on, which a URL has to name: another one's default team is another.
+      const team = await teamId()
+      const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       throw new HttpError(409, 'ambiguous_board_name', `This team has ${boards.length} boards named ${name}${ids.length === boards.length ? `: ${ids.join(', ')}` : ''}.`, {
-        hint: 'Give each a name of its own in Vercel\'s API, or reach one by its URL with `vb --url`.',
+        hint: `Give each a name of its own in Vercel's API, or reach one by its URL with vb --url: ${idUrl(origin, id)}`,
         origin: 'handle',
       })
     }

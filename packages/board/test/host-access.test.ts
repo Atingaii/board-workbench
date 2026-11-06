@@ -43,6 +43,18 @@ function hosted(team: string, options: Partial<MountOptions> = {}) {
 }
 
 describe("a host's authenticate and access", () => {
+  it("puts a host's people through the grants like anyone: a lock shuts them out, a grant on them lets them in", async () => {
+    const tenant = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
+    const ada = caller(tenant.fetch, 'pt_ada')
+    const bob = caller(tenant.fetch, 'pt_viewer')
+    // g1 lets both in, as every person: Ada lets the other into security/, then closes it to everyone.
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_view' }], can: { 'security/': 'all' } })).status).toBe(200)
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'everyone' }], can: { 'security/': [] } })).status).toBe(200)
+    expect((await bob('POST', '/messages', { channel: 'security', text: 'in' })).status).toBe(201)
+    expect((await ada('POST', '/messages', { channel: 'security', text: 'out' })).status).toBe(403)
+    expect((await ada('GET', '/me')).body.can).toMatchObject({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'security/': [] })
+  })
+
   it("trusts nothing built in: the host project's own person and deployment tokens get no access", async () => {
     const tenant = hosted('team_a')
     for (const token of [await personToken(), await deploymentToken('board', PROJECT_ID)]) {
