@@ -131,6 +131,17 @@ console.log(await team.grants())
 await team.revokeGrant(grant.id)
 ```
 
+The CLI says the same with a flag for each principal, its modifiers after it
+(see [`vb grants`](../04-reference/01-cli.md#grants)):
+
+```bash
+# in a terminal:
+vb grants create --everyone --can 'security/=none'
+vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
+vb grants create --github acme/web --workflow ci.yml --branch main --can 'ci/=post'
+vb grants explain --user bob@acme.com security/incidents
+```
+
 | Principal | Names | Level |
 | --- | --- | --- |
 | `user` | a person on the team, by `email`, or by `userId` on a board that verifies tokens itself | one principal |
