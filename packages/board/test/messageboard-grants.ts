@@ -30,13 +30,17 @@ type Stored =
 type Grant = { id: string; principals: Stored[]; can: Can; by: string | null; at: number | null }
 type Level = 'principal' | 'group' | 'everyone'
 
-/** Who asks, or whom explain asks about, as the API knows them from a token. */
-export type Who =
+/**
+ * Who asks, or whom explain asks about, as the API knows them from a token. A board token's `can`
+ * is its `limit`: the most it may do, whatever the grants give its minter.
+ */
+export type Who = (
   | { kind: 'user'; userId: string }
   | { kind: 'project'; projectId: string; environment: string }
   | { kind: 'github'; repositoryId: string; repository: string; workflowRef?: string; ref?: string; event?: string }
   | { kind: 'oidc'; issuer: string; claims: Record<string, string> }
   | { kind: 'app'; clientId: string }
+) & { limit?: Can }
 
 /** A person's role on the team. */
 export type Role = 'owner' | 'member' | 'developer' | 'viewer'
@@ -222,7 +226,10 @@ export function fakeGrants(options: {
     const deciding = at.filter((candidate) => candidate.level === level)
     const given = new Set<Permission>()
     for (const { grant } of deciding) for (const permission of expand(grant.can[pattern]!)) given.add(permission)
-    let can = PERMISSIONS.filter((permission) => given.has(permission))
+    // A board token gets what its can says at its closest pattern, and no more.
+    const limited = who.limit && Object.keys(who.limit).filter((spot) => covers(spot, target)).sort((a, b) => specificity(b) - specificity(a))[0]
+    const limit = who.limit ? (limited === undefined ? new Set<Permission>() : expand(who.limit[limited]!)) : null
+    let can = PERMISSIONS.filter((permission) => given.has(permission) && (limit === null || limit.has(permission)))
     let capped: string | null = null
     // A viewer only reads and reacts, whatever a grant says.
     const VIEWER: readonly Permission[] = ['read', 'react']

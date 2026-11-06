@@ -279,13 +279,15 @@ const REPOSITORIES: Record<string, string> = { 'acme/web': '700001', 'acme/api':
 /** Apps installed on the team, by client ID, with their slugs. */
 const APPS: Record<string, string> = { oac_1: 'ship' }
 
-/** Who a token is, as grants see it. */
-const whoOf = (actor: Actor): Who =>
-  actor.principal.type === 'user'
-    ? { kind: 'user', userId: actor.principal.userId }
+/** Who a token is, as grants see it: a board token, as its minter, held to its can. */
+const whoOf = (actor: Actor): Who => {
+  const limit = actor.token ? { limit: actor.token.can as NonNullable<Who['limit']> } : {}
+  return actor.principal.type === 'user'
+    ? { kind: 'user', userId: actor.principal.userId, ...limit }
     : actor.principal.type === 'project'
-      ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment }
-      : { kind: 'app', clientId: actor.principal.clientId }
+      ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment, ...limit }
+      : { kind: 'app', clientId: actor.principal.clientId, ...limit }
+}
 
 /** What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. */
 type Shared = { teamId: string; accounts: Accounts; directory: Directory; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
