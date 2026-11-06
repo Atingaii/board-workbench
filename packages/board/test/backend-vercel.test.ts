@@ -287,7 +287,12 @@ describe('vercel()', () => {
 
   it("makes the team's board the first time a person uses it, and tells a project it needs a grant", async () => {
     const pong = handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production')
-    await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({ status: 404, code: 'no_board' })
+    await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_not_granted',
+      message: "the team's board doesn't let this project in (prj_pong, production).",
+      hint: 'Someone who manages the board can grant it.',
+    })
     const api = fakeMessageboard({ boardId: null })
     await handleOn(api).post('dev', { text: 'hello' })
     expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
@@ -322,20 +327,55 @@ describe('vercel()', () => {
       expect(lookups(api, 'POST /boards/ensure')).toBe(1)
       // It's the team's: a person reads it.
       expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from pong', 'again'])
-      // The project's preview isn't granted it, and is told what fixes that.
+      // The project's preview isn't granted it, and is told who fixes that.
       await expect(named(api, 'security', 'project:prj_pong:preview').post('dev', { text: 'from a preview' })).rejects.toMatchObject({
         status: 403,
         code: 'board_not_granted',
         origin: 'handle',
-        hint: expect.stringContaining('grant it to this project'),
+        message: "board security doesn't let this project in (prj_pong, preview).",
+        hint: 'Someone who manages the board can grant it.',
       })
     })
 
     it('tells a person there is no board with that name, and makes none', async () => {
       const api = fakeMessageboard()
-      await expect(named(api, 'security').post('dev', { text: 'hi' })).rejects.toMatchObject({ status: 404, code: 'no_board', origin: 'handle' })
+      await expect(named(api, 'security').post('dev', { text: 'hi' })).rejects.toMatchObject({
+        status: 404,
+        code: 'no_board',
+        origin: 'handle',
+        message: 'no board named security on this team, or none you can see.',
+      })
       expect(lookups(api, 'POST /boards/ensure')).toBe(0)
       await expect(named(api, 'security', 'project:prj_pong:production').messages({ channel: 'dev' })).resolves.toMatchObject({ messages: [] })
+    })
+
+    it('makes the board for a person who asks to, once, as the team sees it', async () => {
+      const api = fakeMessageboard()
+      const ensured = () => board({ name: 'security', ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') }) })
+      await ensured().post('dev', { text: 'rotate the keys' })
+      // Another process finds it by its name, and makes nothing more.
+      await ensured().post('dev', { text: 'done' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // It's the team's: someone who didn't ask to make it reads it by its name.
+      expect((await named(api, 'security', 'user:u_ada').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+    })
+
+    it("says a name is another board's that you can't see, and makes none", async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'vault', id: 'brd_vault', members: ['u_ada'] }] })
+      const ensured = board({ name: 'Vault', ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'user:u_jb') }) })
+      await expect(ensured.post('dev', { text: 'hi' })).rejects.toMatchObject({
+        status: 409,
+        code: 'board_name_taken',
+        origin: 'handle',
+        message: "there's a board named Vault you can't see.",
+        hint: 'Ask someone who can see it for access.',
+      })
+      // Its member still reads it, and nothing was posted there.
+      expect((await named(api, 'vault', 'user:u_ada').messages({ channel: 'dev' })).messages).toEqual([])
+    })
+
+    it('takes ensure only with a name', () => {
+      expect(() => board({ ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') }) })).toThrow('ensure makes the board `name` names: pass name too')
     })
 
     it('picks none of the boards an older name is shared by, and names them', async () => {
