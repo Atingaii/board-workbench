@@ -181,7 +181,7 @@ describe('cli grants', () => {
     // Its grants reach it already, so another private vault would leave them letting in whom they name.
     const [ownId, lockId] = [own, lock].map((line) => /^created (g\d+)/.exec(line!)![1]!)
     const again = await vb(['channels', 'create', 'vault', '--private'])
-    expect([again.code, again.stderr]).toEqual([1, `error: ${ownId} and ${lockId} already grant in vault, so a private vault wouldn't be yours alone: nothing was made.\n\n  Revoke each first: vb grants revoke ${ownId}\n`])
+    expect([again.code, again.stderr]).toEqual([1, `error: ${ownId} and ${lockId} already grant in vault, so a private vault wouldn't be yours alone: nothing was made.\n\n  Revoke them first, each with vb grants revoke <id>.\n`])
     expect(JSON.parse((await vb(['channels', 'create', 'vault', '--private', '--json'])).stderr)).toMatchObject({ reason: 'channel_granted' })
     expect((await vb(['channels', 'create', 'open-plan'])).stdout).toBe('created open-plan\n')
   }, 30_000)

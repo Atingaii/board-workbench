@@ -186,7 +186,8 @@ export function fakeGrants(options: {
         return (
           who.kind === 'github' &&
           who.repositoryId === principal.repositoryId &&
-          (principal.workflow === undefined || (who.workflowRef ?? '').startsWith(`${principal.repository}/${workflowPath(principal.workflow)}@`)) &&
+          // All of workflow_ref, with the token's own ref, as Vercel's API matches it.
+          (principal.workflow === undefined || (who.ref !== undefined && who.workflowRef === `${principal.repository}/${workflowPath(principal.workflow)}@${who.ref}`)) &&
           (principal.branch === undefined || who.ref === `refs/heads/${principal.branch}`) &&
           (principal.event === undefined || who.event === principal.event)
         )
