@@ -741,24 +741,27 @@ describe('vercel()', () => {
     expect(await jb.grants()).toEqual([
       { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: true, by: null, at: null },
       { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+      { id: 'g3', principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
     ])
     const { grant } = await jb.createGrant({
       principals: [
         { kind: 'user', email: 'ada@acme.com' },
         { kind: 'project', project: 'web', environments: ['production'] },
         { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' },
+        { kind: 'app', app: 'ship' },
       ],
       can: { 'security/': 'all' },
     })
     expect(grant.principals).toEqual([
       { kind: 'user', userId: 'u_ada', email: 'ada@acme.com' },
-      { kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production'] },
+      { kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production'], teamId: 'team_test' },
       { kind: 'github', repositoryId: '700001', repository: 'acme/web', workflow: 'ci.yml' },
+      { kind: 'app', clientId: 'oac_1', name: 'ship' },
     ])
     // A project it names already gets the new environments.
     const joined = await jb.updateGrant(grant.id, { add: [{ kind: 'project', project: 'prj_web', environments: ['preview'] }] })
-    expect(joined.grant.principals[1]).toEqual({ kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production', 'preview'] })
-    const updated = await jb.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }], remove: [{ kind: 'project', project: 'web' }] })
+    expect(joined.grant.principals[1]).toEqual({ kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production', 'preview'], teamId: 'team_test' })
+    const updated = await jb.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }], remove: [{ kind: 'project', project: 'web' }, { kind: 'app', app: 'oac_1' }] })
     expect(updated.grant.principals.map((principal) => ('userId' in principal ? principal.userId : principal.kind))).toEqual(['u_ada', 'github', 'u_bob'])
     expect(await jb.explain('security/incidents', { user: 'bob@acme.com' })).toEqual({
       channel: 'security/incidents',

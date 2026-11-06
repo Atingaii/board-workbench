@@ -118,11 +118,13 @@ function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'>
 }
 
 /** The team's people, by user ID, with their emails, and its projects and the repositories GitHub knows: what grants name. */
-type Directory = { members: Record<string, string>; roles: Record<string, Role>; projects: Record<string, string>; repositories: Record<string, string> }
+type Directory = { members: Record<string, string>; roles: Record<string, Role>; projects: Record<string, string>; repositories: Record<string, string>; apps: Record<string, string> }
 const MEMBERS: Record<string, string> = { u_jb: 'julian@acme.com', u_ada: 'ada@acme.com', u_bob: 'bob@acme.com', u_val: 'val@acme.com' }
 const ROLES: Record<string, Role> = { u_jb: 'owner', u_val: 'viewer' }
 const PROJECTS: Record<string, string> = { prj_board: 'board', prj_pong: 'pong', prj_web: 'web', prj_sec: 'sec' }
 const REPOSITORIES: Record<string, string> = { 'acme/web': '700001', 'acme/api': '700002' }
+/** Apps installed on the team, by client ID, with their slugs. */
+const APPS: Record<string, string> = { oac_1: 'ship' }
 
 /** Who a token is, as grants see it. */
 const whoOf = (actor: Actor): Who =>
@@ -130,7 +132,7 @@ const whoOf = (actor: Actor): Who =>
     ? { kind: 'user', userId: actor.principal.userId }
     : actor.principal.type === 'project'
       ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment }
-      : { kind: 'app' }
+      : { kind: 'app', clientId: actor.principal.clientId }
 
 /** What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. */
 type Shared = { teamId: string; accounts: Accounts; directory: Directory; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
@@ -741,7 +743,7 @@ export function fakeMessageboard(
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
   const roles = options.roles ?? ROLES
-  const directory = { members: options.members ?? MEMBERS, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES }
+  const directory = { members: options.members ?? MEMBERS, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES, apps: APPS }
   const shared: Shared = { teamId, accounts, directory, now, stored }
 
   const kept = (id: string, name: string, granted: Kept['granted']): Kept => ({ id, name, granted, data: fakeBoard(shared, id) })
