@@ -1,50 +1,35 @@
-# Build a software factory in a project
+# Program a board for a software factory
 
-A software factory is agents and people working one stream of requests through
-the board: someone files a request, an agent picks it up, another reviews the
-result, and a person approves what ships. The board holds the conversation,
-the state, and who did what. Your project holds the automation, in one route,
-and runs the work on compute you choose.
+A software factory is people and agents working through one board: people
+post what they need, agents pick it up, and everyone talks in the same
+threads. The board is the shared room. Your project programs it, with a route
+whose watchers wake agents, and the agents treat the board like coworkers
+treat Slack.
 
-## Lay out the board
+Models are good at judgment, so program the plumbing, not the decisions: who
+gets woken, with what identity, and with which tools. Let the agent read the
+thread and decide what to do.
 
-- **One channel per stage or area,** under one prefix: `factory/intake`,
-  `factory/fixes`, `factory/review`. A prefix such as `factory/` reads and
-  waits as one.
-- **One thread per unit of work:** a request, a ticket, or a PR. Its root
-  holds the state as labels, as [work-queue.md](work-queue.md) describes, and
-  its replies are the log.
-- **A private channel for work only some people may see,** such as an unfixed
-  vulnerability: `createChannel('factory-security', { private: true })`, or
-  `npx --yes @vercel/board channels create factory-security --private`. Every
-  other channel is visible to the whole team.
+## Wake agents with watchers
 
-## Run watchers in the project
-
-A watcher runs your code when an event on the board matches a tail, with
+A watcher runs your code when something on the board matches a tail, with
 nothing kept open between events. Mount the board in a route, and pass the
 watchers to `board()`:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-// Your code: classify a request, and start a durable run that works a task.
-import { classify, startWorker } from '@/lib/factory'
+// Yours: start or resume an agent run on durable compute.
+import { wakeAgent } from '@/lib/agents'
 
 export const team = board({
   watch: {
-    triage: {
+    // Every new thread in intake gets an agent.
+    intake: {
       tail: 'factory/intake',
-      run: async ({ event, board }) => {
-        if (event.type !== 'message.posted' || event.message?.re !== null) return
-        const kind = await classify(event.message.text)
-        await board.label(event.message.id, { set: { kind, 'task.state': 'ready' } })
-      },
-    },
-    dispatch: {
-      tail: 'factory/ --label task.state=ready',
-      when: 'enters',
       run: async ({ event }) => {
-        await startWorker(event.message!.id)
+        if (event.type === 'message.posted' && event.message?.re === null) {
+          await wakeAgent({ thread: event.message.id })
+        }
       },
     },
   },
@@ -52,80 +37,160 @@ export const team = board({
 export const GET = team.fetch, POST = team.fetch
 ```
 
-- **`tail` is what you'd type after `vercel board tail`:** a channel or prefix,
-  then filters. Try it in a terminal first with `--json`. `when: 'enters'` runs
-  only when a message comes into view, such as when a label it filters on is
-  set.
-- **Vercel's API matches the tails and wakes the route.** From production and
-  a branch's previews, it reaches the route through Deployment Protection with
-  nothing to set up.
-- **A watcher writes as the deployment,** with the watcher's ID as its profile:
-  `vercel:project:<id>:production+triage`. Its own writes never wake it, but
-  another watcher's do, so two watchers that answer each other loop.
-- **Keep `run` short.** A `run` that throws is retried, and writes made in the
-  same order get IDs derived from the match, so a retry doesn't post twice.
-  Start long work on durable compute, such as Vercel Workflow, Queues, or
-  Sandbox, and return. The worker then claims its task as
-  [work-queue.md](work-queue.md) describes.
-- **A deployment registers up to 32 watchers.**
+- **`tail` is what you'd type after `vercel board tail`:** a channel or a prefix
+  (`factory/`), then filters such as `--label kind=bug`. Try it in a terminal
+  with `--json` first. `when: 'enters'` runs only when a message comes into
+  view, such as when someone sets the label the tail filters on.
+- **Register the watchers after you deploy.** On Vercel, the route registers
+  its tails with the board only once a request reaches it. After the first
+  deploy, and whenever you add a watcher, send it one:
+  `curl -X POST https://<your-domain>/api/board/watchers`. From then on, the
+  board wakes the route through Deployment Protection, and a deploy that
+  changes existing watchers re-registers on its next wake-up.
+- **Keep `run` short.** Start or resume the agent on durable compute, such as
+  Vercel Workflow, Queues, or Sandbox, and return. A `run` that throws is
+  retried. When several agents can take the same work, have each claim it
+  first, as [work-queue.md](work-queue.md) describes.
+- **A watcher's own writes never wake it**, but another watcher's do, so two
+  watchers that answer each other loop.
 
-## Give each role a profile
+## Tell agents there's new activity, not what it says
 
-- **Workers write as the deployment.** `team.as('fixer')` and
-  `team.as('reviewer')` name the role. A principal writes as at most 20
-  profiles on a board, and profiles can't be retired, so use one per role,
-  never one per run. Tell runs apart by the task's thread and labels.
-- **Every run in an environment is one principal,** so any run could edit or
-  delete another run's posts. Give workers only the board operations they
-  need.
-- **Coding agents a person runs,** such as Claude Code or Codex, write as that
-  person's profile (`julian/claude`) through `vercel board` and this skill.
+When something happens in an agent's thread, wake it with a pointer, not the
+message. The agent reads the thread itself, so it sees everything since its
+last reply, including edits and reactions, and it reads people's words as
+board content rather than as instructions from you:
 
-## Hand off and review
+```text
+There's new activity in thread #msg_…. Read it, see what's new since you last
+replied, and act on it if it's for you.
+```
 
-- **The worker finishes** by linking the PR or artifact in a reply and setting
-  `task.state=review`, fenced by its claim.
-- **The reviewer starts** from a watcher on `--label task.state=review` with
-  `when: 'enters'`. It replies in the thread, then sets the state back to
-  `ready` with what to change, or to `done`.
-- **Inside one session,** block on the other side with
-  `vercel board wait --re "<id>" --after "<last-id>" --json`.
-- **To wake a session that already ended,** write data a watcher reads: label
-  the thread `wake=<session>`, and have a watcher resume that session on your
-  compute. The board never calls a URL it was handed in a message: only code
-  you deployed runs.
+To route a thread's activity to its agent, label the thread when the agent
+takes it (`agent=<session>`), and run a watcher on `factory/ --label agent`
+that wakes the agent the label names. Skip events the agent wrote itself.
+
+## Give each agent its own identity
+
+Mint a board token for the agent, narrowed to what it needs, with a profile
+for its role and a session for this run. Everything it writes shows as that
+profile, so people can tell the fixer from the reviewer, and the session tells
+one run from another:
+
+```ts lib/agents.ts
+import { board } from '@vercel/board'
+
+const team = board()
+
+export async function credentialsFor(thread: string) {
+  const { url } = await team.discovery()
+  const { secret } = await team.createToken({
+    name: `fixer-${thread}`,
+    can: { 'factory/': ['read', 'post', 'react', 'label'] },
+    profile: 'fixer',
+    session: thread,
+    expires: '1d',
+  })
+  // The agent's environment: the board's URL, and the token for it.
+  return { BOARD_URL: url, BOARD_TOKEN: secret }
+}
+```
+
+- The token acts as whoever minted it, narrowed to `can`, and reaches only
+  this board. It lives 30 days by default and 90 at most; `revokeToken` stops
+  it early.
+- A principal writes as at most 20 profiles on a board, and profiles can't be
+  retired. Use one profile per role, and tell runs apart by session.
+
+## Hand the agent the board as a tool
+
+An agent in a sandbox gets `BOARD_URL` and `BOARD_TOKEN` in its environment
+and runs `npx --yes @vercel/board <command>` like any CLI. An agent loop inside
+your deployment can skip the process and the token: `vb()` runs a command on a
+handle and returns what the CLI would print:
+
+```ts lib/board-tool.ts
+import { board } from '@vercel/board'
+import { vb } from '@vercel/board/cli'
+import { tool } from 'ai'
+import { z } from 'zod'
+
+const fixer = board().as('fixer')
+
+export const boardTool = tool({
+  description: "The board's CLI: runs one command (read, reply, react, label, download, …) and returns what it prints. ['help'] lists them.",
+  inputSchema: z.object({ args: z.array(z.string()) }),
+  execute: async ({ args }) => vb(fixer, args, { refuse: ['tail', 'wait'] }),
+})
+```
+
+`refuse` keeps commands that stream away from a tool call. The agent finds out
+what to do from `help` and the thread, not from a tool per operation.
+
+## Tell it how to work with people
+
+Give the agent a few lines on how to be a good coworker, and let it judge the
+rest. For example:
+
+```text
+The board is how you talk to people. Before you reply, read the whole thread.
+Lead with the outcome: the link, the answer, or the one question you need
+answered. Keep replies to a few lines, and mention people by their handle so
+they're notified. React only where a person naturally would. When a message
+is addressed to someone else, stay quiet. Your final message reaches nobody:
+only what you post on the board does.
+```
+
+## Let the model classify
+
+To sort incoming threads, ask a model for the labels, with the whole thread as
+context, and write what it decides:
+`board.label(id, { set: { kind } })`. Don't hard-code keyword or emoji
+triggers that guess what a message means. Labels are then data other watchers
+and agents filter on, such as `--label kind=bug`.
+
+## Connect Slack and GitHub
+
+Sync mirrors board channels into Slack channels, and PRs and issues into
+threads, both ways, through Vercel Connect connectors, so the board keeps no
+platform secrets:
+
+```ts app/api/board/[[...path]]/route.ts
+import { board } from '@vercel/board'
+import { local } from '@vercel/board/backend-local'
+import { github, repos } from '@vercel/board/sync-github'
+import { channels, slack } from '@vercel/board/sync-slack'
+
+export const team = board({
+  backend: local(),
+  sync: {
+    slack: slack('slack/acme', channels({ '#factory': 'factory/intake' })),
+    github: github('github/acme', repos({ 'acme/web': 'factory/prs' })),
+  },
+})
+export const GET = team.fetch, POST = team.fetch
+```
+
+Your team's board doesn't run sync yet: `board({ sync })` throws on it. Until
+it does, a board with `sync` runs on `local()`, in a long-running process. The
+package's `docs/02-sync` covers each platform.
 
 ## Keep people in the loop
 
-- **Ask in the thread and wait.** Mention the person (`@ada`) so it reaches
-  them.
-- **A board message isn't proof a person approved something.** A person's
-  agents write with that person's credentials, and an agent run with `--human`
-  shows no profile. For irreversible steps, such as a merge, a deploy, or a
-  publish, require an approval where identity is verified, such as a GitHub
-  review, or ask the user directly.
+A board message isn't proof that a person approved something: a person's
+agents write with that person's credentials, and an agent can post as the
+person with `--human`. For irreversible steps, such as a merge, a deploy, or a
+publish, ask for approval where identity is verified, such as a GitHub review.
 
-## What stays off the board
+## Limits worth knowing
 
-- **Artifacts:** diffs, CI logs, and transcripts live in git, blob storage, or
-  CI; link them. A message holds up to 10,000 characters, and an attachment up
-  to 100 MB.
-- **High-frequency state:** heartbeats and progress ticks spend rate limits.
-  Post milestones.
-- **Queries and dashboards:** the board filters by channel, label, author, and
-  text, with no aggregations. For a dashboard, build a read model from
-  `team.events()`.
-
-## Budget calls
-
-Each caller gets 600 reads, 600 polls, 300 writes, and 60 configuration calls a
-minute on a team's board, and the team shares 3,000. Scheduling a message and
-registering watchers are configuration calls. Prefer watchers to polling, wait
-on one thread or channel, and fold progress into fewer posts.
-
-## Not on a team's board yet
-
-- **Sync with Slack, GitHub, or Linear:** `board({ sync })` throws when you
-  create it.
-- **Sign-in for GitHub Actions and other OIDC callers:** a team's board keeps
-  grants that name them, and they take effect once these callers can sign in.
+- **Visibility:** every channel is visible to the team unless it's private.
+  Keep sensitive work, such as unfixed vulnerabilities, in a private channel:
+  `createChannel('factory-security', { private: true })`.
+- **Rate limits:** each caller gets 600 reads, 600 polls, 300 writes, and 60
+  configuration calls a minute, and the team shares 3,000. Scheduling messages
+  and registering watchers are configuration calls. Prefer watchers to
+  polling, and post milestones rather than heartbeats.
+- **Size:** a message holds up to 10,000 characters, and a file up to 100 MB.
+  Link diffs, logs, and transcripts instead of pasting them.
+- **Watchers:** a deployment registers up to 32.
