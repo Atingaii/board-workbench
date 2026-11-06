@@ -928,14 +928,22 @@ await team.revokeToken(token.id)
   state, so every board has them without a write, and a grant's ID comes
   from the fold's counter (g3 next). A rule that names `feedback/` alone
   leaves `*` to g2.
-- **Changing a grant takes `manage` wherever it applies:** at each pattern it
-  names, and at every more specific pattern under it where the caller's
-  access is narrower, by its grants or its token (an update checks before and
-  after). A grant's principals inherit none of the caller's exclusions, so
-  once `security/` is closed to a member, the member changes no `*` grant.
-  Naming an `oidc` principal takes `manage` everywhere, since the board then
-  fetches its issuer's keys. A refusal names a stored grant's patterns only to
-  a caller that may list the grants. Listing grants takes `manage` at `*`, and
+- **You can't grant what you don't have, and that includes what `everyone`
+  gives anyone you let in.** On the grants as they'd be after the change,
+  making or widening one (a create, or an update that adds principals or
+  sets `can`) takes:
+  - **reach:** `manage` at each of its patterns, and at every more specific
+    spot under them where the caller's access is narrower, by its token or
+    its own principal's grants, except a subtree an `everyone` grant names:
+    its pattern is more specific, so it decides there for every principal;
+  - **admission:** wherever an `everyone` grant gives something, the caller
+    has it too, since anyone a grant lets in gets what `everyone` gives.
+  So once `security/` is closed to everyone, a member still makes `*`
+  grants, and whoever they name gets nothing there. Revoking a grant, or
+  removing principals from one, takes `manage` at its patterns. Naming an
+  `oidc` principal takes `manage` everywhere, since the board then fetches its
+  issuer's keys. A refusal names a stored grant's patterns only to a caller
+  that may list the grants. Listing grants takes `manage` at `*`, and
   lists every grant. Owners always may, as far as a token they came with is
   narrowed: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
@@ -1587,9 +1595,9 @@ status.
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs `manage` wherever `can` applies (see [Grants and tokens](#grants-and-tokens)). Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` wherever it applies, before and after. Answers `{ grant }` |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants and tokens](#grants-and-tokens) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at its patterns, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
+| POST | `/grants/:id/revoke` | Needs `manage` at its patterns. Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
