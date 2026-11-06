@@ -67,7 +67,9 @@ export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'call
     case 'github': {
       if (caller.kind !== 'github') return null
       const same = principal.repositoryId !== undefined ? caller.repositoryId === principal.repositoryId : caller.repository === principal.repository
-      const workflow = principal.workflow === undefined || (caller.workflowRef ?? '').startsWith(`${caller.repository}/${principal.workflow}@`)
+      // All of workflow_ref, `<repository>/<path>@<ref>`, with the token's own ref: a file named
+      // `ci.yml@other.yml` isn't `ci.yml`.
+      const workflow = principal.workflow === undefined || (caller.ref !== undefined && caller.workflowRef === `${caller.repository}/${principal.workflow}@${caller.ref}`)
       const branch = principal.branch === undefined || caller.ref === `refs/heads/${principal.branch}`
       const event = principal.event === undefined || caller.event === principal.event
       return same && workflow && branch && event ? 'principal' : null

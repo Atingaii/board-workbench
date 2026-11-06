@@ -40,6 +40,13 @@ describe('grantAccess', () => {
     expect(summaries({ ...web('team_other'), grants: [anywhere] })?.caller).toEqual({ '*': ['read'] })
   })
 
+  it('matches a workflow by the whole of its workflow_ref, so another file whose name starts the same gets nothing', () => {
+    const ci: DecidingGrant = { principals: [{ kind: 'github', repository: 'acme/web', workflow: '.github/workflows/ci.yml' }], can: { 'ci/': ['post'] } }
+    const run = (workflowRef: string) => grantAccess({ caller: { kind: 'github', repository: 'acme/web', workflowRef, ref: 'refs/heads/main' }, grants: [ci] })
+    expect(run('acme/web/.github/workflows/ci.yml@refs/heads/main')?.caller.summary()).toEqual({ 'ci/': ['post'] })
+    expect(run('acme/web/.github/workflows/ci.yml@evil.yml@refs/heads/main')).toBeNull()
+  })
+
   it('caps what it gives, then narrows it by a token', () => {
     expect(summaries({ ...bob, grants: [g1], cap: ['read'] })).toEqual({ caller: { '*': ['read'] }, own: { '*': ['read'] } })
     expect(summaries({ ...bob, grants: [g1], can: { 'dev/': ['read', 'post'] } })?.caller).toEqual({ 'dev/': ['read', 'post'] })
