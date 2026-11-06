@@ -201,6 +201,9 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
   z.strictObject({ kind: z.literal('all-users') }),
   z.strictObject({ kind: z.literal('all-projects'), environments: Environments.optional() }),
+  // An app by its slug or its client ID.
+  z.strictObject({ kind: z.literal('app'), app: z.string().min(1).max(200) }),
+  z.strictObject({ kind: z.literal('all-apps') }),
   z.strictObject({ kind: z.literal('everyone') }),
 ])
 
@@ -568,10 +571,9 @@ export type ScheduleView = {
 
 /**
  * Which grants decide a channel for a principal: the `pattern` that won there (an exact channel,
- * then the longest subtree, then `*`), the patterns it won `over` (the others its grants and rules
- * name that cover the channel, most specific first), the `level` that won at it, the `grants` at that level, which
- * add up, or the `rule` in the board's code that decided, and what they give, `can`, after `capped`,
- * the team role that caps a person's. `pattern` and `level` are null where no grant decides: the
+ * then the longest subtree, then `*`), the patterns it won `over` (the others its grants name that
+ * cover the channel, most specific first), the `level` that won at it, the `grants` at that level,
+ * which add up, and what they give, `can`, after `capped`, the team role that caps a person's. `pattern` and `level` are null where no grant decides: the
  * board's own code, its own deployments where it runs, or a principal nothing lets in, whose `can`
  * is empty.
  */
@@ -581,7 +583,6 @@ export type Explanation = {
   over: string[]
   level: 'principal' | 'group' | 'everyone' | null
   grants: GrantView[]
-  rule: string | null
   capped: string | null
   can: Permission[]
 }
@@ -589,11 +590,13 @@ export type Explanation = {
 /** A principal as a grant keeps it: IDs, with the names the board knows beside them. */
 export type PrincipalView =
   | { kind: 'user'; userId: string; email: string | null }
-  | { kind: 'project'; projectId: string; name: string | null; environments: string[] }
+  | { kind: 'project'; projectId: string; name: string | null; environments: string[]; teamId: string | null }
   | { kind: 'github'; repositoryId: string | null; repository: string; workflow?: string; branch?: string; event?: string }
   | { kind: 'oidc'; issuer: string; claims: Record<string, string | string[]> }
   | { kind: 'all-users' }
   | { kind: 'all-projects'; environments: string[] }
+  | { kind: 'app'; clientId: string; name: string | null }
+  | { kind: 'all-apps' }
   | { kind: 'everyone' }
 
 /** A grant: who it names, what it lets them do, and who changed it last, when. */

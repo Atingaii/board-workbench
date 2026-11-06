@@ -353,14 +353,26 @@ export function createBoardClient(options: ClientOptions) {
      * answering the two grants as `grants`. A failure part way leaves the channel open with a grant
      * too many, or closed and not made yet, and never shuts you out. Before it writes anything, it
      * refuses a caller that's neither a person nor a project's deployment (400 `no_own_principal`),
-     * and a path where it or a channel under it is there already (409 `channel_exists`), since
-     * closing `security/` closes `security/incidents` too. A board that keeps no grants fails on the
-     * first, with nothing made.
+     * one that can't list grants, a path a grant other than `*`'s reaches already (409
+     * `channel_granted`: the channel, `<path>/`, or a pattern under it, whose grants would still let
+     * in whoever they name), and a path where it or a channel under it is there already (409
+     * `channel_exists`), since closing `security/` closes `security/incidents` too. A board that
+     * keeps no grants fails on the listing, with nothing made.
      */
     createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
       if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       const creator = creatorOf(await call<Me>('GET', '/me'), path)
       const pattern = `${path}/`
+      // A grant that already reaches it would still let in whoever it names, past the lock.
+      const { grants } = await call<{ grants: GrantView[] }>('GET', '/grants')
+      const reaching = grants.filter((grant) => Object.keys(grant.can).some((at) => at === path || at.startsWith(pattern)))
+      if (reaching.length > 0) {
+        const named = reaching.map((grant) => grant.id)
+        const list = named.length === 1 ? named[0]! : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
+        throw new BoardError('channel_granted', `${list} already ${named.length === 1 ? 'grants' : 'grant'} in ${path}, so a private ${path} wouldn't be yours alone: nothing was made.`, 409, {
+          hint: `Revoke ${named.length === 1 ? 'it' : 'each'} first: vb grants revoke ${named[0]}`,
+        })
+      }
       const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
       if (there)
         throw new BoardError(
@@ -417,7 +429,7 @@ export function createBoardClient(options: ClientOptions) {
      * and grants tied there add up. Needs manage at each pattern `can` names.
      */
     createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: { principals: input.principals.map(withEnvironments), can: wireCan(input.can) } }),
-    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs manage at each pattern it names, before and after. */
+    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
     updateGrant: (id: string, { add, remove, can }: UpdateGrantInput) =>
       call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, {
         body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}) },

@@ -8,10 +8,10 @@ beforeAll(async () => {
   env.BOARD_TOKEN = await localUserToken('julian', url)
 })
 
-/** The board's grants, back to the two it starts with. */
+/** The board's grants, back to the three it starts with. */
 async function startOver() {
   const { stdout } = await vb(['grants', '--json'])
-  for (const { id } of JSON.parse(stdout).grants as { id: string }[]) if (id !== 'g1' && id !== 'g2') await vb(['grants', 'revoke', id])
+  for (const { id } of JSON.parse(stdout).grants as { id: string }[]) if (!['g1', 'g2', 'g3'].includes(id)) await vb(['grants', 'revoke', id])
 }
 
 /** `grants create`, and the ID it made. */
@@ -38,6 +38,9 @@ describe('cli grants', () => {
     // A project without --environment is its production deployments.
     const web = await create('--project', 'prj_web', '--can', 'web/=all')
     expect(web.stdout).toBe(`created ${web.id}  --project prj_web --environment production  web/=all\n`)
+    // An app by its client ID, as a board that verifies tokens itself takes it.
+    const app = await create('--app', 'cl_ship', '--can', 'ship/=post')
+    expect(app.stdout).toBe(`created ${app.id}  --app cl_ship  ship/=post\n`)
 
     // Each column as wide as its widest cell, two spaces apart.
     const width = 89
@@ -45,14 +48,16 @@ describe('cli grants', () => {
       [
         ['g1', '--all-users', 'everything'],
         ['g2', '--all-projects --environment production,preview,development', 'read post react label'],
+        ['g3', '--all-apps', 'read post react label'],
         [closed.id, '--everyone', 'security/=none'],
         [people.id, '--user u_alice --user u_bob', 'security/=all'],
         [project.id, '--project prj_sec --environment production,preview', 'dev/=read security/=read,post'],
         [runs.id, '--github acme/web --workflow ci.yml --branch main --github acme/api --workflow deploy.yml', 'ci/=post'],
         [issuer.id, '--oidc https://gitlab.com --claim project_id=42', 'ci/=post'],
         [web.id, '--project prj_web --environment production', 'web/=all'],
+        [app.id, '--app cl_ship', 'ship/=post'],
       ]
-        .map(([id, principals, can]) => `${id!.padEnd(2)}  ${principals!.padEnd(width)}  ${can}\n`)
+        .map(([id, principals, can]) => `${id!.padEnd(3)}  ${principals!.padEnd(width)}  ${can}\n`)
         .join(''),
     )
     const listed = JSON.parse((await vb(['grants', '--json'])).stdout).grants as { id: string; principals: unknown[] }[]
@@ -77,6 +82,9 @@ describe('cli grants', () => {
     expect((await vb(['grants', 'update', id, '--remove-user', 'u_alice', '--add-github', 'acme/web', '--workflow', 'ci.yml'])).stdout).toBe(
       `updated ${id}  --user u_bob --user u_carol --github acme/web --workflow ci.yml  security/=all\n`,
     )
+    // Every app on the team, in place of one.
+    const app = await create('--app', 'cl_ship', '--can', 'ship/=post')
+    expect((await vb(['grants', 'update', app.id, '--add-all-apps', '--remove-app', 'cl_ship'])).stdout).toBe(`updated ${app.id}  --all-apps  ship/=post\n`)
     const json = JSON.parse((await vb(['grants', 'update', id, '--can', 'security/=read', '--json'])).stdout)
     expect(json).toMatchObject({ grant: { id, can: { 'security/': ['read'] } }, outcome: 'updated' })
   }, 30_000)
@@ -129,7 +137,7 @@ describe('cli grants', () => {
     expect(await refused('--user', 'u_ada', '--can', 'dev/=all,read')).toEqual([2, 'error: --can: all is every permission, so it goes alone: dev/=all.'])
     expect(await refused('--user', 'u_ada', '--can', 'dev/=write')).toEqual([2, "error: --can: write isn't a permission. Permissions are read, post, react, label, sync, manage, all, or none."])
     expect(await refused('--user', 'u_ada', '--can', 'dev/=read', '--can', 'dev/=post')).toEqual([2, 'error: --can names dev/ twice: say it once, with every permission it gives.'])
-    expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(2)
+    expect((await vb(['grants'])).stdout.trim().split('\n')).toHaveLength(3)
   }, 30_000)
 
   it('explains which grant decides a channel, for you or for a principal it names', async () => {
@@ -144,7 +152,7 @@ describe('cli grants', () => {
     // Even a team owner reads a closed channel only by a grant.
     expect(await explain('security/incidents')).toBe(`security/ wins over *. Closest grant for you: ${closed.id} (--everyone): none.\n`)
     expect(JSON.parse(await explain('--user', 'u_bob', 'security', '--json'))).toEqual({
-      explanation: { channel: 'security', pattern: 'security/', over: ['*'], level: 'principal', grants: [expect.objectContaining({ id: people.id })], rule: null, capped: null, can: ['read', 'post', 'react', 'label', 'sync', 'manage'] },
+      explanation: { channel: 'security', pattern: 'security/', over: ['*'], level: 'principal', grants: [expect.objectContaining({ id: people.id })], capped: null, can: ['read', 'post', 'react', 'label', 'sync', 'manage'] },
     })
     // A token that can't list grants sees that one decides, not which.
     const secret = (await vb(['tokens', 'create', 'reader', '--can', 'dev/=read'])).stdout.trim()
@@ -168,9 +176,11 @@ describe('cli grants', () => {
     expect(channel).toBe('created channel vault')
     expect(own).toMatch(/^created g\d+  --user julian  vault\/=all$/)
     expect(lock).toMatch(/^created g\d+  --everyone  vault\/=none$/)
-    const again = await vb(['channels', 'create', 'vault', '--private', '--json'])
-    expect(again.code).toBe(1)
-    expect(JSON.parse(again.stderr)).toMatchObject({ reason: 'channel_exists' })
+    // Its grants reach it already, so another private vault would leave them letting in whom they name.
+    const [ownId, lockId] = [own, lock].map((line) => /^created (g\d+)/.exec(line!)![1]!)
+    const again = await vb(['channels', 'create', 'vault', '--private'])
+    expect([again.code, again.stderr]).toEqual([1, `error: ${ownId} and ${lockId} already grant in vault, so a private vault wouldn't be yours alone: nothing was made.\n\n  Revoke each first: vb grants revoke ${ownId}\n`])
+    expect(JSON.parse((await vb(['channels', 'create', 'vault', '--private', '--json'])).stderr)).toMatchObject({ reason: 'channel_granted' })
     expect((await vb(['channels', 'create', 'open-plan'])).stdout).toBe('created open-plan\n')
   }, 30_000)
 

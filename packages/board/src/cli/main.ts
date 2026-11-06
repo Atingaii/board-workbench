@@ -651,6 +651,8 @@ function failureOf(error: unknown): Failure {
         return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
       case 'channel_exists':
         return own('conflict', 'channel_exists')
+      case 'channel_granted':
+        return own('conflict', 'channel_granted')
       case 'no_own_principal':
         return own('usage', 'no_own_principal')
       case 'port_taken':

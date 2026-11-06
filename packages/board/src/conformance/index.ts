@@ -41,10 +41,12 @@ export type ConformanceOptions = {
    * Whom the grants checks name. A board that verifies tokens itself (`vb serve`) takes the made-up
    * IDs they use without it; one that looks names up, as Vercel's API does, needs real ones on its
    * team, or skips the checks that name them: a `project` (its name or ID), a GitHub `repository`
-   * no grant names, and a `viewer` (a person's email or ID whose team role is viewer), to check
-   * that a role caps what grants give. None may be the run's own: it throws before it writes.
+   * no grant names, a `viewer` (a person's email or ID whose team role is viewer), to check
+   * that a role caps what grants give, and an `app` installed on the board's team (its slug or
+   * client ID), which a local board has none of. None may be the run's own: it throws before it
+   * writes.
    */
-  principals?: { project?: string; repository?: string; viewer?: string }
+  principals?: { project?: string; repository?: string; viewer?: string; app?: string }
 }
 
 class Mismatch extends Error {}
@@ -112,8 +114,8 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 
 /**
  * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
- * `no_scheduler`, and without a blob store `no_files`; one whose `access` is one function keeps
- * no grants, `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
+ * `no_scheduler`, and without a blob store `no_files`; a backend of one's own that keeps no grants
+ * answers `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
  * and fails.
  */
 const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])
@@ -127,7 +129,7 @@ const needRoot = (ctx: Context) => {
  * Who the grants checks name: `principals`' own, or made-up IDs, which a board that verifies tokens
  * itself takes. A grant naming them lets nobody in.
  */
-type Principals = { project: string; repository: string; viewer: string | null }
+type Principals = { project: string; repository: string; viewer: string | null; app: string | null }
 
 /** A check's project, in its environments. */
 const projectFor = (ctx: Context, environments = ['preview']) => ({ kind: 'project' as const, project: ctx.principals.project, environments })
@@ -732,7 +734,7 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
-    name: 'caps a person by their team role, so a viewer only reads',
+    name: 'caps a person by their team role, so a viewer only reads and reacts',
     run: (ctx) => {
       const { viewer } = ctx.principals
       if (viewer === null) return Promise.resolve('name a viewer in principals to check it: a board without team roles caps no one')
@@ -742,7 +744,25 @@ const CHECKS: Check[] = [
         const explained = await explain(ctx, `${subtree}thread`, { user: viewer })
         same(explained.level, 'principal', `the level that decides ${subtree}thread for the viewer`)
         check(explained.capped !== null, `the viewer's role should cap what the grant gives, got capped ${show(explained.capped)}`)
-        alike(explained.can, ['read'], 'what a viewer may do with a grant of all')
+        alike(explained.can, ['read', 'react'], 'what a viewer may do with a grant of all')
+      })
+    },
+  },
+  {
+    group: 'grants',
+    name: 'names an app by its slug or client ID, keeps it by client ID, and every app as a group',
+    run: (ctx) => {
+      const { app } = ctx.principals
+      if (app === null) return Promise.resolve('name an app in principals to check it: a local board has no apps')
+      return withGrants(ctx, async ({ make }) => {
+        const grant = await make({ principals: [{ kind: 'app', app }], can: { [`${subtreeOf(ctx)}apps/`]: ['post'] } })
+        const [named] = grant.principals
+        check(
+          grant.principals.length === 1 && named?.kind === 'app' && (named.clientId === app || named.name === app),
+          `the grant's principals: expected the app ${app}, got ${show(grant.principals)}`,
+        )
+        const swapped = await ctx.board.updateGrant(grant.id, { add: [{ kind: 'all-apps' }], remove: [{ kind: 'app', app }] })
+        alike(swapped.grant.principals, [{ kind: 'all-apps' }], 'principals after adding every app and removing the one')
       })
     },
   },
@@ -1079,6 +1099,9 @@ function namesCaller(me: Me, principals: ConformanceOptions['principals']): stri
   const repository = principals?.repository?.toLowerCase()
   if (repository !== undefined && me.kind === 'workflow' && repository === me.handle.toLowerCase())
     return `principals.repository is this run's own repository, ${principals!.repository}: the grants checks would change what this run may do. Name another repository.`
+  const app = principals?.app
+  if (app !== undefined && source === 'vercel' && kind === 'app' && (app === id || app === me.handle))
+    return `principals.app is this run's own app, ${app}: the grants checks would change what this run may do. Name another app on the team.`
   return null
 }
 
@@ -1119,6 +1142,7 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
       project: options.principals?.project ?? `prj_conformance${label}`,
       repository: options.principals?.repository ?? `acme/conformance-${label}`,
       viewer: options.principals?.viewer ?? null,
+      app: options.principals?.app ?? null,
     },
     team: (discovery as { team_id?: string | null }).team_id ?? null,
   }

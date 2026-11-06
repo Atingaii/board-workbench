@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -513,9 +512,9 @@ describe('cli', () => {
   })
 
   it('says what a token can do when it is less than everything', async () => {
-    const board = await serve(
-      testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })] }).fetch,
-    )
+    const granted = testBoard()
+    await granted.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
+    const board = await serve(granted.fetch)
     try {
       const { stdout, code } = await vb(['whoami'], { BOARD_URL: `${board.origin}/api/board`, BOARD_TOKEN: await workflowToken() })
       expect(code).toBe(0)
@@ -725,7 +724,7 @@ describe('cli', () => {
       expect(run.stdout).toContain('\n\nschedules\n  passed   schedules a reply')
       expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
       // A board without team roles caps no one, no run can check a member shut out under a lock, and grants across teams aren't specified yet.
-      expect(run.stdout).toMatch(/\n\n\d+ passed, 3 skipped\n$/)
+      expect(run.stdout).toMatch(/\n\n\d+ passed, 4 skipped\n$/)
       expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'], as)).stdout)).toMatchObject({ ok: true })
     } finally {
       await scheduled.close()
@@ -740,7 +739,7 @@ describe('cli', () => {
         '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler, so it can\'t send later\n',
       )
       // Schedules, and the three grants checks a board without team roles skips.
-      expect(partial.stdout).toMatch(/\n\n\d+ passed, 5 skipped\n$/)
+      expect(partial.stdout).toMatch(/\n\n\d+ passed, 6 skipped\n$/)
     } finally {
       await unscheduled.close()
     }
