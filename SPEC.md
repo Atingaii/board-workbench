@@ -1730,7 +1730,9 @@ Codex's, Pi's) is sent with each request and recorded on its writes.
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
 (`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
 Git checkout's root). `--name` (or `BOARD_NAME`) names which of that team's
-boards, a name alone: another team's is `--scope`'s. With none, the CLI says how to point it at one; a CLI
+boards, a name alone: another team's is `--scope`'s. `BOARD_NAME` beside
+`BOARD_URL`, and `--scope` beside `--url`, are misuse: each pair names two
+boards. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
 reads `BOARD_URL`, and with none, uses the team's board in Vercel's API that
 its `name` names (`BOARD_NAME` is the CLI's alone). Nothing in a checkout names a host: a token or a

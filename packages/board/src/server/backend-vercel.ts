@@ -158,6 +158,13 @@ const SCAN_PAGES = 10
 /** A file as the board names it. */
 const fileOf = ({ id, name, type, size }: Attachment): Attachment => ({ id, name, type, size })
 
+/**
+ * A team's board in Vercel's API by its ID, as its discovery names it and `vb --url` takes it,
+ * with `<ID>` in place of one: what an ambiguous name's hint offers. `idUrlIn` finds it there.
+ */
+const idUrl = (origin: string, teamId: string) => `${origin}/v1/messageboard/boards/<ID>?teamId=${encodeURIComponent(teamId)}`
+export const idUrlIn = (hint: string): string | null => /https:\/\/\S+\/v1\/messageboard\/boards\/<ID>\?teamId=[\w%-]+/.exec(hint)?.[0] ?? null
+
 const notSupported = (what: string) => new HttpError(501, 'not_supported', `Vercel's boards don't support ${what} yet`)
 
 /** What a caller board() verified may do. Null for this deployment's own code, which may do what its credentials may. */
@@ -308,8 +315,11 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (boards.length > 1) {
       // Their IDs as the API gave them, where they look like IDs: what picks one.
       const ids = boards.map((found) => found.id).filter((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id))
+      // On the team this board is on, which a URL has to name: another one's default team is another.
+      const team = await teamId()
+      const id = team?.startsWith('team_') ? team : (await self(who)).teamId
       throw new HttpError(409, 'ambiguous_board_name', `This team has ${boards.length} boards named ${name}${ids.length === boards.length ? `: ${ids.join(', ')}` : ''}.`, {
-        hint: "Pick one by its ID, with vercel({ board: '<id>' }).",
+        hint: `Pick one by its ID, with vercel({ board: '<ID>' }), or by its URL, ${idUrl(origin, id)}`,
         origin: 'handle',
       })
     }
