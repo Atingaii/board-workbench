@@ -15,6 +15,7 @@ import {
   GITHUB_ISSUER,
   grantIssuers,
   issuerName,
+  joined,
   principalKey,
   removes,
   tokenHash,
@@ -389,7 +390,9 @@ export function createTrust(options: {
       }
       for (const input of add ?? []) {
         const added = checkPrincipal(input, trusted)
-        if (!principals.some((principal) => principalKey(principal) === principalKey(added))) principals.push(added)
+        const at = principals.findIndex((principal) => joined(added, principal) !== null)
+        if (at === -1) principals.push(added)
+        else principals[at] = joined(added, principals[at]!)!
       }
       if (principals.length === 0) throw badRequest(`that leaves ${id} naming no one: revoke it instead`, 'grant_empty')
       if (principals.length > 32) throw badRequest('a grant names at most 32 principals', 'invalid_grant')

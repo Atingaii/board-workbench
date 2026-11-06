@@ -884,8 +884,10 @@ await team.revokeToken(token.id)
   names, kept as written. The same principals again are another grant, and a
   grant changes by its ID: `PATCH /grants/:id { add?, remove?, can? }` adds
   principals, removes them by who they are (a project whatever its
-  environments), and replaces `can`. Removing one it doesn't name is 400
-  `not_in_grant`, and its last 400 `grant_empty`.
+  environments), and replaces `can`. Adding one it names already joins them,
+  a project's environments together, so an add never narrows; removing and
+  adding a project in one update does. Removing one it doesn't name is 400
+  `not_in_grant`, and leaving it naming no one 400 `grant_empty`.
 - **Principals.** `user` (a person on the team), `project` (a project's
   deployments in its environments), `github` (Actions runs in a repository,
   narrowed by workflow, branch, or event, matched as `githubActions()` does),

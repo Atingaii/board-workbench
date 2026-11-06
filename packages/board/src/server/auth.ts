@@ -508,6 +508,21 @@ export function removes(removal: GrantPrincipal, principal: GrantPrincipal): boo
   }
 }
 
+/**
+ * `added` joined into `principal` when it's the same principal, as a removal would find it: a
+ * project's environments, or every project's, together. Null when it's another principal. Adding
+ * never narrows what a grant names; a remove and an add in one update do.
+ */
+export function joined(added: GrantPrincipal, principal: GrantPrincipal): GrantPrincipal | null {
+  if (added.kind !== principal.kind) return null
+  if (added.kind === 'project' || added.kind === 'all-projects') {
+    const other = principal as typeof added
+    if (added.kind === 'project' && added.projectId !== (other as typeof added).projectId) return null
+    return { ...other, environments: environmentsOf([...other.environments, ...added.environments]) }
+  }
+  return principalKey(added) === principalKey(principal) ? principal : null
+}
+
 /** A person's user ID: `vercel:user:u_123` is `u_123`, and a local board's `local:user:jb` is `jb`. */
 export const userIdOf = (id: string) => id.split(':').slice(2).join(':')
 

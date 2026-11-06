@@ -146,6 +146,14 @@ describe('grants', () => {
       ],
       can: { 'dev/': ['read', 'post'] },
     })
+    // Adding a project it names already adds its environments to it.
+    const joined = await person('PATCH', `/grants/${id}`, { add: [{ kind: 'project', project: 'prj_front', environments: ['production'] }, { kind: 'all-projects', environments: ['development'] }] })
+    expect(joined.body.grant.principals).toMatchObject([
+      { kind: 'project', projectId: 'prj_front', environments: ['production', 'preview'] },
+      { kind: 'user' },
+      { kind: 'github' },
+      { kind: 'all-projects', environments: ['preview', 'development'] },
+    ])
     // A project, and every project, is removed by who it is, whatever its environments.
     const removed = await person('PATCH', `/grants/${id}`, { remove: [{ kind: 'project', project: 'prj_front' }, { kind: 'github', repository: 'acme/web' }, { kind: 'all-projects' }] })
     expect(removed.body.grant.principals).toEqual([{ kind: 'user', userId: 'u_ada', email: null }])
