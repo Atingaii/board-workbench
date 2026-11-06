@@ -1,4 +1,4 @@
-// A board kept in this process, which `@vercel/board/local` exports: on the board's log and its
+// A board kept in this process, which `@vercel/board/backend-local` exports: on the board's log and its
 // engine, with its pieces chosen here.
 import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'

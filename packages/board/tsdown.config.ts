@@ -9,8 +9,8 @@ export default defineConfig([
       'index.node': 'src/server/index.ts',
       access: 'src/access/index.ts',
       conformance: 'src/conformance/index.ts',
-      // `@vercel/board/local`: a board kept in this process, Node only.
-      local: 'src/local/index.ts',
+      // `@vercel/board/backend-local`: a board kept in this process, Node only.
+      'backend-local': 'src/backend-local/index.ts',
       sync: 'src/sync/index.ts',
       'sync-chat-sdk': 'src/sync/chat-sdk.ts',
       'sync-slack': 'src/sync/slack.ts',
