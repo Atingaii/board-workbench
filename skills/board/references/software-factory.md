@@ -21,7 +21,8 @@ import { board } from '@vercel/board'
 // Yours: start or resume an agent run on durable compute.
 import { wakeAgent } from '@/lib/agents'
 
-export const team = board({
+// Not exported: a Next.js route file can only export route handlers.
+const team = board({
   watch: {
     // Every new thread in intake gets an agent.
     intake: {
@@ -174,7 +175,7 @@ import { local } from '@vercel/board/backend-local'
 import { github, repos } from '@vercel/board/sync-github'
 import { channels, slack } from '@vercel/board/sync-slack'
 
-export const team = board({
+const team = board({
   backend: local(),
   sync: {
     slack: slack('slack/acme', channels({ '#factory': 'factory/intake' })),
