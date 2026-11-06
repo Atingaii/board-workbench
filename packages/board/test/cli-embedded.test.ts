@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as esbuild from 'esbuild'
 import { build } from 'tsdown'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, type Failure } from '../src/cli/embedded.ts'
@@ -808,30 +809,121 @@ describe('the embedded CLI', () => {
     for (const [what, marker] of Object.entries(MARKERS)) expect(standalone.includes(marker), `${what} in the standalone CLI`).toBe(true)
   }, 120_000)
 
-  it("serves the inspector's page from an app that bundles the published CLI, with no file of board's beside it", async () => {
+  /** `inspect` as a subprocess, until it says where it serves; `stop` is Ctrl-C, answering the exit code. */
+  async function inspecting(argv: string[], extra: NodeJS.ProcessEnv = {}) {
+    const child = spawn(process.execPath, [...argv, 'inspect', '--port', '0', '--no-open'], { env: { ...env, ...extra } })
+    const exited = new Promise<number | null>((resolve) => child.on('close', resolve))
+    let stdout = ''
+    let stderr = ''
+    child.stderr.on('data', (chunk) => (stderr += chunk))
+    const address = await new Promise<string | null>((resolve) => {
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk
+        const found = /at (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout)
+        if (found) resolve(found[1]!)
+      })
+      child.on('close', () => resolve(null))
+    })
+    return {
+      address,
+      stdout: () => stdout,
+      stderr: () => stderr,
+      exited,
+      stop: () => (child.kill('SIGINT'), exited),
+    }
+  }
+
+  /** The app's CLI: board's from `dist`, as npm installs it, bundled as the Vercel CLI bundles it, handing it `PAGE_FROM`'s file as the page when it's set. */
+  const BUNDLED_APP = [
+    "import { readFile } from 'node:fs/promises'",
+    "import { createApp } from '../dist/cli-embedded.mjs'",
+    'const from = process.env.PAGE_FROM',
+    "process.exitCode = await createApp({ appName: 'vercel board', ...(from ? { inspectorPage: () => readFile(from, 'utf8') } : {}) }).run(process.argv.slice(2))",
+  ].join('\n')
+
+  /** Only the page has it: React's production errors. */
+  const PAGE_MARKER = 'Minified React error'
+
+  it('serves the page an app that bundles the published CLI hands it, carrying none of its own, and says so without one', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'board-cli-'))
     try {
-      // What the Vercel CLI bundles: the build in `dist`, as npm installs it.
-      await bundleTo("import { createApp } from '../dist/cli-embedded.mjs'\nprocess.exitCode = await createApp({ appName: 'vercel board' }).run(process.argv.slice(2))", dir)
-      const child = spawn(process.execPath, [join(dir, 'app.mjs'), 'inspect', '--port', '0', '--no-open'], { env })
-      const exited = new Promise<number | null>((resolve) => child.on('close', resolve))
-      let stdout = ''
-      const address = await new Promise<string>((resolve, reject) => {
-        child.stdout.on('data', (chunk) => {
-          stdout += chunk
-          const found = /at (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout)
-          if (found) resolve(found[1]!)
-        })
-        child.on('close', () => reject(new Error(`inspect exited: ${stdout}`)))
-      })
-      expect(stdout).toContain(`inspecting ${url} as julian`)
-      const app = await fetch(`${address}/app.js`)
+      const files = await bundleTo(BUNDLED_APP, dir)
+      expect((await readFile(join(import.meta.dirname, '../dist/inspect/app.js'), 'utf8')).includes(PAGE_MARKER), 'the marker finds the page').toBe(true)
+      expect(everything(files).includes(PAGE_MARKER), "the page in the app's bundle").toBe(false)
+
+      const handed = join(dir, 'page.js')
+      await writeFile(handed, "document.body.dataset.page = 'the app\\'s'")
+      const served = await inspecting([join(dir, 'app.mjs')], { PAGE_FROM: handed })
+      expect(served.stdout()).toContain(`inspecting ${url} as julian`)
+      const app = await fetch(`${served.address}/app.js`)
       expect(app.status).toBe(200)
-      expect(await app.text()).toBe(await readFile(join(import.meta.dirname, '../dist/inspect/app.js'), 'utf8'))
-      child.kill('SIGINT')
-      expect(await exited).toBe(0)
+      expect(await app.text()).toBe(await readFile(handed, 'utf8'))
+      expect(await served.stop()).toBe(0)
+
+      // Without one, there's no page of board's beside the bundle: it says what's missing, and serves
+      // nothing, not even a file where board's would be, which isn't the page board's build made.
+      await mkdir(join(dir, 'inspect'))
+      await writeFile(join(dir, 'inspect/app.js'), "document.body.dataset.page = 'stray'")
+      const without = await inspecting([join(dir, 'app.mjs')])
+      expect(without.address).toBeNull()
+      expect(await without.exited).toBe(1)
+      expect(without.stderr()).toMatch(/^error: The inspector's page isn't beside board's CLI\.\n[\s\S]*inspectorPage/)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
   }, 120_000)
+
+  it('serves the page it is handed in an app that bundles the published CLI as CommonJS, with no import.meta.url', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'board-cli-'))
+    try {
+      const entry = join(dir, 'entry.mjs')
+      await writeFile(
+        entry,
+        [
+          "import { readFile } from 'node:fs/promises'",
+          `import { createApp } from ${JSON.stringify(join(import.meta.dirname, '../dist/cli-embedded.mjs'))}`,
+          "const inspectorPage = () => readFile(process.env.PAGE_FROM, 'utf8')",
+          "createApp({ appName: 'vercel board', inspectorPage }).run(process.argv.slice(2)).then((code) => { process.exitCode = code })",
+        ].join('\n'),
+      )
+      // As esbuild bundles for CommonJS: `import.meta` is an empty object there.
+      await esbuild.build({ entryPoints: [entry], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: join(dir, 'app.cjs'), logLevel: 'silent' })
+      const handed = join(dir, 'page.js')
+      await writeFile(handed, "document.body.dataset.page = 'the app\\'s'")
+      const served = await inspecting([join(dir, 'app.cjs')], { PAGE_FROM: handed })
+      expect(served.address, served.stderr()).not.toBeNull()
+      expect(await (await fetch(`${served.address}/app.js`)).text()).toBe(await readFile(handed, 'utf8'))
+      expect(await served.stop()).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it("names the page this version's package has, with its SHA-256, for an app to fetch and check", async () => {
+    const root = join(import.meta.dirname, '..')
+    const { INSPECTOR_PAGE } = (await import(join(root, 'dist/cli-embedded.mjs'))) as typeof import('../src/cli/embedded.ts')
+    const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { version: string }
+    expect(INSPECTOR_PAGE).toMatchObject({ name: '@vercel/board', version, path: 'dist/inspect/app.js' })
+    expect(INSPECTOR_PAGE.sha256).toBe(createHash('sha256').update(await readFile(join(root, INSPECTOR_PAGE.path))).digest('hex'))
+  })
+
+  it("serves the page it's installed with, standalone", async () => {
+    const served = await inspecting([join(import.meta.dirname, '../dist/cli.mjs')])
+    expect(await (await fetch(`${served.address}/app.js`)).text()).toBe(await readFile(join(import.meta.dirname, '../dist/inspect/app.js'), 'utf8'))
+    expect(await served.stop()).toBe(0)
+  }, 30_000)
+
+  it("fails with why it couldn't get the page the app hands it, before it serves anything", async () => {
+    const app = createApp({
+      appName: 'vercel board',
+      inspectorPage: async () => {
+        throw new Error('the registry is unreachable')
+      },
+    })
+    expect(await capture(() => app.run(['inspect', '--port', '0', '--no-open']))).toEqual({
+      code: 1,
+      stdout: '',
+      stderr: "error: Couldn't get the inspector's page: the registry is unreachable\n",
+    })
+  })
 })

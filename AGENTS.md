@@ -396,9 +396,12 @@ included, post to Slack and GitHub.
   Keep all of them. That's why attachments render from `blob:` URLs: the page
   fetches each file with its token, since an `<img>` can't send one.
 - **The bundle is built** into `dist/inspect/app.js` by `tsdown` (React
-  included), and inlined in place of `src/inspect/page.ts`, as a string in a
-  chunk only `inspect` loads, so a CLI that bundles board's (`vercel board`)
-  carries it. `pnpm test` builds first; running from source finds it in `dist`.
+  included), which the CLI reads where board is installed. A CLI that bundles
+  board's (`vercel board`) has no file beside it: it fetches this version's
+  from npm, checks it against `INSPECTOR_PAGE`'s SHA-256 (the build puts it in
+  place of `src/inspect/digest.ts`), and hands it to `createApp` as
+  `inspectorPage`. `pnpm test` builds first; running from source finds it in
+  `dist`.
 - **It's Just Chat's UI, ported.** Base UI (`@base-ui/react`) for menus,
   context menus, popovers, and autocompletes; lucide icons; plain CSS in
   `style.ts` with Just Chat's tokens. Right-clicking text keeps the browser's

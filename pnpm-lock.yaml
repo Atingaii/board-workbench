@@ -203,6 +203,9 @@ importers:
       chat:
         specifier: ^4.41.1
         version: 4.41.1(ai@7.0.130(zod@4.6.5))(zod@4.6.5)
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       experimental-a2:
         specifier: 0.24.0
         version: 0.24.0(@upstash/qstash@2.12.0)(@vercel/queue@0.7.0)(ai@7.0.130(zod@4.6.5))(ioredis@5.11.1)(pg@8.23.1)(react@19.3.0)
@@ -4908,7 +4911,6 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.1
       '@esbuild/win32-ia32': 0.28.1
       '@esbuild/win32-x64': 0.28.1
-    optional: true
 
   escape-html@1.0.3:
     optional: true
