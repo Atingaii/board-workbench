@@ -87,13 +87,14 @@ describe('cli', () => {
 
   it("finds a Vercel project's link up to its checkout's root, where only a real .git (a HEAD, or a gitdir: file) is one", async () => {
     // A Vercel project linked above the checkout isn't this checkout's: no board, as outside one.
-    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have.
+    // Linked, it's the team's board, which needs a Vercel login this environment doesn't have, or a
+    // BOARD_TOKEN, which it would send there: this run has neither.
     const outside = await tmp('board-vercel-')
     await mkdir(join(outside, '.vercel'))
     await writeFile(join(outside, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_x', projectId: 'prj_x' }))
     const teamBoard = /^error: You're not logged in to Vercel\./
     const noBoard = /^error: No board to use\./
-    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
+    const run = async (directory: string) => (await vb(['whoami'], { BOARD_URL: undefined, BOARD_TOKEN: undefined, XDG_DATA_HOME: await tmp('board-data-') }, undefined, directory)).stderr
     const checkout = join(outside, 'repo')
     await mkdir(join(checkout, '.git', 'x'), { recursive: true })
     await mkdir(join(checkout, 'src'))
@@ -729,12 +730,18 @@ describe('cli', () => {
       await scheduled.close()
     }
     // Without one, the board keeps no schedules, and says so: the kit reports them as not kept here.
-    const partial = await vb(['conformance'])
-    expect(partial.code).toBe(0)
-    expect(partial.stdout).toContain(
-      '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later\n',
-    )
-    expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    const unscheduled = await serve(testBoard({ url: undefined }).fetch)
+    const plain = `${unscheduled.origin}/api/board`
+    try {
+      const partial = await vb(['conformance'], { BOARD_URL: plain, BOARD_TOKEN: await personToken('u_julian', plain) })
+      expect(partial.code).toBe(0)
+      expect(partial.stdout).toContain(
+        '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler, so it can\'t send later\n',
+      )
+      expect(partial.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+    } finally {
+      await unscheduled.close()
+    }
     expect(await vb(['conformance', 'extra'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
   })
 
@@ -791,11 +798,8 @@ describe('cli', () => {
     expect(after.stderr).not.toContain("vb post dev --bogus -- '--bogus thing'")
   })
 
-  it('says `vb stuck` is gone, and where its dead letters are', async () => {
-    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({
-      code: 2,
-      stderr: "error: `vb stuck` is gone. A board on a2() keeps its dead letters in A2, on the backend's `servers`.\n",
-    })
+  it('says `vb stuck` is gone', async () => {
+    expect(await vb(['stuck', 'retry', 'board#1'])).toMatchObject({ code: 2, stderr: 'error: `vb stuck` is gone.\n' })
   })
 
   it('follows a channel until Ctrl-C, and exits 130 for it, as a cancel', async () => {

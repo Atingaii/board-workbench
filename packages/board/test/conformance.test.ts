@@ -179,9 +179,9 @@ describe('the conformance kit', () => {
     const report = await conformance(await clientOf(bare.fetch), { withToken: withToken(bare.fetch) })
     expect(report.ok).toBe(true)
     expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.group, check.status, check.detail])).toEqual([
-      ['schedules', 'skipped', 'not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later'],
-      ['schedules', 'skipped', 'not kept here: this board has no scheduler: pass `scheduler` to `a2()` to send later'],
-      ['attachments', 'skipped', 'not kept here: this board keeps no files: pass `blob` to `a2()`'],
+      ['schedules', 'skipped', "not kept here: this board has no scheduler, so it can't send later"],
+      ['schedules', 'skipped', "not kept here: this board has no scheduler, so it can't send later"],
+      ['attachments', 'skipped', 'not kept here: this board keeps no files'],
     ])
   })
 
