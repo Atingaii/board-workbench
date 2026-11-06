@@ -1,5 +1,5 @@
-// The standalone `board` CLI's own command, which runs a board on this machine: `serve`, on A2. An
-// app that embeds board's CLI leaves it out, so it never loads A2.
+// The standalone `board` CLI's own command, which runs a board on this machine: `serve`, a `local()`
+// board. An app that embeds board's CLI leaves it out, so it never loads a local board.
 import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { projectDir } from '../client/node.ts'
