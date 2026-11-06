@@ -309,6 +309,16 @@ function actorView(actor: ApiActor): ActorView & { id: string } {
   return { id: actor.id, kind, handle, name: handle, avatar: actor.profile?.avatar ?? null }
 }
 
+/** A message's labels just before a change, from what they are after it and what it changed. */
+function labelsBefore(after: Labels, changed: ApiChange['labels'] = {}): Labels {
+  const before = { ...after }
+  for (const [key, { from }] of Object.entries(changed)) {
+    if (from === undefined) delete before[key]
+    else before[key] = from
+  }
+  return before
+}
+
 /** A platform location as board shows one, its optional parts null. */
 const originOf = (origin: ApiMessage['origin']): Origin | null =>
   origin ? { ...(origin.channel !== undefined ? { channel: origin.channel } : {}), thread: origin.thread, subthread: origin.subthread ?? null, message: origin.message, context: origin.context ?? null } : null
@@ -1169,7 +1179,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
     const event = match.event.type === 'thread.synced' ? await syncedOf(who, match, found.message, channel.name) : await eventOf(who, match.event, channel.name, match.id, filters, me, found)
     if (!event?.message) return null
-    return { id: match.id, watcher: match.watcher, thread: event.message.thread, lease: match.lease, attempt: match.attempt, event }
+    // Sync re-renders a copy only when a label change changes what it shows, so it gets the labels from before it too.
+    const handed = match.watcher === '@sync' && event.type === 'labels.changed' ? { ...event, before: { ...event.message, labels: labelsBefore(event.message.labels, match.event.labels) } } : event
+    return { id: match.id, watcher: match.watcher, thread: event.message.thread, lease: match.lease, attempt: match.attempt, event: handed }
   }
 
   /** A thread bound to a target, as the event that has the sync owning its key backfill a channel: about the thread's root. */
@@ -1380,7 +1392,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         return after !== undefined ? ordered.slice(0, limit) : ordered.slice(-limit)
       }
       // A filter on what a message says, or who wrote it, reads every message in the channel.
-      const byMessage = query.re !== undefined || query.by !== undefined || query.mentions !== undefined || query.text !== undefined || (query.from !== undefined && query.from !== 'board')
+      const byMessage = query.re !== undefined || query.by !== undefined || query.mentions !== undefined || query.text !== undefined || query.from !== undefined
       if (byMessage) {
         const { messages, feeds, newest } = await collect(who, query, signal)
         // Each thread with a matching message, by its latest.
