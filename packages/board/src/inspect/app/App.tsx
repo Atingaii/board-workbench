@@ -351,8 +351,17 @@ function ProfileMenu({ me, board: url }: { me: Me; board: string }) {
           title="a letter, then up to 31 letters, numbers, and hyphens"
           required
         />
-        <input name="avatar" type="url" defaultValue={editing.avatar ?? ''} placeholder="avatar URL, https://… (optional)" />
-        <button type="submit" className="send small">
+        <input
+          name="avatar"
+          type="url"
+          defaultValue={editing.avatar ?? ''}
+          placeholder="avatar URL, https://… (optional)"
+          // What the board takes: https, or http on this machine.
+          pattern="https://.+|http://(localhost|127\.0\.0\.1)([:\/].*)?"
+          title="an https URL (http only on localhost)"
+        />
+        {/* Safari and Firefox don't focus a button you click: without this, the field's blur closes the form before the click. */}
+        <button type="submit" className="send small" onMouseDown={(event) => event.preventDefault()}>
           post as this
         </button>
       </form>
