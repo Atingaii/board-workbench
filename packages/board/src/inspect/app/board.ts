@@ -153,20 +153,19 @@ function once(key: string, load: () => Promise<void>): Promise<void> {
   return promise
 }
 
+/**
+ * The page shows once it knows who you are and the channels; the latest across them, the slowest
+ * read on a big board, fills the activity view when it lands, and the live stream goes on from it.
+ */
 export async function boot() {
-  const [me, discovery, channels, recent] = await Promise.all([
-    client.me(),
-    client.discovery().catch(() => null),
-    client.channels(),
-    client.messages({ limit: 200 }),
-  ])
-  set((s) =>
-    store.merge(
-      { ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])), cursor: recent.cursor },
-      recent.messages,
-    ),
-  )
-  void stream(recent.cursor)
+  const recent = client.messages({ limit: 200 })
+  // Awaited after the rest: a failure then is the boot's, not an unhandled one.
+  recent.catch(() => {})
+  const [me, discovery, channels] = await Promise.all([client.me(), client.discovery().catch(() => null), client.channels()])
+  set((s) => ({ ...s, me, discovery, channels: Object.fromEntries(channels.map((c) => [c.path, c])) }))
+  const page = await recent
+  set((s) => store.merge({ ...s, cursor: page.cursor }, page.messages))
+  void stream(page.cursor)
 }
 
 /** Folds the live stream in, a frame's worth of events at a time. */

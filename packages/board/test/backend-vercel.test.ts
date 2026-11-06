@@ -299,6 +299,38 @@ describe('vercel()', () => {
     expect((await other.poll({ channel: 'busy', after: events.cursor })).events).toEqual([])
   })
 
+  it("reads the latest across channels from each channel's page at once, with a cursor the feed goes on from", async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    const first = await team.post('dev', { text: 'dev one' })
+    await team.post('ops', { text: 'ops one' })
+    await team.reply(first.id, { text: 'dev reply' })
+    await team.post('web', { text: 'web one' })
+    await team.post('ops', { text: 'ops two' })
+    const channels = (await team.channels()).length
+    api.requests.length = 0
+    const latest = await team.messages({ limit: 4 })
+    expect(latest.messages.map((m) => m.text)).toEqual(['ops one', 'dev reply', 'web one', 'ops two'])
+    // One page of each channel's messages, at once: no thread is read message by message.
+    expect(api.requests.filter((r) => r === 'GET /boards/brd_test/messages')).toHaveLength(channels)
+    expect(api.requests.filter((r) => r.includes('/threads/') || r.endsWith('/changes'))).toEqual([])
+    // The feed goes on from what it read: the next post, and nothing it already had.
+    await team.post('dev', { text: 'later' })
+    expect((await team.poll({ after: latest.cursor })).events.map((e) => e.message?.text)).toEqual(['later'])
+  })
+
+  it('answers across channels with every message newer than the oldest it has, where a channel has more than one page', async () => {
+    const api = fakeMessageboard()
+    const team = handleOn(api)
+    await team.post('quiet', { text: 'quiet before' })
+    for (let i = 1; i <= 130; i++) await team.post('busy', { text: `m${i}` })
+    await team.post('quiet', { text: 'quiet after' })
+    // The API lists busy's newest 100, back to m31. Quiet's older message would sit past m1 to m30,
+    // which the read never saw, as if nothing came between: so it stops at m31.
+    const latest = await team.messages({ limit: 200 })
+    expect(latest.messages.map((m) => m.text)).toEqual([...Array.from({ length: 100 }, (_, i) => `m${i + 31}`), 'quiet after'])
+  }, 30_000)
+
   it("makes the team's board the first time a person uses it, and tells a project it needs a grant", async () => {
     const pong = handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production')
     await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({

@@ -784,9 +784,41 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         if (matches(filters, message, labeled, mine)) messages.push({ message, thread, channel })
       }
     }
-    // A thread's messages are in order; across threads, by time, as a person reads a channel.
-    messages.sort((a, b) => a.message.createdAt - b.message.createdAt || a.thread.id.localeCompare(b.thread.id) || a.message.sequence - b.message.sequence)
+    messages.sort(byTime)
     return { messages, feeds, newest }
+  }
+
+  /** A thread's messages in order; across threads, by time, as a person reads a channel. */
+  const byTime = (a: { message: ApiMessage }, b: { message: ApiMessage }) =>
+    a.message.createdAt - b.message.createdAt || a.message.threadId.localeCompare(b.message.threadId) || a.message.sequence - b.message.sequence
+
+  /**
+   * The latest `limit` in `listed`, unfiltered: each channel's latest page from the API's message
+   * list, all at once, never a thread at a time. The list goes back one page, so a full page cuts the
+   * answer off at its oldest message: every message newer than the oldest it answers with is in it,
+   * even when that's fewer than `limit`. Each page's cursor is its channel's feed then, which the
+   * read's cursor goes on from.
+   */
+  async function latest(who: Who, listed: ApiChannel[], limit: number, signal: AbortSignal) {
+    const path = await onBoard(who, '/messages')
+    const asked = Math.min(limit, PAGE_MAX)
+    const pages = await Promise.all(
+      listed.map(async (channel) => ({
+        channel,
+        ...(await api<{ messages: ApiMessage[]; cursor: string }>(who, 'GET', path, { query: { channelId: channel.id, limit: String(asked) }, signal })),
+      })),
+    )
+    const full = pages.filter((page) => page.messages.length === asked)
+    const cutoff = Math.max(-Infinity, ...full.map((page) => Math.min(...page.messages.map((message) => message.createdAt))))
+    const messages = pages
+      .flatMap(({ channel, messages }) => messages.map((message) => ({ message, channel })))
+      .filter(({ message }) => message.createdAt >= cutoff)
+      .sort(byTime)
+    return {
+      messages: messages.slice(-limit),
+      feeds: Object.fromEntries(pages.map((page): [string, Feed] => [page.channel.id, { at: page.cursor, skip: 0 }])),
+      newest: Math.max(0, ...pages.flatMap((page) => page.messages.map((message) => message.createdAt))),
+    }
   }
 
   /** A change in the API's feed as a board event, with the message as it is now. Null for what isn't a message's. */
@@ -1219,10 +1251,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         return { messages: await Promise.all(page.messages.map((message) => view(who, message, channel.name))), cursor: page.cursor }
       }
       if (query.after !== undefined && API_CURSOR.test(query.after)) throw new HttpError(400, 'invalid_request', `after: ${query.after} is one channel's cursor: read that channel`)
+      const limit = query.limit ?? 50
+      // The latest across channels, as the inspector's first read asks: each channel's page at once.
+      if (query.re === undefined && query.after === undefined && query.before === undefined && !filtered(query)) {
+        const { messages, feeds, newest } = await latest(who, await channelsFor(who, query.channel), limit, signal)
+        return {
+          messages: await Promise.all(messages.map(({ message, channel }) => view(who, message, channel.name))),
+          cursor: cursorOf({ t: newest, feeds }),
+        }
+      }
       const { messages, feeds, newest } = await collect(who, query, signal)
       const after = query.after !== undefined ? await timeOf(who, query.after) : undefined
       const before = query.before !== undefined ? await timeOf(who, query.before) : undefined
-      const limit = query.limit ?? 50
       const bounded = messages.filter(({ message }) => (after === undefined || message.createdAt > after) && (before === undefined || message.createdAt < before))
       const page = after !== undefined ? bounded.slice(0, limit) : bounded.slice(-limit)
       return {
