@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { githubActions, oidc, vercelProject, type Known } from '../src/server/auth.ts'
-import { caller, deploymentToken, oidcToken, OIDC_ISS, personToken, testBoard, testKeys, workflowToken } from './harness.ts'
+import { createServer } from 'experimental-a2/server'
+import { ACCESS_SESSION, accessContract } from '../src/contract/contract.ts'
+import { caller, deploymentToken, localUserToken, oidcToken, OIDC_ISS, personToken, testBoard, testKeys, workflowToken } from './harness.ts'
 
-/** A person, and callers with other tokens, on one board: the person sets grants, the others try the board. */
+/**
+ * A board, its owner (its local user, as `vb serve` mints a token for it), a person on the team,
+ * and callers with other tokens: the owner and the person set grants, the others try the board.
+ */
 async function setUp(options: Parameters<typeof testBoard>[0] = {}) {
   const board = testBoard(options)
+  const owner = caller(board.fetch, await localUserToken())
   const person = caller(board.fetch, await personToken())
-  return { board, person, as: async (token: string | Promise<string>) => caller(board.fetch, await token) }
+  return { board, owner, person, as: async (token: string | Promise<string>) => caller(board.fetch, await token) }
 }
 
 const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
@@ -40,11 +46,11 @@ describe('grants', () => {
   })
 
   it('decides a channel by its most specific pattern first, then by the closest principal', async () => {
-    const { person, as } = await setUp()
-    await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
-    await person('POST', '/grants', { principals: [user('u_alice')], can: { 'security/': 'all' } })
+    const { owner, as } = await setUp()
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    await owner('POST', '/grants', { principals: [user('u_alice')], can: { 'security/': 'all' } })
     // A grant naming Bob on * doesn't reach security/: the more specific pattern decides first.
-    await person('POST', '/grants', { principals: [user('u_bob')], can: { '*': 'all' } })
+    await owner('POST', '/grants', { principals: [user('u_bob')], can: { '*': 'all' } })
     const alice = await as(personToken('u_alice'))
     const bob = await as(personToken('u_bob'))
     expect((await alice('POST', '/messages', { channel: 'security/incidents', text: 'paged' })).status).toBe(201)
@@ -82,37 +88,76 @@ describe('grants', () => {
     expect((await (await as(deploymentToken('web', 'prj_web', 'production')))('GET', '/me')).body.can).toEqual({ '*': ['read'], 'ci/': [] })
   })
 
-  it('changes a grant only with manage at each pattern it names, before and after', async () => {
-    const { person, as } = await setUp()
-    await person('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { '*': 'all' } })
+  it('changes a grant only with manage wherever it applies, under it too wherever the caller is narrower', async () => {
+    const { owner, as } = await setUp()
+    await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { '*': 'all' } })
     const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
     const readers = await ops('POST', '/grants', { principals: [everyone], can: { '*': ['read'] } })
     expect(readers.status).toBe(200)
-    const lock = await person('POST', '/grants', { principals: [everyone], can: { 'security/': [], 'ci/': ['read'] } })
-    // A grant on * is still ops's to change, where manage at * is what * gives, whatever security/ says.
-    expect((await ops('PATCH', `/grants/${readers.body.grant.id}`, { can: { '*': ['read', 'react'] } })).status).toBe(200)
-    // Not one on security/, before or after: taking security/ out of the lock is changing it there.
+    const lock = await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    // Once security/ is closed to ops, a grant on * would reach it there for whoever it names: ops changes none.
+    expect((await ops('PATCH', `/grants/${readers.body.grant.id}`, { can: { '*': ['read', 'react'] } })).status).toBe(403)
+    expect((await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })).status).toBe(403)
     expect((await ops('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })).status).toBe(403)
-    expect((await ops('PATCH', `/grants/${lock.body.grant.id}`, { can: { '*': ['read'] } })).status).toBe(403)
-    expect((await ops('PATCH', `/grants/${readers.body.grant.id}`, { can: { '*': ['read'], 'security/incidents': ['read'] } })).status).toBe(403)
     expect((await ops('POST', `/grants/${lock.body.grant.id}/revoke`, {})).status).toBe(403)
-    expect((await person('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === lock.body.grant.id).can).toEqual({ 'ci/': ['read'], 'security/': [] })
+    // Where it manages all of it, it still may.
+    expect((await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'dev/': 'all' } })).status).toBe(200)
+    // The owner always may.
+    expect((await owner('PATCH', `/grants/${readers.body.grant.id}`, { can: { '*': ['read', 'react'] } })).status).toBe(200)
+    expect((await owner('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === lock.body.grant.id).can).toEqual({ 'security/': [] })
   })
 
-  it("lets the board's owner change any grant, though a closed channel still takes a grant to read", async () => {
+  it('lets no token reach past its own can by granting someone else', async () => {
     const { person, as } = await setUp()
+    // Manage at *, but nothing in security/: a grant on * for a run it controls would be all of security/ too.
+    const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'security/': [] } })
+    const scoped = await as(minted.body.secret)
+    const run = { kind: 'github', repository: 'acme/web' }
+    expect((await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })).status).toBe(403)
+    expect((await scoped('POST', '/grants', { principals: [run], can: { 'dev/': 'all' } })).status).toBe(200)
+  })
+
+  it("lets the board's local user, its owner, change any grant, though a closed channel still takes a grant to read", async () => {
+    const { owner, person, as } = await setUp()
     await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
-    expect((await person('POST', '/messages', { channel: 'security', text: 'locked out' })).status).toBe(403)
+    // A person on the team is no owner: once security/ is closed to them, they open it to no one, and keep g1.
+    expect((await person('POST', '/grants', { principals: [user('u_julian')], can: { 'security/': 'all' } })).status).toBe(403)
+    expect((await person('POST', '/grants/g1/revoke', {})).status).toBe(403)
+    expect((await owner('POST', '/messages', { channel: 'security', text: 'locked out' })).status).toBe(403)
     // With g1 gone, the local user manages nothing, and is still the owner.
-    expect((await person('POST', '/grants/g1/revoke', {})).body).toEqual({ revoked: true })
-    expect((await person('GET', '/me')).body.can).toEqual({})
-    expect((await person('POST', '/grants', { principals: [user('u_julian')], can: { 'security/': 'all' } })).status).toBe(200)
-    expect((await person('POST', '/messages', { channel: 'security', text: 'let in' })).status).toBe(201)
+    expect((await owner('POST', '/grants/g1/revoke', {})).body).toEqual({ revoked: true })
+    expect((await owner('GET', '/me')).body.can).toEqual({})
+    expect((await owner('POST', '/grants', { principals: [user('julian')], can: { 'security/': 'all' } })).status).toBe(200)
+    expect((await owner('POST', '/messages', { channel: 'security', text: 'let in' })).status).toBe(201)
     // A token the owner mints goes no further than its can, owner or not.
-    const minted = await person('POST', '/tokens', { name: 'reader', can: { 'security/': ['read'] } })
+    const minted = await owner('POST', '/tokens', { name: 'reader', can: { 'security/': ['read'] } })
     const reader = await as(minted.body.secret)
     expect((await reader('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })).status).toBe(403)
     expect((await reader('GET', '/grants')).status).toBe(403)
+  })
+
+  it("names no stored grant's channels to a caller that can't list the grants", async () => {
+    const { owner, as } = await setUp()
+    const secret = await owner('POST', '/grants', { principals: [everyone], can: { 'security/incidents/': [] } })
+    await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { 'ci/': 'all' } })
+    const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
+    for (const [method, path, body] of [
+      ['PATCH', `/grants/${secret.body.grant.id}`, { can: { 'ci/': ['read'] } }],
+      ['POST', `/grants/${secret.body.grant.id}/revoke`, {}],
+    ] as const) {
+      const refused = await ops(method, path, body)
+      expect([refused.status, JSON.stringify(refused.body).includes('security')]).toEqual([403, false])
+    }
+  })
+
+  it('keeps both of two adds to one grant that land at once', async () => {
+    const { person } = await setUp()
+    const { body } = await person('POST', '/grants', { principals: [user('u_ada')], can: { 'dev/': ['read'] } })
+    const id = body.grant.id
+    const answers = await Promise.all(['u_bob', 'u_carol', 'u_dan'].map((added) => person('PATCH', `/grants/${id}`, { add: [user(added)] })))
+    expect(answers.map((answer) => answer.status)).toEqual([200, 200, 200])
+    const kept = (await person('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === id)
+    expect(kept.principals.map((principal: { userId: string }) => principal.userId).sort()).toEqual(['u_ada', 'u_bob', 'u_carol', 'u_dan'])
   })
 
   it('makes a new grant for the same principals, and keeps can as written', async () => {
@@ -244,6 +289,9 @@ describe('grants', () => {
     expect(await refused({ kind: 'project', project: 'prj_front' })).toEqual(invalid)
     expect(await refused({ kind: 'all-projects', environments: ['env_staging'] })).toEqual(invalid)
     expect(await refused({ kind: 'github', repository: 'acme' })).toEqual(invalid)
+    // A key it doesn't know is refused, never dropped: without workflow, this would let in every run.
+    expect(await refused({ kind: 'github', repository: 'acme/web', workflows: 'deploy.yml' })).toEqual([400, 'invalid_request'])
+    expect((await person('PATCH', '/grants/g2', { add: [everyone], cann: { '*': ['read'] } })).status).toBe(400)
     // An issuer signs tokens for everyone it serves, and its keys are fetched from it, so never from the board's own network.
     expect(await refused({ kind: 'oidc', issuer: OIDC_ISS, claims: {} })).toEqual(invalid)
     expect(await refused({ kind: 'oidc', issuer: 'https://169.254.169.254', claims: { sub: 'x' } })).toEqual(invalid)
@@ -264,6 +312,50 @@ describe('grants', () => {
     expect((await person('POST', '/grants', gitlab(OIDC_ISS))).status).toBe(200)
     const { status, body } = await person('POST', '/grants', gitlab(`${OIDC_ISS}/`))
     expect([status, body.error.code]).toEqual([400, 'invalid_grant'])
+  })
+
+  it('refuses two issuers that name the same principals within one grant, or added to it', async () => {
+    const { person } = await setUp({ access: [] })
+    const gitlab = (issuer: string) => ({ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } })
+    const both = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS), gitlab(`${OIDC_ISS}/`)], can: { 'ci/': ['post'] } })
+    expect([both.status, both.body.error.code]).toEqual([400, 'invalid_grant'])
+    const one = await person('POST', '/grants', { principals: [gitlab(OIDC_ISS)], can: { 'ci/': ['post'] } })
+    const added = await person('PATCH', `/grants/${one.body.grant.id}`, { add: [gitlab(`${OIDC_ISS}/`)] })
+    expect([added.status, added.body.error.code]).toEqual([400, 'invalid_grant'])
+  })
+
+  it('takes manage everywhere to name an oidc issuer, whose keys the board then fetches', async () => {
+    const { owner, as } = await setUp()
+    await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { 'ci/': 'all' } })
+    const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
+    const gitlab = { kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }
+    expect((await ops('POST', '/grants', { principals: [gitlab], can: { 'ci/': ['post'] } })).status).toBe(403)
+    const run = await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })
+    expect(run.status).toBe(200)
+    expect((await ops('PATCH', `/grants/${run.body.grant.id}`, { add: [gitlab] })).status).toBe(403)
+  })
+
+  it("trusts no stored grant's issuer that names another's principals or is on the board's own network, and nothing else breaks", async () => {
+    const { board, person, as } = await setUp({ access: [] })
+    // Grants a board refuses now, as one could hold from before it did.
+    const log = createServer({ contract: accessContract, store: board.store.log }).session(ACCESS_SESSION)
+    for (const issuer of [OIDC_ISS, `${OIDC_ISS}/`, 'https://169.254.169.254'])
+      await log.append({ type: 'grant.created', payload: { principals: [{ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } }], can: { 'ci/': ['post'] }, by: 'local:user:julian' } })
+    const asked: string[] = []
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      asked.push(input instanceof Request ? input.url : String(input))
+      return new Response('not found', { status: 404 })
+    })
+    try {
+      // The first of the two issuers is trusted, and verifies as it would alone.
+      expect((await (await as(oidcToken()))('POST', '/messages', { channel: 'ci', text: 'from gitlab' })).status).toBe(201)
+      expect((await (await as(oidcToken({}, `${OIDC_ISS}/`)))('GET', '/me')).status).toBe(401)
+      expect((await (await as(oidcToken({}, 'https://169.254.169.254')))('GET', '/me')).status).toBe(401)
+      expect(asked).toEqual([])
+      expect((await person('POST', '/messages', { channel: 'dev', text: 'still in' })).status).toBe(201)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("refuses an issuer that names the same principals as one the code's rules trust", async () => {
@@ -289,10 +381,10 @@ describe('grants', () => {
 
 describe('explain', () => {
   it('says which pattern, level, and grants decide a channel for a principal, and what they give', async () => {
-    const { person } = await setUp()
-    const lock = (await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })).body.grant
-    const team = (await person('POST', '/grants', { principals: [user('u_alice'), user('u_bob')], can: { 'security/': 'all' } })).body.grant
-    const explain = async (query: string) => (await person('GET', `/grants/explain?${query}`)).body
+    const { owner } = await setUp()
+    const lock = (await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })).body.grant
+    const team = (await owner('POST', '/grants', { principals: [user('u_alice'), user('u_bob')], can: { 'security/': 'all' } })).body.grant
+    const explain = async (query: string) => (await owner('GET', `/grants/explain?${query}`)).body
     expect(await explain('channel=security/incidents&user=u_bob')).toEqual({ channel: 'security/incidents', pattern: 'security/', over: ['*'], level: 'principal', grants: [team], rule: null, capped: null, can: ALL })
     expect(await explain('channel=security/incidents&user=u_carol')).toEqual({ channel: 'security/incidents', pattern: 'security/', over: ['*'], level: 'everyone', grants: [lock], rule: null, capped: null, can: [] })
     expect(await explain('channel=dev&user=u_carol')).toMatchObject({ pattern: '*', over: [], level: 'group', grants: [{ id: 'g1' }], can: ALL })

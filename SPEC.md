@@ -939,14 +939,29 @@ await team.revokeToken(token.id)
   everyone it lets in; `rule` names the rule in code that decided; `pattern`
   and `level` are null where no grant decides (the board's own code and
   deployments, or a principal nothing lets in, whose `can` is empty).
-- **Changing a grant takes `manage` at each pattern it names,** resolved at
-  that pattern (an update checks the patterns before and after), so a member
-  still edits a `*` grant once `security/` is closed, but can't create one on
-  `security/`. Listing grants takes `manage` at `*`, and lists every grant.
-  Team owners always may; on a board without team roles, its people are its
-  owners, as far as a token they came with is narrowed. Reading a closed
-  channel still takes a grant, an owner's too. A board whose `access` is one
-  function decides alone and keeps no grants (501 `no_grants`).
+- **Changing a grant takes `manage` wherever it applies:** at each pattern it
+  names, and at every more specific pattern under it where the caller's
+  access is narrower, by its grants or its token (an update checks before and
+  after). A grant's principals inherit none of the caller's exclusions, so
+  once `security/` is closed to a member, the member changes no `*` grant.
+  Naming an `oidc` principal takes `manage` everywhere, since the board then
+  fetches its issuer's keys. A refusal names a stored grant's patterns only to
+  a caller that may list the grants. Listing grants takes `manage` at `*`, and
+  lists every grant. Owners always may, as far as a token they came with is
+  narrowed: the team's owners on Vercel's API, and on a local board its local
+  user (`local:user:<name>`, whom only its local issuer mints for). Reading a
+  closed channel still takes a grant, an owner's too. A board whose `access`
+  is one function decides alone and keeps no grants (501 `no_grants`).
+- **Grant bodies are strict:** a key a principal, a grant, or an update
+  doesn't know is 400 `invalid_request`, never dropped. Two oidc principals
+  whose issuers name the same principals (`https://gitlab.com` and
+  `https://gitlab.com/`) are refused, in one grant or across grants. The
+  verifier trusts a grant's issuer only while it's https on the internet and
+  names principals no other does, so one stored before the board refused it
+  never breaks anyone else's tokens.
+- **Each write to the grants holds the state it read:** it appends only while
+  nothing has landed since, and reads again when something has, so two adds
+  to one grant at once both stay.
 - **The board fetches keys only for issuers its rules or grants name,** and
   verifies a token from an issuer only a grant names once it has read the
   grants for it. An `oidc` principal's issuer is an https URL on the internet:
@@ -1583,8 +1598,8 @@ status.
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs `manage` at each pattern in `can`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at each pattern it names, before and after. Answers `{ grant }` |
+| POST | `/grants` | `{ principals, can }`: a new grant. Needs `manage` wherever `can` applies (see [Grants and tokens](#grants-and-tokens)). Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` wherever it applies, before and after. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, rule, capped, can }` |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
