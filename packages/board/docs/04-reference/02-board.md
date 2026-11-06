@@ -325,8 +325,8 @@ revokeGrant(id: string): Promise<{ revoked: boolean }>
 
 `createGrant` lets `principals` do what `can` says: a map from channel pattern
 to `'all'` or a list of permissions, `[]` for none. The same principals again
-are another grant. `updateGrant` adds principals, removes them by who they are,
-and replaces `can`. Each needs `manage` at the patterns its grant names;
+are another grant. `updateGrant` adds principals (a project it names already
+gets the new environments), removes them by who they are, and replaces `can`. Each needs `manage` at the patterns its grant names;
 `grants` needs `manage` at `*`. Team owners always may.
 
 ```ts
