@@ -55,6 +55,16 @@ function rerun(...extra: string[]): string[] {
 const without = (argv: string[], ...options: string[]): string[] =>
   argv.filter((arg, at) => !options.some((option) => arg === option || argv[at - 1] === option || arg.startsWith(`${option}=`)))
 
+/**
+ * This run's command line without `options`, with `extra` in their place: both before any `--`,
+ * since what follows it is text, which a way out mustn't change or add options to.
+ */
+function rerunWithout(options: string[], ...extra: string[]): string[] {
+  const at = typed.indexOf('--')
+  const before = at === -1 ? typed : typed.slice(0, at)
+  return [...cli(), ...without(before, ...options), ...extra, ...(at === -1 ? [] : typed.slice(at))]
+}
+
 /** What the parser accepts: every option, by name (`commands.ts`). */
 const OPTIONS = options
 
@@ -587,7 +597,7 @@ function failureOf(error: unknown): Failure {
         // The CLI picks one by its URL, which names its ID and its team, in place of the name and
         // the team: beside a URL, --scope would pick nothing.
         const at = (typeof hint === 'string' && idUrlIn(hint)) || 'https://api.vercel.com/v1/messageboard/boards/<ID>'
-        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: [...without(rerun(), '--name', '--scope', '--team'), '--url', at] }])
+        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: rerunWithout(['--name', '--scope', '--team'], '--url', at) }])
       }
       case 'invalid_board_name':
         return own('usage', 'invalid_arguments', [helpRecovery()])
@@ -746,7 +756,7 @@ function boardNameFlag(url: string | undefined, team: string | undefined): strin
   if (given.includes('/')) {
     // Another team's board is its team, with --scope, and its name.
     const [owner, ...rest] = given.split('/')
-    const argv = [...without(rerun(), '--name', '--scope', '--team'), '--scope', owner || '<TEAM>', '--name', rest.join('/') || '<NAME>']
+    const argv = rerunWithout(['--name', '--scope', '--team'], '--scope', owner || '<TEAM>', '--name', rest.join('/') || '<NAME>')
     throw usage(`${from} takes a board's name alone, not its team's.`, {
       next: [flags.name !== undefined ? { instruction: 'Pass its team with --scope', argv } : { instruction: 'Set BOARD_NAME to the name alone, and pass its team with --scope' }],
     })
@@ -883,6 +893,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'conformance': {
       if (args.length > 0) throw usage('conformance takes no arguments: pass its channel with --channel.')
+      // It posts and changes grants, so it checks a board someone named, never the team's by default.
+      const named = flags.name !== undefined || flags.url !== undefined || Boolean(process.env.BOARD_URL?.trim()) || Boolean(process.env.BOARD_NAME)
+      if (!io.board && !named)
+        throw usage('conformance posts and changes grants, so name a scratch board for it.', {
+          reason: 'needs_scratch_board',
+          next: [
+            { instruction: 'Check a scratch board on this team, by its name', argv: rerun('--name', '<BOARD>') },
+            { instruction: 'Or a board by its URL', argv: rerun('--url', '<URL>') },
+          ],
+        })
       // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
       const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
       const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken })
