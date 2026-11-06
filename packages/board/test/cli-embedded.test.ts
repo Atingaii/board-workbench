@@ -367,6 +367,35 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("shows what a board token Vercel's API minted may do and until when, and says it reaches only its own board", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    // Ada mints it on the team's board: its secret is all the CLI gets.
+    const minting = await api.fetch('https://api.vercel.com/v1/messageboard/boards/brd_test/tokens?teamId=team_test', {
+      method: 'POST',
+      headers: { authorization: 'Bearer user:u_ada', 'content-type': 'application/json' },
+      body: JSON.stringify({ operationId: 'op_1', name: 'ci', can: { 'dev/': ['read'] }, expires: '2h' }),
+    })
+    vi.stubEnv('BOARD_TOKEN', ((await minting.json()) as { secret: string }).secret)
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const whoami = await capture(() => main(['whoami', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test'], { name: 'board', commands: local }))
+      expect(whoami.code).toBe(0)
+      expect(whoami.stdout).toMatch(/^Ada Lovelace \(vercel:user:u_ada\)\n(.*\n)*token +expires in (1h 59m|2h 0m)\n(.*\n)*can +dev\/  read\n$/)
+      // Naming no board, the CLI asks for the team's, which a board token can't.
+      expect(await capture(() => main(['read', 'dev', '--scope', 'test'], { name: 'board', commands: local }))).toMatchObject({
+        code: 1,
+        stderr: 'error: a board token reaches only its own board, by its ID.\n\n  Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).\n',
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("sends a token an app's command hands the CLI's connection to Vercel's API, in place of your login", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
