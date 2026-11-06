@@ -319,7 +319,7 @@ describe('the embedded CLI', () => {
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toMatch(/^token +expires in 1h 30m$/m)
       expect(whoami.stdout).toMatch(/^can +ci\/ +read\n +dev\/  read post$/m)
-      // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads.
+      // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads and reacts.
       const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
       fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
       const owner = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
@@ -327,7 +327,7 @@ describe('the embedded CLI', () => {
       expect(owner.stdout).not.toMatch(/^(can|token) /m)
       vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
       const viewer = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
-      expect(viewer.stdout).toMatch(/^can +\*  read$/m)
+      expect(viewer.stdout).toMatch(/^can +\*  read react$/m)
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)

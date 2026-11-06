@@ -4,7 +4,6 @@ import { createServer } from 'experimental-a2/server'
 import { z } from 'zod'
 import { boardEvents, BOARD_SESSION } from '../src/contract/events.ts'
 import { memory } from '../src/store/memory.ts'
-import { githubActions, vercelProject } from '../src/access/index.ts'
 import {
   BOARD_URL,
   caller,
@@ -151,24 +150,23 @@ describe('auth', () => {
     expect(await claude.text()).toContain('<path') // the mark, not a letter
   })
 
-  it('rejects other projects unless access or a grant lets them in', async () => {
-    // Without g2, which lets in every project on the board's team.
+  it('rejects other projects until a grant names them, once g2 no longer names every one', async () => {
     const plain = testBoard()
     await plain.revokeGrant('g2')
     const call = caller(plain.fetch, await deploymentToken())
     expect((await call('GET', '/me')).status).toBe(403)
 
-    const trusted = testBoard({ access: [vercelProject({ project: 'marketing', can: 'all' })] })
+    const trusted = testBoard()
+    await trusted.revokeGrant('g2')
+    await trusted.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } })
     const { body } = await caller(trusted.fetch, await deploymentToken())('GET', '/me')
     expect(body).toMatchObject({ actor: 'vercel:project:prj_marketing:production', handle: 'marketing' })
   })
 
-  it('limits a workflow to what `can` allows', async () => {
-    const { fetch } = testBoard({
-      access: [
-        githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: ['post'] }),
-      ],
-    })
+  it("limits a workflow to what its grant's `can` allows", async () => {
+    const board = testBoard()
+    const { fetch } = board
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
     const call = caller(fetch, await workflowToken())
     const posted = await call('POST', '/messages', { channel: 'errors-www', text: 'deploy failed' })
     expect(posted.status).toBe(201)

@@ -1,5 +1,6 @@
 // The grants of the fake `/v1/messageboard`, in the protocol's shapes, as Vercel's API keeps them: a
-// board starts with g1 (every person on the team) and g2 (every project on it), names come in and IDs
+// board starts with g1 (every person on the team), g2 (every project on it), and g3 (every app
+// installed on it), names come in and IDs
 // are stored, and a person's team role caps what grants give them. A combination of its own answers
 // explain and decides who may change grants, so `vercel()` runs the conformance kit's grants group
 // against something that decides, not against board's own code.
@@ -23,6 +24,8 @@ type Stored =
   | { kind: 'oidc'; issuer: string; claims: Record<string, string | string[]> }
   | { kind: 'all-users' }
   | { kind: 'all-projects'; environments: string[] }
+  | { kind: 'app'; clientId: string }
+  | { kind: 'all-apps' }
   | { kind: 'everyone' }
 type Grant = { id: string; principals: Stored[]; can: Can; by: string | null; at: number | null }
 type Level = 'principal' | 'group' | 'everyone'
@@ -33,7 +36,7 @@ export type Who =
   | { kind: 'project'; projectId: string; environment: string }
   | { kind: 'github'; repositoryId: string; repository: string; workflowRef?: string; ref?: string; event?: string }
   | { kind: 'oidc'; issuer: string; claims: Record<string, string> }
-  | { kind: 'app' }
+  | { kind: 'app'; clientId: string }
 
 /** A person's role on the team. */
 export type Role = 'owner' | 'member' | 'developer' | 'viewer'
@@ -49,7 +52,7 @@ export class GrantRefused extends Error {
 }
 
 const LEVEL: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }
-const levelOf = (principal: Stored): Level => (principal.kind === 'everyone' ? 'everyone' : principal.kind === 'all-users' || principal.kind === 'all-projects' ? 'group' : 'principal')
+const levelOf = (principal: Stored): Level => (principal.kind === 'everyone' ? 'everyone' : principal.kind === 'all-users' || principal.kind === 'all-projects' || principal.kind === 'all-apps' ? 'group' : 'principal')
 
 /** Whether grant pattern `pattern` covers `target`, a channel or a pattern of its own. */
 function covers(pattern: string, target: string): boolean {
@@ -79,6 +82,8 @@ export function fakeGrants(options: {
   projects: Record<string, string>
   /** GitHub repositories, by `owner/repo`, with their IDs. */
   repositories: Record<string, string>
+  /** Apps installed on the team, by client ID, with their slugs. */
+  apps: Record<string, string>
 }) {
   const grants = new Map<string, Grant>()
   let next = 1
@@ -90,6 +95,7 @@ export function fakeGrants(options: {
   // What Vercel's API starts every board with.
   add([{ kind: 'all-users' }], { '*': 'all' }, null)
   add([{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], { '*': ['read', 'post', 'react', 'label'] }, null)
+  add([{ kind: 'all-apps' }], { '*': ['read', 'post', 'react', 'label'] }, null)
 
   const invalid = (message: string) => new GrantRefused(400, 'invalid_grant', message)
 
@@ -116,7 +122,14 @@ export function fakeGrants(options: {
       case 'oidc':
         if (typeof input.issuer !== 'string' || !input.issuer.startsWith('https://')) throw invalid('an oidc issuer is an https URL')
         return { kind: 'oidc', issuer: input.issuer, claims: input.claims ?? {} }
+      case 'app': {
+        // A slug or a client ID, kept by client ID.
+        const clientId = input.app in options.apps ? input.app : Object.keys(options.apps).find((id) => options.apps[id] === input.app)
+        if (!clientId) throw new GrantRefused(400, 'app_not_found', `no app ${input.app} on the team`)
+        return { kind: 'app', clientId }
+      }
       case 'all-users':
+      case 'all-apps':
       case 'everyone':
         return { kind: input.kind }
       case 'all-projects':
@@ -141,6 +154,7 @@ export function fakeGrants(options: {
     if (removal.kind !== principal.kind) return false
     if (removal.kind === 'user') return removal.userId === (principal as typeof removal).userId
     if (removal.kind === 'project') return removal.projectId === (principal as typeof removal).projectId
+    if (removal.kind === 'app') return removal.clientId === (principal as typeof removal).clientId
     if (removal.kind === 'github') {
       const other = principal as typeof removal
       return removal.repositoryId === other.repositoryId && (removal.workflow ?? other.workflow) === other.workflow && (removal.branch ?? other.branch) === other.branch && (removal.event ?? other.event) === other.event
@@ -164,6 +178,10 @@ export function fakeGrants(options: {
         return who.kind === 'project' && who.projectId === principal.projectId && principal.environments.includes(who.environment)
       case 'all-projects':
         return who.kind === 'project' && onTeam(who.projectId) && principal.environments.includes(who.environment)
+      case 'app':
+        return who.kind === 'app' && who.clientId === principal.clientId
+      case 'all-apps':
+        return who.kind === 'app' && who.clientId in options.apps
       case 'github':
         return (
           who.kind === 'github' &&
@@ -205,9 +223,10 @@ export function fakeGrants(options: {
     for (const { grant } of deciding) for (const permission of expand(grant.can[pattern]!)) given.add(permission)
     let can = PERMISSIONS.filter((permission) => given.has(permission))
     let capped: string | null = null
-    // A viewer only reads, whatever a grant says.
-    if (who.kind === 'user' && options.roles[who.userId] === 'viewer' && can.some((permission) => permission !== 'read')) {
-      can = can.filter((permission) => permission === 'read')
+    // A viewer only reads and reacts, whatever a grant says.
+    const VIEWER: readonly Permission[] = ['read', 'react']
+    if (who.kind === 'user' && options.roles[who.userId] === 'viewer' && can.some((permission) => !VIEWER.includes(permission))) {
+      can = can.filter((permission) => VIEWER.includes(permission))
       capped = 'viewer'
     }
     return { pattern, over, level, grants: deciding.map((candidate) => candidate.grant), capped, can }
@@ -261,7 +280,9 @@ export function fakeGrants(options: {
       id: grant.id,
       principals: grant.principals.map((principal) => {
         if (principal.kind === 'user') return { ...principal, email: options.members[principal.userId] ?? null }
-        if (principal.kind === 'project') return { kind: 'project', projectId: principal.projectId, name: options.projects[principal.projectId] ?? null, environments: principal.environments }
+        // The API keeps the team a project was on, and matches its tokens only while they're that team's.
+        if (principal.kind === 'project') return { kind: 'project', projectId: principal.projectId, name: options.projects[principal.projectId] ?? null, environments: principal.environments, teamId: options.teamId }
+        if (principal.kind === 'app') return { kind: 'app', clientId: principal.clientId, name: options.apps[principal.clientId] ?? null }
         return principal
       }),
       can: grant.can,

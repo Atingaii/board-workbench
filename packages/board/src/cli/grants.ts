@@ -24,7 +24,7 @@ type PrincipalInput = Protocol['createGrant']['input']['principals'][number]
 type GrantCan = Record<string, 'all' | Permission[]>
 
 /** What starts a principal, after `--`, `--add-`, or `--remove-`. */
-export const KINDS = ['user', 'project', 'github', 'oidc', 'all-users', 'all-projects', 'everyone'] as const
+export const KINDS = ['user', 'project', 'github', 'oidc', 'app', 'all-users', 'all-projects', 'all-apps', 'everyone'] as const
 type Kind = (typeof KINDS)[number]
 export type Prefix = '' | 'add-' | 'remove-'
 
@@ -116,6 +116,8 @@ function inputOf(started: Started): PrincipalInput {
       }
     case 'oidc':
       return { kind: 'oidc', issuer: value, claims: started.claims ?? {} }
+    case 'app':
+      return { kind: 'app', app: value }
     case 'all-projects':
       return { kind: 'all-projects', ...(environments ? { environments } : {}) }
     default:
@@ -192,7 +194,7 @@ function levelFlag(level: NonNullable<Explanation['level']>, kind: Kind | null, 
   if (level === 'everyone') return '--everyone'
   const kinds = [...new Set(grants.flatMap((grant) => grant.principals.map((principal) => principal.kind)))]
   const group = level === 'group'
-  const of = kinds.filter((one) => (one === 'all-users' || one === 'all-projects') === group && one !== 'everyone')
+  const of = kinds.filter((one) => (one === 'all-users' || one === 'all-projects' || one === 'all-apps') === group && one !== 'everyone')
   if (group) {
     if (kind === 'user') return '--all-users'
     if (kind === 'project') return '--all-projects'
@@ -204,7 +206,7 @@ function levelFlag(level: NonNullable<Explanation['level']>, kind: Kind | null, 
 
 /**
  * Explain's answer in a sentence or two: which pattern won, and over what; the closest grants
- * there, or the rule in the board's code; and what they give.
+ * there; and what they give.
  * `security/ wins over *. Closest grant for bob@acme.com: g4 (--user): all.`
  */
 export function explanationLine(answer: Explanation, subject: string | null, kind: Kind | null): string {
@@ -212,16 +214,12 @@ export function explanationLine(answer: Explanation, subject: string | null, kin
   const given = `${canWords(answer.can)}${answer.capped !== null ? `, capped by the ${answer.capped} role` : ''}`
   if (answer.pattern === null || answer.level === null) {
     if (answer.can.length === 0) return `Nothing lets ${whom} into ${answer.channel}.`
-    if (answer.rule !== null) return `${answer.rule}, in the board's code, decides for ${whom}: ${given}.`
     return `The board lets ${whom} in itself, outside its grants: ${given}.`
   }
   const wins = answer.over.length > 0 ? `${answer.pattern} wins over ${answer.over.join(', ')}.` : `${answer.pattern} wins.`
   const flag = levelFlag(answer.level, kind, answer.grants)
   const at = flag ? ` (${flag})` : ''
-  const which = [
-    ...answer.grants.map((grant) => `${grant.id}${at}`),
-    ...(answer.rule !== null ? [`${answer.rule} (in the board's code)`] : []),
-  ]
+  const which = answer.grants.map((grant) => `${grant.id}${at}`)
   // Grants name whom else they let in, so a caller that can't list them sees only that they're there.
   const closest = which.length > 0 ? `${which.length === 1 ? 'grant' : 'grants'} for ${whom}: ${which.join(', ')}` : `grant for ${whom}: ${flag ? `a ${flag} grant` : 'one'} you can't list`
   return `${wins} Closest ${closest}: ${given}.`

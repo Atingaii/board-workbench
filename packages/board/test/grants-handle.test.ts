@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { oidcTokens, vercelProject } from '../src/access/index.ts'
-import { board as mount, bearer, BOARD_URL, caller, deploymentToken, personToken, testAuth, testBoard, workflowToken } from './harness.ts'
-
-/** Where a gateway on the team's board is mounted. */
-const V0_URL = 'https://v0.test/api/board'
+import { bearer, BOARD_URL, caller, deploymentToken, personToken, TEAM_ID, testBoard, workflowToken } from './harness.ts'
 
 type Fetch = (request: Request) => Promise<Response>
 
@@ -36,7 +32,7 @@ describe('a private channel, from the handle', () => {
     // A deployment lets in its own project, in the environment it runs in.
     await team.createGrant({ principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { '*': 'all' } })
     const ops = handleAs(team.fetch, () => deploymentToken('ops', 'prj_ops', 'production'))
-    expect((await ops.createChannel('ops/keys', { private: true })).grants?.[0]?.principals).toEqual([{ kind: 'project', projectId: 'prj_ops', name: null, environments: ['production'] }])
+    expect((await ops.createChannel('ops/keys', { private: true })).grants?.[0]?.principals).toEqual([{ kind: 'project', projectId: 'prj_ops', name: null, environments: ['production'], teamId: TEAM_ID }])
   })
 
   it("refuses a path where it or a channel under it is there, and a caller no grant could name, before it writes anything", async () => {
@@ -56,6 +52,31 @@ describe('a private channel, from the handle', () => {
     expect((await ids(team)).length).toBe(before.length + 1)
   })
 
+  it("refuses a path a grant reaches already, naming it, and a caller that can't list grants, before it writes anything", async () => {
+    const team = testBoard()
+    const julian = handleAs(team.fetch, () => personToken())
+    // A grant on the channel itself would still let Ada in past the lock.
+    const exact = (await team.createGrant({ principals: [{ kind: 'user', userId: 'u_ada' }], can: { vault: ['read'] } })).grant.id
+    await expect(julian.createChannel('vault', { private: true })).rejects.toMatchObject({
+      status: 409,
+      code: 'channel_granted',
+      origin: 'handle',
+      message: `${exact} already grants in vault, so a private vault wouldn't be yours alone: nothing was made.`,
+      hint: `Revoke it first: vb grants revoke ${exact}`,
+    })
+    // So would a principal's at <path>/, closer than everyone there, and one under it.
+    const subtree = (await team.createGrant({ principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { 'keys/': 'all' } })).grant.id
+    await expect(julian.createChannel('keys', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_granted', message: expect.stringContaining(subtree) })
+    const under = (await team.createGrant({ principals: [{ kind: 'user', userId: 'u_ada' }], can: { 'ops/deploys': ['read'] } })).grant.id
+    await expect(julian.createChannel('ops', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_granted', message: expect.stringContaining(under) })
+    const before = await ids(team)
+    // A token that can't list grants can't tell, so it makes nothing.
+    const minted = await caller(team.fetch, await personToken())('POST', '/tokens', { name: 'narrow', can: { '*': ['read', 'post'] } })
+    await expect(handleAs(team.fetch, async () => minted.body.secret).createChannel('lockbox', { private: true })).rejects.toMatchObject({ status: 403 })
+    expect(await ids(team)).toEqual(before)
+    expect(await team.channels()).toEqual([])
+  })
+
   it('never shuts its creator out when a step fails part way', async () => {
     const team = testBoard()
     let grantsPosted = 0
@@ -71,7 +92,7 @@ describe('a private channel, from the handle', () => {
     const ada = caller(team.fetch, await personToken('u_ada'))
     await expect(julian.createChannel('vault', { private: true })).rejects.toThrow()
     // Open, with a grant too many.
-    expect((await team.grants()).slice(2).map((grant) => [grant.principals, grant.can])).toEqual([[[{ kind: 'user', userId: 'u_julian', email: null }], { 'vault/': 'all' }]])
+    expect((await team.grants()).slice(3).map((grant) => [grant.principals, grant.can])).toEqual([[[{ kind: 'user', userId: 'u_julian', email: null }], { 'vault/': 'all' }]])
     expect((await team.channels()).map((channel) => channel.path)).toEqual([])
     expect((await ada('POST', '/messages', { channel: 'vault', text: 'still open' })).status).toBe(201)
     // Closed, and not made yet: its creator still gets in.
@@ -80,20 +101,6 @@ describe('a private channel, from the handle', () => {
     expect((await team.channels()).map((channel) => channel.path)).toEqual(['vault'])
     expect((await ada('POST', '/messages', { channel: 'lockbox', text: 'let me in' })).status).toBe(403)
     expect((await caller(team.fetch, await personToken())('POST', '/messages', { channel: 'lockbox', text: 'mine' })).status).toBe(201)
-  })
-
-  it('makes nothing on a board that keeps no grants, or through a gateway, which would grant its whole project', async () => {
-    const none = testBoard({ access: async () => 'all' as const })
-    await expect(handleAs(none.fetch, () => personToken()).createChannel('vault', { private: true })).rejects.toMatchObject({ status: 501, code: 'no_grants' })
-    expect(await none.channels()).toEqual([])
-    // A gateway on the team's board: its callers act there as its project.
-    const team = testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' })] })
-    const remote = (input: RequestInfo | URL, init?: RequestInit) => team.fetch(new Request(input, init))
-    const gateway = mount({ backend: http(BOARD_URL, { fetch: bearer(remote, () => deploymentToken('v0', 'prj_v0', 'production')) }), url: V0_URL, authenticate: oidcTokens(testAuth), access: [vercelProject({ project: 'prj_web', can: 'all' })] })
-    const served = board({ backend: http(V0_URL, { fetch: bearer((input, init) => gateway.fetch(new Request(input, init)), () => personToken('u_julian', V0_URL)) }) }).as(null)
-    await expect(served.createChannel('vault', { private: true })).rejects.toMatchObject({ status: 403 })
-    expect((await ids(team)).length).toBe(2)
-    expect(await team.channels()).toEqual([])
   })
 })
 

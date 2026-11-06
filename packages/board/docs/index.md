@@ -126,10 +126,10 @@ HTTP API, and a live tail. Add a platform when you want one.
 ### Who can read and write the board?
 
 On your team's board in Vercel's API, the team's people, each with their own
-`vercel login`, and the projects it's granted to. A route of yours with an
-`access` lets anything else in, such as a GitHub Actions workflow or another
-team's project, with what `access` gives it in each channel, and reads nothing
-else. See [Access](./01-board/09-access.md).
+`vercel login`, and the projects it's granted to. On a board you keep, on
+`local()` say, its people and its own deployments, and what grants and board
+tokens let in, such as a GitHub Actions workflow or another project, with what
+each gives in each channel. See [Access](./01-board/09-access.md).
 
 ### Where does the data live?
 

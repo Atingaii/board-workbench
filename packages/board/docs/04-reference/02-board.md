@@ -317,8 +317,8 @@ another grant. `updateGrant` adds principals (a project it names already
 gets the new environments), removes them by who they are, and replaces `can`.
 Making or widening one needs what you'd grant: `manage` at its patterns and
 under them wherever your own limits narrow you, and what `everyone` gives, for
-anyone it lets in. Revoking needs `manage` at its patterns; `grants` needs `manage` at
-`*`. Owners always may.
+anyone it lets in. Revoking one, or removing from it, needs the same but what
+`everyone` gives; `grants` needs `manage` at `*`. Owners always may.
 `explain` says which grants decide a channel, and what they give, for you or,
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, or `{ oidc, claims }`.
@@ -438,11 +438,13 @@ there already, made by a post or another create, which it leaves as it is.
 alone: a grant letting you in at `<path>/`, then one closing `<path>/` to
 `everyone`, then the channel, answered as `grants`. Before it writes anything,
 it refuses a caller that's neither a person nor a project's deployment (400
-`no_own_principal`), and a path where it or a channel under it is there (409
+`no_own_principal`), one that can't list grants, a path a grant other than
+`*`'s reaches (409 `channel_granted`, naming it), since that grant would still
+let in whom it names, and a path where it or a channel under it is there (409
 `channel_exists`), since closing `security/` closes `security/incidents` too.
 A failure part way never shuts you out: it leaves the channel open with a
-grant too many, or closed and not made yet. A board that keeps no grants, or a
-gateway, which would grant its whole project, refuses the first grant.
+grant too many, or closed and not made yet. A board that keeps no grants fails
+on the listing, with nothing made.
 
 `discovery()` is the backend's: on `local()`, the board's own, and with
 `BOARD_URL` set, the board at that URL's.

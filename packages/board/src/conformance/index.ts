@@ -101,8 +101,8 @@ type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) =>
 
 /**
  * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
- * `no_scheduler`, and without a blob store `no_files`; one whose `access` is one function keeps
- * no grants, `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
+ * `no_scheduler`, and without a blob store `no_files`; a backend of one's own that keeps no grants
+ * answers `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
  * and fails.
  */
 const OPTIONAL = new Set<CheckGroup>(['schedules', 'grants', 'tokens', 'attachments'])

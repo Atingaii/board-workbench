@@ -475,8 +475,10 @@ A principal is a flag, and repeating flags names several:
 | `--project <name\|id>` | a project's deployments | `--environment` |
 | `--github <owner/repo>` | GitHub Actions runs in a repository | `--workflow`, `--branch`, `--event` |
 | `--oidc <issuer>` | an issuer's tokens | `--claim name=value` |
+| `--app <slug\|id>` | an app installed on the team | |
 | `--all-users` | every person on the team | |
 | `--all-projects` | every project's deployments on the team | `--environment` |
+| `--all-apps` | every app installed on the team | |
 | `--everyone` | everyone something else lets in | |
 
 A modifier goes after the principal it's for, so one grant mixes them:
@@ -486,7 +488,8 @@ out. `--workflow` matches the run's workflow file (`ci.yml` is
 `.github/workflows/ci.yml`), `--branch` its `refs/heads/` branch, and
 `--event` its event. `--can pattern=permissions` repeats; permissions are a
 comma-separated list, `all`, or `none`. A board that verifies tokens itself,
-as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`.
+as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an
+app's client ID.
 
 `create` prints the grant it made as its row. `update` takes `--add-<kind>` and
 `--remove-<kind>` for each kind (`--add-user`, `--remove-project`,
@@ -497,17 +500,17 @@ patterns the grant names, before and after. `revoke` stops one.
 
 ```text
 $ vb grants create --everyone --can 'security/=none'
-created g3  --everyone  security/=none
+created g4  --everyone  security/=none
 $ vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
-created g4  --user alice@acme.com --user bob@acme.com  security/=all
+created g5  --user alice@acme.com --user bob@acme.com  security/=all
 $ vb grants create --project sec --environment production,preview --can 'security/=read,post'
-created g5  --project sec --environment production,preview  security/=read,post
-$ vb grants update g4 --add-user carol@acme.com
-updated g4  --user alice@acme.com --user bob@acme.com --user carol@acme.com  security/=all
-$ vb grants update g5 --remove-project sec --add-project sec --environment production --can 'security/=read'
-updated g5  --project sec --environment production  security/=read
-$ vb grants revoke g3
-revoked g3
+created g6  --project sec --environment production,preview  security/=read,post
+$ vb grants update g5 --add-user carol@acme.com
+updated g5  --user alice@acme.com --user bob@acme.com --user carol@acme.com  security/=all
+$ vb grants update g6 --remove-project sec --add-project sec --environment production --can 'security/=read'
+updated g6  --project sec --environment production  security/=read
+$ vb grants revoke g4
+revoked g4
 ```
 
 `explain` says which grant decides a channel: the pattern that won and those
@@ -556,7 +559,8 @@ dev/alerts already exists
 `--private` closes it to everyone but you, as `createChannel(path, { private:
 true })` does: a grant letting you in, one closing it to everyone else, then
 the channel. It needs `manage` there, and makes nothing where the channel, or
-one under it, is there already:
+one under it, is there already, or where a grant other than `*`'s reaches it
+already, which it names, since that grant would still let in whom it names:
 
 ```text
 $ vb channels create security --private
