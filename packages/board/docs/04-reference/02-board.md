@@ -319,7 +319,8 @@ anyone it lets in. Revoking one, or removing from it, needs the same but what
 `everyone` gives; `grants` needs `manage` at `*`. Owners always may.
 `explain` says which grants decide a channel, and what they give, for you or,
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
-workflow, branch, event }`, or `{ oidc, claims }`.
+workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
+no apps, so it explains one as nothing letting it in.
 
 ```ts
 const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })

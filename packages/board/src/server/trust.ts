@@ -493,9 +493,11 @@ export function createTrust(options: {
       return { grant: grantView((await read()).grants[id]!) }
     },
     async explain(identity: Identity, query: Protocol['explain']['input']): Promise<Protocol['explain']['output']> {
-      const named = query.user !== undefined || query.project !== undefined || query.github !== undefined || query.oidc !== undefined
+      const named = query.user !== undefined || query.project !== undefined || query.github !== undefined || query.oidc !== undefined || query.app !== undefined
       // What anyone else may do shows the grants, which only those who may list them see.
       if (named) mayList(identity, 'explain what another principal may do')
+      // A local board has no apps, so nothing lets one in, whatever its grants name.
+      if (query.app !== undefined) return { channel: query.channel, pattern: null, over: [], level: null, grants: [], capped: null, can: [] }
       const { id, kind, handle, facts, scope, token } = identity.principal
       const principal: Known = named ? principalNamed(query, await options.team()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}), ...(token !== undefined ? { token } : {}) }
       const decided = await options.explain(principal, query.channel)

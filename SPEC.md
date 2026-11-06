@@ -927,9 +927,10 @@ await team.revokeToken(token.id)
 - **`GET /grants/explain?channel=…`** says which grants decide a channel for
   the caller, or with `manage` at `*` for the principal its query names
   (`user`, `project` and `environment`, `github` and `workflow`, `branch`,
-  `event`, or `oidc` and `claim`): `{ channel, pattern, over, level, grants,
-  capped, can }`, `over` the other patterns its grants name that cover the
-  channel, most specific first. A `github` query is a run on main
+  `event`, `oidc` and `claim`, or `app`): `{ channel, pattern, over, level,
+  grants, capped, can }`, `over` the other patterns its grants name that cover
+  the channel, most specific first. A local board has no apps, so nothing
+  lets one in there. A `github` query is a run on main
   unless it names a `branch`. It runs on the board, which knows roles and
   membership. `explainGrants` in `@vercel/board/access` is the same answer
   from plain data, over what `grantAccess` takes.

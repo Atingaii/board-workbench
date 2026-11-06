@@ -221,6 +221,8 @@ export type ExplainPrincipal = {
   event?: string
   oidc?: string
   claims?: Record<string, string>
+  /** An app on the team, by its slug or client ID. */
+  app?: string
 }
 
 /** What a write returns, with the handles in it that matched nobody and stayed plain text. */
