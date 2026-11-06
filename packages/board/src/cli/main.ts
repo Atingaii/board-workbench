@@ -143,7 +143,7 @@ export function commandWord(argv: string[]): string | undefined {
 
 const parseAll = (args: string[]) => parseArgs({ args, allowPositionals: true, options: OPTIONS })
 
-/** A command an app adds to board's: `serve` and `inspect`, in the standalone `board`. */
+/** A command an app adds to board's: `serve`, in the standalone `board`. */
 export type Command = {
   /** What it is, as help shows it, with the options it takes from `commands.ts`'s. */
   spec: CliCommand
@@ -1443,6 +1443,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       else out(formatEvent(event))
       return 0
     }
+
+    case 'inspect':
+      // Loaded only now: the page comes with it, and it's most of what the CLI ships.
+      return (await import('./inspect.ts')).inspect(context())
 
     default: {
       const own = app.commands[command]

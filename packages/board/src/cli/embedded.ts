@@ -1,6 +1,6 @@
 // `@vercel/board/cli`: board's CLI, to run inside another one, as `vercel board`. It has every
-// command but `serve` and `inspect`, which run something on this machine, and loads neither: no
-// A2 and no inspector reach an app that bundles it.
+// command but `serve`, which runs a board on this machine, so no A2 reaches an app that bundles it.
+// `inspect` and its page are in a chunk of their own, which only `inspect` loads.
 import type { Board } from '../server/index.ts'
 import { exitCode, failureDocument, formatFailure, type Failure, type Warning } from './failure.ts'
 import { commandWord, Failed, main, mainWith } from './main.ts'

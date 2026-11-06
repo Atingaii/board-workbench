@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -39,20 +40,44 @@ async function isolated(): Promise<string> {
 /** Markers only the inspector, `serve`, and A2's stores have. */
 const MARKERS = { inspector: 'x-inspect-token', serve: 'serving a local board', a2: 'board-tables' }
 
-/** `entry`, bundled as the Vercel CLI bundles what it imports: for Node, every dependency inlined. */
-async function bundled(entry: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'board-cli-'))
+/**
+ * `entry`, bundled as the Vercel CLI bundles what it imports: for Node, every dependency inlined, in
+ * a directory of its own, away from board's `dist`. Its files by name; `app.mjs` is the entry.
+ */
+async function bundleTo(entry: string, dir: string): Promise<Map<string, string>> {
   const file = join(import.meta.dirname, `.cli-entry-${process.pid}-${Math.random().toString(36).slice(2)}.ts`)
   await writeFile(file, entry)
   try {
     await build({ config: false, entry: { app: file }, outDir: dir, platform: 'node', format: 'esm', dts: false, clean: false, logLevel: 'silent', deps: { alwaysBundle: [/.*/], onlyBundle: false } })
     const names = (await readdir(dir, { recursive: true })).filter((name) => /\.m?js$/.test(name))
-    return (await Promise.all(names.map((name) => readFile(join(dir, name), 'utf8')))).join('\n')
+    return new Map(await Promise.all(names.map(async (name) => [name, await readFile(join(dir, name), 'utf8')] as const)))
   } finally {
     await rm(file, { force: true })
+  }
+}
+
+async function bundled(entry: string): Promise<Map<string, string>> {
+  const dir = await mkdtemp(join(tmpdir(), 'board-cli-'))
+  try {
+    return await bundleTo(entry, dir)
+  } finally {
     await rm(dir, { recursive: true, force: true })
   }
 }
+
+/** What loads when the bundle starts: its entry and every file that one imports statically, not with `import()`. */
+function loadedAtStart(files: Map<string, string>): string {
+  const seen = new Set<string>()
+  const visit = (name: string) => {
+    if (seen.has(name) || !files.has(name)) return
+    seen.add(name)
+    for (const [, path] of files.get(name)!.matchAll(/^\s*(?:import|export)\b[^;]*?["']\.\/([^"']+)["']/gm)) visit(path!)
+  }
+  visit('app.mjs')
+  return [...seen].map((name) => files.get(name)).join('\n')
+}
+
+const everything = (files: Map<string, string>) => [...files.values()].join('\n')
 
 describe('the embedded CLI', () => {
   useBoard()
@@ -61,14 +86,16 @@ describe('the embedded CLI', () => {
     vi.unstubAllEnvs()
   })
 
-  it('names the app that runs it in help, usage, and errors, and has no serve or inspect', async () => {
+  it('names the app that runs it in help, usage, and errors, and has inspect but no serve', async () => {
     const app = createApp({ appName: 'vercel board' })
     const help = await capture(() => app.run(['help']))
     expect(help.code).toBe(0)
     expect(help.stdout).toMatch(/^vercel board \d+\.\d+\.\d+\S*: a message board you mount in one route\n\nusage: vercel board <command> \[options\]\n/)
-    expect(help.stdout).not.toMatch(/also installed as|^\s+(serve|inspect) \[/m)
+    expect(help.stdout).not.toMatch(/also installed as|^\s+serve /m)
+    expect(help.stdout).toMatch(/^ {2}inspect +the board in your browser/m)
     expect(await capture(() => app.run(['serve']))).toEqual({ code: 2, stdout: '', stderr: 'error: Unknown command serve for vercel board.\n\n  See all commands:\n    vercel board --help\n' })
-    expect(await capture(() => app.run(['inspect']))).toMatchObject({ code: 2 })
+    // It runs: it reads its port before it starts anything.
+    expect(await capture(() => app.run(['inspect', '--port', 'nope']))).toEqual({ code: 2, stdout: '', stderr: "error: nope isn't a port.\n\n  See how to use it:\n    vercel board inspect --help\n" })
     const extra = await capture(() => app.run(['conformance', 'extra']))
     expect(extra).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance takes no arguments/) })
     expect(extra.stderr).toContain('    vercel board conformance --help\n')
@@ -724,11 +751,11 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it('leaves the standalone board as it was: serve and inspect in its help, after wait', async () => {
+  it('lists serve in the standalone board only, in a section of its own after inspect', async () => {
     const help = await capture(() => main(['help'], { name: 'board', commands: local }))
     expect(help.stdout).toMatch(/^usage: board <command> \[options\]      \(also installed as `vb`\)$/m)
-    // After wait, in a section of their own, and then the options every command takes.
-    expect(help.stdout).toMatch(/\n  wait \[channel\][^\n]*\n\n  inspect +the board in your browser[\s\S]*\n  serve +run a board on this machine[\s\S]*\(or\s+--handle\)\n\nfilters:/)
+    // inspect after wait, serve after them in a section of its own, and then the options every command takes.
+    expect(help.stdout).toMatch(/\n  wait \[channel\][^\n]*\n  inspect +the board in your browser[^\n]*\n(?: {4,}[^\n]*\n)*\n  serve +run a board on this machine[\s\S]*\(or\s+--handle\)\n\nfilters:/)
   })
 
   it("takes the login the Vercel CLI hands it in VERCEL_AUTH_TOKEN, never a token cached for someone else's", async () => {
@@ -770,11 +797,41 @@ describe('the embedded CLI', () => {
     expect(process.listenerCount('SIGINT')).toBe(before)
   })
 
-  it('never brings the inspector, serve, or A2 into an app that bundles it', async () => {
+  it('never brings serve or A2 into an app that bundles it, and loads the inspector only when inspect runs', async () => {
     const embedded = await bundled("import { createApp } from '../src/cli/embedded.ts'\nawait createApp({ appName: 'vercel board' }).run(process.argv.slice(2))")
-    for (const [what, marker] of Object.entries(MARKERS)) expect(embedded.includes(marker), `${what} in the embedded CLI`).toBe(false)
+    expect(everything(embedded).includes(MARKERS.serve), 'serve in the embedded CLI').toBe(false)
+    expect(everything(embedded).includes(MARKERS.a2), 'A2 in the embedded CLI').toBe(false)
+    expect(everything(embedded).includes(MARKERS.inspector), 'the inspector in the embedded CLI').toBe(true)
+    expect(loadedAtStart(embedded).includes(MARKERS.inspector), 'the inspector loaded at start').toBe(false)
     // The standalone CLI has all three, so the markers find what they look for.
-    const standalone = await bundled("import '../src/cli/bin.ts'")
+    const standalone = everything(await bundled("import '../src/cli/bin.ts'"))
     for (const [what, marker] of Object.entries(MARKERS)) expect(standalone.includes(marker), `${what} in the standalone CLI`).toBe(true)
+  }, 120_000)
+
+  it("serves the inspector's page from an app that bundles the published CLI, with no file of board's beside it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'board-cli-'))
+    try {
+      // What the Vercel CLI bundles: the build in `dist`, as npm installs it.
+      await bundleTo("import { createApp } from '../dist/cli-embedded.mjs'\nprocess.exitCode = await createApp({ appName: 'vercel board' }).run(process.argv.slice(2))", dir)
+      const child = spawn(process.execPath, [join(dir, 'app.mjs'), 'inspect', '--port', '0', '--no-open'], { env })
+      const exited = new Promise<number | null>((resolve) => child.on('close', resolve))
+      let stdout = ''
+      const address = await new Promise<string>((resolve, reject) => {
+        child.stdout.on('data', (chunk) => {
+          stdout += chunk
+          const found = /at (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout)
+          if (found) resolve(found[1]!)
+        })
+        child.on('close', () => reject(new Error(`inspect exited: ${stdout}`)))
+      })
+      expect(stdout).toContain(`inspecting ${url} as julian`)
+      const app = await fetch(`${address}/app.js`)
+      expect(app.status).toBe(200)
+      expect(await app.text()).toBe(await readFile(join(import.meta.dirname, '../dist/inspect/app.js'), 'utf8'))
+      child.kill('SIGINT')
+      expect(await exited).toBe(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   }, 120_000)
 })
