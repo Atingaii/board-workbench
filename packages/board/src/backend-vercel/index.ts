@@ -11,7 +11,10 @@ import { HttpError } from '../server/errors.ts'
 /** On Vercel, or with its OIDC token pulled (`vercel env pull`): a deployment acts as its project. */
 const deployed = () => process.env.VERCEL === '1' || !!process.env.VERCEL_OIDC_TOKEN
 
-/** A token you set for the board (a board token, `board_…`): it goes as it is, ahead of every other, as it does to a board at a URL. */
+/**
+ * A token you set for the board: it goes as `Authorization: Bearer <token>`, as it is, whatever its
+ * format (that's Vercel's API's), ahead of every other, as it does to a board at a URL.
+ */
 const boardToken = () => process.env.BOARD_TOKEN || null
 
 /**

@@ -7,7 +7,7 @@ import type { Backend, BoardBinding, Caller, ProtocolMethods, Trust } from './ba
 import { fsBlob, memoryBlob } from './blob.ts'
 import { HttpError } from './errors.ts'
 import { METHODS } from './routing.ts'
-import { localScheduler } from '../scheduler/local.ts'
+import { localScheduler, type LocalScheduler } from '../scheduler/local.ts'
 import type { BoardStore } from '../store/types.ts'
 
 export type LocalOptions = {
@@ -23,7 +23,7 @@ export type LocalOptions = {
 
 /** A board kept in this process. `close()` closes its file, once nothing uses it. */
 export type LocalBackend = Backend & {
-  /** Closes the board's file. Its timers stop with the process. */
+  /** Stops its timers and closes the board's file. What was still to send doesn't, as after a restart. */
   close(): Promise<void>
 }
 
@@ -34,15 +34,16 @@ const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/
 /**
  * The file a board keeps, without its extension, from its name alone: `local` for the default
  * board, a plain name as it is (whatever its case: names match that way), and any other name,
- * `Security Team` say, as letters and dashes after a hash of it, so no two names share one and
- * none is `local`'s.
+ * `Security Team` say, as letters and dashes, a `.`, and a hash of it. No plain name has a `.`,
+ * and the hash is long enough that no one finds two names that share it, so no two names
+ * share a file, and none is `local`'s.
  */
 export function localFile(name: string | null): string {
   if (name === null) return 'local'
   const lower = name.toLowerCase()
   if (PLAIN.test(lower) && lower !== 'local' && !RESERVED.test(lower)) return lower
   const slug = lower.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'board'
-  return `${slug}-${createHash('sha256').update(lower).digest('hex').slice(0, 8)}`
+  return `${slug}.${createHash('sha256').update(lower).digest('hex').slice(0, 32)}`
 }
 
 /** Why a file couldn't be opened, in a few words. */
@@ -64,7 +65,7 @@ function unwritable(error: unknown): string {
 export function local(options: LocalOptions = {}): LocalBackend {
   const dir = resolve(options.dir ?? '.board')
   let binding: BoardBinding | null = null
-  let opening: Promise<{ backend: ReturnType<typeof a2>; store: BoardStore }> | null = null
+  let opening: Promise<{ backend: ReturnType<typeof a2>; store: BoardStore; scheduler: LocalScheduler }> | null = null
 
   /** The board, opened on its first use: binding does no I/O. One that didn't open is tried again on the next call. */
   function open() {
@@ -85,9 +86,10 @@ export function local(options: LocalOptions = {}): LocalBackend {
           throw new HttpError(500, 'no_store', `can't open the board at ${path}: ${unwritable(error)}`)
         }
       }
-      const backend = a2({ store, scheduler: localScheduler(), blob: options.memory ? memoryBlob() : fsBlob(join(dir, file)) })
+      const scheduler = localScheduler()
+      const backend = a2({ store, scheduler, blob: options.memory ? memoryBlob() : fsBlob(join(dir, file)) })
       backend.bind(bound)
-      return { backend, store }
+      return { backend, store, scheduler }
     })()
     opening.catch(() => (opening = null))
     return opening
@@ -114,7 +116,10 @@ export function local(options: LocalOptions = {}): LocalBackend {
     async close() {
       const opened = opening
       opening = null
-      if (opened) await (await opened.catch(() => null))?.store.close()
+      const board = opened && (await opened.catch(() => null))
+      // Its timers first: one that fired after would run against a closed file.
+      board?.scheduler.stop()
+      await board?.store.close()
     },
   }
 }
