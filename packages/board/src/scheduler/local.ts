@@ -10,7 +10,7 @@ import {
 const MAX_DELAY = 2 ** 31 - 1
 
 /**
- * A scheduler in this process (`@vercel/board/backend-a2/scheduler-local`): each task runs at its time on
+ * A scheduler in this process, `local()`'s: each task runs at its time on
  * a timer, so retries, leases, wake-ups, and scheduled messages work with nothing else running.
  * Its timers live in the process, and a restart drops the pending ones, so it's for development,
  * `vb serve`, tests, and long-running servers, never serverless functions, which stop between

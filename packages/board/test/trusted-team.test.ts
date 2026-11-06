@@ -1,10 +1,12 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { memory } from '../src/store/memory.ts'
-import { describe, expect, it } from 'vitest'
-import { vercelProject } from '../src/access/index.ts'
-// The engine itself, as a2() starts it.
-import { mount as board } from './harness.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { oidcTokens, vercelProject } from '../src/access/index.ts'
+import { board } from '../src/server/index.ts'
+import { a2 } from '../src/server/a2.ts'
 import { BOARD_URL, caller, PROJECT_ID, TEAM_ID, testBoard } from './harness.ts'
+
+afterEach(() => vi.unstubAllEnvs())
 
 // Vercel signs every team's tokens, each under its own issuer
 // (`https://oidc.vercel.com/<team>`), and production accepts any of them.
@@ -56,7 +58,10 @@ describe('a trusted Vercel project named without its team', () => {
   })
 
   it('learns its team from the platform token for its own project', async () => {
-    const { fetch } = board({ store: memory(), url: BOARD_URL, project: { id: PROJECT_ID }, auth, access })
+    // A deployment that knows its project, as Vercel sets `VERCEL_PROJECT_ID`, and not its team.
+    vi.stubEnv('VERCEL_PROJECT_ID', PROJECT_ID)
+    vi.stubEnv('VERCEL_ORG_ID', '')
+    const { fetch } = board({ backend: a2({ store: memory() }), url: BOARD_URL, authenticate: oidcTokens(auth), access })
     const call = async (token: string, platform?: string) =>
       (await caller(fetch, token, platform ? { 'x-vercel-oidc-token': platform } : {})('GET', '/me')).status
     // With no team to scope it to, a name matches nothing.

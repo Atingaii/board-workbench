@@ -4,6 +4,7 @@ import { http } from '../src/backend-http/index.ts'
 import { createBoardClient } from '../src/client/client.ts'
 import { ATTACHMENT_BYTES_MAX } from '../src/contract/files.ts'
 import { vercel } from '../src/backend-vercel/index.default.ts'
+import { vercel as nodeVercel } from '../src/backend-vercel/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { compileAccess, type Can } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
@@ -370,6 +371,128 @@ describe('vercel()', () => {
     await handleOn(api).post('dev', { text: 'hello' })
     expect(api.requests.filter((r) => r === 'POST /boards/default')).toHaveLength(1)
     expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['hello'])
+  })
+
+  it('says what the API says its credentials may do, and until when, and what any it lets in may when it says neither', async () => {
+    const said = async (handle: ReturnType<typeof handleOn>) => {
+      const { can, expiresAt } = await handle.me()
+      return { can, expiresAt }
+    }
+    const everything = { can: { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] }, expiresAt: null }
+    // A person may do what their team role lets them; a project, what any credentials the API lets in may.
+    const api = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
+    expect(await said(handleOn(api, 'user:u_jb'))).toEqual(everything)
+    expect(await said(handleOn(api, 'user:u_ada'))).toEqual({ can: { '*': ['read'] }, expiresAt: null })
+    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+    for (const role of ['member', 'developer'] as const) expect(await said(handleOn(fakeMessageboard({ roles: { u_jb: role } })))).toEqual(everything)
+    // Credentials it says less of, and until when, as it will of board tokens: board's own permissions, as it gives them.
+    const expiresAt = Date.now() + 59 * 60_000
+    const narrowed = fakeMessageboard({ me: { 'user:u_jb': { can: { 'pings/': ['read', 'post'], 'dev/': ['read', 'fly'] }, expiresAt } } })
+    expect(await said(handleOn(narrowed))).toEqual({ can: { 'pings/': ['read', 'post'], 'dev/': ['read'] }, expiresAt: new Date(expiresAt).toISOString() })
+    // An API that says neither, as before it sent them: what any credentials it lets in may do, with no expiry.
+    expect(await said(handleOn(fakeMessageboard({ me: false }), 'user:u_jb'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+  })
+
+  it("sends a board token you set, in Node, ahead of VERCEL_TOKEN and the deployment's OIDC token", async () => {
+    for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
+    const api = fakeMessageboard({ tokens: { board_ada3: 'user:u_ada' } })
+    vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const who = async () => (await board({ backend: nodeVercel() }).me()).principal
+    try {
+      vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
+      expect(await who()).toBe('vercel:project:prj_pong:production')
+      vi.stubEnv('BOARD_TOKEN', 'board_ada3')
+      expect(await who()).toBe('vercel:user:u_ada')
+      // On a deployment, with no VERCEL_TOKEN: its OIDC token, which isn't one here, is never read.
+      vi.stubEnv('VERCEL_TOKEN', '')
+      vi.stubEnv('VERCEL', '1')
+      vi.stubEnv('VERCEL_OIDC_TOKEN', 'not-an-oidc-token')
+      expect(await who()).toBe('vercel:user:u_ada')
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  describe('a board by its name', () => {
+    /** A handle on the team's board named `name`, through vercel(), as `principal`. */
+    const named = (api: ReturnType<typeof fakeMessageboard>, name: string, principal = 'user:u_jb') =>
+      board({ name, backend: vercel({ team: 'team_test', api: API, fetch: as(api, principal) }) })
+    const lookups = (api: ReturnType<typeof fakeMessageboard>, request: string) => api.requests.filter((made) => made === request).length
+
+    it('uses the board with that name, whatever its case, apart from the default board, and looks it up once', async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+      const security = named(api, 'security')
+      await security.post('dev', { text: 'rotate the keys' })
+      await security.post('dev', { text: 'done' })
+      expect(lookups(api, 'GET /boards')).toBe(1)
+      expect((await named(api, 'SECURITY').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['rotate the keys', 'done'])
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages).toEqual([])
+      expect(await security.discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_sec?teamId=team_test` })
+      // The default board is named General, so its name finds it too.
+      expect(await named(api, 'general').discovery()).toMatchObject({ url: `${API}/v1/messageboard/boards/brd_test?teamId=team_test` })
+    })
+
+    it('makes the board the first time its project uses it, granted to that project in its environment', async () => {
+      const api = fakeMessageboard()
+      await named(api, 'security', 'project:prj_pong:production').post('dev', { text: 'from pong' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // Another process of the project finds it, and makes nothing.
+      await named(api, 'security', 'project:prj_pong:production').post('dev', { text: 'again' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(1)
+      // It's the team's: a person reads it.
+      expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from pong', 'again'])
+      // The project's preview isn't granted it, and is told what fixes that.
+      await expect(named(api, 'security', 'project:prj_pong:preview').post('dev', { text: 'from a preview' })).rejects.toMatchObject({
+        status: 403,
+        code: 'board_not_granted',
+        origin: 'handle',
+        hint: expect.stringContaining('grant it to this project'),
+      })
+    })
+
+    it('tells a person there is no board with that name, and makes none', async () => {
+      const api = fakeMessageboard()
+      await expect(named(api, 'security').post('dev', { text: 'hi' })).rejects.toMatchObject({ status: 404, code: 'no_board', origin: 'handle' })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+      await expect(named(api, 'security', 'project:prj_pong:production').messages({ channel: 'dev' })).resolves.toMatchObject({ messages: [] })
+    })
+
+    it('picks none of the boards an older name is shared by, and names them', async () => {
+      const api = fakeMessageboard({ boards: [{ name: 'general', id: 'brd_old', granted: ['prj_pong:production'] }] })
+      for (const principal of ['user:u_jb', 'project:prj_pong:production'])
+        await expect(named(api, 'General', principal).post('dev', { text: 'hi' })).rejects.toMatchObject({
+          status: 409,
+          code: 'ambiguous_board_name',
+          origin: 'handle',
+          message: expect.stringMatching(/brd_test, brd_old|brd_old, brd_test/),
+          // What fixes it is something people can do: name them apart, or reach one by its URL.
+          hint: "Give each a name of its own in Vercel's API, or reach one by its URL with `vb --url`.",
+        })
+      expect(lookups(api, 'POST /boards/ensure')).toBe(0)
+    })
+
+    it("takes another team's board by its team and name, or that team's default board by its team alone", async () => {
+      const api = fakeMessageboard({ slug: 'acme', boards: [{ name: 'security' }] })
+      const teams: (string | null)[] = []
+      const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { searchParams } = new URL(String(input instanceof Request ? input.url : input))
+        teams.push(searchParams.get('slug') ?? searchParams.get('teamId'))
+        return as(api, 'user:u_jb')(input, init)
+      }) as typeof globalThis.fetch
+      await board({ team: 'acme', name: 'security', backend: vercel({ api: API, fetch }) }).post('dev', { text: 'for acme security' })
+      await board({ team: 'acme', backend: vercel({ api: API, fetch }) }).post('dev', { text: "on acme's default board" })
+      expect(new Set(teams)).toEqual(new Set(['acme']))
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(["on acme's default board"])
+      expect((await named(api, 'security').messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['for acme security'])
+      // vercel()'s own team is board()'s, or nothing binds.
+      board({ team: 'acme', backend: vercel({ team: 'acme', api: API, fetch }) })
+      expect(() => board({ team: 'acme', backend: vercel({ team: 'team_test', api: API, fetch }) })).toThrow('name the team once')
+      // Its own board ID wins over the name, as the CLI's URL form passes it.
+      const byId = board({ name: 'nope', backend: vercel({ board: 'brd_test', team: 'acme', api: API, fetch }) })
+      expect((await byId.messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(["on acme's default board"])
+    })
   })
 
   it("says the team's ID in its discovery, though it's named by its slug", async () => {

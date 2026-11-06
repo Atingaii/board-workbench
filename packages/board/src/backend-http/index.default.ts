@@ -1,4 +1,4 @@
-// `@vercel/board/backend-http` outside Node: the board at `url`, through the `fetch` you give it.
+// A board that uses another one, outside Node, internal: the inspector's page, through the `fetch` it gives.
 import { createHttp, type HttpBackend, type HttpOptions } from '../server/backend-http.ts'
 
 /**
