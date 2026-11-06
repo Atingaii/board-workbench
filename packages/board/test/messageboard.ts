@@ -672,8 +672,8 @@ const BOARD_NAME = /^[^/]{1,64}$/
  * The team's API: its default board, `General` (`brd_test`, or none with `boardId: null` until a
  * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
  * uses every board in the team; a project, those granted it in its environment. A board made here
- * takes no name another has, whatever its case, private ones included; `boards` may share one, as
- * older boards can. A private board (`members`) is seen only by the people it lists.
+ * takes no name another has, whatever its case, private ones included. A private board (`members`)
+ * is seen only by the people it lists.
  * `notDefault`: this team isn't the token's default team, so a request reaches it only when it
  * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  */
@@ -733,8 +733,7 @@ export function fakeMessageboard(
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     if (method === 'GET' && path === '/me') return { teamId, actor, view: viewOf(accounts, actor) }
     if (method === 'GET' && path === '/boards') {
-      // `name` matches whatever its case, among the boards the caller may use, all in one answer:
-      // older boards can share one.
+      // `name` matches whatever its case, among the boards the caller may use, in one answer.
       const name = url.searchParams.get('name')
       if (name !== null && !BOARD_NAME.test(name)) throw new Refused(400, 'bad_request', 'A board name is 1 to 64 characters with no /.')
       if (name !== null && url.searchParams.has('cursor')) throw new Refused(400, 'invalid_request', 'A name lookup takes no cursor.')
@@ -754,7 +753,6 @@ export function fakeMessageboard(
       const replayed = ensured.get(`${principalId(actor.principal)}|${body.operationId}`)
       if (replayed) return { board: show(replayed), created: false }
       const found = boards().filter((board) => board.name.toLowerCase() === body.name.toLowerCase())
-      if (found.length > 1) throw new Refused(409, 'ambiguous_board_name', 'Several boards have that name.')
       if (found[0]) {
         // A name is taken whoever can see its board: a private one stays unseen, and isn't made again.
         if (found[0].members !== null && !mayUse(actor, found[0])) throw new Refused(409, 'board_name_taken', 'A board has that name.')
