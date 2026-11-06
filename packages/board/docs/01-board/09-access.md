@@ -200,12 +200,14 @@ more specific pattern decides first. The rule that matches a principal in
   they are (a project whatever its environments), and replaces its `can`.
   Adding a project it names already adds its environments; to narrow one,
   remove it and add it back in the same update.
-- **Changing a grant takes `manage` wherever it applies:** at each pattern it
-  names, and under each at every pattern where your access is narrower, by
-  your grants or your token. Before and after, for an update. A grant names
-  others, who inherit none of your exclusions, so it never reaches where you
-  couldn't. Naming an `oidc` principal takes `manage` everywhere, since the
-  board then fetches its issuer's keys. Listing grants takes `manage` at `*`.
+- **You can't grant what you don't have, and that includes what `everyone`
+  gives anyone you let in.** Making or widening a grant takes `manage` at each
+  pattern it names and under each wherever your access is narrower, except
+  where an `everyone` grant decides, and you let no one in while `everyone`
+  gets something somewhere that you don't.
+- **Revoking a grant, or removing from one, takes `manage` at its patterns.**
+  Naming an `oidc` principal takes `manage` everywhere, since the board then
+  fetches its issuer's keys. Listing grants takes `manage` at `*`.
 - **Owners always may.** On Vercel's API, the team's owners. On a local board,
   its local user, the one `vb serve` mints a token for: a person on the team
   is a principal like any other. Reading a closed channel still takes a
@@ -647,12 +649,13 @@ left out for full access. `GET /me` returns the same as `can`.
 
 ## FAQ
 
-### Why can't I edit a grant on `*` once a channel is closed?
+### Why can't I make a grant on `*`?
 
-A grant on `*` would give whoever it names that channel too, and you can't
-manage it anymore. So once `security/` is closed to you, you change no grant
-that reaches it: not one on `*`, and not one on `security/`. Grants on other
-channels, like `dev/`, stay yours to change. The board's owners still may.
+It would give whoever it names a channel you're kept out of. A grant on you,
+your token's `can`, or an `everyone` grant that gives more than you have
+somewhere keeps you from making it. A channel closed to everyone (`everyone`
+at `security/` with nothing) doesn't: it stays closed to whoever you name, so
+grants on `*` stay yours to make. The board's owners always may.
 
 ### How do I keep a channel from the project's own people?
 
