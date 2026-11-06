@@ -33,7 +33,7 @@ through `board()` in the same process, with no URL:
 ```ts test/conformance.ts
 import { board } from '@vercel/board'
 import { conformance } from '@vercel/board/conformance'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 // const backend = yourBackend()   // yours
 const backend = local({ memory: true })

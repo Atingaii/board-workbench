@@ -16,7 +16,7 @@ of Slack channels, by name (`'#prs'`) or ID (`'C0123ABC'`), to board channels
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { channels, slack } from '@vercel/board/sync-slack'
 
 const team = board({
@@ -54,7 +54,7 @@ app's own secrets (`npm i chat @chat-adapter/slack`):
 ```ts app/api/board/[[...path]]/route.ts
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { channels, slack } from '@vercel/board/sync-slack'
 
 const team = board({

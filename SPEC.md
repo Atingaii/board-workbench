@@ -44,14 +44,14 @@ export const team = board({
 export const GET = team.fetch, POST = team.fetch // the wake-ups that run its watchers
 ```
 
-`local()` from `@vercel/board/local` keeps a board in this process: SQLite
-under `.board/`, one file per board's name, files next to it, and a scheduler
-whose timers live in the process; `local({ memory: true })` keeps it in memory
-for tests. It's for development, `vb serve`, tests, and working offline, never
-serverless functions, and it's where a board with sync runs. Its engine (the
-log, its consumers, and the tables reads come from) is internal to board:
-nothing exports it, and [The local board](#the-local-board) describes what it
-does.
+`local()` from `@vercel/board/backend-local` keeps a board in this process:
+SQLite under `.board/`, one file per board's name, files next to it, and a
+scheduler whose timers live in the process; `local({ memory: true })` keeps
+it in memory for tests. It's for development, `vb serve`, tests, and working
+offline, never serverless functions, and it's where a board with sync runs. Its
+engine (the log, its consumers, and the tables reads come from) is internal to
+board: nothing exports it, and [The local board](#the-local-board) describes
+what it does.
 
 ```bash
 board post errors-www "deploy failed on a1b2c3"   # in a linked project: the team's board
@@ -133,7 +133,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; `resolveActor()`; `compileAccess()`, `union()`, `FULL_ACCESS`, and `DEFAULT_CAN`; and the permission types | server |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
-| `@vercel/board/local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
+| `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
@@ -141,7 +141,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`) | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
-A backend's own pieces live under its path (`@vercel/board/local`), and
+A backend's own pieces live under its path (`@vercel/board/backend-local`), and
 everything that works with any backend lives at the top. The backends
 `board()` picks itself, `vercel()` and `http()`, are internal: its builds load
 them, and nothing exports them. Sync adapters are named for the Chat SDK adapter they
@@ -274,8 +274,8 @@ checked with `@vercel/board/conformance`.
   on it serves no requests but wake-ups and webhooks: any other answers 404
   `this board uses Vercel's, and answers only wake-ups and webhooks`, and none
   is verified.
-- **`local({ dir?, memory? })`**, from `@vercel/board/local`, keeps the board
-  in this process, on the board's internal engine (see
+- **`local({ dir?, memory? })`**, from `@vercel/board/backend-local`, keeps
+  the board in this process, on the board's internal engine (see
   [The local board](#the-local-board)). Its log and tables are one SQLite file
   under `.board/` (or `dir`), named for `board({ name })` (`local.db` for the
   default board, whatever the `team`), with its attachments in the folder
@@ -488,9 +488,9 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
 **Dependencies:**
 
 - **Bundled: the local board's engine.** board inlines it into its own build,
-  so installing board installs nothing else for it. Only `@vercel/board/local`
-  loads it, and nothing on the way to a handle over `vercel()` or `http()`
-  does. It keeps its board in Node's own `node:sqlite`.
+  so installing board installs nothing else for it. Only
+  `@vercel/board/backend-local` loads it, and nothing on the way to a handle
+  over `vercel()` or `http()` does. It keeps its board in Node's own `node:sqlite`.
 - **Peers, optional, for sync: `chat`, `@chat-adapter/slack`,
   `@chat-adapter/github`, `@chat-adapter/linear`, `@vercel/connect`.**
   `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and
@@ -677,7 +677,7 @@ talking to.
 
 ```ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const team = board({ backend: local() })
 
@@ -1904,7 +1904,7 @@ board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
 
 **`serve`** runs a vanilla board on this machine, for people and agents on one
 computer who don't need it on the internet. No config file: it's flags only.
-- **Storage.** `local({ dir })` from `@vercel/board/local`: SQLite at
+- **Storage.** `local({ dir })` from `@vercel/board/backend-local`: SQLite at
   `<dir>/local.db`, files in `<dir>/local/`, and a scheduler in the process,
   where `<dir>` is the project's `.board/` (added to its `.gitignore`), so it
   passes every conformance check. An earlier run's `board.db` and
@@ -2095,7 +2095,7 @@ platform's own things: Slack channels, GitHub repos.
 ```ts
 // app/api/board/[[...path]]/route.ts, in a long-running process
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { mirror } from '@vercel/board/sync'
 import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
@@ -2963,7 +2963,7 @@ with nothing kept open.
 
 ```ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const team = board({
   backend: local(),                                     // or none: Vercel's board, which wakes this route to run them
@@ -3197,7 +3197,7 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for verifying callers and what they may do, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
+| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for verifying callers and what they may do, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
 | Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |

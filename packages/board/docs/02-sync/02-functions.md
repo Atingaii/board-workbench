@@ -10,7 +10,7 @@ every event, in both directions, and the function decides what happens:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { slack } from '@vercel/board/sync-slack'
 
 const team = board({
