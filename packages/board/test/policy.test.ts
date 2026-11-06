@@ -47,7 +47,7 @@ afterEach(() => vi.useRealTimers())
 describe('a board on http()', () => {
   it('serves no request but wake-ups and webhooks: it verifies none, and nothing reaches the board it uses', async () => {
     const remote = testBoard()
-    await remote.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_support', environment: 'production' }, can: 'all' })
+    await remote.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
     let project: ReturnType<typeof board>
     const { seen, fetch } = team(remote, () => project)
     const authenticate = vi.fn(async (): Promise<HostPrincipal> => ({ id: 'app:user:ada', kind: 'person', handle: 'ada' }))
@@ -86,7 +86,9 @@ describe("a local board's own writes, through board()", () => {
       authenticate: oidcTokens(testAuth),
       middleware: [middleware],
     })
-    const ops = { issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: { ops: ['read', 'post'] } } as const
+    // Without g2's every project on the team, its creator may do only what this grant says.
+    await kept.revokeGrant('g2')
+    const ops = { principals: [{ kind: 'project' as const, project: 'prj_marketing', environments: ['production'] }], can: { ops: ['read' as const, 'post' as const] } }
     const { grant } = await kept.createGrant(ops)
     // A token minted now, since the clock moves past each one's hour.
     const marketing = async (method: string, path: string, body?: unknown) => caller(kept.fetch, await deploymentToken())(method, path, body)
@@ -123,9 +125,10 @@ describe("a local board's own writes, through board()", () => {
         post: (url, init) => (wakes.held ? Promise.resolve(Response.json({ ran: 0 })) : project.fetch(new Request(url, { method: 'POST', headers: init.headers, body: init.body }))),
       },
     })
-    // One grant for the project, set again to change what it gives.
-    const grant = (can: Can) => remote.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_support', environment: 'production' }, can })
-    await grant('all')
+    // One grant for the project, changed by its ID to change what it gives; g2 would let it in too.
+    await remote.revokeGrant('g2')
+    const { grant: made } = await remote.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
+    const grant = (can: Can) => remote.updateGrant(made.id, { can: (typeof can === 'object' && !Array.isArray(can) ? can : { '*': can }) as never })
     const { fetch } = team(remote, () => project)
     const ran: WatcherContext['event'][] = []
     const watch: Record<string, Watcher> = { triage: { tail: 'feedback', run: ({ event }) => void ran.push(event) } }

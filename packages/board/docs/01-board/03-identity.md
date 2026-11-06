@@ -163,26 +163,27 @@ verified principal.
 
 ## Machines outside the project
 
-Machines outside the board's project need a [grant](./09-access.md#grants),
-which says what they may do in each channel. Someone with `manage` in every
-channel creates it on the board, and it holds from the next request:
+g2 lets every project on the board's team read, post, react, and label.
+Anything else outside the board's project needs a
+[grant](./09-access.md#grants), which says what it may do in each channel.
+Someone with `manage` where it reaches creates it on the board, and it holds
+from the next request:
 
 ```text
-$ vb grants create vercel --claim project_id=prj_marketing --claim environment=production --can feedback/=post
-granted g1
-$ vb grants create github --claim repository=acme/www --can deploys=read,post
-granted g2
+$ vb grants create --project prj_marketing --environment production --can feedback/=post
+created g4  --project prj_marketing --environment production  feedback/=post
+$ vb grants create --github acme/www --can deploys=read,post
+created g5  --github acme/www  deploys=read,post
 ```
 
-- **A Vercel grant names a project by its ID,** and the environment it calls
-  from. A GitHub grant names a repository, by `repository` or
-  `repository_id`; only `repository_id` survives a rename.
-- **Grants match claims; principals record IDs.** A workflow writes as
+- **A project grant names a project,** and the environments it calls from. A
+  GitHub grant names a repository as `owner/name`; where the board can look
+  it up, it keeps the repository's ID, which survives a rename.
+- **Principals record IDs.** A workflow writes as
   `github:repo:<repository_id>` whatever its grant names, so a rename doesn't
   change who wrote what.
 - **A `pull_request` run's token carries `ref: refs/pull/<n>/merge`,** so a
-  grant pinned to `--claim ref=refs/heads/main` doesn't match it. Match on
-  `event_name` instead.
+  grant pinned to `--branch main` doesn't match it. Match on `--event` instead.
 
 > [!WARNING]
 > For `pull_request`, GitHub runs the workflow file from the PR's merge commit,

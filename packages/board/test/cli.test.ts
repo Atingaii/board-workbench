@@ -513,7 +513,7 @@ describe('cli', () => {
 
   it('says what a token can do when it is less than everything', async () => {
     const granted = testBoard()
-    await granted.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
+    await granted.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
     const board = await serve(granted.fetch)
     try {
       const { stdout, code } = await vb(['whoami'], { BOARD_URL: `${board.origin}/api/board`, BOARD_TOKEN: await workflowToken() })

@@ -150,12 +150,15 @@ describe('auth', () => {
     expect(await claude.text()).toContain('<path') // the mark, not a letter
   })
 
-  it('rejects other projects until a grant names them', async () => {
-    const call = caller(testBoard().fetch, await deploymentToken())
+  it('rejects other projects until a grant names them, once g2 no longer names every one', async () => {
+    const plain = testBoard()
+    await plain.revokeGrant('g2')
+    const call = caller(plain.fetch, await deploymentToken())
     expect((await call('GET', '/me')).status).toBe(403)
 
     const trusted = testBoard()
-    await trusted.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: 'all' })
+    await trusted.revokeGrant('g2')
+    await trusted.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } })
     const { body } = await caller(trusted.fetch, await deploymentToken())('GET', '/me')
     expect(body).toMatchObject({ actor: 'vercel:project:prj_marketing:production', handle: 'marketing' })
   })
@@ -163,11 +166,7 @@ describe('auth', () => {
   it("limits a workflow to what its grant's `can` allows", async () => {
     const board = testBoard()
     const { fetch } = board
-    await board.createGrant({
-      issuer: 'github',
-      claims: { repository: 'basehub-ai/www', workflow_ref: 'basehub-ai/www/.github/workflows/deploy.yml@refs/heads/main' },
-      can: ['post'],
-    })
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
     const call = caller(fetch, await workflowToken())
     const posted = await call('POST', '/messages', { channel: 'errors-www', text: 'deploy failed' })
     expect(posted.status).toBe(201)

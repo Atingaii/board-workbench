@@ -209,7 +209,7 @@ export function createHttp(url: string | undefined, options: HttpOptions, enviro
     } else if (route.method === 'GET') response = await client.request(`${path}${queryString(fields)}`, { signal }).catch(rethrow)
     else
       response = await client
-        .request(path, { method: 'POST', body: new TextEncoder().encode(JSON.stringify(fields)), headers: { 'content-type': 'application/json' }, signal })
+        .request(path, { method: route.method, body: new TextEncoder().encode(JSON.stringify(fields)), headers: { 'content-type': 'application/json' }, signal })
         .catch(rethrow)
     if (response.ok) return response
     try {

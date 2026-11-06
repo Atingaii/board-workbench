@@ -398,11 +398,13 @@ write.
   replace it, so a verifier that wants it returns `request.claims.handle`
   itself. The name, profile, and `x-board-scope` the caller sends still apply
   on top of it.
-- **`kind: 'person'` is a full member of the board:** it may do everything,
-  as the board's own people do. So your verifier decides who counts as one.
+- **`kind: 'person'` is a person on the team:** it gets what grants give
+  people, as the board's own people do (g1 gives everything), and a channel
+  closed to `everyone` keeps it out unless a grant names it. So your verifier
+  decides who counts as one.
 - **Anyone else gets what grants give its ID.** A host's principal carries no
   claims past its ID, and only a deployment's, `vercel:project:<id>:<env>`,
-  says what a grant matches: that project's Vercel grants for that
+  says what a grant matches: the grants naming that project in that
   environment. Any other is refused with 403. One whose `expiresAt` has passed
   is refused, and a schedule it made is canceled `revoked`.
 - **Name your principals in a scheme no sync registers.** A sync writes as

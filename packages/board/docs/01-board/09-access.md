@@ -1,6 +1,6 @@
 ---
 title: Access
-description: "Who may use a board, and what each caller may do in each channel: read, post, react, label, sync, or manage. Its people and its own deployments get everything, and grants and board tokens let others in while it runs. Anything out of reach answers 404."
+description: "Grants say who may do what in each channel: read, post, react, label, sync, or manage, and board tokens narrow what their minter may. Anything out of reach answers 404."
 ---
 
 ## Who gets what
@@ -16,20 +16,21 @@ it answers only wake-ups and webhooks.
 Every caller is an OIDC principal. `board()` verifies it with its
 `authenticate` (see [Identity](./03-identity.md)), works out what it may do,
 then calls its backend with the caller it verified. The policy is the board's
-on every backend, and the backend only stores. Some get everything without
-asking; the rest get what grants and board tokens give them:
+on every backend, and the backend only stores. The board's own code gets
+everything without asking; everyone else gets what the [grants](#grants) that
+name them give:
 
-| Caller | Default |
+| Caller | On a new board |
 | --- | --- |
-| A person: your `vercel login`, or `vb serve`'s local user | everything |
+| A person: your `vercel login`, or `vb serve`'s local user | everything, from g1 |
+| A project's deployments on the board's team, the board's own previews included | read, post, react, and label everywhere, from g2 |
 | The board's own deployments in the environment it runs in | everything |
-| The board's own deployments in any other environment | what its [grants](#grants) give, or nothing |
-| Another Vercel project, a GitHub Actions workflow, any other OIDC issuer | what its grants give, or nothing |
+| Another project on the team, a GitHub Actions workflow, any other OIDC issuer | what its grants give, or nothing |
 | A [board token](#tokens) | what its minter may do, narrowed to its `can` |
 | The board's own code: watchers, sync, middleware, its [handle](./01-mounting.md#the-handle) | everything |
 
-A token no grant lets in is refused with 403, whatever it asks, and one from
-an issuer no grant names with 401.
+A caller that only `everyone` names is refused with 403, whatever it asks,
+and one from an issuer no grant names with 401.
 
 The board's environment is the one Vercel runs it in (`VERCEL_TARGET_ENV`,
 which names custom environments, or `VERCEL_ENV`). A production board trusts
@@ -43,7 +44,7 @@ grant would let it in, as a command to run:
   "error": {
     "code": "forbidden",
     "message": "this token can't use this board: no grant lets in acme/www",
-    "hint": "Grant it: vb grants create github --claim repository=acme/www"
+    "hint": "Grant it: vb grants create --github acme/www"
   }
 }
 ```
@@ -54,9 +55,10 @@ preview deployments need a grant`, with the grant for their project in
 
 ## Grants
 
-A grant lets callers in by their tokens: an issuer, the claims its tokens
-carry, and what they may do in each channel. The board keeps it, so people let
-a CI run or another project in while the board runs, with no deploy:
+A grant names principals and says what they may do, in one `can` for all of
+them: a map from [channel pattern](#channels) to permissions, `[]` for none.
+Grants live on the board, so people change who gets in while it runs, with no
+deploy:
 
 ```ts scripts/grants.ts
 import { board } from '@vercel/board'
@@ -64,54 +66,119 @@ import { board } from '@vercel/board'
 // The board at BOARD_URL, one that keeps grants: vb serve's, say.
 const team = board()
 
-// acme/web's runs report in ci/ and read the replies there.
-const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
-// front's production deployments post feedback, and do nothing else.
-await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
+// Close security/ to everyone, then open it to two people.
+await team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
+const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })
+// acme/web's CI posts in ci/ from its main branch.
+await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })
+await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'carol@acme.com' }] })
 console.log(await team.grants())
 await team.revokeGrant(grant.id)
 ```
 
-```text
-$ vb grants create github --claim repository=acme/web --can ci/=read,post
-granted g1
-$ vb grants create vercel --claim project_id=prj_www --claim environment=preview --can dev/=read
-granted g2
-$ vb grants
-g1  github  repository=acme/web                     ci/=read,post
-g2  vercel  environment=preview project_id=prj_www  dev/=read
-$ vb grants revoke g1
-revoked g1
-```
+| Principal | Names | Level |
+| --- | --- | --- |
+| `user` | a person on the team, by `email`, or by `userId` on a board that verifies tokens itself | one principal |
+| `project` | a project's deployments in its `environments`, by name or ID (`prj_…`) | one principal |
+| `github` | GitHub Actions runs in a `repository`, narrowed by `workflow`, `branch`, or `event` | one principal |
+| `oidc` | an `issuer`'s tokens that carry every one of its `claims` | one principal |
+| `all-users` | every person on the team | a group |
+| `all-projects` | every project's deployments on the board's team, in its `environments` | a group |
+| `app` | an app on the team, by its slug or client ID (`clientId` on a board that verifies tokens itself) | one principal |
+| `all-apps` | every app installed on the board's team | a group |
+| `everyone` | everyone the board lets in some other way | everyone |
 
-The second lets a production board's own previews, `prj_www`'s, read `dev/`
-and nothing else.
+### How grants combine
 
-- **A grant is an issuer, the claims its tokens carry, and `can`.** `vercel`
-  and `github` name those issuers; any other is an https URL on the internet,
-  and the board fetches its keys once a grant names it, by OIDC discovery: its
-  `/.well-known/openid-configuration` must name it as `issuer`, with a
-  `jwks_uri` that's an https URL on the internet, and no redirect is followed. Every claim must match
-  exactly, and a list is any of its values (`--claim` twice with one name).
-- **It names who it lets in.** A Vercel grant names `project_id` and
-  `environment`, since a preview runs any branch's code, and a GitHub grant
-  `repository` or `repository_id`: those issuers sign tokens for everyone they
-  serve. Any other issuer's names at least one claim. A claim is any one its
-  tokens carry: GitHub's `event_name` or `ref`, GitLab's `project_path`.
-- **It's for callers on the board's team.** Until cross-team access exists, a
-  caller on another team gets in only with a [board token](#tokens) that
+For a caller and a channel, among the grants that name the caller:
+
+1. **The most specific pattern wins:** an exact channel, then the longest
+   subtree, then `*`.
+2. **Among the grants naming that pattern, the closest principal wins:** one
+   principal, then a group, then `everyone`.
+3. **Grants tied there add up.**
+4. **A cap limits the result:** a person's team role, so a viewer reads and
+   reacts, or an app's scopes. A board without team roles, such as
+   `vb serve`'s, caps nothing.
+
+So `everyone` with `security/=none` beside Alice's `security/=all` lets only
+Alice into `security/`. A grant naming Bob on `*` doesn't help him there: the
+more specific pattern decides first.
+
+- **`explain` says which grant decides.** `team.explain('security/incidents',
+  { user: 'bob@acme.com' })` (`GET /grants/explain?channel=…&user=…`) answers
+  the pattern that won and the ones it won `over`, the level that won there,
+  the grants at that level or the rule in code, and what they give:
+  `{ channel, pattern, over, level, grants, rule, capped, can }`. Left
+  without a principal, it explains you. Anyone else's takes `manage` at `*`,
+  and so does seeing which grants decided, since a grant names everyone else
+  it lets in.
+- **`everyone` never lets anyone in.** It only shapes what callers something
+  else lets in get: a person on the team, or a project or workflow a grant
+  names. A caller nothing else names is refused.
+- **Every board starts with three grants,** as a team's board in Vercel's API
+  does. g1 names `all-users` with `*` at `all`, capped by role. g2 names
+  `all-projects` in production, preview, and development, and g3
+  `all-apps`, each with read, post, react, and label everywhere. A local
+  board has no apps, so g3 lets no one in there. Revoke or change them like
+  any other.
+- **A person's role, and an app's scopes, cap what grants give:** a viewer
+  reads and reacts, and an app with only `read:messageboard` only reads.
+
+> [!WARNING]
+> g2 lets in every project on the team, previews included, and a preview runs
+> any branch's code. Revoke g2, or close the channels it shouldn't reach, when
+> that's too much.
+
+- **A grant names principals by what people type.** Vercel's API looks up an
+  email, a project's name, and a repository, and keeps their IDs: views show
+  `{ userId, email }`, `{ projectId, name }`, and `{ repositoryId,
+  repository }`. A board that verifies tokens itself, such as `vb serve`'s,
+  has nothing to look names up with, so it takes a user's ID and a project's
+  `prj_…`, and matches a repository by the token's `repository`.
+- **A project names its environments,** and `all-projects` only production,
+  preview, or development, since a custom environment's ID is one project's.
+- **A project is its team's.** A grant keeps the board's team on each project
+  it names, and lets in its tokens only while they're that team's, so a
+  project moved to another team keeps none of its grants. A board that
+  doesn't know its team, such as `vb serve`'s outside a linked project, keeps
+  none, and lets a project in by its ID alone. Until cross-team access exists,
+  a caller on another team gets in only with a [board token](#tokens) that
   someone on the board's team mints for it.
-- **The same issuer and claims are one grant.** Setting it again changes its
-  `can` (`updated g1`). Claims that differ, such as another environment, are
-  another grant.
-- **`can` left out is read, post, react, and label everywhere,** what Vercel's
-  API gives a project it lets use a board.
-- **Grants add up.** A caller gets what every grant that matches its token
-  gives. People and the board's own deployments where it runs are never a
-  grant's: they have everything already.
-- **Grants are the board's bookkeeping:** setting, listing, and revoking them
-  takes `manage` in every channel. A revoke holds from the next request, and a
-  schedule a principal made stops as any creator's does when it loses access.
+- **A GitHub principal matches a run's token:** `workflow` by the
+  token's `workflow_ref` (`ci.yml` is `.github/workflows/ci.yml`), `branch` as
+  `refs/heads/<branch>`, and `event` by `event_name`.
+- **An `oidc` issuer is an https URL on the internet,** and the board fetches
+  its keys once a grant names it, by OIDC discovery: its
+  `/.well-known/openid-configuration` must name it as `issuer`, with a
+  `jwks_uri` that's an https URL on the internet, and no redirect is followed.
+  Every claim must match exactly, and a list is any of its values. Vercel's
+  and GitHub's issuers have kinds of their own.
+- **The same principals again are another grant.** Change one by its ID:
+  `updateGrant(id, { add, remove, can })` adds principals, removes them by who
+  they are (a project whatever its environments), and replaces its `can`.
+  Adding a project it names already adds its environments; to narrow one,
+  remove it and add it back in the same update.
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. So making or widening a grant takes `manage` at each pattern
+  it names, and under each wherever your own limits narrow you, and you let no
+  one in while `everyone` gets something somewhere that you don't.
+- **Revoking a grant, or removing from one, is judged the same way,** since
+  lifting what it held back widens whoever it named: `manage` at its patterns,
+  and under each wherever your own limits narrow you. It lets no one new in,
+  so what `everyone` gets doesn't count.
+- **Naming an `oidc` principal takes `manage` everywhere,** since the board
+  then fetches its issuer's keys. Listing grants takes `manage` at `*`.
+- **Owners always may.** On Vercel's API, the team's owners. On a local board,
+  its local user, the one `vb serve` mints a token for: a person on the team
+  is a principal like any other. Reading a closed channel still takes a
+  grant, an owner's too.
+- **A grant takes only the keys it knows.** A misspelled one, `workflows` for
+  `workflow` say, is 400, never dropped, so a grant never names more than you
+  wrote.
+- **A revoke holds from the next request,** and a schedule a principal made
+  stops as any creator's does when it loses access.
 
 ## Tokens
 
@@ -217,7 +284,10 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | --- | --- |
 | `oidcTokens(options?)` | An `authenticate`: the OIDC tokens made out to this board. It verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer a grant names (`board.issuers`), or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `board()`'s default |
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
-| `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as an `Access`: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, `summary()` for `me`, and `narrow(scope)` to keep only what both allow. `union` adds up what several allow, as grants do: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that checks a caller against a `can` of its own |
+| `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as an `Access`: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, `summary()` for `me`, and `narrow(scope)` to keep only what both allow. `union` adds up what several allow, as tied grants do: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws `InvalidCan`. For a backend that checks a caller against a `can` of its own |
+| `grantAccess(facts)` | What a caller may do by a board's grants, from plain data: `caller`, all of it, and `own`, without `everyone`'s grants, or null when nothing lets it in. `facts` is the `caller` (`{ kind: 'user', userId }`, a project in an environment, a run, an issuer's token, or `{ kind: 'app', clientId }`), the `grants`, whether the caller is on the team (`member`, `teamProject`, `teamApp`, booleans), a `cap`, the most the caller may do (`['read', 'react']` for a viewer), and a token's `can` |
+| `checkGrantChange({ caller, own, owner, after, changed, revoked })` | Whether a caller may change grants so, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says and `own` the same without `everyone`'s grants, `after` every grant as the change leaves them, `changed` a grant made or widened, and `revoked` one revoked, removed from, or updated, as it was. It does no I/O, so a backend that keeps grants runs the same rule |
+| `InvalidCan` | What a `can`, a pattern, or a permission that doesn't parse throws, with `code` `invalid_can`, for a backend to answer 400 |
 | `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions
@@ -370,6 +440,16 @@ left out for full access. `GET /me` returns the same as `can`.
 
 ## FAQ
 
+### Why can't I make a grant on `*`?
+
+It would give whoever it names a channel you're kept out of. A grant on you,
+your token's `can`, or an `everyone` grant that gives more than you have
+somewhere keeps you from making it. A channel closed to everyone (`everyone`
+at `security/` with nothing) doesn't: it stays closed to whoever you name,
+and opens to them only as it opens to you, so grants on `*` stay yours to
+make. A grant on `security/` itself doesn't: it would meet the lock there and
+win, being closer. The board's owners always may.
+
 ### How do I keep a channel from the project's own people?
 
 You can't, on one board: people who can access the board's Vercel project can
@@ -391,6 +471,7 @@ all of them. They don't say where or what.
 
 Yes: a [board token](#tokens), which you mint, list, and revoke, and which
 lives 90 days at most. Callers with an OIDC token need none: a
-[grant](#grants) lets them in by their claims, each living as long as its
-token. A credential of your own, such as a session cookie, takes
+[grant](#grants) names them, a project, a repository's runs, or an issuer's
+claims, and each token lives as long as it does. A credential of your own,
+such as a session cookie, takes
 [a verifier of your own](./01-mounting.md#callers-of-your-own).

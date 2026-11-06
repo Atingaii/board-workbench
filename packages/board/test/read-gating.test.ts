@@ -12,10 +12,16 @@ import { fakePlatform } from './sync-fixtures.ts'
 import { fakeQueue } from './queue.ts'
 
 /** The front project's feedback intake: it starts threads in feedback/ and reads nothing. */
-const intake = { issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: { 'feedback/': ['post'] } } satisfies GrantInput
+const intake = { principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { 'feedback/': ['post'] } } satisfies GrantInput
 
 /** What basehub-ai/www's workflows may do. */
-const www = (can: GrantInput['can']) => ({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can }) satisfies GrantInput
+const www = (can: GrantInput['can']) => ({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can }) satisfies GrantInput
+
+/** Sets what the grant naming basehub-ai/www gives: it changes that one grant. */
+async function setWww(board: ReturnType<typeof testBoard>, can: GrantInput['can']) {
+  const named = (await board.grants()).find((one) => one.principals.some((principal) => principal.kind === 'github' && principal.repository === 'basehub-ai/www'))
+  await board.updateGrant(named!.id, { can })
+}
 
 /** A board that keeps `grants`, set before any test request. */
 async function granting(grants: GrantInput[], options: Parameters<typeof testBoard>[0] = {}) {
@@ -208,7 +214,7 @@ describe('attachments', () => {
   })
 
   it('need post somewhere to upload', async () => {
-    const { board } = await setup([www(['read'])])
+    const { board } = await setup([www({ '*': ['read'] })])
     expect((await upload(board, await workflowToken(), 'x')).status).toBe(403)
   })
 })
@@ -265,7 +271,7 @@ describe('links', () => {
 
   it('show nothing of it on any route', async () => {
     const s = fakePlatform('slack')
-    const board = await granting([{ issuer: 'vercel', claims: { project_id: 'prj_sync', environment: 'production' }, can: { open: 'all', security: ['read'] } }], {
+    const board = await granting([{ principals: [{ kind: 'project', project: 'prj_sync', environments: ['production'] }], can: { open: 'all', security: ['read'] } }], {
       sync: { slack: slack({ adapter: s.adapter }, channels({ C2: 'security' })) },
     })
     const webhook = (body: unknown) =>
@@ -348,11 +354,11 @@ describe('sync', () => {
 
 describe('one principal, two grants', () => {
   // A repo's workflows share `github:repo:<id>`: deploy.yml reads and posts in ci/, a pull request's run only posts there.
-  const deployYml = { repository: 'basehub-ai/www', event_name: 'push', workflow_ref: 'basehub-ai/www/.github/workflows/deploy.yml@refs/heads/main' }
-  const pullRequests = { repository: 'basehub-ai/www', event_name: 'pull_request' }
+  const deployYml = { kind: 'github' as const, repository: 'basehub-ai/www', event: 'push', workflow: 'deploy.yml', branch: 'main' }
+  const pullRequests = { kind: 'github' as const, repository: 'basehub-ai/www', event: 'pull_request' }
   const grants = [
-    { issuer: 'github', claims: deployYml, can: { 'ci/': ['read', 'post'] } },
-    { issuer: 'github', claims: pullRequests, can: { 'ci/': ['post'] } },
+    { principals: [deployYml], can: { 'ci/': ['read', 'post'] } },
+    { principals: [pullRequests], can: { 'ci/': ['post'] } },
   ] satisfies GrantInput[]
   const pullRequest = { event_name: 'pull_request', ref: 'refs/pull/7/merge', workflow_ref: 'basehub-ai/www/.github/workflows/test.yml@refs/pull/7/merge' }
 
@@ -387,8 +393,8 @@ describe('one principal, two grants', () => {
     it(`keep a post the one that reads wrote from the other's retry of its id (${middleware ? 'with' : 'without'} middleware)`, async () => {
       const board = await granting(
         [
-          { issuer: 'github', claims: deployYml, can: { 'ci/': ['read', 'post', 'label'] } },
-          { issuer: 'github', claims: pullRequests, can: { 'ci/': ['post'] } },
+          { principals: [deployYml], can: { 'ci/': ['read', 'post', 'label'] } },
+          { principals: [pullRequests], can: { 'ci/': ['post'] } },
         ],
         middleware ? { middleware } : {},
       )
@@ -415,7 +421,7 @@ describe('one principal, two grants', () => {
     const ci = caller(board.fetch, await workflowToken())
     const id = (await ci('POST', '/messages', { channel: 'ci', text: 'nightly' })).body.message.id
     // Setting its grant again changes what it gives.
-    await board.createGrant(www({ dev: ['post'] }))
+    await setWww(board, { dev: ['post'] })
     expect(await ci('POST', `/messages/${id}/edit`, { text: 'nightly, again' })).toMatchObject({ status: 403, body: { error: { message: "this token can't post in ci" } } })
     expect((await ci('POST', `/messages/${id}/delete`, {})).status).toBe(403)
   })
@@ -436,7 +442,7 @@ describe('schedules', () => {
     const ci = caller(board.fetch, await workflowToken())
     const scheduled = await ci('POST', '/schedules', { channel: 'ci', text: 'nightly: green', in: '1h' })
     expect(scheduled.status).toBe(201)
-    await board.createGrant(www(after))
+    await setWww(board, after)
     await new Promise((resolve) => setTimeout(resolve, 20))
     vi.setSystemTime(T0 + 61 * 60_000)
     await queue.fire()
@@ -482,7 +488,7 @@ describe('schedules', () => {
     await settle()
     expect((await julian('GET', '/messages?channel=ci')).body.messages).toEqual([])
 
-    await after.board.createGrant(www({ ci: ['read'] }))
+    await setWww(after.board, { ci: ['read'] })
     await after.queue.fire()
     await vi.waitFor(async () =>
       expect((await julian('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ state: 'canceled', sent: 0, canceled: { reason: 'revoked' } }]),
@@ -558,7 +564,6 @@ describe('schedules', () => {
       const callers = {
         own: () => deploymentToken('board', PROJECT_ID),
         byId: () => deploymentToken('marketing', 'prj_marketing'),
-        pastTheId: () => deploymentToken('docs', 'prj_docs'),
         workflow: () => workflowToken(),
       }
       for (const [who, token] of Object.entries(callers)) {
@@ -578,10 +583,8 @@ describe('schedules', () => {
           )) as typeof log.append
         const queue = fakeQueue()
         const grants: GrantInput[] = [
-          { issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: 'all' },
-          // It names more than a deployment's ID says: the project's team.
-          { issuer: 'vercel', claims: { project_id: 'prj_docs', environment: 'production', owner_id: TEAM_ID }, can: 'all' },
-          www('all'),
+          { principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } },
+          www({ '*': 'all' }),
         ]
         const board = await granting(grants, { store, scheduler: queue.scheduler })
         expect((await caller(board.fetch, await token())('POST', '/schedules', { channel: 'dev', text: who, in: '1h' })).status).toBe(201)
@@ -592,7 +595,6 @@ describe('schedules', () => {
       expect(sent).toEqual({
         own: { sent: 1, reason: null },
         byId: { sent: 1, reason: null },
-        pastTheId: { sent: 0, reason: 'revoked' },
         workflow: { sent: 0, reason: 'revoked' },
       })
     } finally {

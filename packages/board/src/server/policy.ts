@@ -1,4 +1,5 @@
-import { compileAccess, parseScope, scopeOf, type Access } from './access.ts'
+import { compileAccess, parseScope, PERMISSIONS, scopeOf, type Access, type Level, type Permission } from './access.ts'
+import { explainGrants } from './grants.ts'
 import { resolveActor } from './actors.ts'
 import {
   BOARD_TOKEN_PREFIX,
@@ -7,6 +8,7 @@ import {
   fromTokens,
   GITHUB_ISSUER,
   grantIssuers,
+  verifiedIssuers,
   hostPrincipal,
   VERCEL_ISSUER,
   verifiesTokens,
@@ -18,10 +20,14 @@ import {
   type Known,
   type Pinned,
   type Principal,
+  type StoredGrant,
 } from './auth.ts'
 import type { Identity, Trust } from './backend.ts'
 import { HttpError, RejectedError, unauthorized } from './errors.ts'
 import type { ProjectIdentity } from './identity.ts'
+
+/** What decides a channel for a principal: the winning pattern and level, the grants there or the rule, and what they give. */
+export type Decided = { pattern: string | null; over: string[]; level: Level | null; grants: StoredGrant[]; permissions: Permission[] }
 
 /** Who may use a board, and what they may do: `board()`'s options for it. */
 export type PolicyOptions = {
@@ -101,7 +107,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
     const iss = issuerOf(credential)
     // A grant's issuer is https: a local board's own (`vb serve`'s) never is.
     if (iss === null || !iss.startsWith('https://') || iss === GITHUB_ISSUER || VERCEL_ISSUER.test(iss)) return
-    const issuers = grantIssuers(await grants())
+    const issuers = verifiedIssuers([], grantIssuers(await grants()))
     if (issuers.join('\n') !== context.issuers.join('\n')) context.issuers = issuers
   }
 
@@ -167,6 +173,27 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
     return fromTokens(result) ? (result as Principal) : hostPrincipal(result as HostPrincipal)
   }
 
+  /**
+   * Which pattern, level, and grants decide `channel` for `principal`, and what they give it there,
+   * narrowed by its scope: what explain answers, through `explainGrants`. Nothing for a principal
+   * nothing lets in.
+   */
+  async function explain(principal: Known, channel: string): Promise<Decided> {
+    let resolved: Awaited<ReturnType<typeof authority.resolve>>
+    try {
+      resolved = await authority.resolve(principal)
+    } catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 401 || status === 403) return { pattern: null, over: [], level: null, grants: [], permissions: [] }
+      throw error
+    }
+    const scope = principal.scope === undefined ? null : compileAccess(parseScope(principal.scope))
+    const allowed = (permissions: readonly Permission[]) => (scope ? permissions.filter((permission) => scope.can(permission, channel)) : [...permissions])
+    if ('fixed' in resolved) return { pattern: null, over: [], level: null, grants: [], permissions: allowed(PERMISSIONS.filter((permission) => resolved.fixed.can(permission, channel))) }
+    const { pattern, over, level, grants, permissions } = explainGrants(resolved.facts, channel)
+    return { pattern, over, level, grants, permissions: allowed(permissions) }
+  }
+
   return {
     /** Whether requests are served at all: only where the backend keeps the board. */
     open: keeps,
@@ -186,10 +213,11 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       const { author, actor } = resolveActor(principal, claims, request.audience)
       return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
     },
+    explain,
     /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing, its board token's revoking included. */
-    async accessNow(principal: Known): Promise<Access | null> {
+    async accessNow(principal: Known, grants?: readonly StoredGrant[]): Promise<Access | null> {
       if (principal.token !== undefined && !(await trust?.live(principal.token))) return null
-      return authority.accessNow(principal)
+      return authority.accessNow(principal, grants)
     },
   }
 }
