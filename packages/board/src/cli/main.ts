@@ -620,7 +620,10 @@ function failureOf(error: unknown): Failure {
       case 'no_token':
         return own('auth', 'token_unavailable')
       case 'no_board':
-        return own('not_found', 'board_not_found')
+        // A person's named board that isn't there, or that they can't see: this command again makes it.
+        return own('not_found', 'board_not_found', [{ instruction: 'Check the name, or make it', argv: rerun('--ensure') }])
+      case 'board_name_taken':
+        return own('conflict', 'board_name_taken')
       case 'board_not_granted':
         return own('permission', 'board_not_granted')
       case 'ambiguous_board_name': {
@@ -755,7 +758,7 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
   // A name names a team's board as --scope does, so it goes before BOARD_URL too.
   const configured = url ?? (team === undefined && name === undefined ? configuredUrl() : null)
   if (configured === null) {
-    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }), ...(name !== undefined ? { name } : {}) })
+    const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }), ...(name !== undefined ? { name, ...(flags.ensure ? { ensure: true } : {}) } : {}) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
   }
   const at = configured.replace(/\/+$/, '')
@@ -782,11 +785,14 @@ function boardNameFlag(url: string | undefined, team: string | undefined): strin
     throw usage("--name names a team's board, and --url a board by its URL: pass one of them.", { reason: 'conflicting_options' })
   if (team !== undefined && flags.url !== undefined)
     throw usage("--url names its board, its team included, and --scope a team's board: pass one of them.", { reason: 'conflicting_options' })
+  if (flags.ensure && flags.url !== undefined)
+    throw usage("--ensure makes a team's board by its name, and --url names a board by its URL: pass one of them.", { reason: 'conflicting_options' })
   if (url !== undefined) return undefined
   const named = process.env.BOARD_NAME || undefined
   if (flags.name === undefined && team === undefined && named !== undefined && process.env.BOARD_URL?.trim())
     throw usage("BOARD_NAME names a team's board, and BOARD_URL a board by its URL: unset one.", { reason: 'conflicting_options' })
   const given = flags.name ?? named
+  if (given === undefined && flags.ensure) throw usage('--ensure makes the board --name names: pass --name too.', { reason: 'missing_arguments' })
   if (given === undefined) return undefined
   const from = flags.name !== undefined ? '--name' : 'BOARD_NAME'
   if (given.includes('/')) {
@@ -1515,7 +1521,7 @@ async function runOnce(argv: string[], options: App): Promise<number> {
     const command = canonical(word)
     current = { command, args }
     if (io.board) {
-      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.handle ? 'handle' : null
+      const given = flags.url ? 'url' : flags.name !== undefined ? 'name' : flags.ensure ? 'ensure' : flags.handle ? 'handle' : null
       if (given) throw usage(`--${given} doesn't apply in-process: the board handle you pass says which board and who.`, { next: [] })
       if (command !== undefined && MACHINE.has(command))
         throw usage(`${command} isn't available in-process: it's about the machine ${named()} runs on.`, { reason: 'not_available', next: [] })
