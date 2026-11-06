@@ -25,6 +25,7 @@ export {
   compileAccess,
   union,
   checkGrantChange,
+  InvalidCan,
   FULL_ACCESS,
   type Access,
   type Permission,
