@@ -859,6 +859,9 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       const made = CREATED.has(target.name) || (target.name === 'createChannel' && (output as Protocol['createChannel']['output']).created)
       return json(output, made ? 201 : 200)
     } catch (error) {
+      // Stopped by its caller (a page reloaded, a long-poll let go): no one reads the answer, and
+      // the abort isn't the board's failure. Any other failure still is, caller there or not.
+      if (request.signal.aborted && error === request.signal.reason) return new Response(null, { status: 499 })
       return toErrorResponse(error)
     }
   }
