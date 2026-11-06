@@ -192,12 +192,19 @@ more specific pattern decides first. The rule that matches a principal in
   they are (a project whatever its environments), and replaces its `can`.
   Adding a project it names already adds its environments; to narrow one,
   remove it and add it back in the same update.
-- **Changing a grant takes `manage` at each pattern it names,** resolved at
-  that pattern: before and after, for an update. So a member still edits a
-  grant on `*` once `security/` is closed, but can't create one on
-  `security/`. Listing grants takes `manage` at `*`. Team owners always may,
-  and on a board without team roles, its people are its owners. Reading a
-  closed channel still takes a grant, an owner's too.
+- **Changing a grant takes `manage` wherever it applies:** at each pattern it
+  names, and under each at every pattern where your access is narrower, by
+  your grants or your token. Before and after, for an update. A grant names
+  others, who inherit none of your exclusions, so it never reaches where you
+  couldn't. Naming an `oidc` principal takes `manage` everywhere, since the
+  board then fetches its issuer's keys. Listing grants takes `manage` at `*`.
+- **Owners always may.** On Vercel's API, the team's owners. On a local board,
+  its local user, the one `vb serve` mints a token for: a person on the team
+  is a principal like any other. Reading a closed channel still takes a
+  grant, an owner's too.
+- **A grant takes only the keys it knows.** A misspelled one, `workflows` for
+  `workflow` say, is 400, never dropped, so a grant never names more than you
+  wrote.
 - **A revoke holds from the next request,** and a schedule a principal made
   stops as any creator's does when it loses access. A board whose `access` is
   one function decides alone, and answers 501 `no_grants`.
@@ -631,6 +638,13 @@ can     ci/  read post
 left out for full access. `GET /me` returns the same as `can`.
 
 ## FAQ
+
+### Why can't I edit a grant on `*` once a channel is closed?
+
+A grant on `*` would give whoever it names that channel too, and you can't
+manage it anymore. So once `security/` is closed to you, you change no grant
+that reaches it: not one on `*`, and not one on `security/`. Grants on other
+channels, like `dev/`, stay yours to change. The board's owners still may.
 
 ### How do I keep a channel from the project's own people?
 

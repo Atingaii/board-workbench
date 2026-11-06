@@ -7,6 +7,7 @@ import {
   fromTokens,
   GITHUB_ISSUER,
   grantIssuers,
+  verifiedIssuers,
   hostPrincipal,
   issuersOf,
   VERCEL_ISSUER,
@@ -123,8 +124,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
     const iss = issuerOf(credential)
     // A grant's issuer is https: a local board's own (`vb serve`'s) never is.
     if (iss === null || !iss.startsWith('https://') || iss === GITHUB_ISSUER || VERCEL_ISSUER.test(iss) || ruleIssuers.includes(iss)) return
-    const named = grantIssuers(await grants())
-    const issuers = [...ruleIssuers, ...named.filter((issuer) => !ruleIssuers.includes(issuer))]
+    const issuers = verifiedIssuers(ruleIssuers, grantIssuers(await grants()))
     if (issuers.join('\n') !== context.issuers.join('\n')) context.issuers = issuers
   }
 
