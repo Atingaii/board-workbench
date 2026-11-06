@@ -313,8 +313,10 @@ revokeGrant(id: string): Promise<{ revoked: boolean }>
 to `'all'` or a list of permissions, `[]` for none. The same principals again
 are another grant. `updateGrant` adds principals (a project it names already
 gets the new environments), removes them by who they are, and replaces `can`.
-Each needs `manage` wherever its grant applies, under each pattern too where
-your access is narrower; `grants` needs `manage` at `*`. Owners always may.
+Making or widening one needs what you'd grant: `manage` at its patterns and
+under them wherever you're narrower, and what `everyone` gives, for anyone it
+lets in. Revoking needs `manage` at its patterns; `grants` needs `manage` at
+`*`. Owners always may.
 `explain` says which grants decide a channel, and what they give, for you or,
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, or `{ oidc, claims }`.
