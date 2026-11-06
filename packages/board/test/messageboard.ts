@@ -700,7 +700,7 @@ export function fakeMessageboard(
     boards?: { name: string; id?: string; granted?: string[] }[]
     roles?: Record<string, Role>
     me?: Record<string, MeSays> | false
-    /** Board tokens the API takes, by their secret (`board_…`): the principal each acts as, as `as()` names it. */
+    /** Board tokens the API takes, by their secret, whatever it looks like: the principal each acts as, as `as()` names it. */
     tokens?: Record<string, string>
   } = {},
 ) {

@@ -338,8 +338,8 @@ describe('the embedded CLI', () => {
   it("sends a board token you set to Vercel's API as itself, ahead of your login, from vb and from a CLI that runs board's", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
-    vi.stubEnv('BOARD_TOKEN', 'board_ada1')
-    const api = fakeMessageboard({ tokens: { board_ada1: 'user:u_ada' }, me: { board_ada1: { can: { 'dev/': ['read'] }, expiresAt: null } } })
+    vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
+    const api = fakeMessageboard({ tokens: { p9Lr4vTzQ2wc: 'user:u_ada' }, me: { p9Lr4vTzQ2wc: { can: { 'dev/': ['read'] }, expiresAt: null } } })
     const sent: (string | null)[] = []
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       sent.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization'))
@@ -351,7 +351,7 @@ describe('the embedded CLI', () => {
       const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toMatch(/^Ada Lovelace \(vercel:user:u_ada\)\n(.*\n)*source +BOARD_TOKEN\n(.*\n)*can +dev\/  read\n$/)
-      expect(new Set(sent)).toEqual(new Set(['Bearer board_ada1']))
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
       // `vercel board`: its login and its signed fetch go unused, and the token goes as it is.
       sent.length = 0
       let asked = 0
@@ -359,7 +359,7 @@ describe('the embedded CLI', () => {
       const app = createApp({ appName: 'vercel board', login: async () => (asked++, 'user:u_jb'), team: async () => 'team_test', fetch: async (input, init) => (signed(), api.fetch(input, init)) })
       expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
       expect([asked, signed.mock.calls.length]).toEqual([0, 0])
-      expect(new Set(sent)).toEqual(new Set(['Bearer board_ada1']))
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -370,7 +370,7 @@ describe('the embedded CLI', () => {
   it("sends a token an app's command hands the CLI's connection to Vercel's API, in place of your login", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
-    const api = fakeMessageboard({ tokens: { board_ada2: 'user:u_ada' } })
+    const api = fakeMessageboard({ tokens: { w3Nc8sJd1hFy: 'user:u_ada' } })
     const sent: (string | null)[] = []
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       sent.push(new Request(input, init).headers.get('authorization'))
@@ -380,7 +380,7 @@ describe('the embedded CLI', () => {
     const probe: Command = {
       spec: { name: 'probe', description: 'who a token is on the board', arguments: [], options: [], examples: [] },
       run: async (_args, { connection, out }) => {
-        out((await connection(undefined, { token: 'board_ada2' }).board.me()).actor)
+        out((await connection(undefined, { token: 'w3Nc8sJd1hFy' }).board.me()).actor)
         return 0
       },
     }
@@ -388,7 +388,7 @@ describe('the embedded CLI', () => {
     process.chdir(home)
     try {
       expect(await capture(() => main(['probe', '--scope', 'test'], { name: 'board', commands: { probe } }))).toMatchObject({ code: 0, stdout: 'vercel:user:u_ada\n' })
-      expect(new Set(sent)).toEqual(new Set(['Bearer board_ada2']))
+      expect(new Set(sent)).toEqual(new Set(['Bearer w3Nc8sJd1hFy']))
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)

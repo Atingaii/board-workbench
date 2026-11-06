@@ -997,9 +997,9 @@ everything for owners, members, and developers and `read` for viewers, and a
 project's read, post, react, and label), and `expiresAt` in milliseconds, null
 until board tokens. Where it says neither, read, post, react, and label
 everywhere, with no expiry.
-In Node it sends a board token from `BOARD_TOKEN` as it is
-(`Authorization: Bearer board_…`) ahead of `VERCEL_TOKEN`, the deployment's
-OIDC token, and the login, as `vb` sends one to any board.
+In Node it sends a board token from `BOARD_TOKEN` as it is, whatever its
+format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
+deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 

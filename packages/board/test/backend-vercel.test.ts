@@ -396,14 +396,14 @@ describe('vercel()', () => {
 
   it("sends a board token you set, in Node, ahead of VERCEL_TOKEN and the deployment's OIDC token", async () => {
     for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
-    const api = fakeMessageboard({ tokens: { board_ada3: 'user:u_ada' } })
+    const api = fakeMessageboard({ tokens: { k7Qe2mXa9vLp: 'user:u_ada' } })
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => api.fetch(input, init))
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
     const who = async () => (await board({ backend: nodeVercel() }).me()).principal
     try {
       vi.stubEnv('VERCEL_TOKEN', 'project:prj_pong:production')
       expect(await who()).toBe('vercel:project:prj_pong:production')
-      vi.stubEnv('BOARD_TOKEN', 'board_ada3')
+      vi.stubEnv('BOARD_TOKEN', 'k7Qe2mXa9vLp')
       expect(await who()).toBe('vercel:user:u_ada')
       // On a deployment, with no VERCEL_TOKEN: its OIDC token, which isn't one here, is never read.
       vi.stubEnv('VERCEL_TOKEN', '')
