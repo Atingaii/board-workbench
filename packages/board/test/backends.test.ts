@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { connect } from '../src/client/node.ts'
 import { board, HttpError, type Backend, type Caller } from '../src/server/index.ts'
 import { oidcTokens } from '../src/access/index.ts'
-import { local } from '../src/local/index.ts'
+import { local } from '../src/backend-local/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { board as projectBoard, bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, signedInHome, testAuth, testBoard } from './harness.ts'
 

@@ -16,7 +16,7 @@ connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { github, repos } from '@vercel/board/sync-github'
 
 const team = board({
@@ -200,7 +200,7 @@ Without Connect, pass the App's credentials to a Chat SDK adapter
 ```ts app/api/board/[[...path]]/route.ts
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 import { github, repos } from '@vercel/board/sync-github'
 
 const team = board({

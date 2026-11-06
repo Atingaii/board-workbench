@@ -330,6 +330,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     } catch {}
     if (response.ok) return body as T
     const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
+    // A board token reaches its own board by ID, and none of the team's routes: finding a board by its name or as the team's is one.
+    if (error?.code === 'board_token_scope')
+      throw new HttpError(403, 'board_token_scope', 'a board token reaches only its own board, by its ID.', { hint: 'Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).', origin: 'handle' })
     throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
   }
 
@@ -1062,7 +1065,15 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const specs: Record<string, WatcherSpec> = Object.fromEntries(Object.entries(watch).map(([id, spec]) => [id, { tail: spec.tail, when: spec.when ?? 'matches' }]))
     const filters = Object.fromEntries(await Promise.all(Object.entries(specs).map(async ([id, spec]) => [id, await filterOf(who, id, spec)] as const)))
     // vboard's own hash of the tails, which every wake-up carries back, so a board can tell its registration is stale.
-    const made = await api<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), { body: { ...where, watch: filters, tag: await tagOf(specs) } })
+    let made: ApiRegistration
+    try {
+      made = await api<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), { body: { ...where, watch: filters, tag: await tagOf(specs) } })
+    } catch (error) {
+      // Vercel's API takes no board token for watchers, for now.
+      if (error instanceof HttpError && error.code === 'board_token_unsupported')
+        throw new HttpError(403, 'board_token_unsupported', "a board token can't register watchers yet.", { hint: "Register them with a person's or a deployment's own credentials.", origin: 'handle' })
+      throw error
+    }
     return { owner: made.owner, ...whereOf(made), watch: specs, sync: [], hash: made.hash }
   }
 

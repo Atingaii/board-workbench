@@ -4,7 +4,7 @@ import { createBoard, type Board, type BoardOptions } from '../src/server/board.
 import type { Serving } from '../src/server/policy.ts'
 import { a2, type A2Options } from '../src/server/a2.ts'
 import { memoryBlob } from '../src/server/blob.ts'
-import { local } from '../src/local/index.ts'
+import { local } from '../src/backend-local/index.ts'
 import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 import { BOARD_URL, PROJECT_ID, TEAM_ID, testAuth, testLocal } from './tokens.ts'
 
