@@ -402,7 +402,7 @@ condition: the `node` one finds boards and credentials as above, and the
 default one, for browsers, finds none in the environment; the rest runs the
 same. There, `board({ name, fetch })` reaches Vercel's board with what `fetch`
 sends. Nothing in a browser finds a team, so it's `team`'s, or with none, the
-team the token's own is. Or
+token's own team. Or
 `http(url, { fetch })` sends the page's own session to a board on the same
 site:
 
