@@ -260,7 +260,7 @@ export async function createServe(context: BoardContext): Promise<Serve> {
     return { identity: await policy.identify(request), origin: { via: { kind: 'api' } } }
   }
 
-  /** What a board that serves no requests answers them: a board on `http()` with no `access` of its own. */
+  /** What a board that serves no requests answers them: one that uses another board's. */
   const servesOnly = () => new HttpError(404, 'not_found', `${ownUrl() ?? 'this board'} answers only wake-ups and webhooks`)
 
   /**
@@ -683,14 +683,6 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       }
       case 'syncImport':
         return syncImport(caller, input as Protocol['syncImport']['input'], signal)
-      case 'grants':
-      case 'createGrant':
-      case 'updateGrant':
-      case 'explain':
-      case 'revokeGrant':
-        // A board whose `access` is one function decides alone: a grant it kept would never apply.
-        if (backend.keeps && !policy.takesGrants) throw new HttpError(501, 'no_grants', "this board's access is one function, which decides alone: it keeps no grants")
-        return (backend[name] as (caller: Caller, input: unknown, signal: AbortSignal) => Promise<unknown>).call(backend, caller, input, signal)
       case 'schedule': {
         const body = input as Protocol['schedule']['input']
         const schedule = (made: Protocol['schedule']['input']) => (backend.sendsSchedulesHere === false ? screenSchedule(caller, made, signal) : backend.schedule(caller, made, signal))
@@ -847,8 +839,8 @@ export async function createServe(context: BoardContext): Promise<Serve> {
       // A backend's own routes check what they need: a wake-up carries no board token.
       if (target.kind === 'backend') return await target.route.handle(request, { caller: injected && 'platform' in injected ? engine!.caller : injected, param: match.param })
 
-      // Everything else is for a caller: this deployment's own code, or a request, which a board on
-      // http() with no access of its own doesn't serve. Nothing runs for one before that.
+      // Everything else is for a caller: this deployment's own code, or a request, which a board that
+      // uses another board's doesn't serve. Nothing runs for one before that.
       if (!injected && !policy.open) throw servesOnly()
       if (!injected && target.kind === 'protocol' && target.name === 'discovery') return json(await discovery(request, boardUrl, request.signal))
       if (target.kind === 'protocol' && typeof (backend[target.name] as unknown) !== 'function') throw notFound(`no route: ${request.method} ${url.pathname}`)

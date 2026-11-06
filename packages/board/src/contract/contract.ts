@@ -257,7 +257,8 @@ const Environments = z.array(z.string().min(1).max(100)).max(16)
 /** Who a grant names, as the board keeps it: IDs, with the names it knows beside them. */
 const GrantPrincipal = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('user'), userId: z.string().min(1).max(200), email: z.string().max(320).optional() }),
-  z.object({ kind: z.literal('project'), projectId: z.string().min(1).max(200), name: z.string().max(200).optional(), environments: Environments }),
+  // A project on the team the board was on when the grant named it, where the board knew it.
+  z.object({ kind: z.literal('project'), projectId: z.string().min(1).max(200), name: z.string().max(200).optional(), environments: Environments, teamId: z.string().min(1).max(200).optional() }),
   z.object({
     kind: z.literal('github'),
     repository: z.string().min(1).max(200),
@@ -269,6 +270,8 @@ const GrantPrincipal = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
   z.object({ kind: z.literal('all-users') }),
   z.object({ kind: z.literal('all-projects'), environments: Environments }),
+  z.object({ kind: z.literal('app'), clientId: z.string().min(1).max(200), name: z.string().max(200).optional() }),
+  z.object({ kind: z.literal('all-apps') }),
   z.object({ kind: z.literal('everyone') }),
 ])
 /** A grant's `can`, as written: each pattern and `'all'` or its permissions. */
