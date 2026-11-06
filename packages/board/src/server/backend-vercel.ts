@@ -1,5 +1,5 @@
-import type { Method, Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
+import type { Protocol } from '../api/protocol.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
