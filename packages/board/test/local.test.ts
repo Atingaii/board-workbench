@@ -1,11 +1,12 @@
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { conformance } from '../src/conformance/index.ts'
 import { local } from '../src/local/index.ts'
+import { localFile } from '../src/server/local.ts'
 import { bearer, BOARD_URL, localBoard, personToken } from './harness.ts'
 
 const made: string[] = []
@@ -64,7 +65,42 @@ describe('local()', () => {
       await backend.close()
     }
     const files = (await readdir(dir)).filter((name) => name.endsWith('.db')).sort()
-    expect(files).toEqual([expect.stringMatching(/^con-[0-9a-f]{8}\.db$/), expect.stringMatching(/^local-[0-9a-f]{8}\.db$/), expect.stringMatching(/^security-team-[0-9a-f]{8}\.db$/)])
+    expect(files).toEqual([expect.stringMatching(/^con\.[0-9a-f]{32}\.db$/), expect.stringMatching(/^local\.[0-9a-f]{32}\.db$/), expect.stringMatching(/^security-team\.[0-9a-f]{32}\.db$/)])
+  })
+
+  it("keeps a name apart from a plain name that reads like the file another's would be", async () => {
+    const dir = await scratch()
+    // Before, Security Team's file was security-team-83f2a9a1.db, the plain name's file too. Its
+    // file's name now, taken as a name, is no plain name either.
+    const names = ['Security Team', 'security-team-83f2a9a1', localFile('Security Team')]
+    for (const name of names) {
+      const backend = local({ dir })
+      await board({ backend, name }).post('dev', `only on ${name}`)
+      await backend.close()
+    }
+    for (const name of names) {
+      const backend = local({ dir })
+      expect((await board({ backend, name }).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual([`only on ${name}`])
+      await backend.close()
+    }
+    expect((await readdir(dir)).filter((file) => file.endsWith('.db')).length).toBe(3)
+  })
+
+  it("stops its timers when it's closed, so nothing runs against the closed file", async () => {
+    const dir = await scratch()
+    const failed = vi.spyOn(console, 'error')
+    try {
+      const backend = local({ dir })
+      const team = board({ backend })
+      const root = (await team.post('dev', 'deploy')).id
+      await team.schedule({ re: root }, { text: 'did it land?', in: '1s' })
+      await backend.close()
+      // Past its time: nothing ran against the closed file.
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      expect(failed.mock.calls.filter(([said]) => String(said).includes('a scheduled task failed'))).toEqual([])
+    } finally {
+      failed.mockRestore()
+    }
   })
 
   it("keeps one board per name whatever its team: there's one team here", async () => {
