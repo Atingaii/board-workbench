@@ -976,6 +976,16 @@ describe("board tokens on Vercel's API", () => {
       await expect(handleOn(api, principal).createToken({ name: 'ci' })).rejects.toMatchObject({ status: 403, code: 'unsupported_principal' })
   })
 
+  it("holds a token to its can in grants, as its minter's grants and role are", async () => {
+    const api = fakeMessageboard()
+    // Ada is a member, who manages everywhere; her token only reads, and posts in ci/.
+    const { secret } = await handleOn(api, 'user:u_ada').createToken({ name: 'ci', can: { '*': ['read'], 'ci/': ['read', 'post'] } })
+    const token = holding(api, secret)
+    await expect(token.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    await expect(token.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    expect((await handleOn(api, 'user:u_ada').createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).grant.id).toEqual(expect.any(String))
+  })
+
   it('lists and revokes, for a token, only itself and the tokens made from it, and answers a bad scope 400 invalid_scope', async () => {
     const api = fakeMessageboard()
     const ada = handleOn(api, 'user:u_ada')
