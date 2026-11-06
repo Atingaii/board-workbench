@@ -15,7 +15,8 @@ import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
-import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
+import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
+import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { parseScope } from '../server/access.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
@@ -196,6 +197,8 @@ type Flags = ReturnType<typeof parseAll>['values']
 let app: App = { name: 'board', commands: {} }
 let flags = {} as Flags
 let positionals: string[] = []
+/** Every option as it was typed, in order: what reads principal flags and the modifiers after each. */
+let ordered: OptionToken[] = []
 /** The command this run runs, by its own name, and what follows it: what a failure says it was doing. */
 let current: { command: string | undefined; args: string[] } = { command: undefined, args: [] }
 /** What this run was given, as typed: what a recovery runs again, with what it lacked. */
@@ -227,6 +230,9 @@ function parse(argv: string[]) {
   if (removed) throw removed
   try {
     const parsed = parseAll(markAttachmentId(args))
+    ordered = parseArgs({ args: markAttachmentId(args), allowPositionals: true, options: OPTIONS, tokens: true }).tokens.flatMap((token) =>
+      token.kind === 'option' ? [{ name: token.name, value: token.value }] : [],
+    )
     flags = parsed.values
     positionals = parsed.positionals.map((arg) => (arg.startsWith(MARK) ? arg.slice(MARK.length) : arg))
   } catch (error) {
@@ -413,12 +419,47 @@ function trustId(what: 'grant' | 'token', value: string | undefined): string {
   return value
 }
 
-/** `--can`, as `x-board-scope` writes it: `dev/=read,post;ci/=read`. */
-function canFlag(value: string) {
+/**
+ * A token's `--can`, as `x-board-scope` writes it (`dev/=read,post;ci/=read`), repeated or
+ * `;`-joined, with `none` for no permissions, as `all` is every one: `*=all;security/=none` closes a
+ * subtree. `security/=` means the same. The board takes an empty list, so `none` never leaves the CLI.
+ */
+function canFlag(values: readonly string[]) {
+  const scope = values
+    .flatMap((value) => value.split(';'))
+    .map((entry) => {
+      const at = entry.indexOf('=')
+      if (at === -1) return entry
+      const permissions = entry.slice(at + 1).split(',').map((permission) => permission.trim())
+      if (permissions.includes('none') && permissions.length > 1) throw usage(`--can: none is no permissions, so it goes alone: ${entry.slice(0, at).trim()}=none.`)
+      return permissions[0] === 'none' ? entry.slice(0, at + 1) : entry
+    })
+    .join(';')
   try {
-    return parseScope(value)
+    return parseScope(scope)
   } catch (error) {
-    throw usage(`${(error as Error).message.replace(/x-board-scope/g, '--can')}.`)
+    throw usage(`${(error as Error).message.replace(/x-board-scope/g, '--can').replace(/, or all$/, ', all, or none')}.`)
+  }
+}
+
+/** What a grant's flags say, or the misuse in them. */
+function grantFlags<T>(read: () => T): T {
+  try {
+    return read()
+  } catch (error) {
+    if (error instanceof GrantMisuse) throw usage(error.message, error.next ? { next: error.next } : {})
+    throw error
+  }
+}
+
+/** Refuses the principal flags `verb` doesn't take: plain ones on update, `--add-` and `--remove-` ones elsewhere. */
+function onlyPrincipalFlags(verb: 'create' | 'update' | 'explain') {
+  for (const { name } of ordered) {
+    const kind = name.replace(/^(add|remove)-/, '')
+    if (!(KINDS as readonly string[]).includes(kind)) continue
+    const prefixed = kind !== name
+    if (verb === 'update' && !prefixed) throw usage(`grants update adds and removes principals: --add-${kind} or --remove-${kind}, not --${kind}.`)
+    if (verb !== 'update' && prefixed) throw usage(`--${name} is for grants update: grants ${verb} names principals as --${kind}.`)
   }
 }
 
@@ -508,7 +549,7 @@ function doing(): string {
     case 'actors':
       return `list ${command}`
     case 'grants':
-      return a === 'create' ? `grant ${b ?? 'an issuer'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
+      return a === 'create' ? 'create the grant' : a === 'update' ? `update grant ${b}` : a === 'explain' ? `explain ${b ?? 'the channel'}` : a === 'revoke' ? `revoke grant ${b}` : 'list grants'
     case 'tokens':
       return a === 'create' ? `mint token ${b ?? ''}`.trimEnd() : a === 'revoke' ? `revoke token ${b}` : 'list tokens'
     case 'sources':
@@ -541,7 +582,7 @@ function missing(): string | undefined {
   if (command === 'read' && /^https?:\/\//i.test(a)) return "that link's message on this board"
   if (ON_MESSAGE.has(command) || (['read', 'post', 'schedule'].includes(command) && isMessageRef(a))) return `message ${ref(a)}`
   if (command === 'schedule' && a === 'cancel' && b !== undefined) return `schedule ${b}`
-  if ((command === 'grants' || command === 'tokens') && a === 'revoke' && b !== undefined) return `${command === 'grants' ? 'grant' : 'token'} ${b}`
+  if ((command === 'grants' || command === 'tokens') && (a === 'revoke' || a === 'update') && b !== undefined) return `${command === 'grants' ? 'grant' : 'token'} ${b}`
   if (command === 'download') return `attachment ${a}`
   return undefined
 }
@@ -585,6 +626,10 @@ function failureOf(error: unknown): Failure {
         return own('conflict', 'board_name_taken')
       case 'board_not_granted':
         return own('permission', 'board_not_granted')
+      case 'board_token_unsupported':
+        return own('permission', 'board_token_unsupported')
+      case 'board_token_scope':
+        return own('permission', 'board_token_scope')
       case 'invalid_board_name':
         return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
@@ -605,6 +650,12 @@ function failureOf(error: unknown): Failure {
         return { ...own('platform', 'api_error'), message: "Couldn't tell which team's board to use.", details: [message] }
       case 'upload_failed':
         return { ...own('platform', 'upload_failed'), message: `Failed to ${doing()}.`, details: [message] }
+      case 'channel_exists':
+        return own('conflict', 'channel_exists')
+      case 'channel_granted':
+        return own('conflict', 'channel_granted')
+      case 'no_own_principal':
+        return own('usage', 'no_own_principal')
       case 'port_taken':
         return own('conflict', 'port_taken', [{ instruction: 'Pick another port', argv: [...cli(), current.command ?? 'serve', '--port', '<PORT>'] }])
     }
@@ -893,7 +944,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           ],
         })
       // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
-      const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
+      // A board token is its board's, so a team's board in Vercel's API is reached by its URL, which names it by ID.
+      const tokenUrl = io.board ? undefined : connection().url === null ? (await client().discovery()).url : flags.url
+      const withToken = io.board ? {} : { withToken: (secret: string) => connection(tokenUrl, { token: secret }).board }
       const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken })
       if (flags.json) result(report)
       else out(formatConformance(report))
@@ -906,9 +959,13 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const [path, extra] = rest
         if (!path) throw usage('Missing the channel to create, such as dev/alerts.', { reason: 'missing_arguments' })
         if (extra !== undefined) throw usage(`channels create takes one channel: ${extra} is one too many.`)
-        const { channel, created } = await client().createChannel(path)
-        if (flags.json) result({ channel, outcome: created ? 'created' : 'unchanged' })
-        else out(created ? `created ${channel.path}` : `${channel.path} already exists`)
+        const { channel, created, grants } = await client().createChannel(path, flags.private ? { private: true } : {})
+        if (flags.json) result({ channel, outcome: created ? 'created' : 'unchanged', ...(grants ? { grants } : {}) })
+        else if (grants) {
+          // The channel, then the two grants that close it, each a line.
+          out(`created channel ${channel.path}`)
+          for (const grant of grants) out(`created ${grantRow(grant)}`)
+        } else out(created ? `created ${channel.path}` : `${channel.path} already exists`)
         return 0
       }
       if (sub !== undefined && sub !== 'list') throw usage(`Unknown command ${sub} for ${named()} channels.`, { reason: 'unknown_command' })
@@ -1085,6 +1142,65 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         const list = await client().grants()
         if (flags.json) return result({ grants: list }), 0
         out(list.length === 0 ? 'no grants' : formatGrants(list))
+        return 0
+      }
+      if (verb === 'create') {
+        if (rest.length > 0) throw usage(`grants create takes no arguments: ${rest[0]} is one too many.`)
+        onlyPrincipalFlags('create')
+        const principals = grantFlags(() => principalsIn(ordered, [''])).map(({ principal }) => principal)
+        if (principals.length === 0)
+          throw usage('A grant names whom it lets in: --user, --project, --github, --oidc, --all-users, --all-projects, or --everyone.', { reason: 'missing_arguments' })
+        const can = grantFlags(() => grantCanOf(flags.can ?? []))
+        if (Object.keys(can).length === 0) throw usage("A grant says what it lets them do: --can pattern=permissions, like --can 'ci/=read,post'.", { reason: 'missing_arguments' })
+        const { grant } = await client().createGrant({ principals, can })
+        // Vercel's API keeps a grant for a GitHub run or an OIDC issuer, but signs in neither yet.
+        const unsigned = principals.some((principal) => principal.kind === 'github' || principal.kind === 'oidc') && vercelBoard((await client().discovery()).url) !== null
+        const note = "Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does"
+        if (flags.json) {
+          if (unsigned) warnings.push({ reason: 'callers_not_signed_in', message: note })
+          result({ grant, outcome: 'created' })
+        } else {
+          out(`created ${grantRow(grant)}`)
+          if (unsigned) out(`note  ${note}`)
+        }
+        return 0
+      }
+      if (verb === 'update') {
+        const id = trustId('grant', rest[0])
+        if (rest.length > 1) throw usage(`grants update takes one grant: ${rest[1]} is one too many.`)
+        onlyPrincipalFlags('update')
+        const named = grantFlags(() =>
+          // To drop an environment, remove the principal and add it back with the ones it keeps, in one
+          // update: as two, removing a grant's only principal would leave it naming no one.
+          principalsIn(ordered, ['add-', 'remove-'], ({ kind, value }) => {
+            const named = value !== undefined ? [value] : []
+            return [
+              {
+                instruction: 'Remove it and add it back with the environments it keeps',
+                argv: [...cli(), 'grants', 'update', id, `--remove-${kind}`, ...named, `--add-${kind}`, ...named, '--environment', '<ENVIRONMENTS>'],
+              },
+            ]
+          }),
+        )
+        const add = named.filter(({ prefix }) => prefix === 'add-').map(({ principal }) => principal)
+        const remove = named.filter(({ prefix }) => prefix === 'remove-').map(({ principal }) => principal)
+        const can = flags.can !== undefined ? grantFlags(() => grantCanOf(flags.can!)) : undefined
+        if (add.length === 0 && remove.length === 0 && can === undefined)
+          throw usage(`grants update ${id} changes nothing: add or remove a principal (--add-user, --remove-project, …), or give --can.`, { reason: 'missing_arguments' })
+        const { grant } = await client().updateGrant(id, { ...(add.length > 0 ? { add } : {}), ...(remove.length > 0 ? { remove } : {}), ...(can !== undefined ? { can } : {}) })
+        if (flags.json) result({ grant, outcome: 'updated' })
+        else out(`updated ${grantRow(grant)}`)
+        return 0
+      }
+      if (verb === 'explain') {
+        const [channel, extra] = rest
+        if (channel === undefined) throw usage('Missing the channel to explain, such as security/incidents.', { reason: 'missing_arguments' })
+        if (extra !== undefined) throw usage(`grants explain takes one channel: ${extra} is one too many.`)
+        onlyPrincipalFlags('explain')
+        const { principal, subject, kind } = grantFlags(() => explainPrincipalOf(ordered))
+        const explanation = await client().explain(channel, principal)
+        if (flags.json) result({ explanation })
+        else out(explanationLine(explanation, subject, kind))
         return 0
       }
       if (verb === 'revoke') {

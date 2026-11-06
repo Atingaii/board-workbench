@@ -26,9 +26,12 @@ function pongBoard(api: ReturnType<typeof fakeMessageboard>, middleware: Middlew
 }
 
 describe('vercel()', () => {
-  it("passes the conformance kit's core, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
+  it("passes the conformance kit's core, grants, attachments, and watchers, and fails what sync needs of Vercel's API", async () => {
     const api = fakeMessageboard()
-    const report = await conformance(handleOn(api), { withToken: () => handleOn(api) })
+    // The API looks names up, so the grants checks name a project, a repository, a viewer, and an app its team has.
+    // A board token is its board's, so the handle it's sent on names the board.
+    const withToken = (secret: string) => board({ backend: vercel({ team: 'team_test', api: API, board: 'brd_test', fetch: as(api, secret), files: api.files }) })
+    const report = await conformance(handleOn(api), { withToken, principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com', app: 'ship' } })
     const statuses = Object.fromEntries(report.checks.map((check) => [`${check.group}: ${check.name}`, check.status]))
     expect(statuses).toEqual({
       'core: says in its discovery where it is': 'passed',
@@ -52,12 +55,20 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
-      // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
-      'grants: grants a project, lists it, and revokes it': 'failed',
-      'grants: makes another grant for the same principals, and changes one by its ID': 'failed',
-      "grants: keeps a grant's can as written, a pattern with no permissions included": 'failed',
-      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
-      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
+      'grants: grants a principal, lists it, and revokes it': 'passed',
+      'grants: makes another grant for the same principals, and changes one by its ID': 'passed',
+      "grants: keeps a grant's can as written, a pattern with no permissions included": 'passed',
+      'grants: lets the most specific pattern decide, then the closest principal there, and adds up ties': 'passed',
+      'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'passed',
+      'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
+      'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
+      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'passed',
+      "grants: lets no token grant past its own can, even where everyone's grant closes it": 'passed',
+      'grants: lets no token let anyone in where everyone gets more than the token has': 'passed',
+      'grants: lets a member grant on a pattern after a lock under it': 'skipped',
+      'grants: lets a project on another team in, in its environments': 'skipped',
+      'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'passed',
+      "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'passed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
       'watchers: matches a registered tail, hands the match to a pull, and takes its ack': 'passed',
       'watchers: wakes by path only where its discovery says so, and only a Vercel project': 'passed',
@@ -66,6 +77,8 @@ describe('vercel()', () => {
       'sync: hands a sync each message change as a match of its @sync watcher': 'failed',
       'sync: keeps noSync on a post and a reply, so sync sends neither': 'failed',
     })
+    // It leaves the grants as it found them.
+    expect([...api.grants.keys()]).toEqual(['g1', 'g2', 'g3'])
   }, 30_000)
 
   it('answers only wake-ups and webhooks: it verifies no request, and none reaches the API, while its own code writes as the project', async () => {
@@ -292,7 +305,7 @@ describe('vercel()', () => {
       status: 403,
       code: 'board_not_granted',
       message: "this project has no access to the team's board (prj_pong, production).",
-      hint: 'Someone who manages the board can grant it.',
+      hint: "Grant it: vb grants create --project prj_pong --environment production --can '*=read,post,react,label'",
     })
     const api = fakeMessageboard({ boardId: null })
     await handleOn(api).post('dev', { text: 'hello' })
@@ -309,7 +322,7 @@ describe('vercel()', () => {
     // A person may do what their team role lets them; a project, what any credentials the API lets in may.
     const api = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
     expect(await said(handleOn(api, 'user:u_jb'))).toEqual(everything)
-    expect(await said(handleOn(api, 'user:u_ada'))).toEqual({ can: { '*': ['read'] }, expiresAt: null })
+    expect(await said(handleOn(api, 'user:u_ada'))).toEqual({ can: { '*': ['read', 'react'] }, expiresAt: null })
     expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
     for (const role of ['member', 'developer'] as const) expect(await said(handleOn(fakeMessageboard({ roles: { u_jb: role } })))).toEqual(everything)
     // Credentials it says less of, and until when, as it will of board tokens: board's own permissions, as it gives them.
@@ -386,7 +399,7 @@ describe('vercel()', () => {
         code: 'board_not_granted',
         origin: 'handle',
         message: 'this project has no access to board security (prj_pong, preview).',
-        hint: 'Someone who manages the board can grant it.',
+        hint: "Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'",
       })
     })
 
@@ -767,11 +780,242 @@ describe('vercel()', () => {
     expect(screened).toEqual(['post dev root', 'post dev check in', 'post dev check later', 'post memory/notes remember this', 'post memory/notes and this'])
   })
 
-  it("sends grants and tokens to Vercel's API as the protocol has them, which answers what it doesn't keep yet", async () => {
+  it("refuses a project it names by name that turns out to be the run's own, after one grant it revokes", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'project', project: 'web', environments: ['production'] }], can: { '*': 'all' } })
+    const before = [...api.grants.keys()]
+    // web's own deployment names web: only the API knows that's prj_web, so the kit asks it with a grant that changes nothing for the run.
+    await expect(conformance(handleOn(api, 'project:prj_web:production'), { principals: { project: 'web', repository: 'acme/api' } })).rejects.toThrow(
+      "principals.project is this run's own project, web (prj_web)",
+    )
+    expect([...api.grants.keys()]).toEqual(before)
+  })
+
+  it("fails a board whose team role lets a viewer post, in the conformance kit's viewer check", async () => {
+    const api = fakeMessageboard()
+    const real = as(api, 'user:u_jb')
+    // The API, but its explain lets the viewer post.
+    const posting: typeof fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const response = await real(request)
+      if (!new URL(request.url).pathname.endsWith('/grants/explain')) return response
+      const text = (await response.text()).replace('"can":["read","react"]', '"can":["read","post","react"]')
+      return new Response(text, { status: response.status, headers: response.headers })
+    }
+    const handle = board({ backend: vercel({ team: 'team_test', api: API, fetch: posting, files: api.files }) })
+    const report = await conformance(handle, { principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com' } })
+    expect(report.checks.find((check) => check.name.startsWith('caps a person by their team role'))).toMatchObject({
+      status: 'failed',
+      detail: 'what a viewer may do with a grant of all: expected read, and neither post nor manage, got ["read","post","react"]',
+    })
+  })
+
+  it('keeps an app run in while it checks apps, so it revokes all it made', async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { '*': 'all' } })
+    const before = [...api.grants.keys()]
+    const report = await conformance(handleOn(api, 'app:oac_2'), { principals: { project: 'prj_board', repository: 'acme/api', app: 'ship' } })
+    expect(report.checks.find((check) => check.name.startsWith('names an app'))).toMatchObject({ status: 'passed' })
+    expect([...api.grants.keys()]).toEqual(before)
+  })
+
+  it("gives back what Vercel's API refuses under the grant rules as the board's, grant_forbidden", async () => {
+    const pong = handleOn(fakeMessageboard(), 'project:prj_pong:production')
+    await expect(pong.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', origin: 'board' })
+    await expect(pong.createGrant({ principals: [{ kind: 'everyone' }], can: { 'dev/': [] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', message: expect.stringContaining('takes manage') })
+  })
+
+  it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)
-    await expect(jb.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
-    await expect(jb.createToken({ name: 'widget', can: { 'feedback/': ['post'] } })).rejects.toMatchObject({ status: 404 })
-    expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/brd_test/grants', 'POST /boards/brd_test/tokens']))
+    expect(await jb.grants()).toEqual([
+      { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: true, by: null, at: null },
+      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+      { id: 'g3', principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+    ])
+    const { grant } = await jb.createGrant({
+      principals: [
+        { kind: 'user', email: 'ada@acme.com' },
+        { kind: 'project', project: 'web', environments: ['production'] },
+        { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' },
+        { kind: 'app', app: 'ship' },
+      ],
+      can: { 'security/': 'all' },
+    })
+    expect(grant.principals).toEqual([
+      { kind: 'user', userId: 'u_ada', email: 'ada@acme.com' },
+      { kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production'], teamId: 'team_test' },
+      { kind: 'github', repositoryId: '700001', repository: 'acme/web', workflow: 'ci.yml' },
+      { kind: 'app', clientId: 'oac_1', name: 'ship' },
+    ])
+    // A project it names already gets the new environments.
+    const joined = await jb.updateGrant(grant.id, { add: [{ kind: 'project', project: 'prj_web', environments: ['preview'] }] })
+    expect(joined.grant.principals[1]).toEqual({ kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production', 'preview'], teamId: 'team_test' })
+    const updated = await jb.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }], remove: [{ kind: 'project', project: 'web' }, { kind: 'app', app: 'oac_1' }] })
+    expect(updated.grant.principals.map((principal) => ('userId' in principal ? principal.userId : principal.kind))).toEqual(['u_ada', 'github', 'u_bob'])
+    expect(await jb.explain('security/incidents', { user: 'bob@acme.com' })).toEqual({
+      channel: 'security/incidents',
+      pattern: 'security/',
+      over: ['*'],
+      level: 'principal',
+      grants: [updated.grant],
+      rule: null,
+      capped: null,
+      can: ['read', 'post', 'react', 'label', 'sync', 'manage'],
+    })
+    // A viewer's role caps what g1 gives them.
+    expect(await jb.explain('dev', { user: 'val@acme.com' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g1' }], capped: 'viewer', can: ['read', 'react'] })
+    // An app on the team, by its slug: g3 lets every one in.
+    expect(await jb.explain('dev', { app: 'ship' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g3' }], can: ['read', 'post', 'react', 'label'] })
+    // Its grant lets the run in, and says nothing of ci.
+    expect(await jb.explain('ci', { github: 'acme/web', workflow: 'ci.yml' })).toMatchObject({ pattern: null, level: null, grants: [], can: [] })
+    await jb.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })
+    expect(await jb.explain('ci', { oidc: 'https://gitlab.com', claims: { project_id: '42' } })).toMatchObject({ pattern: 'ci/', level: 'principal', can: ['post'] })
+    expect((await jb.revokeGrant(grant.id)).revoked).toBe(true)
+    expect(api.requests).toEqual(
+      expect.arrayContaining([
+        'POST /boards/brd_test/grants',
+        `PATCH /boards/brd_test/grants/${grant.id}`,
+        'GET /boards/brd_test/grants/explain',
+        `POST /boards/brd_test/grants/${grant.id}/revoke`,
+      ]),
+    )
+  })
+
+  it("gives back grants' and tokens' times as the protocol has them, though the API answers milliseconds", async () => {
+    const api = fakeMessageboard()
+    const jb = handleOn(api)
+    const before = Date.now()
+    const { grant } = await jb.createGrant({ principals: [{ kind: 'user', email: 'ada@acme.com' }], can: { 'ci/': ['read'] } })
+    expect(Date.parse(grant.at!)).toBeGreaterThanOrEqual(before)
+    expect(grant.at).toBe(new Date(Date.parse(grant.at!)).toISOString())
+    expect((await jb.grants()).find((listed) => listed.id === grant.id)?.at).toBe(grant.at)
+    expect((await jb.explain('ci', { user: 'ada@acme.com' })).grants).toMatchObject([{ id: grant.id, at: grant.at }])
+    expect((await jb.updateGrant(grant.id, { can: { 'ci/': ['read', 'post'] } })).grant.at).toMatch(/^\d{4}-\d\d-\d\dT/)
+    const { token } = await jb.createToken({ name: 'ci', can: { 'ci/': ['post'] }, expires: '1d' })
+    expect(token.at).toBe(new Date(Date.parse(token.at)).toISOString())
+    expect(Date.parse(token.expiresAt) - Date.parse(token.at)).toBe(86_400_000)
+    expect(await jb.tokens()).toMatchObject([{ id: token.id, at: token.at, expiresAt: token.expiresAt }])
+  })
+})
+
+describe("board tokens on Vercel's API", () => {
+  /** A handle on a board that sends `secret`, by the board's ID, as a board token reaches its board. */
+  const holding = (api: ReturnType<typeof fakeMessageboard>, secret: string, id = 'brd_test') =>
+    board({ backend: vercel({ team: 'team_test', api: API, board: id, fetch: as(api, secret), files: api.files }) })
+  /** What the API answers to a request vercel() never makes: a replayed operation ID, or a scope board's schema refuses first. */
+  const raw = async (api: ReturnType<typeof fakeMessageboard>, bearer: string, method: string, path: string, body?: unknown) => {
+    const response = await as(api, bearer)(`${API}/v1/messageboard${path}?teamId=team_test`, { method, headers: { 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })
+    return { status: response.status, body: await response.json() }
+  }
+
+  it("runs the conformance kit on a board token, and skips watchers, which a board token can't register yet", async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api).createToken({ name: 'conformance' })
+    const report = await conformance(holding(api, secret), { withToken: (minted) => holding(api, minted) })
+    expect(report.checks.filter((check) => check.group === 'watchers').map(({ status, detail }) => ({ status, detail }))).toEqual([
+      { status: 'skipped', detail: "a board token can't register watchers yet" },
+      { status: 'skipped', detail: "a board token can't register watchers yet" },
+    ])
+    expect(report.checks.filter((check) => check.group === 'core' || check.group === 'tokens').every((check) => check.status === 'passed')).toBe(true)
+  })
+
+  it('shows a secret once, sends it as it is, and answers a retried mint 409 token_already_minted', async () => {
+    const api = fakeMessageboard()
+    const ada = handleOn(api, 'user:u_ada')
+    const { secret } = await ada.createToken({ name: 'ci' })
+    expect(JSON.stringify(await ada.tokens())).not.toContain(secret)
+    expect((await holding(api, secret).me()).principal).toBe('vercel:user:u_ada')
+    const mint = { operationId: 'op_1', name: 'ci' }
+    expect((await raw(api, 'user:u_ada', 'POST', '/boards/brd_test/tokens', mint)).status).toBe(200)
+    expect(await raw(api, 'user:u_ada', 'POST', '/boards/brd_test/tokens', mint)).toMatchObject({ status: 409, body: { error: { code: 'token_already_minted' } } })
+  })
+
+  it("answers 401 invalid_token for a token that's unknown, revoked, expired, or whose person left the team", async () => {
+    const api = fakeMessageboard()
+    const ada = handleOn(api, 'user:u_ada')
+    const [revoked, expired, left] = await Promise.all(['revoked', 'expired', 'left'].map((name) => ada.createToken({ name })))
+    await ada.revokeToken(revoked!.token.id)
+    api.tokens.get(expired!.token.id)!.expiresAt = Date.now() - 1
+    expect((await holding(api, left!.secret).me()).principal).toBe('vercel:user:u_ada')
+    api.leave('u_ada')
+    for (const secret of ['not-a-token', revoked!.secret, expired!.secret, left!.secret])
+      await expect(holding(api, secret).me()).rejects.toMatchObject({ status: 401, code: 'invalid_token' })
+  })
+
+  it("answers 404 board_not_found on a board that isn't the token's, and says plainly that it reaches no team route", async () => {
+    const api = fakeMessageboard({ boards: [{ name: 'Security', id: 'brd_sec' }] })
+    const { secret } = await handleOn(api).createToken({ name: 'ci' })
+    await expect(holding(api, secret, 'brd_sec').messages({ channel: 'dev' })).rejects.toMatchObject({ status: 404, code: 'board_not_found' })
+    expect(await raw(api, secret, 'GET', '/boards')).toMatchObject({ status: 403, body: { error: { code: 'board_token_scope' } } })
+    // Finding the team's board is a team route.
+    const unnamed = board({ backend: vercel({ team: 'team_test', api: API, fetch: as(api, secret), files: api.files }) })
+    await expect(unnamed.messages({ channel: 'dev' })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_token_scope',
+      origin: 'handle',
+      message: 'a board token reaches only its own board, by its ID.',
+    })
+  })
+
+  it('says what a token may do, and until when', async () => {
+    const api = fakeMessageboard()
+    const { token, secret } = await handleOn(api).createToken({ name: 'ci', can: { 'dev/': ['read'] }, expires: '1h' })
+    expect(await holding(api, secret).me()).toMatchObject({ can: { 'dev/': ['read'] }, expiresAt: token.expiresAt })
+    expect(Date.parse(token.expiresAt) - Date.parse(token.at)).toBe(3_600_000)
+  })
+
+  it("says plainly that a board token can't register watchers yet", async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api).createToken({ name: 'ci' })
+    await expect(holding(api, secret).register({ url: null, watch: { open: { tail: 'dev/' } } })).rejects.toMatchObject({
+      status: 403,
+      code: 'board_token_unsupported',
+      origin: 'handle',
+      message: "a board token can't register watchers yet.",
+    })
+    expect(api.registrations.size).toBe(0)
+  })
+
+  it("mints for people, deployments, and tokens, and answers 403 unsupported_principal to apps and development tokens that carry a person", async () => {
+    const api = fakeMessageboard()
+    const { token, secret } = await handleOn(api).createToken({ name: 'ci' })
+    expect((await holding(api, secret).createToken({ name: 'child' })).token.parent).toBe(token.id)
+    expect((await handleOn(api, 'project:prj_pong:production').createToken({ name: 'deploy' })).token.by).toBe('vercel:project:prj_pong:production')
+    for (const principal of ['app:oac_1', 'user:u_jb:development'])
+      await expect(handleOn(api, principal).createToken({ name: 'ci' })).rejects.toMatchObject({ status: 403, code: 'unsupported_principal' })
+  })
+
+  it("holds a token to its can in grants, as its minter's grants and role are", async () => {
+    const api = fakeMessageboard()
+    // Ada is a member, who manages everywhere; her token only reads, and posts in ci/.
+    const { secret } = await handleOn(api, 'user:u_ada').createToken({ name: 'ci', can: { '*': ['read'], 'ci/': ['read', 'post'] } })
+    const token = holding(api, secret)
+    await expect(token.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    await expect(token.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    expect((await handleOn(api, 'user:u_ada').createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).grant.id).toEqual(expect.any(String))
+    // Nor grant over a spot it's kept out of.
+    const kept = holding(api, (await handleOn(api, 'user:u_ada').createToken({ name: 'ci', can: { '*': 'all', 'ci/secret/': [] } })).secret)
+    await expect(kept.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    expect((await kept.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/open/': ['read'] } })).grant.id).toEqual(expect.any(String))
+    // An owner's token too.
+    const owners = holding(api, (await handleOn(api, 'user:u_jb').createToken({ name: 'ci', can: { '*': ['read'] } })).secret)
+    await expect(owners.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+  })
+
+  it('lists and revokes, for a token, only itself and the tokens made from it, and answers a bad scope 400 invalid_scope', async () => {
+    const api = fakeMessageboard()
+    const ada = handleOn(api, 'user:u_ada')
+    const parent = await ada.createToken({ name: 'parent' })
+    const sibling = await ada.createToken({ name: 'sibling' })
+    const child = await holding(api, parent.secret).createToken({ name: 'child' })
+    const ids = async (handle: ReturnType<typeof board>) => (await handle.tokens()).map((listed) => listed.id).sort()
+    expect(await ids(holding(api, parent.secret))).toEqual([parent.token.id, child.token.id].sort())
+    expect(await ids(holding(api, child.secret))).toEqual([child.token.id])
+    await expect(holding(api, parent.secret).revokeToken(sibling.token.id)).rejects.toMatchObject({ status: 404, code: 'token_not_found' })
+    expect(await holding(api, parent.secret).revokeToken(child.token.id)).toEqual({ revoked: true })
+    // Ada sees what acts as her.
+    expect(await ids(ada)).toEqual([parent.token.id, sibling.token.id].sort())
+    expect(await raw(api, 'user:u_ada', 'POST', '/boards/brd_test/tokens', { operationId: 'op_2', name: 'ci', can: { 'dev/': ['fly'] } })).toMatchObject({ status: 400, body: { error: { code: 'invalid_scope' } } })
   })
 })
