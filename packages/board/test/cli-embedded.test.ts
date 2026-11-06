@@ -409,7 +409,7 @@ describe('the embedded CLI', () => {
       expect(await run('whoami', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')).toMatchObject({ code: 0, stdout: expect.stringContaining('brd_test') })
       vi.stubEnv('BOARD_NAME', undefined)
       // A board no one made yet: a person is told, and nothing makes it.
-      expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: There's no board named nope on this team/) })
+      expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: no board named nope on this team, or none you can see\./) })
       expect(api.requests).not.toContain('POST /boards/ensure')
       // What isn't a name, or names a board twice, is misuse: another team's board is --scope's.
       for (const args of [['--name', 'security', '--url', 'https://www.example.com/api/board'], ['--name', 'x'.repeat(65)]])
@@ -444,6 +444,66 @@ describe('the embedded CLI', () => {
       const at = 'https://api.vercel.com/v1/messageboard/boards/brd_ops1?teamId=team_acme'
       expect((await run('post', 'dev', 'on ops one', '--url', at)).code).toBe(0)
       expect((await run('read', 'dev', '--url', at)).stdout).toContain('on ops one')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("tells a person how to make a board their name finds none of, and makes it with --ensure", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard({ boards: [{ name: 'vault', members: ['u_ada'] }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({
+        code: 1,
+        stderr: "error: no board named nope on this team, or none you can see.\n\n  Check the name, or make it:\n    vb read dev --name nope --ensure\n",
+      })
+      // The way out adds --ensure before --, so the text after it stays text.
+      expect((await run('post', 'dev', '--name', 'nope', '--', '--ensure')).stderr).toContain('    vb post dev --name nope --ensure -- --ensure\n')
+      expect(api.requests.filter((request) => request === 'POST /boards/ensure')).toEqual([])
+      // Following it makes the board, and posts there.
+      expect((await run('post', 'dev', 'first', '--name', 'nope', '--ensure')).code).toBe(0)
+      expect((await run('read', 'dev', '--name', 'nope')).stdout).toContain('first')
+      // A private board's name is taken, and there's no way out but asking for access.
+      expect(await run('read', 'dev', '--name', 'vault', '--ensure')).toMatchObject({
+        code: 1,
+        stderr: "error: there's a board named vault you can't see.\n\n  Ask someone who can see it for access.\n",
+      })
+      // --ensure makes a board by its name: without one, or beside a URL, it's misuse.
+      expect(await run('read', 'dev', '--ensure')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --ensure makes the board --name names: pass --name too\.\n/) })
+      expect(await run('read', 'dev', '--ensure', '--url', 'https://board.example/api/board')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --ensure makes a team's board by its name, and --url/) })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("tells a project a board doesn't let it in, and who fixes that", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:preview')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard({ boardId: null, boards: [{ name: 'security', granted: ['prj_pong:production'] }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await run('read', 'dev', '--name', 'security')).toMatchObject({
+        code: 1,
+        stderr: "error: board security doesn't let this project in (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+      })
+      expect(await run('read', 'dev')).toMatchObject({
+        code: 1,
+        stderr: "error: the team's board doesn't let this project in (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+      })
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)

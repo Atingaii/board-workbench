@@ -349,8 +349,10 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
 
   /**
    * The board named `name` in the team: the one the API lists for it. Where it lists none, this
-   * project's own code makes it (granted to the project, in its environment), and a person is
-   * told there's none to use. Older boards can share a name, and then none is picked.
+   * project's own code makes it (granted to the project, in its environment), and so does a person
+   * who asks to (`ensure`); anyone else is told there's none they can see. Names are unique across
+   * the team's boards, the ones you can't see included. Older boards can share a name, and then none
+   * is picked.
    */
   async function boardNamed(who: Who, name: string): Promise<string> {
     if (!/^[^/]{1,64}$/.test(name))
@@ -369,23 +371,30 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       })
     }
     if (boards[0]) return boards[0].id
-    if ((await self(who)).actor.principal.type !== 'project')
-      throw new HttpError(404, 'no_board', `There's no board named ${name} on this team that you can use.`, {
-        hint: 'Check the name, or run the project that uses it: it makes the board.',
+    const { principal } = (await self(who)).actor
+    if (principal.type !== 'project' && !binding?.ensure)
+      throw new HttpError(404, 'no_board', `no board named ${name} on this team, or none you can see.`, {
+        hint: 'Check the name, or make it: board({ name, ensure: true })',
         origin: 'handle',
       })
     try {
       const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
       return made.id
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'board_not_granted')
-        throw new HttpError(403, 'board_not_granted', `This project isn't granted the board named ${name}.`, {
-          hint: 'Ask someone on the team to grant it to this project in this environment.',
-          origin: 'handle',
-        })
+      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(`board ${name}`, principal)
+      // Names are unique across the team's boards, private ones included: this one is someone else's to show.
+      if (error instanceof HttpError && error.code === 'board_name_taken')
+        throw new HttpError(409, 'board_name_taken', `there's a board named ${name} you can't see.`, { hint: 'Ask someone who can see it for access.', origin: 'handle' })
       throw error
     }
   }
+
+  /** A project a board's grants don't let in: they were narrowed, since every project on the team gets in by default. */
+  const notLetIn = (board: string, principal: ApiPrincipal) =>
+    new HttpError(403, 'board_not_granted', `${board} doesn't let this project in${principal.type === 'project' ? ` (${principal.projectId}, ${principal.environment})` : ''}.`, {
+      hint: 'Someone who manages the board can grant it.',
+      origin: 'handle',
+    })
 
   let board: Promise<string> | null = null
   /**
@@ -401,8 +410,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         ? boardNamed(who, boardName()!)
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
-            if ((await self(who)).actor.principal.type === 'project')
-              throw new HttpError(404, 'no_board', "Vercel's API names no board this project may use: ask someone on the team to grant it the team's board, or pass `board`")
+            const { principal } = (await self(who)).actor
+            if (principal.type === 'project') throw notLetIn("the team's board", principal)
             const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
             return made.id
           })).catch((error: unknown) => {

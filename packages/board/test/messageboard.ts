@@ -660,6 +660,8 @@ type Kept = {
   name: string
   /** The projects granted it, as `prj_x:production`, or `all` for every project in the team. */
   granted: Set<string> | 'all'
+  /** For a private board, the people who see it, by user ID; null for a team-visible one. */
+  members: Set<string> | null
   data: ReturnType<typeof fakeBoard>
 }
 
@@ -679,7 +681,8 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  * The team's API: its default board, `General` (`brd_test`, or none with `boardId: null` until a
  * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
  * uses every board in the team; a project, those granted it in its environment. A board made here
- * takes no name another has, whatever its case; `boards` may share one, as older boards can.
+ * takes no name another has, whatever its case, private ones included; `boards` may share one, as
+ * older boards can. A private board (`members`) is seen only by the people it lists.
  * `notDefault`: this team isn't the token's default team, so a request reaches it only when it
  * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  *
@@ -695,7 +698,7 @@ export function fakeMessageboard(
     slug?: string
     boardId?: string | null
     accounts?: Accounts
-    boards?: { name: string; id?: string; granted?: string[] }[]
+    boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
     roles?: Record<string, Role>
     me?: Record<string, MeSays> | false
     notDefault?: boolean
@@ -711,19 +714,25 @@ export function fakeMessageboard(
   const now = () => (clock = Math.max(Date.now(), clock + 1))
   const shared: Shared = { teamId, accounts, now, stored }
 
-  const kept = (id: string, name: string, granted: Kept['granted']): Kept => ({ id, name, granted, data: fakeBoard(shared, id) })
+  const kept = (id: string, name: string, granted: Kept['granted'], members: Kept['members'] = null): Kept => ({ id, name, granted, members, data: fakeBoard(shared, id) })
   // The default board is kept from the start, so what a test reads of it holds once a person makes it.
   const general = kept(options.boardId === undefined ? 'brd_test' : (options.boardId ?? 'brd_default'), 'General', 'all')
   let made = options.boardId !== null
-  const others = (options.boards ?? []).map((board) => kept(board.id ?? `brd_${randomUUID()}`, board.name, new Set(board.granted ?? [])))
+  const others = (options.boards ?? []).map((board) => kept(board.id ?? `brd_${randomUUID()}`, board.name, new Set(board.granted ?? []), board.members ? new Set(board.members) : null))
   const boards = () => [...(made ? [general] : []), ...others]
   /** What each ensure made, by its caller and operation ID, for a retry to answer again. */
   const ensured = new Map<string, Kept>()
 
   const grantOf = (principal: Extract<Principal, { type: 'project' }>) => `${principal.projectId}:${principal.environment}`
-  /** A board is team-visible: anyone in the team uses it but a project, which needs it granted in its environment. */
-  const mayUse = (actor: Actor, board: Kept) => actor.principal.type !== 'project' || board.granted === 'all' || board.granted.has(grantOf(actor.principal))
-  const show = (board: Kept) => ({ id: board.id, teamId, name: board.name, visibility: 'team' })
+  /**
+   * Who uses a board: a project, where it's granted in its environment; a person, a team-visible
+   * board, or a private one that lists them.
+   */
+  const mayUse = (actor: Actor, board: Kept) =>
+    actor.principal.type === 'project'
+      ? board.granted === 'all' || board.granted.has(grantOf(actor.principal))
+      : board.members === null || (actor.principal.type === 'user' && board.members.has(actor.principal.userId))
+  const show = (board: Kept) => ({ id: board.id, teamId, name: board.name, visibility: board.members === null ? 'team' : 'private' })
   const named = (name: string) => boards().some((board) => board.name.toLowerCase() === name.toLowerCase())
 
   async function route(request: Request): Promise<unknown> {
@@ -771,6 +780,8 @@ export function fakeMessageboard(
       const found = boards().filter((board) => board.name.toLowerCase() === body.name.toLowerCase())
       if (found.length > 1) throw new Refused(409, 'ambiguous_board_name', 'Several boards have that name.')
       if (found[0]) {
+        // A name is taken whoever can see its board: a private one stays unseen, and isn't made again.
+        if (found[0].members !== null && !mayUse(actor, found[0])) throw new Refused(409, 'board_name_taken', 'A board has that name.')
         if (!mayUse(actor, found[0])) throw new Refused(403, 'board_not_granted', "This project isn't granted that board.")
         return { board: show(found[0]), created: false }
       }
