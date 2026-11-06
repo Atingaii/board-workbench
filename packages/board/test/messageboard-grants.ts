@@ -261,7 +261,8 @@ export function fakeGrants(options: {
    */
   function mayGrant(who: Who, patterns: Iterable<string>, after: readonly Grant[], what: string) {
     if (isOwner(who)) return
-    const spots = [...grants.values()].filter((grant) => grant.principals.some((principal) => names(principal, who, true))).flatMap((grant) => Object.keys(grant.can))
+    // Its own limits' patterns are spots too: a board token's can, and the grants that name it.
+    const spots = [...grants.values()].filter((grant) => grant.principals.some((principal) => names(principal, who, true))).flatMap((grant) => Object.keys(grant.can)).concat(Object.keys(who.limit ?? {}))
     const everyone = after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone')).flatMap((grant) => Object.keys(grant.can))
     const manages = (spot: string, own = false) => decide(who, spot, own).can.includes('manage')
     for (const pattern of patterns) {

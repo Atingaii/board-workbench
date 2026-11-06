@@ -933,6 +933,10 @@ describe("board tokens on Vercel's API", () => {
     await expect(token.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
     await expect(token.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
     expect((await handleOn(api, 'user:u_ada').createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).grant.id).toEqual(expect.any(String))
+    // Nor grant over a spot it's kept out of.
+    const kept = holding(api, (await handleOn(api, 'user:u_ada').createToken({ name: 'ci', can: { '*': 'all', 'ci/secret/': [] } })).secret)
+    await expect(kept.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
+    expect((await kept.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/open/': ['read'] } })).grant.id).toEqual(expect.any(String))
     // An owner's token too.
     const owners = holding(api, (await handleOn(api, 'user:u_jb').createToken({ name: 'ci', can: { '*': ['read'] } })).secret)
     await expect(owners.createGrant({ principals: [{ kind: 'user', email: 'bob@acme.com' }], can: { 'ci/': ['read'] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden' })
