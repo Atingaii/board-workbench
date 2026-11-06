@@ -486,22 +486,16 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("says how to use one of a team's boards that share a name, on that team", async () => {
+  it("reaches a team's board by its URL, which names its team, from a login whose default team is another", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
     // acme isn't the login's default team: a request reaches it only when it names it.
-    const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'ops', id: 'brd_ops1' }, { name: 'Ops', id: 'brd_ops2' }] })
+    const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'ops', id: 'brd_ops1' }] })
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
     const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
     const cwd = process.cwd()
     process.chdir(home)
     try {
-      const ambiguous = await run('read', 'dev', '--scope', 'acme', '--name', 'ops')
-      expect(ambiguous).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: This team has 2 boards named ops: brd_ops1, brd_ops2\.\n/) })
-      // Its way out names the team in the URL, and drops --scope, which a URL would leave unread.
-      const way = "    vb read dev --url 'https://api.vercel.com/v1/messageboard/boards/<ID>?teamId=team_acme'\n"
-      expect(ambiguous.stderr).toContain(way)
-      // Which works, on acme.
       const at = 'https://api.vercel.com/v1/messageboard/boards/brd_ops1?teamId=team_acme'
       expect((await run('post', 'dev', 'on ops one', '--url', at)).code).toBe(0)
       expect((await run('read', 'dev', '--url', at)).stdout).toContain('on ops one')
@@ -532,10 +526,10 @@ describe('the embedded CLI', () => {
       // Following it makes the board, and posts there.
       expect((await run('post', 'dev', 'first', '--name', 'nope', '--ensure')).code).toBe(0)
       expect((await run('read', 'dev', '--name', 'nope')).stdout).toContain('first')
-      // A private board's name is taken, and there's no way out but asking for access.
+      // A private board's name is taken: pick another, or ask for access.
       expect(await run('read', 'dev', '--name', 'vault', '--ensure')).toMatchObject({
         code: 1,
-        stderr: "error: there's a board named vault you can't see.\n\n  Ask someone who can see it for access.\n",
+        stderr: "error: the board name vault is taken.\n\n  Pick another name, or ask whoever can see it for access.\n",
       })
       // --ensure makes a board by its name: without one, or beside a URL, it's misuse.
       expect(await run('read', 'dev', '--ensure')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --ensure makes the board --name names: pass --name too\.\n/) })
@@ -547,7 +541,7 @@ describe('the embedded CLI', () => {
     }
   })
 
-  it("tells a project a board doesn't let it in, and who fixes that", async () => {
+  it('tells a project it has no access to a board, and who fixes that', async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:preview')
     vi.stubEnv('VERCEL_ORG_ID', 'team_test')
@@ -559,11 +553,11 @@ describe('the embedded CLI', () => {
     try {
       expect(await run('read', 'dev', '--name', 'security')).toMatchObject({
         code: 1,
-        stderr: "error: board security doesn't let this project in (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'\n",
+        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'\n",
       })
       expect(await run('read', 'dev')).toMatchObject({
         code: 1,
-        stderr: "error: the team's board doesn't let this project in (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'\n",
+        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'\n",
       })
     } finally {
       fetching.mockRestore()
@@ -575,7 +569,8 @@ describe('the embedded CLI', () => {
   it('puts a way out before --, so following it posts the same text to the board it names', async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
-    const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'ops', id: 'brd_ops1' }, { name: 'Ops', id: 'brd_ops2' }] })
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
     const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
     const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
     // What a way out says to run, as argv: its last indented line, unquoted.
@@ -584,12 +579,12 @@ describe('the embedded CLI', () => {
     process.chdir(home)
     try {
       // Text that reads like options, after --: the way out leaves it as it is, and adds its own before it.
-      const ambiguous = await run('post', 'dev', '--scope', 'acme', '--name', 'ops', '--', '--scope')
-      expect(ambiguous.code).toBe(1)
-      const argv = wayOut(ambiguous.stderr).map((arg) => arg.replace('<ID>', 'brd_ops1'))
+      const missing = await run('post', 'dev', '--name', 'ops', '--', '--scope')
+      expect(missing.code).toBe(1)
+      const argv = wayOut(missing.stderr)
       expect(argv.slice(argv.indexOf('--'))).toEqual(['--', '--scope'])
       expect((await run(...argv)).code).toBe(0)
-      expect((await run('read', 'dev', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_ops1?teamId=team_acme')).stdout).toContain('--scope')
+      expect((await run('read', 'dev', '--name', 'ops')).stdout).toContain('--scope')
       // So does the way out for a team in --name.
       const slashed = await run('post', 'dev', '--name', 'acme/ops', '--', '--rollback')
       expect(slashed.code).toBe(2)

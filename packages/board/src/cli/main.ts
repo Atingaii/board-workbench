@@ -10,7 +10,7 @@ import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
-import { idUrlIn, isApiMessageId } from '../server/backend-vercel.ts'
+import { isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
@@ -626,12 +626,6 @@ function failureOf(error: unknown): Failure {
         return own('conflict', 'board_name_taken')
       case 'board_not_granted':
         return own('permission', 'board_not_granted')
-      case 'ambiguous_board_name': {
-        // The CLI picks one by its URL, which names its ID and its team, in place of the name and
-        // the team: beside a URL, --scope would pick nothing.
-        const at = (typeof hint === 'string' && idUrlIn(hint)) || 'https://api.vercel.com/v1/messageboard/boards/<ID>'
-        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: rerunWithout(['--name', '--scope', '--team'], '--url', at) }])
-      }
       case 'invalid_board_name':
         return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
