@@ -8,4 +8,3 @@ What to write instead:
 
 - `board({ backend: vercel({ team }) })` is `board({ team })`, `vercel({ fetch })` is `board({ fetch })`, and a board by its ID is one by its name, `board({ name })`.
 - `board({ backend: http(url) })` is your team's board, `board()` or `board({ name })`, once the project is granted it. For a board at a URL, `vb serve`'s say, set `BOARD_URL`.
-- A gateway, `board({ backend: http(url), access })`, is `board({ access })`: a gateway onto the team's board.
