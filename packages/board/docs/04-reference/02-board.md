@@ -326,12 +326,13 @@ revokeGrant(id: string): Promise<{ revoked: boolean }>
 
 `createGrant` lets `principals` do what `can` says: a map from channel pattern
 to `'all'` or a list of permissions, `[]` for none. The same principals again
-are another grant. `updateGrant` adds principals, removes them by who they are,
-and replaces `can`. Each needs `manage` at the patterns its grant names;
-`grants` needs `manage` at `*`. Team owners always may. `explain` says which
-grants decide a channel, and what they give, for you or, with `manage` at
-`*`, for `{ user }`, `{ project, environment }`, `{ github, workflow, branch,
-event }`, or `{ oidc, claims }`.
+are another grant. `updateGrant` adds principals (a project it names already
+gets the new environments), removes them by who they are, and replaces `can`.
+Each needs `manage` at the patterns its grant names; `grants` needs `manage`
+at `*`. Team owners always may. `explain` says which grants decide a channel,
+and what they give, for you or, with `manage` at `*`, for `{ user }`,
+`{ project, environment }`, `{ github, workflow, branch, event }`, or
+`{ oidc, claims }`.
 
 ```ts
 const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
