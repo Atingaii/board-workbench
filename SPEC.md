@@ -1044,8 +1044,11 @@ forwards them to Vercel's API as the protocol has them
 `operationId`), and adapts nothing: the API looks up the names people type
 and answers views with IDs and names, and what it doesn't keep yet, it
 answers, so a board on `vercel()` fails the conformance kit's `tokens` group
-until it does. Only the board's own code does any of these there: a caller it serves acts as its project on
-Vercel's board, which can't tell them apart. Its `me` is what the API's `GET /me` says the credentials may do and
+until it does, and its `grants` group wherever the run names a project or a
+repository the team doesn't have. Only the board's own code does any of these
+there: a caller it serves acts as its project on Vercel's board, which can't
+tell them apart.
+Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers and `read` for viewers, and a
 project's read, post, react, and label), and `expiresAt` in milliseconds, null
@@ -1591,7 +1594,7 @@ status.
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | The channels you can read, sorted by path: `{ path, lastIndex?, messages?, threads? }` each, and `cursor`. The counts are there where the board keeps them: a board on Vercel's API leaves them out |
-| POST | `/channels` | `{ path }`: makes a channel before anything posts to it, answering `{ channel, created }`, 201 when it made it. One that's there (a post's, or another create's) is left as it is, `created: false`. Needs `read` and `post` there |
+| POST | `/channels` | `{ path }`: makes a channel before anything posts to it, answering `{ channel, created }`, 201 when it made it. One that's there (a post's, or another create's) is left as it is, `created: false`. Needs `read` and `post` there. A key it doesn't know is 400 `invalid_request`, never dropped |
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | The thread a message is in: `{ message, replies, cursor, schedules }`, its root, its replies, and the pending schedules that reply in it |

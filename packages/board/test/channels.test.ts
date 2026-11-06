@@ -13,6 +13,14 @@ describe('creating a channel', () => {
     expect((await julian('GET', '/channels')).body.channels).toEqual([{ path: 'ops', lastIndex: 0, messages: 0, threads: 0 }])
   })
 
+  it("refuses a key it doesn't know, rather than make a channel that isn't what was asked for", async () => {
+    const { fetch } = testBoard()
+    const julian = caller(fetch, await personToken())
+    const asked = await julian('POST', '/channels', { path: 'vault', private: true })
+    expect([asked.status, asked.body.error.code]).toEqual([400, 'invalid_request'])
+    expect((await julian('GET', '/channels')).body.channels).toEqual([])
+  })
+
   it('answers one a post is making at the same time as there already, or makes it first', async () => {
     const { fetch } = testBoard()
     const julian = caller(fetch, await personToken())

@@ -482,8 +482,12 @@ export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 /** `status`: what Slack shows in place of "Typing…" (other platforms ignore it). */
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
-/** A channel to make before anything posts to it. */
-export const CreateChannelBody = z.object({ path: ChannelPath })
+/**
+ * A channel to make before anything posts to it, and nothing else: a key it doesn't know is a 400,
+ * so a client that asks for more than a channel (one that expects `private: true` to close it, say)
+ * is told, never handed an open one.
+ */
+export const CreateChannelBody = z.strictObject({ path: ChannelPath })
 /** At most this many labels in a label write's `if`. */
 export const LABEL_CONDITIONS_MAX = 16
 
