@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { build, defineConfig, type InlineConfig, type Rolldown } from 'tsdown'
@@ -42,7 +43,8 @@ export default defineConfig([
       'sync-github': 'src/sync/github.ts',
       'sync-linear': 'src/sync/linear.ts',
       cli: 'src/cli/bin.ts',
-      // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `serve`.
+      // `@vercel/board/cli`: the CLI for another one to embed, as `vercel board`, without `serve`
+      // or the inspector's page, which the app fetches (`INSPECTOR_PAGE`).
       'cli-embedded': 'src/cli/embedded.ts',
       // `@vercel/board/cli/commands`: the CLI's commands as data, for a host to render, with no imports.
       'cli-commands': 'src/cli/commands.ts',
@@ -61,26 +63,29 @@ export default defineConfig([
       onlyBundle: [/^experimental-a2(\/|$)/],
       dts: { alwaysBundle: [/^experimental-a2(\/|$)/] },
     },
-    plugins: [inlinePage()],
+    plugins: [pageDigest()],
     clean: true,
   },
 ])
 
 /**
- * `inspect`'s page goes in the CLI in place of `src/inspect/page.ts`, as a string in a chunk only
- * `inspect` loads: a CLI that bundles board's (`vercel board`) carries it that way, where a file
- * next to board's chunks would stay behind. It's built first, into `dist/inspect/app.js`, which
- * running from source reads.
+ * `inspect`'s page is built first, into `dist/inspect/app.js`, which the CLI reads where board is
+ * installed, and running from source too. Its SHA-256 goes in place of `src/inspect/digest.ts`:
+ * a CLI that bundles board's (`vercel board`) has no file beside it, so it fetches this version's
+ * from npm and checks it against that.
  */
-function inlinePage(): Rolldown.Plugin {
-  const module = here('src/inspect/page.ts')
-  let built: Promise<string> | undefined
+function pageDigest(): Rolldown.Plugin {
+  const module = here('src/inspect/digest.ts')
+  let digest: Promise<string> | undefined
+  const built = () => (digest ??= build(page).then(async () => createHash('sha256').update(await readFile(here('dist/inspect/app.js'))).digest('hex')))
   return {
     name: 'board:inspector-page',
+    buildStart() {
+      void built()
+    },
     async load(id) {
       if (id !== module) return null
-      built ??= build(page).then(() => readFile(here('dist/inspect/app.js'), 'utf8'))
-      return `export const page = async () => ${JSON.stringify(await built)}`
+      return `export const PAGE_SHA256 = ${JSON.stringify(await built())}`
     },
   }
 }

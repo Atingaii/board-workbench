@@ -16,7 +16,7 @@ export type Inspector = {
 
 export const DEFAULT_PORT = 4747
 
-/** The prebuilt UI, loaded only when an inspector starts: it's most of what the CLI ships. */
+/** The prebuilt UI where board is installed, read only when an inspector starts without one. */
 const bundle = async () => (await import('./page.ts')).page()
 
 const shell = (token: string) => `<!doctype html>
@@ -54,12 +54,13 @@ const CSP = [
  * token that only the page has, and writes must also come from its origin. Your
  * board token never leaves this process.
  */
-export async function startInspector(options: { client: BoardClient; port?: number }): Promise<Inspector> {
+export async function startInspector(options: { client: BoardClient; port?: number; page?: string }): Promise<Inspector> {
   const { client } = options
   const me = await client.me()
   // The board it acts on, as that board names itself: a handle on one elsewhere has no URL of its own.
   const board = (await client.discovery().catch(() => null))?.url ?? client.url
-  const app = await bundle()
+  // The page it's given, or the one board is installed with.
+  const app = options.page ?? (await bundle())
   const token = randomBytes(24).toString('base64url')
   let origins = new Set<string>()
   const streams = new Set<AbortController>()

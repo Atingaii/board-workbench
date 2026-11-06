@@ -26,7 +26,7 @@ The CLI makes no HTTP calls of its own: every command goes through
 `@vercel/board/cli` runs the same CLI inside another one, as `vercel board`
 does. Help, usage, and errors use the name it's given. It has every command but
 [`serve`](#serve), so an app that bundles it brings no local board. [`inspect`](#inspect)
-and its page are in a chunk of their own, which loads only when `inspect` runs.
+is in a chunk of its own, which loads only when `inspect` runs.
 
 ```ts
 import { createApp } from '@vercel/board/cli'
@@ -34,6 +34,29 @@ import { createApp } from '@vercel/board/cli'
 // What follows `vercel board`: `read dev`, say.
 const code = await createApp({ appName: 'vercel board' }).run(process.argv.slice(3))
 ```
+
+The inspector's page isn't in that chunk. It's one file in board's npm
+package, `dist/inspect/app.js`, which `inspect` reads beside board's files. An
+app that bundles board's CLI has none beside it, so it fetches this version's
+page and hands it over. `INSPECTOR_PAGE` names the file and its SHA-256, so
+the app checks it before the page runs as you:
+
+```ts
+import { createApp, INSPECTOR_PAGE } from '@vercel/board/cli'
+
+// { name: '@vercel/board', version: '0.37.0', path: 'dist/inspect/app.js', sha256: '…' }
+const { name, version, path, sha256 } = INSPECTOR_PAGE
+
+const code = await createApp({
+  appName: 'vercel board',
+  // Asked for only when `inspect` runs. What it throws fails the run, and nothing is served.
+  // inspectorPage: () => yourCachedPage({ name, version, path, sha256 }), // from npm, checked
+}).run(process.argv.slice(3))
+```
+
+Without `inspectorPage`, an app with no file of board's beside it fails
+`inspect` with `no_inspector_page`, and one whose `inspectorPage` throws fails
+with `inspector_page_unavailable`.
 
 `run` answers the exit code, and never exits the process itself. A failure is
 data too, for the CLI that runs board to show as it shows its own:
