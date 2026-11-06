@@ -604,6 +604,7 @@ function build(options: A2Options & { store: BoardStore }, binding: BoardBinding
     },
     grants: async (caller) => access.grants(await identityOf(caller)),
     createGrant: async (caller, body) => access.createGrant(await identityOf(caller), body),
+    updateGrant: async (caller, input) => access.updateGrant(await identityOf(caller), input),
     revokeGrant: async (caller, input) => access.revokeGrant(await identityOf(caller), input),
     tokens: async (caller) => access.tokens(await identityOf(caller)),
     createToken: async (caller, body) => access.createToken(await identityOf(caller), body),

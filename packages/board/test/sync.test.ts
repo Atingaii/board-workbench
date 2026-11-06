@@ -1392,6 +1392,8 @@ describe('sync', () => {
       access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['read', 'post'] } })],
       sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never }, channels({ C1: 'firehose' })) },
     })
+    // Only the rules decide for it: g2 would let in every project on the board's team.
+    await board.revokeGrant('g2')
     const anyone = caller(board.fetch, 'not-a-token')
     const front = caller(board.fetch, await deploymentToken())
     const julian = caller(board.fetch, await personToken())
@@ -1439,6 +1441,8 @@ describe('sync', () => {
       sync: { slack: slack({ adapter: s.adapter, client: async () => slackClient as never }, channels({ C1: 'firehose' })) },
       scheduler: fakeQueue().scheduler,
     })
+    // Only the rules decide for it: g2 would let in every project on the board's team.
+    await board.revokeGrant('g2')
     const front = caller(board.fetch, await deploymentToken())
     const julian = caller(board.fetch, await personToken())
     const text = 'checkout is slow, cc @[ada@vercel.com]'

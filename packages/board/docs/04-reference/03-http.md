@@ -119,9 +119,10 @@ a refused write it can read answers 403. `GET /me` returns the caller's
 | POST | `/schedules` | Schedule a message. Answers 201 `{ schedule }`, with `unknownMentions` like a post. See [Schedules](#schedules) |
 | GET | `/schedules` | `{ schedules }`. Query: `re`, `channel`, `by`, `all` |
 | POST | `/schedules/:id/cancel` | Cancel one, by the ID the board gave it (`s12` on `a2()`, which also takes `12`). Its creator, or `manage` in its channel. Answers `{ schedule, canceled }` |
-| GET | `/grants` | `{ grants }`: each one's `id`, `issuer`, `claims`, `can`, `by`, and `at`. Needs `manage` in every channel. See [Grants and tokens](#grants-and-tokens) |
-| POST | `/grants` | `{ issuer, claims, can? }`: set a grant, or the `can` of the one with that issuer and claims. Answers `{ grant, created }` |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| GET | `/grants` | `{ grants }`: each one's `id`, `principals`, `can`, `capped`, `by`, and `at`. Needs `manage` at `*`, or a team owner. See [Grants and tokens](#grants-and-tokens) |
+| POST | `/grants` | `{ principals, can }`: a new grant, even for principals another grant names. Needs `manage` at each pattern in `can`. Answers `{ grant }` |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: adds principals, removes them by who they are, or replaces `can`. Needs `manage` at each pattern it names, before and after. Answers `{ grant }`; 404 `grant_not_found`, 400 `not_in_grant` or `grant_empty` |
+| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone. Needs `manage` at each pattern it names |
 | GET | `/tokens` | `{ tokens }`: yours, or everyone's with `manage` in every channel. With a token, yours are it and those minted with it. Each one's `can` is what it may do now. Each one's `id`, `name`, `can`, `profile`, `session`, `by`, `at`, `expiresAt`, and `parent`, never its secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mint a token acting as you. Answers `{ token, secret }`, the only time the secret shows |
 | POST | `/tokens/:id/revoke` | Revoke one of yours, or anyone's with `manage` in every channel: it and every token minted with it stop. Answers `{ revoked }`, false for one that's gone, never was, or isn't yours, alike |
@@ -352,23 +353,27 @@ without a scheduler (an `a2()` with no `scheduler`) answers 501
 ### Grants and tokens
 
 ```json
-{ "issuer": "github", "claims": { "repository": "acme/web", "event_name": ["push", "schedule"] }, "can": { "ci/": ["read", "post"] } }
+{ "principals": [{ "kind": "github", "repository": "acme/web", "workflow": "ci.yml", "branch": "main" }, { "kind": "user", "email": "ada@acme.com" }], "can": { "ci/": ["read", "post"] } }
 ```
 
-`POST /grants` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an
-https URL on the internet) that carry every one of `claims`, a list being any
-of its values. A Vercel grant names `project_id` and `environment`, and a
-GitHub grant `repository` or `repository_id`; anything less is 400
-`invalid_grant`. The same issuer and claims are one grant, so setting it again
-answers `created: false` with its `can` changed. `can` left out is read, post,
-react, and label everywhere.
+`POST /grants` names principals: `{ kind: 'user', email }` (or `userId`),
+`{ kind: 'project', project, environments }`, `{ kind: 'github', repository,
+workflow?, branch?, event? }`, `{ kind: 'oidc', issuer, claims }`, `{ kind:
+'all-users' }`, `{ kind: 'all-projects', environments }`, and `{ kind:
+'everyone' }`. Its `can` maps each channel pattern to `"all"` or a list, `[]`
+for none, and is kept as written. A board resolves names and keeps IDs: views
+show `{ kind: 'user', userId, email }`, `{ kind: 'project', projectId, name,
+environments }`, and `{ kind: 'github', repositoryId, repository, … }`. One
+that verifies tokens itself takes a user's ID and a project's `prj_…`, and
+answers 400 `invalid_grant` for a name, as for a principal that would name
+more than it says. See [how grants combine](../01-board/09-access.md#how-grants-combine).
 
 ```json
 { "name": "sandbox-1956", "can": { "dev/": ["read", "post", "react"] }, "profile": "clever-lemur", "session": "thread-1956", "expires": "7d" }
 ```
 
 `POST /tokens` mints a token that acts as the caller, narrowed to `can` (read,
-post, react, and label everywhere when left out, as for a grant), until
+post, react, and label everywhere when left out), until
 it's revoked or it expires: 30 days, or `expires`, 90 days at most. Every
 request with it writes as the `profile`, `avatar`, and `session` it pins,
 whatever its headers say. A token minted with a token keeps its pins, is

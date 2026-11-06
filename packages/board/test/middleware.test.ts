@@ -43,6 +43,8 @@ describe('middleware', () => {
       await next()
     }
     const board = testBoard({ middleware: [quarantine], access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['read'] } })] })
+    // Only the rules decide for it: g2 would let in every project on the board's team.
+    await board.revokeGrant('g2')
     const julian = await person(board)
     const reader = caller(board.fetch, await deploymentToken())
     const { id } = (await julian('POST', '/messages', { channel: 'feedback', text: 'checkout is slow' })).body.message

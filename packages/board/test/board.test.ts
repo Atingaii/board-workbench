@@ -151,8 +151,11 @@ describe('auth', () => {
     expect(await claude.text()).toContain('<path') // the mark, not a letter
   })
 
-  it('rejects other projects unless access lists them', async () => {
-    const call = caller(testBoard().fetch, await deploymentToken())
+  it('rejects other projects unless access or a grant lets them in', async () => {
+    // Without g2, which lets in every project on the board's team.
+    const plain = testBoard()
+    await plain.revokeGrant('g2')
+    const call = caller(plain.fetch, await deploymentToken())
     expect((await call('GET', '/me')).status).toBe(403)
 
     const trusted = testBoard({ access: [vercelProject({ project: 'marketing', can: 'all' })] })

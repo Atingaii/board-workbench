@@ -13,23 +13,28 @@ afterEach(() => vi.restoreAllMocks())
 
 describe("the board's own project", () => {
   afterEach(() => vi.unstubAllEnvs())
-  /** A board running in `environment`, as Vercel tells it; none outside Vercel. */
-  const runningIn = (environment: string | null, options: Parameters<typeof testBoard>[0] = {}) => {
+  /**
+   * A board running in `environment`, as Vercel tells it, none outside Vercel, without g2: its own
+   * deployments are on its team, so g2 would let every environment of them in.
+   */
+  const runningIn = async (environment: string | null, options: Parameters<typeof testBoard>[0] = {}) => {
     vi.stubEnv('VERCEL_TARGET_ENV', '')
     vi.stubEnv('VERCEL_ENV', environment ?? '')
-    return testBoard(options)
+    const board = testBoard(options)
+    await board.revokeGrant('g2')
+    return board
   }
   const refusal = (here: string, environment: string) =>
     `this token can't use this board: it runs in ${here}, so its ${environment} deployments need vercelProject({ project: 'self', environments: ['${environment}'], can })`
 
   it('gives its people and its production everything on a production board', async () => {
-    const { fetch } = runningIn('production')
+    const { fetch } = await runningIn('production')
     expect((await caller(fetch, await personToken())('GET', '/me')).body.can).toEqual({ '*': ALL })
     expect((await caller(fetch, await own('production'))('GET', '/me')).body.can).toEqual({ '*': ALL })
   })
 
   it('refuses its previews and custom environments on a production board unless access lists them', async () => {
-    const { fetch } = runningIn('production')
+    const { fetch } = await runningIn('production')
     for (const environment of ['preview', 'staging']) {
       const denied = await caller(fetch, await own(environment))('GET', '/me')
       expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('production', environment) } } })
@@ -37,7 +42,7 @@ describe("the board's own project", () => {
   })
 
   it('lets a preview board call itself, and refuses its production', async () => {
-    const { fetch } = runningIn('preview')
+    const { fetch } = await runningIn('preview')
     expect((await caller(fetch, await own('preview'))('GET', '/me')).body.can).toEqual({ '*': ALL })
     const denied = await caller(fetch, await own('production'))('GET', '/me')
     expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('preview', 'production') } } })
@@ -46,21 +51,23 @@ describe("the board's own project", () => {
   it('knows a custom environment by its target, not as a preview', async () => {
     vi.stubEnv('VERCEL_ENV', 'preview')
     vi.stubEnv('VERCEL_TARGET_ENV', 'staging')
-    const { fetch } = testBoard()
+    const board = testBoard()
+    await board.revokeGrant('g2')
+    const { fetch } = board
     expect((await caller(fetch, await own('staging'))('GET', '/me')).body.can).toEqual({ '*': ALL })
     const denied = await caller(fetch, await own('preview'))('GET', '/me')
     expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('staging', 'preview') } } })
   })
 
   it('lets only its people in outside Vercel', async () => {
-    const { fetch } = runningIn(null)
+    const { fetch } = await runningIn(null)
     expect((await caller(fetch, await personToken())('GET', '/me')).body.can).toEqual({ '*': ALL })
     const denied = await caller(fetch, await own('production'))('GET', '/me')
     expect(denied).toMatchObject({ status: 403, body: { error: { message: refusal('no Vercel environment', 'production') } } })
   })
 
   it("lists other environments with project: 'self'", async () => {
-    const { fetch } = runningIn('production', {
+    const { fetch } = await runningIn('production', {
       access: [vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } })],
     })
     const preview = caller(fetch, await own('preview'))
@@ -73,7 +80,7 @@ describe("the board's own project", () => {
   })
 
   it('narrows its own environment when a rule matches it', async () => {
-    const { fetch } = runningIn('preview', {
+    const { fetch } = await runningIn('preview', {
       access: [vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read', 'post'] } })],
     })
     expect((await caller(fetch, await own('preview'))('GET', '/me')).body.can).toEqual({ 'dev/': ['read', 'post'] })
@@ -88,7 +95,10 @@ describe("the board's own project", () => {
 
 describe('access rules', () => {
   it('lets another project post in its own channels and nowhere else', async () => {
-    const { fetch } = testBoard({ access: [vercelProject({ project: 'prj_marketing', can: { 'feedback/': ['post'] } })] })
+    const board = testBoard({ access: [vercelProject({ project: 'prj_marketing', can: { 'feedback/': ['post'] } })] })
+    // g2's * would let it in everywhere else: the rule names feedback/ alone.
+    await board.revokeGrant('g2')
+    const { fetch } = board
     const front = caller(fetch, await deploymentToken())
     expect((await front('POST', '/messages', { channel: 'feedback/front', text: 'checkout is slow' })).status).toBe(201)
     const elsewhere = await front('POST', '/messages', { channel: 'dev', text: 'hi' })
@@ -103,7 +113,9 @@ describe('access rules', () => {
   })
 
   it('says which rule would let in a token none matches', async () => {
-    const { fetch } = testBoard({ access: [githubActions({ repository: 'other/repo', can: 'all' }), vercelProject({ project: 'docs', can: 'all' })] })
+    const board = testBoard({ access: [githubActions({ repository: 'other/repo', can: 'all' }), vercelProject({ project: 'docs', can: 'all' })] })
+    await board.revokeGrant('g2')
+    const { fetch } = board
     expect((await caller(fetch, await workflowToken())('GET', '/me')).body.error.message).toBe(
       "this token can't use this board: add githubActions({ repository: 'basehub-ai/www', can }) to access",
     )

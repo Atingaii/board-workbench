@@ -27,6 +27,7 @@ import type {
   SchedulesQueryInput,
   GrantInput,
   GrantView,
+  UpdateGrantInput,
   TokenInput,
   TokenView,
   ThreadsPage,
@@ -345,12 +346,15 @@ export function createBoardClient(options: ClientOptions) {
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
     /**
-     * Lets in callers with an OIDC token from `issuer` that carries every one of `claims`, to do
-     * what `can` says (read, post, react, and label everywhere when left out). Setting the same
-     * issuer and claims again changes its `can`: `created` says which. Needs manage in every channel.
+     * A new grant: `principals` may do what `can` says, a map from channel pattern to permissions
+     * (`[]` for none). The same principals again are another grant. At each channel, the most
+     * specific pattern among the grants that name a caller decides, then the closest principal,
+     * and grants tied there add up. Needs manage at each pattern `can` names.
      */
-    createGrant: (input: GrantInput) => call<{ grant: GrantView; created: boolean }>('POST', '/grants', { body: input }),
-    /** The board's grants. Needs manage in every channel. */
+    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: input }),
+    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs manage at each pattern it names, before and after. */
+    updateGrant: (id: string, input: UpdateGrantInput) => call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, { body: input }),
+    /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
     revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),

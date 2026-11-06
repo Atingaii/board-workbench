@@ -13,7 +13,8 @@ import { fakePlatform } from './sync-fixtures.ts'
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
 const V0 = 'vercel:project:prj_v0:production'
-const v0Token = () => deploymentToken('v0', 'prj_v0', 'production')
+// Another team's project, so only the rules let it in: g2 lets in every project on the board's team.
+const v0Token = () => deploymentToken('v0', 'prj_v0', 'production', { teamId: 'team_v0' })
 
 // The board's own Vercel OIDC token, as @vercel/oidc mints it on Vercel: only the tests that say
 // they run on Vercel give it one.

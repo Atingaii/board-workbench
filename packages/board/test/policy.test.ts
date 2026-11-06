@@ -232,6 +232,8 @@ describe("a2()'s own writes, through board()", () => {
         post: (url, init) => (wakes.held ? Promise.resolve(Response.json({ ran: 0 })) : project.fetch(new Request(url, { method: 'POST', headers: init.headers, body: init.body }))),
       },
     })
+    // Only the rules decide for it: g2 would let in every project on the board's team.
+    await remote.revokeGrant('g2')
     const { fetch } = team(remote, () => project)
     const ran: WatcherContext['event'][] = []
     const watch: Record<string, Watcher> = { triage: { tail: 'feedback', run: ({ event }) => void ran.push(event) } }

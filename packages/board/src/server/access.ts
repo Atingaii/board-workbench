@@ -161,6 +161,12 @@ export type Access = {
   everywhere(permission: Permission): boolean
   /** `permission` in some channel. */
   anywhere(permission: Permission): boolean
+  /**
+   * `permission` where `pattern` itself decides: at `*`, what `*` gives, whatever a more specific
+   * pattern says; at `security/`, what covers `security` as a subtree. Changing a grant checks
+   * `manage` this way at each pattern it names.
+   */
+  at(permission: Permission, pattern: ChannelPattern): boolean
   /** Only what both this and `scope` allow, channel by channel. It never widens. */
   narrow(scope: Can | Access): Access
   /** Each pattern and its permissions, `*` first and the rest sorted; an empty `*` is left out. */
@@ -187,6 +193,7 @@ function fromRules(rules: Rules): Access {
     readsAll: everywhere('read'),
     everywhere,
     anywhere: (permission) => entries.some(([, permissions]) => permissions.has(permission)),
+    at: (permission, pattern) => at(rules, parsePattern(pattern)).has(permission),
     narrow(scope) {
       const other = isAccess(scope) ? scope[RULES] : canonical(entriesOf(scope as Can))
       // `*` and every pattern either side names: each governs channels where both answers are fixed.
@@ -230,6 +237,109 @@ export function union(accesses: readonly Access[]): Access {
   const patterns = new Map<string, Pattern>([['*', { kind: 'all' }]])
   for (const side of rules) for (const [pattern] of entriesIn(side)) patterns.set(key(pattern), pattern)
   return fromRules(canonical([...patterns.values()].map((pattern) => [pattern, new Set(rules.flatMap((side) => [...at(side, pattern)]))] as const)))
+}
+
+/** A grant's `can` as it was written: each pattern and `'all'` or its permissions, `[]` for none. */
+export type WrittenCan = Readonly<Record<ChannelPattern, 'all' | readonly Permission[]>>
+
+/**
+ * A grant's `can`, checked and kept as written, patterns and all, since each pattern counts where
+ * grants meet: `{ 'security/': [] }` closes `security/` though it gives nothing. Its lists are
+ * sorted, without repeats. A bad pattern or permission throws, saying what to write.
+ */
+export function writtenCan(can: unknown, max = 64): WrittenCan {
+  if (typeof can !== 'object' || can === null || Array.isArray(can))
+    throw new Error("a grant's can is a map from channel pattern to permissions, like { 'ci/': ['read', 'post'] }")
+  const entries = Object.entries(can as Record<string, unknown>)
+  if (entries.length === 0) throw new Error("a grant's can names at least one channel pattern, like { '*': ['read'] }")
+  if (entries.length > max) throw new Error(`a grant's can names at most ${max} channel patterns`)
+  const out: Record<ChannelPattern, 'all' | Permission[]> = {}
+  for (const [pattern, grant] of entries.sort(([a], [b]) => (a === '*' ? -1 : b === '*' ? 1 : a.localeCompare(b)))) {
+    parsePattern(pattern)
+    if (grant === 'all') {
+      out[pattern] = 'all'
+      continue
+    }
+    if (!Array.isArray(grant)) throw new Error(`${pattern} takes 'all' or a list of permissions: ${PERMISSIONS.join(', ')}`)
+    for (const permission of grant)
+      if (!ORDER.has(permission as Permission)) throw new Error(`unknown permission ${String(permission)} at ${pattern}: use ${PERMISSIONS.join(', ')}, or all`)
+    out[pattern] = [...new Set(grant as Permission[])].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!)
+  }
+  return out
+}
+
+/** Each pattern a written `can` names. */
+export const patternsOf = (can: WrittenCan): ChannelPattern[] => Object.keys(can)
+
+/**
+ * How close a grant's principal is to a caller: one named principal (a user, a project, a
+ * repository's workflows, an issuer's claims), a group of them (`all-users`, `all-projects`), or
+ * `everyone`. The closest decides where grants name the same pattern.
+ */
+export const LEVELS = ['principal', 'group', 'everyone'] as const
+export type Level = (typeof LEVELS)[number]
+
+/** A grant that matched a caller: how close its principal is, and what its `can` gives at each pattern. */
+export type Matched<Source = unknown> = { level: Level; can: Can; source: Source }
+
+/** What `decide` found for one channel: the pattern that won, the level that won there, the sources at it, and what they give. */
+export type Decision<Source = unknown> = {
+  pattern: ChannelPattern | null
+  level: Level | null
+  sources: Source[]
+  permissions: readonly Permission[]
+}
+
+const RANK = new Map(LEVELS.map((level, index) => [level, index]))
+
+/** Each pattern a `can` names, with what it gives, implications included. */
+const namedIn = (can: Can): Entry[] => entriesOf(can)
+
+/**
+ * For each pattern any matched grant names: the closest level among the grants naming it, and
+ * what those grants give there, added up.
+ */
+function closest<Source>(matched: readonly Matched<Source>[]) {
+  const byPattern = new Map<string, { pattern: Pattern; level: Level; permissions: Set<Permission>; sources: Source[] }>()
+  for (const grant of matched)
+    for (const [pattern, permissions] of namedIn(grant.can)) {
+      const name = key(pattern)
+      const found = byPattern.get(name)
+      if (!found || RANK.get(grant.level)! < RANK.get(found.level)!)
+        byPattern.set(name, { pattern, level: grant.level, permissions: new Set(permissions), sources: [grant.source] })
+      else if (found.level === grant.level) {
+        for (const permission of permissions) found.permissions.add(permission)
+        if (!found.sources.includes(grant.source)) found.sources.push(grant.source)
+      }
+    }
+  return byPattern
+}
+
+/**
+ * What a caller may do from the grants that match it. At each channel, the most specific pattern
+ * any of them names decides (an exact channel, then the longest subtree, then `*`); among the
+ * grants naming that pattern, the closest principal does; and grants tied there add up.
+ */
+export function combine(matched: readonly Matched[]): Access {
+  return fromRules(canonical([...closest(matched).values()].map(({ pattern, permissions }) => [pattern, permissions] as const)))
+}
+
+/** Which pattern, level, and grants decide `channel` for a caller, and what they give: `combine`'s answer, explained. */
+export function decide<Source>(matched: readonly Matched<Source>[], channel: string): Decision<Source> {
+  const byPattern = closest(matched)
+  const covering = [...byPattern.values()].filter(({ pattern }) =>
+    pattern.kind === 'all' ? true : pattern.kind === 'exact' ? pattern.path === channel : under(channel, pattern.path),
+  )
+  // An exact channel, then the longest subtree, then `*`.
+  const specificity = ({ pattern }: { pattern: Pattern }) => (pattern.kind === 'exact' ? Infinity : pattern.kind === 'subtree' ? pattern.path.length : -1)
+  const winner = covering.sort((a, b) => specificity(b) - specificity(a))[0]
+  if (!winner) return { pattern: null, level: null, sources: [], permissions: [] }
+  return {
+    pattern: key(winner.pattern),
+    level: winner.level,
+    sources: winner.sources,
+    permissions: [...winner.permissions].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!),
+  }
 }
 
 /** An access as `x-board-scope` writes it, `dev/=read,post;ci/=read`, or `*=` for nothing: what a stored principal keeps. */

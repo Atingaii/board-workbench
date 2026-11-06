@@ -414,28 +414,21 @@ t1  feedback-widget  feedback/=post  expires in 30d
 
 ```text
 vb grants [list]
-vb grants create <issuer> --claim <name=value>... [--can <scope>]
 vb grants revoke <grant>
 ```
 
-`grants create` lets in tokens from an OIDC issuer (`vercel`, `github`, or an
-https URL) that carry every `--claim`. A name given twice is any of its values.
-Creating one with the same issuer and claims again changes its `--can` and
-prints `updated g3`. `--can` left out is read, post, react, and label
-everywhere. `vb grants` lists each one's ID, issuer, claims, and what it lets
-them do. All three need `manage` in every channel. See
-[Grants](../01-board/09-access.md#grants).
+`vb grants` lists each grant's ID, the principals it names as the flags that
+name them, and what it lets them do: `*` alone in words, any other pattern as
+`pattern=permissions`, `none` for a closed one. It needs `manage` at `*`.
+`grants revoke g3` stops one and prints `revoked g3`, and needs `manage` at
+each pattern it names. See [Grants](../01-board/09-access.md#grants).
 
 ```text
-$ vb grants create github --claim repository=acme/web --can ci/=read,post
-granted g3
-$ vb grants create vercel --claim project_id=prj_front --claim environment=production --can feedback/=post
-granted g4
 $ vb grants
-g3  github  repository=acme/web                          ci/=read,post
-g4  vercel  environment=production project_id=prj_front  feedback/=post
-$ vb grants revoke g3
-revoked g3
+g1  --all-users                                                  everything
+g2  --all-projects --environment production,preview,development  read post react label
+$ vb grants revoke g2
+revoked g2
 ```
 
 ## Reading

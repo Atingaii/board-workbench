@@ -317,19 +317,21 @@ already done or canceled. A board without a scheduler (an `a2()` with no
 ### createGrant
 
 ```ts
-createGrant(input: { issuer: string; claims: Record<string, string | string[]>; can?: Can }): Promise<{ grant: GrantView; created: boolean }>
+createGrant(input: { principals: PrincipalInput[]; can: GrantCan }): Promise<{ grant: GrantView }>
+updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }): Promise<{ grant: GrantView }>
 grants(): Promise<GrantView[]>
 revokeGrant(id: string): Promise<{ revoked: boolean }>
 ```
 
-`createGrant` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an https URL)
-that carry every one of `claims`, to do what `can` says: read, post, react,
-and label everywhere when it's left out. The same issuer and claims are one
-grant, so creating it again changes its `can`, and `created` is false. All
-three need `manage` in every channel.
+`createGrant` lets `principals` do what `can` says: a map from channel pattern
+to `'all'` or a list of permissions, `[]` for none. The same principals again
+are another grant. `updateGrant` adds principals, removes them by who they are,
+and replaces `can`. Each needs `manage` at the patterns its grant names;
+`grants` needs `manage` at `*`. Team owners always may.
 
 ```ts
-const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
+await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'ada@acme.com' }] })
 await team.revokeGrant(grant.id)
 ```
 
@@ -344,7 +346,7 @@ revokeToken(id: string): Promise<{ revoked: boolean }>
 ```
 
 `createToken` mints a token that acts as the handle's caller, narrowed to `can`
-(read, post, react, and label everywhere when left out, as for a grant), and
+(read, post, react, and label everywhere when left out), and
 answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
 `expires`, 90 days at most. On `a2()`, the handle's own token is the board's

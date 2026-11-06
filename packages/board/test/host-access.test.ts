@@ -235,6 +235,8 @@ const asCookie = (tenant: { fetch(request: Request): Promise<Response> }, cookie
 }
 
 describe('a function among the access rules', () => {
+  /** Another team's deployment, which only the rules let in: g2 lets in the board's own team's projects. */
+  const partner = (project = 'marketing', projectId = `prj_${project}`) => deploymentToken(project, projectId, 'production', { teamId: 'team_partner' })
   const customers: RuleFunction = (principal) => (principal.id.startsWith('support:customer:') ? { 'support/': ['read', 'post'] } : undefined)
 
   it("gives a host's external principal what it returns, and nothing past it", async () => {
@@ -244,7 +246,7 @@ describe('a function among the access rules', () => {
     expect((await customer('POST', '/messages', { channel: 'support/billing', text: 'my invoice is wrong' })).status).toBe(201)
     expect((await customer('POST', '/messages', { channel: 'dev', text: 'hello?' })).status).toBe(403)
     // The token rules still decide for tokens.
-    expect((await caller(tenant.fetch, await deploymentToken('front', 'prj_front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
+    expect((await caller(tenant.fetch, await partner('front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
     // Without it, the rules give the customer nothing: `external` gets everything only as a platform user sync writes as.
     const without = supportBoard(() => [vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } })], customers)
     expect((await asCookie(without, 'session=customer-99')('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
@@ -291,11 +293,11 @@ describe('a function among the access rules', () => {
     const asked: string[] = []
     const passes: RuleFunction = (principal) => void asked.push(principal.id)
     const tenant = supportBoard((fn) => [passes, vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }), fn], customers)
-    expect((await caller(tenant.fetch, await deploymentToken('front', 'prj_front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
+    expect((await caller(tenant.fetch, await partner('front'))('GET', '/me')).body.can).toEqual({ 'feedback/': ['post'] })
     expect((await asCookie(tenant, 'session=customer-7')('GET', '/me')).body.can).toEqual({ 'support/': ['read', 'post'] })
     expect(asked).toEqual(['vercel:project:prj_front:production', 'support:customer:7'])
     // Past the last rule, a token still hears which rule would let it in.
-    expect((await caller(tenant.fetch, await deploymentToken())('GET', '/me')).body.error.message).toBe(
+    expect((await caller(tenant.fetch, await partner())('GET', '/me')).body.error.message).toBe(
       "this token can't use this board: add vercelProject({ project: 'marketing', can }) to access",
     )
   })

@@ -14,7 +14,7 @@ type Fixture = {
   secret: { root: number; reply: number; schedule: number; file: string }
   open: { root: number; schedule: number }
 }
-type Call = { method: 'GET' | 'POST'; path: string; body?: unknown; status: number; check?: (body: any) => void }
+type Call = { method: 'GET' | 'POST' | 'PATCH'; path: string; body?: unknown; status: number; check?: (body: any) => void }
 type Walk = 'public' | ((fixture: Fixture) => Call[])
 
 const SLACK_USER = { id: 'slack:user:U1', handle: 'eve', name: 'Eve', avatar: null, isBot: false }
@@ -100,9 +100,13 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: `/schedules/${secret.schedule}/cancel`, status: 404 },
     { method: 'POST', path: `/schedules/s${open.schedule}/cancel`, status: 403 },
   ],
-  // Who the board trusts is its bookkeeping: manage in every channel.
+  // Listing grants takes manage at *, and changing one manage at each pattern it names: g1 names *.
   grants: () => [{ method: 'GET', path: '/grants', status: 403 }],
-  createGrant: () => [{ method: 'POST', path: '/grants', body: { issuer: 'github', claims: { repository: 'acme/web' }, can: 'all' }, status: 403 }],
+  createGrant: () => [
+    { method: 'POST', path: '/grants', body: { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } }, status: 403 },
+    { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }, status: 403 },
+  ],
+  updateGrant: () => [{ method: 'PATCH', path: '/grants/g1', body: { can: { '*': 'all' } }, status: 403 }],
   revokeGrant: () => [{ method: 'POST', path: '/grants/g1/revoke', status: 403 }],
   // Anyone mints a token, which acts as them: it can't do more than they can.
   createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],

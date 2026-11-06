@@ -578,6 +578,8 @@ describe("an import's links", () => {
   const author = { id: 'slack:user:U_EVE', handle: 'eve', name: 'Eve', avatar: null, isBot: false }
   it('name a board message only one its importer may read, and say what the board has it say', async () => {
     const team = testBoard({ access: [vercelProject({ project: 'prj_support', can: { 'support/': 'all' } })] })
+    // Only the rules decide for it: g2 would let in every project on the board's team.
+    await team.revokeGrant('g2')
     const support = caller(team.fetch, await supportToken())
     const julian = await julianOn(team.fetch)
     expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })).status).toBe(200)

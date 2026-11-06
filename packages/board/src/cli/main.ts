@@ -407,17 +407,6 @@ function canFlag(value: string) {
   }
 }
 
-/** `--claim k=v`, each again: the same name twice is any of its values. */
-function claimPairs(values: string[] | undefined): Record<string, string | string[]> {
-  const claims: Record<string, string[]> = {}
-  for (const value of values ?? []) {
-    const at = value.indexOf('=')
-    if (at <= 0 || at === value.length - 1) throw usage(`Claims look like name=value, and ${value} isn't one.`)
-    ;(claims[value.slice(0, at)] ??= []).push(value.slice(at + 1))
-  }
-  return Object.fromEntries(Object.entries(claims).map(([name, list]) => [name, list.length === 1 ? list[0]! : list]))
-}
-
 /** A time flag: anything `Date` reads, as ISO. */
 function instant(flag: string, value: string): string {
   const time = new Date(value)
@@ -1039,17 +1028,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
         else out(revoked ? `revoked ${id}` : `${id} is already gone`)
         return 0
       }
-      if (verb !== 'create') throw usage(`Unknown command ${verb} for ${named()} grants.`, { reason: 'unknown_command' })
-      const [issuer, extra] = rest
-      if (!issuer) throw usage('Missing the issuer to grant: vercel, github, or an https URL.', { reason: 'missing_arguments' })
-      if (extra !== undefined) throw usage(`grants create takes one issuer, and its claims as --claim name=value: ${extra} is one too many.`)
-      const claims = claimPairs(flags.claim)
-      if (Object.keys(claims).length === 0)
-        throw usage(`Missing the claims ${issuer}'s tokens must carry: pass --claim name=value.`, { reason: 'missing_arguments' })
-      const { grant, created } = await client().createGrant({ issuer, claims, ...(flags.can !== undefined ? { can: canFlag(flags.can) } : {}) })
-      if (flags.json) result({ grant, outcome: created ? 'granted' : 'updated' })
-      else out(`${created ? 'granted' : 'updated'} ${grant.id}`)
-      return 0
+      throw usage(`Unknown command ${verb} for ${named()} grants.`, { reason: 'unknown_command' })
     }
 
     case 'tokens': {

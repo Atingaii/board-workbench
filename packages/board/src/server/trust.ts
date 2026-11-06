@@ -1,14 +1,28 @@
 import { reducer } from 'experimental-a2'
 import { createServer } from 'experimental-a2/server'
 import type { Protocol } from '../api/protocol.ts'
-import type { GrantView, TokenView } from '../api/routes.ts'
+import type { GrantView, PrincipalView, TokenView } from '../api/routes.ts'
 import { duration } from '../client/client.ts'
 import { ACCESS_SESSION, accessContract, type AccessEvent } from '../contract/contract.ts'
 import { SCOPE_MAX } from '../contract/schemas.ts'
-import { compileAccess, FULL_ACCESS, parseScope, scopeOf, type Access, type Can } from './access.ts'
-import { BOARD_TOKEN_PREFIX, checkGrant, DEFAULT_CAN, grantIssuers, tokenHash, type GrantSpec, type Known, type Principal, type StoredGrant } from './auth.ts'
+import { compileAccess, FULL_ACCESS, parseScope, patternsOf, scopeOf, type Access, type Can, type WrittenCan } from './access.ts'
+import {
+  BOARD_TOKEN_PREFIX,
+  checkCan,
+  checkGrant,
+  checkPrincipal,
+  DEFAULT_CAN,
+  grantIssuers,
+  principalKey,
+  removes,
+  tokenHash,
+  type GrantPrincipal,
+  type Known,
+  type Principal,
+  type StoredGrant,
+} from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
-import { badRequest, forbidden, unauthorized } from './errors.ts'
+import { badRequest, forbidden, notFound, unauthorized } from './errors.ts'
 
 /** How long a token lives when its minter doesn't say, and at most: npm caps its write tokens at 90 days. */
 export const TOKEN_DEFAULT_MS = 30 * 24 * 3600_000
@@ -16,7 +30,8 @@ export const TOKEN_MAX_MS = 90 * 24 * 3600_000
 /** How deep tokens minted with tokens go: each request walks the chain to its root. */
 const TOKEN_DEPTH_MAX = 8
 
-type GrantRow = { id: number; issuer: string; claims: Record<string, string | string[]>; can: Can; by: string; at: number }
+/** A grant as the fold keeps it: `event` is the index of the event that made it, null for the one the board starts with. */
+type GrantRow = { id: number; event: number | null; principals: GrantPrincipal[]; can: WrittenCan; by: string | null; at: number | null }
 type TokenRow = {
   id: number
   hash: string
@@ -33,13 +48,13 @@ type TokenRow = {
   at: number
 }
 /**
- * Grants by their issuer and claims, which make one grant; live tokens by ID, and their IDs by
- * hash. A revoked token leaves the state at once, and an expired one with the first event of the
- * day after it expires: its token IDs wait in `expiring`, by that day. The log keeps every event.
+ * Grants by ID, and the next ID; live tokens by ID, and their IDs by hash. A revoked token leaves
+ * the state at once, and an expired one with the first event of the day after it expires: its
+ * token IDs wait in `expiring`, by that day. The log keeps every event.
  */
 export type AccessState = {
   grants: Record<string, GrantRow>
-  grantKeys: Record<string, string>
+  nextGrant: number
   tokens: Record<string, TokenRow>
   hashes: Record<string, number>
   expiring: Record<string, number[]>
@@ -47,11 +62,27 @@ export type AccessState = {
   pruned: number | null
 }
 
-const DAY_MS = 24 * 3600_000
+/**
+ * The grants a board starts with, as a team's board in Vercel's API does: g1, every person may do
+ * everything (no team roles cap it here), and g2, every project on the board's team, in every
+ * environment, reads, posts, reacts, and labels everywhere. Revoke or change them like any other.
+ */
+const STARTING_GRANTS: Record<string, GrantRow> = {
+  1: { id: 1, event: null, principals: [{ kind: 'all-users' }], can: { '*': 'all' }, by: null, at: null },
+  2: {
+    id: 2,
+    event: null,
+    principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }],
+    can: { '*': ['read', 'post', 'react', 'label'] },
+    by: null,
+    at: null,
+  },
+}
 
-/** What makes two grants one: the issuer, and the claims with their names sorted. */
-const grantKey = (issuer: string, claims: Record<string, string | string[]>) =>
-  JSON.stringify([issuer, Object.keys(claims).sort().map((name) => [name, claims[name]])])
+/** The access session before its first event: the grants every board starts with, and no tokens. */
+export const startingAccess = (): AccessState => ({ grants: structuredClone(STARTING_GRANTS), nextGrant: 3, tokens: {}, hashes: {}, expiring: {}, pruned: null })
+
+const DAY_MS = 24 * 3600_000
 
 function dropToken(state: AccessState, id: number) {
   const row = state.tokens[id]
@@ -97,25 +128,25 @@ export function foldAccess(state: AccessState, event: AccessEvent): AccessState 
     delete state.expiring[state.pruned]
   }
   switch (event.type) {
-    case 'grant.set': {
-      const { issuer, claims, can, by } = event.payload
-      const key = grantKey(issuer, claims)
-      const existing = state.grants[key]
-      if (existing) Object.assign(existing, { can, by, at })
-      else {
-        state.grants[key] = { id: event.index, issuer, claims, can: can as Can, by, at }
-        state.grantKeys[event.index] = key
-      }
+    // From before grants named principals: they name no one now.
+    case 'grant.set':
+    case 'grant.revoked':
+      break
+    case 'grant.created': {
+      const { principals, can, by } = event.payload
+      const id = state.nextGrant++
+      state.grants[id] = { id, event: event.index, principals: principals as GrantPrincipal[], can: can as WrittenCan, by, at }
       break
     }
-    case 'grant.revoked': {
-      const key = state.grantKeys[event.payload.id]
-      if (key !== undefined) {
-        delete state.grants[key]
-        delete state.grantKeys[event.payload.id]
-      }
+    case 'grant.updated': {
+      const { id, principals, can, by } = event.payload
+      const row = state.grants[id]
+      if (row) Object.assign(row, { principals: principals as GrantPrincipal[], can: can as WrittenCan, by, at })
       break
     }
+    case 'grant.deleted':
+      delete state.grants[event.payload.id]
+      break
     case 'token.minted': {
       const { payload } = event
       if (state.hashes[payload.hash] !== undefined) break
@@ -133,8 +164,9 @@ export function foldAccess(state: AccessState, event: AccessEvent): AccessState 
 
 export const accessReducer = reducer({
   contract: accessContract,
-  name: 'board.access.v1',
-  initialState: { grants: {}, grantKeys: {}, tokens: {}, hashes: {}, expiring: {}, pruned: null } as AccessState,
+  // v2 since grants name principals: what v1 folded is folded again.
+  name: 'board.access.v2',
+  initialState: startingAccess(),
 }).fold(foldAccess)
 
 const grantId = (id: number) => `g${id}`
@@ -145,14 +177,35 @@ function indexOf(id: string, prefix: 'g' | 't'): number | null {
   return found ? Number(found[1]) : null
 }
 
+/** A principal as views show it: the IDs, and the names the board knows, which on `a2()` are none. */
+function principalView(principal: GrantPrincipal): PrincipalView {
+  switch (principal.kind) {
+    case 'user':
+      return { kind: 'user', userId: principal.userId, email: principal.email ?? null }
+    case 'project':
+      return { kind: 'project', projectId: principal.projectId, name: principal.name ?? null, environments: [...principal.environments] }
+    case 'github':
+      return { ...principal, repositoryId: principal.repositoryId ?? null }
+    case 'oidc':
+      return { kind: 'oidc', issuer: principal.issuer, claims: Object.fromEntries(Object.entries(principal.claims).map(([name, value]) => [name, typeof value === 'string' ? value : [...value]])) }
+    case 'all-projects':
+      return { kind: 'all-projects', environments: [...principal.environments] }
+    default:
+      return { kind: principal.kind }
+  }
+}
+
 const grantView = (row: GrantRow): GrantView => ({
   id: grantId(row.id),
-  issuer: row.issuer,
-  claims: row.claims,
-  can: compileAccess(row.can).summary() as GrantView['can'],
+  principals: row.principals.map(principalView),
+  can: Object.fromEntries(Object.entries(row.can).map(([pattern, grant]) => [pattern, grant === 'all' ? 'all' : [...grant]])) as GrantView['can'],
+  // A board on `a2()` has no team roles.
+  capped: false,
   by: row.by,
-  at: new Date(row.at).toISOString(),
+  at: row.at === null ? null : new Date(row.at).toISOString(),
 })
+
+const storedGrant = (row: GrantRow): StoredGrant => ({ id: grantId(row.id), principals: row.principals, can: row.can })
 
 /** A token as the protocol shows it, with `can` what it may do now (`accessNow`'s, for its minter). */
 const tokenView = (row: TokenRow, can: Access | null): TokenView => ({
@@ -173,8 +226,21 @@ function newSecret(): string {
   return `${BOARD_TOKEN_PREFIX}${btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`
 }
 
-const needsManage = (identity: Identity, what: string) => {
-  if (!identity.principal.access.everywhere('manage')) throw forbidden(`this token can't ${what}: it needs manage in every channel`)
+/**
+ * Whether `identity` may change grants at `pattern`: `manage` there, as its access resolves at that
+ * pattern itself, so `*` is what `*` gives whatever a channel locks. The board's people (a local
+ * board's local user) are its owners, who always may, as far as a token they came with allows.
+ */
+function managesAt({ principal }: Identity, pattern: string): boolean {
+  if (principal.access.at('manage', pattern)) return true
+  if (principal.kind !== 'person') return false
+  return principal.scope === undefined || compileAccess(parseScope(principal.scope)).at('manage', pattern)
+}
+
+/** Every pattern in `patterns` that `identity` may change grants at, or a 403 naming the first it can't. */
+function mayChange(identity: Identity, patterns: Iterable<string>, what: string) {
+  for (const pattern of patterns)
+    if (!managesAt(identity, pattern)) throw forbidden(`this token can't ${what}: it needs manage at ${pattern}`)
 }
 
 /**
@@ -222,7 +288,7 @@ export function createTrust(options: {
 
   const trust: Trust = {
     async grants(): Promise<StoredGrant[]> {
-      return Object.values((await read()).grants).map((row) => ({ ...grantView(row), can: row.can }))
+      return Object.values((await read()).grants).map(storedGrant)
     },
     async token(hash): Promise<StoredToken | null> {
       const state = await read()
@@ -246,24 +312,53 @@ export function createTrust(options: {
   return {
     trust,
     async grants(identity: Identity): Promise<Protocol['grants']['output']> {
-      needsManage(identity, 'list grants')
+      mayChange(identity, ['*'], 'list grants')
       return { grants: Object.values((await read()).grants).sort((a, b) => a.id - b.id).map(grantView) }
     },
     async createGrant(identity: Identity, body: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
-      needsManage(identity, 'set grants')
       const before = await read()
-      const checked = checkGrant(body as GrantSpec, [...options.issuers(), ...grantIssuers(Object.values(before.grants))])
-      const key = grantKey(checked.issuer, checked.claims)
-      const created = before.grants[key] === undefined
-      await session.append({ type: 'grant.set', payload: { issuer: checked.issuer, claims: checked.claims, can: checked.can as never, by: identity.actor.id } })
-      const row = (await read()).grants[key]!
-      return { grant: grantView(row), created }
+      const checked = checkGrant(body, [...options.issuers(), ...grantIssuers(Object.values(before.grants).map(storedGrant))])
+      mayChange(identity, patternsOf(checked.can), 'create this grant')
+      const [row] = await session.append({ type: 'grant.created', payload: { principals: checked.principals as never, can: checked.can as never, by: identity.actor.id } })
+      const made = row && Object.values((await read()).grants).find((grant) => grant.event === row.index)
+      if (!made) throw new Error('a grant was made but its log has no record of it')
+      return { grant: grantView(made) }
+    },
+    async updateGrant(identity: Identity, { id, add, remove, can }: Protocol['updateGrant']['input']): Promise<Protocol['updateGrant']['output']> {
+      const state = await read()
+      const index = indexOf(id, 'g')
+      const row = index === null ? undefined : state.grants[index]
+      if (!row) throw notFound(`grant not found: ${id}`, 'grant_not_found')
+      mayChange(identity, patternsOf(row.can), `update ${id}`)
+      const trusted = [...options.issuers(), ...grantIssuers(Object.values(state.grants).filter((other) => other.id !== row.id).map(storedGrant))]
+      let principals = [...row.principals]
+      for (const input of remove ?? []) {
+        const removal = checkPrincipal(input, trusted, true)
+        const kept = principals.filter((principal) => !removes(removal, principal))
+        if (kept.length === principals.length) throw badRequest(`${id} doesn't name that ${removal.kind} principal`, 'not_in_grant')
+        principals = kept
+      }
+      for (const input of add ?? []) {
+        const added = checkPrincipal(input, trusted)
+        if (!principals.some((principal) => principalKey(principal) === principalKey(added))) principals.push(added)
+      }
+      if (principals.length === 0) throw badRequest(`that leaves ${id} naming no one: revoke it instead`, 'grant_empty')
+      if (principals.length > 32) throw badRequest('a grant names at most 32 principals', 'invalid_grant')
+      const next = can === undefined ? row.can : checkCan(can)
+      mayChange(identity, patternsOf(next), `update ${id}`)
+      await session.append({ type: 'grant.updated', payload: { id: row.id, principals: principals as never, can: next as never, by: identity.actor.id } })
+      return { grant: grantView((await read()).grants[row.id]!) }
     },
     async revokeGrant(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeGrant']['output']> {
-      needsManage(identity, 'revoke grants')
       const index = indexOf(id, 'g')
-      if (index === null || (await read()).grantKeys[index] === undefined) return { revoked: false }
-      await session.append({ type: 'grant.revoked', payload: { id: index, by: identity.actor.id } })
+      const row = index === null ? undefined : (await read()).grants[index]
+      if (!row) {
+        // One that isn't there is only news to whoever may list them.
+        mayChange(identity, ['*'], 'revoke grants')
+        return { revoked: false }
+      }
+      mayChange(identity, patternsOf(row.can), `revoke ${id}`)
+      await session.append({ type: 'grant.deleted', payload: { id: row.id, by: identity.actor.id } })
       return { revoked: true }
     },
 
