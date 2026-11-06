@@ -374,7 +374,8 @@ export function createBoardClient(options: ClientOptions) {
         const named = grants.map((grant) => grant.id)
         const list = named.length === 1 ? named[0]! : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
         return new BoardError('channel_granted', `${list} already ${named.length === 1 ? 'grants' : 'grant'} in ${path}, so a private ${path} wouldn't be yours alone: nothing was made.`, 409, {
-          hint: `Revoke ${named.length === 1 ? 'it' : 'each'} first: vb grants revoke ${named[0]}`,
+          // The message names them all; one command fits only one.
+          hint: named.length === 1 ? `Revoke it first: vb grants revoke ${named[0]}` : 'Revoke them first, each with vb grants revoke <id>.',
         })
       }
       const before = await reaching()

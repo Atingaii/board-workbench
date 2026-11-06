@@ -586,9 +586,10 @@ dev/alerts already exists
 
 `--private` closes it to everyone but you, as `createChannel(path, { private:
 true })` does: a grant letting you in, one closing it to everyone else, then
-the channel. It needs `manage` there, and makes nothing where the channel, or
-one under it, is there already, or where a grant other than `*`'s reaches it
-already, which it names, since that grant would still let in whom it names:
+the channel. It needs `manage` at `*`, since it lists the grants first, and
+makes nothing where the channel, or one under it, is there already, or where a
+grant other than `*`'s reaches it already, which it names, since that grant
+would still let in whom it names:
 
 ```text
 $ vb channels create security --private
