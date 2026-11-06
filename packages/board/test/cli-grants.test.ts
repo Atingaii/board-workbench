@@ -29,10 +29,11 @@ describe('cli grants', () => {
     expect(closed.stdout).toBe(`created ${closed.id}  --everyone  security/=none\n`)
     const people = await create('--user', 'u_alice', '--user', 'u_bob', '--can', 'security/=all')
     expect(people.stdout).toBe(`created ${people.id}  --user u_alice --user u_bob  security/=all\n`)
-    const project = await create('--project', 'prj_sec', '--environment', 'production,preview', '--can', 'security/=read,post', '--can', 'dev/=read')
+    // -p and -e, as the Vercel CLI writes them, and -e repeated, gathered into one list.
+    const project = await create('-p', 'prj_sec', '-e', 'production', '-e', 'preview', '--can', 'security/=read,post', '--can', 'dev/=read')
     expect(project.stdout).toBe(`created ${project.id}  --project prj_sec --environment production,preview  dev/=read security/=read,post\n`)
-    const runs = await create('--github', 'acme/web', '--workflow', 'ci.yml', '--branch', 'main', '--github', 'acme/api', '--workflow', 'deploy.yml', '--can', 'ci/=post')
-    expect(runs.stdout).toBe(`created ${runs.id}  --github acme/web --workflow ci.yml --branch main --github acme/api --workflow deploy.yml  ci/=post\n`)
+    const runs = await create('--github', 'acme/web', '--workflow', 'ci.yml', '--git-branch', 'main', '--github', 'acme/api', '--workflow', 'deploy.yml', '--can', 'ci/=post')
+    expect(runs.stdout).toBe(`created ${runs.id}  --github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml  ci/=post\n`)
     const issuer = await create('--oidc', 'https://gitlab.com', '--claim', 'project_id=42', '--can', 'ci/=post')
     expect(issuer.stdout).toBe(`created ${issuer.id}  --oidc https://gitlab.com --claim project_id=42  ci/=post\n`)
     // A project without --environment is its production deployments.
@@ -43,7 +44,7 @@ describe('cli grants', () => {
     expect(app.stdout).toBe(`created ${app.id}  --app cl_ship  ship/=post\n`)
 
     // Each column as wide as its widest cell, two spaces apart.
-    const width = 89
+    const width = 93
     expect((await vb(['grants'])).stdout).toBe(
       [
         ['g1', '--all-users', 'everything'],
@@ -52,7 +53,7 @@ describe('cli grants', () => {
         [closed.id, '--everyone', 'security/=none'],
         [people.id, '--user u_alice --user u_bob', 'security/=all'],
         [project.id, '--project prj_sec --environment production,preview', 'dev/=read security/=read,post'],
-        [runs.id, '--github acme/web --workflow ci.yml --branch main --github acme/api --workflow deploy.yml', 'ci/=post'],
+        [runs.id, '--github acme/web --workflow ci.yml --git-branch main --github acme/api --workflow deploy.yml', 'ci/=post'],
         [issuer.id, '--oidc https://gitlab.com --claim project_id=42', 'ci/=post'],
         [web.id, '--project prj_web --environment production', 'web/=all'],
         [app.id, '--app cl_ship', 'ship/=post'],
@@ -65,6 +66,12 @@ describe('cli grants', () => {
       { kind: 'github', repositoryId: null, repository: 'acme/web', workflow: '.github/workflows/ci.yml', branch: 'main' },
       { kind: 'github', repositoryId: null, repository: 'acme/api', workflow: '.github/workflows/deploy.yml' },
     ])
+    // --branch is --git-branch now, as the Vercel CLI names a Git branch.
+    expect(await vb(['grants', 'create', '--github', 'acme/web', '--branch', 'main', '--can', 'ci/=post'])).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: Unknown option --branch for vb grants\./) })
+    const help = (await vb(['grants', 'create', '--help'])).stdout
+    expect(help).toMatch(/\n  -p, --project <name\|id>\.\.\. +a project's deployments\n/)
+    expect(help).toMatch(/\n  -e, --environment <environment>\.\.\. +where its --project runs/)
+    expect(help).toMatch(/\n  --git-branch <branch>\.\.\. +its --github's branch\n/)
   }, 30_000)
 
   it('updates a grant by its ID: adds and removes principals, and replaces its can', async () => {

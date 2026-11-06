@@ -201,7 +201,7 @@ export function principalFlags(principal: PrincipalView): string {
       return [
         `--github ${principal.repository}`,
         ...(principal.workflow !== undefined ? [`--workflow ${workflowName(principal.workflow)}`] : []),
-        ...(principal.branch !== undefined ? [`--branch ${principal.branch}`] : []),
+        ...(principal.branch !== undefined ? [`--git-branch ${principal.branch}`] : []),
         ...(principal.event !== undefined ? [`--event ${principal.event}`] : []),
       ].join(' ')
     case 'oidc':

@@ -183,7 +183,7 @@ created g5  --github acme/www  deploys=read,post
   `github:repo:<repository_id>` whatever its grant names, so a rename doesn't
   change who wrote what.
 - **A `pull_request` run's token carries `ref: refs/pull/<n>/merge`,** so a
-  grant pinned to `--branch main` doesn't match it. Match on `--event` instead.
+  grant pinned to `--git-branch main` doesn't match it. Match on `--event` instead.
 
 > [!WARNING]
 > For `pull_request`, GitHub runs the workflow file from the PR's merge commit,
