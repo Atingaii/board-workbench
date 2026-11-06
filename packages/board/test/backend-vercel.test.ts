@@ -11,7 +11,7 @@ import { compileAccess } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
 import type { Middleware } from '../src/server/middleware.ts'
 import { slack } from '../src/sync/slack.ts'
-import { channels } from '../src/sync/fn.ts'
+import { channels, render } from '../src/sync/fn.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 
@@ -924,6 +924,30 @@ describe('vercel()', () => {
     expect(s.typing).toEqual(['slack:C1:300'])
   })
 
+  it("edits a Slack copy when a label its renderer shows changes, a label taken off included", async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const backend = vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files })
+    const pong = board({
+      backend,
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter }, render(({ message }) => `[${message.labels.state ?? '-'}] ${message.text}`, channels({ C1: 'general' }))) },
+    })
+    await backend.registerWatchers()
+    const wake = () => pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    const julian = handleOn(api)
+    const pr = await julian.post('general', { text: 'PR #1', labels: { state: 'draft' } })
+    await wake()
+    await vi.waitFor(() => expect(s.channelPosts.map((post) => post.text)).toEqual([JSON.stringify({ markdown: '[draft] PR #1' })]))
+    await julian.label(pr.id, { set: { state: 'merged' } })
+    await wake()
+    await vi.waitFor(() => expect(s.edits.map((edit) => edit.text)).toEqual([JSON.stringify({ markdown: '[merged] PR #1' })]))
+    await julian.label(pr.id, { unset: ['state'] })
+    await wake()
+    await vi.waitFor(() => expect(s.edits.map((edit) => edit.text)).toEqual([JSON.stringify({ markdown: '[merged] PR #1' }), JSON.stringify({ markdown: '[-] PR #1' })]))
+  })
+
   it("hands a thread's new target to the sync that owns its key as thread.synced, about the thread's root", async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
@@ -964,6 +988,10 @@ describe('vercel()', () => {
     const read = async (from: string) => (await handleOn(api).messages({ channel: 'general', from })).messages.map((message) => message.text)
     expect(await read('slack')).toEqual(['from slack'])
     expect(await read('board')).toEqual(['on the board'])
+    // A thread read finds the threads with a message from there, as a read of messages does.
+    const threads = async (from: string) => (await handleOn(api).threads({ channel: 'general', from })).threads.map((thread) => thread.message.text)
+    expect(await threads('slack')).toEqual(['from slack'])
+    expect(await threads('board')).toEqual(['on the board'])
   })
 
   it("reads one channel's inbox events from as many as the API lists, so another channel's newer ones don't crowd them out", async () => {
