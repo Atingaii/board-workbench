@@ -318,3 +318,43 @@ describe('explain', () => {
   })
 })
 
+describe('private channels', () => {
+  it('makes the channel and the two grants that close it to everyone but its creator, in one request', async () => {
+    const { person, as } = await setUp()
+    const made = await person('POST', '/channels', { path: 'security', private: true })
+    expect(made.body).toMatchObject({
+      channel: { path: 'security' },
+      created: true,
+      grants: [
+        { principals: [everyone], can: { 'security/': [] } },
+        { principals: [{ kind: 'user', userId: 'u_julian', email: null }], can: { 'security/': 'all' } },
+      ],
+    })
+    expect((await person('GET', '/grants')).body.grants.map((grant: { id: string }) => grant.id)).toEqual(['g1', 'g2', made.body.grants[0].id, made.body.grants[1].id])
+    expect((await person('POST', '/messages', { channel: 'security/incidents', text: 'paged' })).status).toBe(201)
+    expect((await (await as(personToken('u_ada')))('POST', '/messages', { channel: 'security', text: 'let me in' })).status).toBe(403)
+    // A deployment lets in its own project, in the environment it runs in.
+    await person('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { '*': 'all' } })
+    const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
+    expect((await ops('POST', '/channels', { path: 'ops/keys', private: true })).body.grants[1].principals).toEqual([{ kind: 'project', projectId: 'prj_ops', name: null, environments: ['production'] }])
+    expect((await ops('POST', '/messages', { channel: 'ops/keys/rotation', text: 'rotated' })).status).toBe(201)
+    expect((await (await as(deploymentToken('ops', 'prj_ops', 'preview')))('POST', '/messages', { channel: 'ops/keys', text: 'from a branch' })).status).toBe(403)
+  })
+
+  it("refuses a channel that's there, a caller no grant could name, and one without manage there, making nothing", async () => {
+    const { person, as } = await setUp()
+    await person('POST', '/messages', { channel: 'dev', text: 'already here' })
+    const refused = async (call: Awaited<ReturnType<typeof as>>, path: string) => {
+      const { status, body } = await call('POST', '/channels', { path, private: true })
+      return [status, body.error?.code]
+    }
+    expect(await refused(person, 'dev')).toEqual([409, 'channel_exists'])
+    await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': 'all' } })
+    expect(await refused(await as(workflowToken()), 'ci')).toEqual([400, 'no_own_principal'])
+    // g2 lets a project on the team read and post, not manage.
+    expect(await refused(await as(deploymentToken('web', 'prj_web', 'production')), 'web')).toEqual([403, 'forbidden'])
+    expect((await person('GET', '/channels')).body.channels.map((channel: { path: string }) => channel.path)).toEqual(['dev'])
+    expect((await person('GET', '/grants')).body.grants).toHaveLength(3)
+  })
+})
+

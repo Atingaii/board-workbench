@@ -321,9 +321,12 @@ export function createBoardClient(options: ClientOptions) {
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
     /**
      * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
-     * there. `created` is false when it was there already; it's left as it is.
+     * there. `created` is false when it was there already; it's left as it is. `private` closes it
+     * to everyone and opens it to you, in the same write, and answers the two `grants` it made:
+     * it needs `manage` at `<path>/`, and a channel that's there already is 409 `channel_exists`.
      */
-    createChannel: (path: string) => call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } }),
+    createChannel: (path: string, options: { private?: boolean } = {}) =>
+      call<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>('POST', '/channels', { body: { path, ...(options.private ? { private: true } : {}) } }),
     actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>

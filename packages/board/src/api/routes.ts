@@ -481,7 +481,12 @@ export const DeleteBody = z.object({ revision: Revision.optional() }).optional()
 export const TypingBody = z.object({ status: z.string().trim().min(1).max(100).optional() }).optional()
 export const ReactBody = z.object({ emoji: Emoji, remove: z.boolean().optional() })
 /** A channel to make before anything posts to it. */
-export const CreateChannelBody = z.object({ path: ChannelPath })
+/**
+ * A channel to make before anything posts to it. `private` closes it to everyone and opens it to
+ * its creator, in the same write: two grants, `everyone` at `<path>/` with nothing, and the caller's
+ * own principal (a person's user, or a deployment's project in its own environment) with all.
+ */
+export const CreateChannelBody = z.object({ path: ChannelPath, private: z.boolean().optional() })
 /** At most this many labels in a label write's `if`. */
 export const LABEL_CONDITIONS_MAX = 16
 
@@ -853,7 +858,7 @@ export const routes = {
   discovery: { method: 'GET', path: '/' },
   me: { method: 'GET', path: '/me' },
   channels: { method: 'GET', path: '/channels' },
-  /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is. */
+  /** Makes a channel before anything posts to it: needs `read` and `post` there. One that's there already is left as it is, or with `private`, 409 `channel_exists`. */
   createChannel: { method: 'POST', path: '/channels', body: CreateChannelBody },
   actors: { method: 'GET', path: '/actors' },
   messages: { method: 'GET', path: '/messages', query: MessagesQuery },

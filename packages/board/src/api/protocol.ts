@@ -73,7 +73,8 @@ export type Protocol = {
   me: { input: Nothing; output: Me }
   channels: { input: Nothing; output: { channels: ChannelView[]; cursor: string } }
   /** `created` is false for a channel that was there already, made by a post or another create. */
-  createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean } }
+  /** With `private`, the two grants it made: `everyone` closed out of the channel, and the caller let in. */
+  createChannel: { input: Input<typeof CreateChannelBody>; output: { channel: ChannelView; created: boolean; grants?: GrantView[] } }
   actors: { input: Nothing; output: { actors: Actor[]; cursor: string } }
   messages: { input: Input<typeof MessagesQuery>; output: MessagesPage }
   threads: { input: Input<typeof ThreadsQuery>; output: ThreadsPage }
