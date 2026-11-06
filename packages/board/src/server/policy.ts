@@ -8,11 +8,8 @@ import {
   GITHUB_ISSUER,
   grantIssuers,
   hostPrincipal,
-  issuersOf,
   VERCEL_ISSUER,
   verifiesTokens,
-  type AccessFunction,
-  type AccessRule,
   type Authenticate,
   type AuthenticateContext,
   type CallerRequest,
@@ -21,7 +18,6 @@ import {
   type Known,
   type Pinned,
   type Principal,
-  type RuleFunction,
 } from './auth.ts'
 import type { Identity, Trust } from './backend.ts'
 import { HttpError, RejectedError, unauthorized } from './errors.ts'
@@ -36,62 +32,39 @@ export type PolicyOptions = {
    * from its credential or its headers (a session cookie). It replaces the built-in one, so no
    * token's audience or the board's own project counts then, unless it calls `oidcTokens()` itself.
    * Null when it recognizes nothing; to reject, return or throw a `Response`.
+   *
+   * What a principal may do isn't its to say: people, and the board's own deployments in its
+   * environment, may do everything, and anyone else what the board's grants give.
    */
   authenticate?: Authenticate
-  /**
-   * Who besides the board's people and its own deployments in the environment it runs in may use
-   * it, and what they may do in each channel: `vercelProject()`, `githubActions()`, `oidc()` from
-   * `@vercel/board/access`, and functions of your own, `(principal) => can`, for principals your
-   * `authenticate` returns. The first rule that matches decides; a function's undefined leaves it to
-   * the next. A production board's previews need a rule, as
-   * `vercelProject({ project: 'self', environments: ['preview'], can })`.
-   *
-   * Or a host's own model: one function of the principal its `authenticate` returned, giving what it
-   * may do in each channel (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), or null for nothing.
-   * Nothing else is trusted then, not the board's own people or deployments.
-   *
-   * On `http()`, a board with none serves no requests but wake-ups and webhooks; with one, it serves
-   * its callers within it, as its project on the board it uses.
-   */
-  access?: readonly (AccessRule | RuleFunction)[] | AccessFunction
-  /**
-   * The board's Vercel project: `self` in the rules, whose people's development tokens it takes,
-   * and what discovery names for clients to mint them. Defaults to `VERCEL_PROJECT_ID` or
-   * `.vercel/project.json`.
-   */
-  project?: { id: string; teamId?: string }
 }
 
 /** What a build of board finds in its environment for a board's policy: Node's verifies OIDC tokens and reads the board's Vercel project. */
 export type Serving = {
   oidcTokens(): Authenticate
-  ownProjectId(configured?: { id: string }): Promise<string | null>
-  ownTeamId(configured?: { teamId?: string }): Promise<string | null>
-  discoveryIdentity(headers: Headers | null, configured?: { id: string; teamId?: string }): Promise<ProjectIdentity>
+  ownProjectId(): Promise<string | null>
+  ownTeamId(): Promise<string | null>
+  discoveryIdentity(headers: Headers | null): Promise<ProjectIdentity>
 }
 
 /** board()'s policy: who each request is, and what principals may do, now and at every send and match. */
 export type Policy = ReturnType<typeof createPolicy>
 
 /**
- * The policy a board's options say: verifying requests, and `access` over them and over the
- * principals its backend stores. `keeps`: the backend keeps the board, so the defaults let its
- * people and own deployments in when `access` is left out.
+ * The policy a board's options say: verifying requests, and what they and the principals its
+ * backend stores may do. `keeps`: the backend keeps the board, so it serves requests; one that
+ * uses another board's (Vercel's, or one at `BOARD_URL`) answers only wake-ups and webhooks.
  */
 export function createPolicy(options: PolicyOptions, keeps: boolean, serving: (() => Promise<Serving>) | null, trust: Trust | null = null) {
-  /** Whether requests are served at all: a board on `http()` serves none without an `access` of its own. */
-  const open = keeps || options.access !== undefined
-  const access = options.access ?? []
-  // A board whose `access` is one function decides alone: it keeps no grants.
-  const grants = trust && typeof access !== 'function' ? () => trust.grants() : null
+  const grants = trust ? () => trust.grants() : null
 
-  /** The board's own Vercel project and team, from `project` or the environment, asked once. */
+  /** The board's own Vercel project and team, from the environment, asked once. */
   let own: Promise<{ id: string | null; teamId: string | null }> | null = null
   const project = () =>
     (own ??= (async () => {
-      if (!serving) return { id: options.project?.id ?? null, teamId: options.project?.teamId ?? null }
+      if (!serving) return { id: null, teamId: null }
       const found = await serving()
-      const [id, teamId] = await Promise.all([found.ownProjectId(options.project), found.ownTeamId(options.project)])
+      const [id, teamId] = await Promise.all([found.ownProjectId(), found.ownTeamId()])
       return { id, teamId }
     })()).catch((error: unknown) => {
       own = null
@@ -100,8 +73,8 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
 
   /** What discovery says the board's project is, as a request shows it: clients mint tokens with it. */
   async function discoveryIdentity(headers: Headers): Promise<ProjectIdentity> {
-    if (!serving) return { projectId: options.project?.id ?? null, teamId: options.project?.teamId ?? null }
-    return (await serving()).discoveryIdentity(headers, options.project)
+    if (!serving) return { projectId: null, teamId: null }
+    return (await serving()).discoveryIdentity(headers)
   }
 
   let tokens: Promise<Authenticate> | null = null
@@ -113,24 +86,22 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
           ? serving().then((found) => found.oidcTokens())
           : Promise.reject(new HttpError(501, 'no_verifier', "this build of board verifies no tokens: pass board({ authenticate })")))
 
-  // What callers may do, under this board's rules: requests, and stored principals. A board whose
-  // verifier is the built-in one alone takes no host's principals.
-  const authority = createAuthority({ access, project, hosts: options.authenticate !== undefined && !verifiesTokens(options.authenticate), grants })
-  const ruleIssuers = typeof access === 'function' ? [] : issuersOf(access)
+  // What callers may do: requests, and stored principals. A board whose verifier is the built-in one
+  // alone takes no host's principals.
+  const authority = createAuthority({ project, hosts: options.authenticate !== undefined && !verifiesTokens(options.authenticate), grants })
   /** One for every request, so a verifier keeps what it built: its issuers change only when grants name new ones. */
-  const context: { project: AuthenticateContext['project']; issuers: readonly string[] } = { project, issuers: ruleIssuers }
+  const context: { project: AuthenticateContext['project']; issuers: readonly string[] } = { project, issuers: [] }
 
   /**
    * Trusts the issuers grants name, before a token from one is verified: only for a token from an
-   * issuer neither Vercel, GitHub, nor a rule is, so most requests read no grants for it.
+   * issuer neither Vercel nor GitHub is, so most requests read no grants for it.
    */
   async function learnIssuers(credential: string) {
     if (!grants) return
     const iss = issuerOf(credential)
     // A grant's issuer is https: a local board's own (`vb serve`'s) never is.
-    if (iss === null || !iss.startsWith('https://') || iss === GITHUB_ISSUER || VERCEL_ISSUER.test(iss) || ruleIssuers.includes(iss)) return
-    const named = grantIssuers(await grants())
-    const issuers = [...ruleIssuers, ...named.filter((issuer) => !ruleIssuers.includes(issuer))]
+    if (iss === null || !iss.startsWith('https://') || iss === GITHUB_ISSUER || VERCEL_ISSUER.test(iss)) return
+    const issuers = grantIssuers(await grants())
     if (issuers.join('\n') !== context.issuers.join('\n')) context.issuers = issuers
   }
 
@@ -154,8 +125,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       const principal = await known
       if (live(principal)) return principal
     }
-    // What Vercel sends with the request can tell a deployment's token which team the board is on.
-    const key = request.credential === null ? null : [request.audience, request.credential, request.headers.get('x-vercel-oidc-token') ?? ''].join('\u001f')
+    const key = request.credential === null ? null : [request.audience, request.credential].join('\u001f')
     const cached = key === null ? undefined : verified.get(key)
     if (cached && cached.until > Date.now()) {
       perRequest.set(request, cached.principal)
@@ -198,12 +168,9 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   }
 
   return {
-    open,
+    /** Whether requests are served at all: only where the backend keeps the board. */
+    open: keeps,
     project,
-    /** The OIDC issuers the rules name. */
-    issuers: ruleIssuers,
-    /** Whether grants decide anything here: not where `access` is one function, which decides alone. */
-    takesGrants: typeof access !== 'function',
     discoveryIdentity,
     /**
      * Who a request is, and what it may do now: verified, under the rules, with the profile it

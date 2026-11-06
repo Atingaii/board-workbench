@@ -1,6 +1,6 @@
-import type { JWTPayload, JWTVerifyGetKey } from 'jose'
+import type { JWTVerifyGetKey } from 'jose'
 import { compileAccess, FULL_ACCESS, parseScope, union, type Access, type Can } from './access.ts'
-import { badRequest, unauthorized, forbidden } from './errors.ts'
+import { badRequest, forbidden, HttpError, unauthorized } from './errors.ts'
 
 /**
  * What a request says about who's calling, beside its credential: labels the caller picks for
@@ -88,144 +88,12 @@ export const wroteAs = (caller: { principal: Pick<Principal, 'id' | 'pinned'>; a
  */
 export const authenticates = (id: string) => /^(vercel|oidc|local|board):/.test(id) || id.startsWith('github:repo:')
 
-/** A verified token's claims, as rules match them. */
-type TokenClaims = JWTPayload & Record<string, unknown>
-
 /** What a verified token said: its issuer and its claims, never the token itself. */
 export type TokenFacts = {
   /** `host`: a host's own verifier recognized the caller; its claims are when that runs out. */
   issuer: 'vercel' | 'github' | 'oidc' | 'host'
   iss: string
   claims: Readonly<Record<string, string | number | boolean>>
-  /**
-   * The board's own Vercel team, as the board knew it when it verified the
-   * token. A schedule's send may run where the board can't work it out (the
-   * scheduler's own function, with no request to learn it from), and a rule
-   * naming a project without its team needs it. Only the board writes it.
-   */
-  team?: string
-}
-
-/** What a rule may compare claims to: the board's own Vercel team and project, when they're known. */
-export type MatchContext = { teamId: string | null; projectId: string | null }
-
-/** One entry in `board({ access })`: who it matches, and what they may do. The first entry that matches decides. */
-export type AccessRule = {
-  /** `vercel` and `github` are their platforms' issuers; `oidc` is the exact `url`. */
-  issuer: 'vercel' | 'github' | 'oidc'
-  /** For `oidc`: the issuer URL, pinned in code. */
-  url?: string
-  matches(claims: TokenClaims, context: MatchContext): boolean
-  access: Access
-}
-
-/** A token no rule matches, and the rule that would let it in. */
-const notInAccess = (rule: string) => forbidden(`this token can't use this board: add ${rule} to access`)
-
-/** A rule's `can`, compiled. A rule without one says which rule and what to write. */
-function accessOf(rule: string, can: Can | undefined): Access {
-  if (can === undefined || can === null)
-    throw new Error(`${rule} needs can: say what it may do, like can: { 'ci/': ['read', 'post'] }, or can: 'all'`)
-  return compileAccess(can)
-}
-
-const oneOf = (value: unknown, allowed: string | readonly string[] | undefined) =>
-  allowed === undefined ||
-  (typeof value === 'string' && (typeof allowed === 'string' ? [allowed] : allowed).includes(value))
-
-/**
- * A Vercel project's deployments, by name or ID. A name is only unique within
- * a team, so without `team` it means the board's own team, and matches nothing
- * when that isn't known. An ID is unique on Vercel, so it matches on any team.
- * `'self'` is the board's own project: its deployments in the environment the
- * board runs in have full access unless a rule says otherwise, and its other
- * environments have none unless one lists them. Its development tokens are
- * people, which no rule changes.
- */
-export function vercelProject(options: {
-  project: string
-  team?: string
-  environments?: readonly string[]
-  can: Can
-}): AccessRule {
-  if (options.project === 'self' && options.team !== undefined)
-    throw new Error("vercelProject({ project: 'self' }) is the board's own project: drop team")
-  return {
-    issuer: 'vercel',
-    access: accessOf(`vercelProject({ project: '${options.project}' })`, options.can),
-    matches: (claims, { teamId, projectId }) =>
-      (options.project === 'self'
-        ? projectId !== null && claims.project_id === projectId
-        : claims.project_id === options.project ||
-          (claims.project === options.project &&
-            (options.team === undefined
-              ? teamId !== null && claims.owner_id === teamId
-              : claims.owner === options.team || claims.owner_id === options.team))) &&
-      oneOf(claims.environment, options.environments),
-  }
-}
-
-/**
- * A GitHub Actions workflow. A `pull_request` run's token carries
- * `ref: refs/pull/<n>/merge`, so match those on `event` and `workflow`, not `ref`.
- */
-export function githubActions(options: {
-  repository: string
-  event?: string | readonly string[]
-  workflow?: string
-  ref?: string
-  can: Can
-}): AccessRule {
-  return {
-    issuer: 'github',
-    access: accessOf(`githubActions({ repository: '${options.repository}' })`, options.can),
-    matches: (claims) =>
-      claims.repository === options.repository &&
-      oneOf(claims.event_name, options.event) &&
-      (options.ref === undefined || claims.ref === options.ref) &&
-      (options.workflow === undefined ||
-        (typeof claims.workflow_ref === 'string' &&
-          claims.workflow_ref.startsWith(`${options.repository}/${options.workflow}@`))),
-  }
-}
-
-/**
- * Any OIDC issuer's tokens: GitLab, Buildkite, a cloud's workload identity.
- * The issuer is pinned here, and only issuers some rule names are trusted or
- * have their keys fetched. Every listed claim must match exactly (a list is
- * any of its values), and there must be at least one, since an issuer signs
- * tokens for everyone it serves. The principal is `oidc:<issuer host and path>:<sub>`,
- * with any `:` or `%` in the issuer part percent-encoded, so it ends at the first `:`.
- */
-export function oidc(options: {
-  issuer: string
-  claims: Readonly<Record<string, string | readonly string[]>>
-  can: Can
-}): AccessRule {
-  let url: URL
-  try {
-    url = new URL(options.issuer)
-  } catch {
-    throw new Error(`oidc: issuer must be a URL, got ${options.issuer}`)
-  }
-  if (url.protocol !== 'https:' || url.search || url.hash || url.username || url.password)
-    throw new Error(`oidc: issuer must be an https URL with no query or credentials, got ${options.issuer}`)
-  if (VERCEL_ISSUER.test(options.issuer)) throw new Error('oidc: use vercelProject() for Vercel tokens')
-  if (options.issuer === GITHUB_ISSUER) throw new Error('oidc: use githubActions() for GitHub Actions tokens')
-  const required = Object.entries(options.claims)
-  if (required.length === 0) throw new Error(`oidc: name at least one claim to match for ${options.issuer}`)
-  // An unset value (an environment variable that isn't there) must not match every token the issuer signs.
-  for (const [name, allowed] of required) {
-    const values: readonly unknown[] = typeof allowed === 'string' ? [allowed] : Array.isArray(allowed) ? allowed : []
-    if (values.length === 0 || values.some((value) => typeof value !== 'string' || value === ''))
-      throw new Error(`oidc: claim ${name} has no value to match for ${options.issuer}`)
-  }
-  return {
-    issuer: 'oidc',
-    url: options.issuer,
-    access: accessOf(`oidc({ issuer: '${options.issuer}' })`, options.can),
-    matches: (claims) => required.every(([name, allowed]) => oneOf(claims[name], allowed)),
-  }
 }
 
 export type IssuerConfig = {
@@ -239,7 +107,7 @@ export type IssuerConfig = {
 export type OidcTokensOptions = {
   vercel?: IssuerConfig
   github?: IssuerConfig
-  /** Keys for `oidc()` issuers, by issuer URL, instead of their published JWKS. It trusts no issuer by itself. */
+  /** Keys for the OIDC issuers grants name, by issuer URL, instead of their published JWKS. It trusts no issuer by itself. */
   oidc?: Readonly<Record<string, JWTVerifyGetKey>>
   /**
    * A local board's own issuer (`vb serve`): its tokens' `sub` is a person on
@@ -271,29 +139,11 @@ export function trustedIssuers(issuers: readonly string[]): Set<string> {
     const name = issuerName(iss)
     const other = named.get(name)
     if (other !== undefined && other !== iss)
-      throw new Error(`access: oidc issuers ${other} and ${iss} name the same principals, oidc:${name}:<sub>: pin one of them`)
+      throw new Error(`oidc issuers ${other} and ${iss} name the same principals, oidc:${name}:<sub>: pin one of them`)
     named.set(name, iss)
   }
   return new Set(issuers)
 }
-
-/** The OIDC issuers rules name: the only ones whose tokens are verified for them. */
-export const issuersOf = (rules: readonly (AccessRule | RuleFunction)[]) =>
-  [...new Set(rules.flatMap((rule) => (typeof rule !== 'function' && rule.issuer === 'oidc' ? [rule.url!] : [])))]
-
-/**
- * What a host's own model gives a principal: what it may do, or null for nothing. It sees only the
- * principals its own `authenticate` returned.
- */
-export type AccessFunction = (principal: Known) => Can | null | undefined | Promise<Can | null | undefined>
-
-/**
- * A rule of your own, among `vercelProject()` and the rest: what it gives a principal (`'all'`,
- * `['read']`, `{ 'support/': ['read', 'post'] }`), null for nothing, or undefined to leave it to the
- * next rule. It's asked whenever a principal acts, a schedule's send included, and never about a
- * person or the board's own deployments in its environment, which the defaults decide first.
- */
-export type RuleFunction = (principal: Known) => Can | null | undefined | Promise<Can | null | undefined>
 
 /** A principal as the board keeps it to work its access out again: who it is, its token's facts, its scope, and the board token it came with. */
 export type Known = Pick<Principal, 'id' | 'kind' | 'handle' | 'facts' | 'scope' | 'token'>
@@ -333,8 +183,12 @@ export async function tokenHash(secret: string): Promise<string> {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-/** What a grant or a token left without `can` gives: what Vercel's API gives a project it lets use a board. */
-export const DEFAULT_CAN: Can = { '*': ['read', 'post', 'react', 'label'] }
+/**
+ * What a grant or a token left without `can` gives: what Vercel's API gives a project it lets use a
+ * board. Frozen all the way down: board reads it for every such grant, and @vercel/board/access
+ * exports it, so code that imports it can't widen them.
+ */
+export const DEFAULT_CAN: Can = Object.freeze({ '*': Object.freeze(['read', 'post', 'react', 'label'] as const) })
 const GRANT_CLAIMS_MAX = 32
 const GRANT_VALUES_MAX = 32
 const GRANT_VALUE_MAX = 1000
@@ -352,8 +206,8 @@ export function privateHost(host: string): boolean {
 /**
  * A grant checked and put in one form: its issuer, its claims with keys and lists sorted, its
  * `can`, and the key that says it's the same grant as another. A 400 `invalid_grant` that says
- * what to write. `trusted`: the issuers the board's rules and other grants name, which no two may
- * share principals between.
+ * what to write. `trusted`: the issuers other grants name, which no two may share principals
+ * between.
  */
 export function checkGrant(spec: GrantSpec, trusted: readonly string[]): { issuer: string; claims: Record<string, string | string[]>; can: Can; key: string } {
   const { issuer } = spec
@@ -416,92 +270,66 @@ export function grantMatches(grant: Pick<StoredGrant, 'issuer' | 'claims'>, fact
 export const grantIssuers = (grants: readonly Pick<StoredGrant, 'issuer'>[]) =>
   [...new Set(grants.flatMap((grant) => (grant.issuer === 'vercel' || grant.issuer === 'github' ? [] : [grant.issuer])))]
 
+/** A token no grant lets in, and the grant that would. */
+const notGranted = (who: string, grant: string) =>
+  new HttpError(403, 'forbidden', `this token can't use this board: no grant lets in ${who}`, { hint: `Grant it: vb grants create ${grant}` })
+
 /**
- * What principals may do, under a board's rules: `vercelProject()`, `githubActions()`, `oidc()`,
- * and functions of your own, the first that matches deciding, with the board's grants adding to it,
- * past the defaults (people, and the board's own deployments in its environment, may do
- * everything). Or a host's own function of the principal.
+ * What principals may do: people, and the board's own deployments in its environment, everything;
+ * anyone else what the board's grants that match its token give, all of them adding up. A board
+ * token's principal is the one that minted it, narrowed.
  */
 export function createAuthority(options: {
-  access: readonly (AccessRule | RuleFunction)[] | AccessFunction
   /** Whether a host's verifier makes this board's principals: false for one whose verifier is the built-in one alone. */
   hosts: boolean
   /** The board's own Vercel project and team. */
   project: () => Promise<{ id: string | null; teamId: string | null }>
-  /** The grants the board keeps, as they are now: what they add to the rules for a principal. Null where it keeps none. */
+  /** The grants the board keeps, as they are now. Null where it keeps none. */
   grants?: (() => Promise<readonly StoredGrant[]>) | null
 }) {
-  const rules = typeof options.access === 'function' ? [] : options.access
-  const host = typeof options.access === 'function' ? options.access : null
-  const oidcIssuers = trustedIssuers(issuersOf(rules))
-
   /**
-   * What the rules give a principal, in order: a token's rule when its facts match, a function when
-   * it answers. Every grant that matches its token adds to that, so a grant never goes unused
-   * because a rule matched first. The board's own deployments in its environment get everything
-   * unless a token's rule says otherwise, no function is asked about them, and no grant is theirs;
-   * a function that answers null refuses, grants or not. A 401 or 403 that says which rule would
-   * let it in, when nothing does.
+   * What a principal that isn't a person may do: everything for the board's own deployments in its
+   * environment, and for anyone else, every grant that matches its token, added up. A 401 or 403
+   * that says which grant would let it in, when none does.
    */
-  async function byRules(principal: Known, facts: TokenFacts | null): Promise<Access> {
-    if (facts?.issuer === 'host') throw forbidden("this token can't use this board: its board no longer takes a host's principals")
-    const claims = (facts?.claims ?? {}) as TokenClaims
+  async function byGrants(facts: TokenFacts | null): Promise<Access> {
+    const claims = facts?.claims ?? {}
     const own = facts?.issuer === 'vercel' ? await options.project() : null
-    const context: MatchContext = own ? { teamId: facts!.team ?? own.teamId, projectId: own.id } : { teamId: null, projectId: null }
     const environment = String(claims.environment ?? '')
     // A deployment in the board's own environment runs the board's code. A
     // preview runs any branch's, so a production board doesn't trust them.
     const here = boardEnvironment()
     const ownDeployment = own !== null && own.id !== null && claims.project_id === own.id
-    const ownHere = ownDeployment && here !== null && environment === here
-    let ruled: Access | null = null
-    for (const rule of rules) {
-      if (typeof rule === 'function') {
-        // A function never takes the default of everything away: only a token's rule replaces it.
-        if (ownHere) continue
-        const can = await rule(principal)
-        if (can === undefined) continue
-        if (can === null) throw forbidden("this token can't use this board")
-        ruled = compileAccess(can)
-        break
-      }
-      if (facts && rule.issuer === facts.issuer && (rule.issuer !== 'oidc' || rule.url === facts.iss) && rule.matches(claims, context)) {
-        ruled = rule.access
-        break
-      }
-    }
-    if (ownHere) return ruled ?? FULL_ACCESS
-    if (!facts) {
-      if (ruled) return ruled
-      throw forbidden("this token can't use this board")
-    }
-    // The board's grants add to what a rule gives, all that match adding up: they only let more in.
+    if (ownDeployment && here !== null && environment === here) return FULL_ACCESS
+    if (!facts) throw forbidden("this token can't use this board")
     const grants = options.grants ? await options.grants() : []
     const granted = grants.filter((grant) => grantMatches(grant, facts)).map((grant) => compileAccess(grant.can))
-    if (ruled) return granted.length > 0 ? union([ruled, ...granted]) : ruled
     if (granted.length > 0) return union(granted)
     // An issuer a grant names is trusted: its token just isn't one the grant lets in.
-    if (facts.issuer === 'oidc' && !oidcIssuers.has(facts.iss) && !grants.some((grant) => grant.issuer === facts.iss)) throw unauthorized(`untrusted issuer: ${facts.iss}`)
-    if (facts.issuer === 'oidc' && !oidcIssuers.has(facts.iss)) throw forbidden("this token can't use this board: no grant lets in its claims")
-    if (facts.issuer === 'oidc') throw notInAccess(`oidc({ issuer: '${facts.iss}', claims, can })`)
-    if (facts.issuer === 'github') throw notInAccess(`githubActions({ repository: '${String(claims.repository)}', can })`)
+    if (facts.issuer === 'oidc' && !grants.some((grant) => grant.issuer === facts.iss)) throw unauthorized(`untrusted issuer: ${facts.iss}`)
+    if (facts.issuer === 'oidc') throw forbidden("this token can't use this board: no grant lets in its claims")
+    if (facts.issuer === 'github') {
+      const repository = String(claims.repository ?? '')
+      throw notGranted(repository || 'its repository', `github --claim repository=${repository || '<OWNER/REPO>'}`)
+    }
+    const project = String(claims.project_id ?? '') || '<PROJECT_ID>'
+    const grant = `vercel --claim project_id=${project} --claim environment=${environment || '<ENVIRONMENT>'}`
     if (ownDeployment)
-      throw forbidden(
-        `this token can't use this board: it runs in ${here ?? 'no Vercel environment'}, so its ${environment || 'unnamed'} deployments need vercelProject({ project: 'self', environments: ['${environment}'], can })`,
-      )
-    throw notInAccess(`vercelProject({ project: '${String(claims.project ?? '') || String(claims.project_id)}', can })`)
+      throw new HttpError(403, 'forbidden', `this token can't use this board: it runs in ${here ?? 'no Vercel environment'}, and its ${environment || 'unnamed'} deployments need a grant`, {
+        hint: `Grant them: vb grants create ${grant}`,
+      })
+    throw notGranted(`project ${project} in ${environment || 'no environment'}`, grant)
   }
 
   /**
    * What a principal may do now, narrowed by its scope: the board's own code and the platform users
-   * sync writes as everything; anyone else what a host's function says, or under the rules, a person
-   * everything and anyone else whatever the first rule that matches gives. A host's principal is
-   * what its kind is, until it expires. A 401 or 403 when it may do nothing.
+   * sync writes as everything; a person everything; anyone else what the board's grants give. A
+   * host's principal is what its kind is, until it expires. A 401 or 403 when it may do nothing.
    */
   async function grant(principal: Known): Promise<Access> {
     let access: Access = FULL_ACCESS
     const hosted = principal.facts?.issuer === 'host'
-    // A platform user sync writes as is `external` too, but one a host's verifier returns is the host's to give access.
+    // A platform user sync writes as is `external` too, but one a host's verifier returns is a host's principal.
     if (principal.id.startsWith('board:') || (principal.kind === 'external' && !hosted)) access = FULL_ACCESS
     else {
       if (hosted) {
@@ -510,14 +338,8 @@ export function createAuthority(options: {
         const { exp } = principal.facts!.claims
         if (typeof exp === 'number' && exp * 1000 <= Date.now()) throw unauthorized('token expired')
       }
-      if (host) {
-        const can = await host(principal)
-        if (can === null || can === undefined) throw forbidden("this token can't use this board")
-        access = compileAccess(can)
-      } else if (principal.kind !== 'person') {
-        // A host's says nothing past its ID, as a principal stored before the board kept claims.
-        access = await byRules(principal, (hosted ? undefined : principal.facts) ?? factsFromId(principal.id))
-      }
+      // A host's says nothing past its ID, as a principal stored before the board kept claims.
+      if (principal.kind !== 'person') access = await byGrants((hosted ? undefined : principal.facts) ?? factsFromId(principal.id))
     }
     return principal.scope === undefined ? access : access.narrow(parseScope(principal.scope))
   }
@@ -537,30 +359,17 @@ export function createAuthority(options: {
 }
 
 /**
- * What a principal may do under `rules` (`vercelProject()`, `githubActions()`, `oidc()`, and
- * functions of your own), the first that matches deciding, past the defaults: people, and the
- * board's own deployments in the environment it runs in, may do everything. Its scope narrows what
- * it gets. A 401 or 403 that names the rule that would let it in, when it may do nothing.
- */
-export function compileRules(
-  rules: readonly (AccessRule | RuleFunction)[],
-  board: { project(): Promise<{ id: string | null; teamId: string | null }> },
-): (principal: Known) => Promise<Access> {
-  return createAuthority({ access: rules, project: () => board.project(), hosts: true }).grant
-}
-
-/**
  * The Vercel environment the board runs in: `production`, `preview`, or a
  * custom environment's name. `VERCEL_TARGET_ENV` names custom environments,
  * where `VERCEL_ENV` says `preview`. Null outside Vercel, where only people
- * get in without a rule.
+ * get in without a grant.
  */
 const boardEnvironment = (): string | null => process.env.VERCEL_TARGET_ENV || process.env.VERCEL_ENV || null
 
 /**
  * What a principal's ID still says, for one stored before the board kept
  * claims: a deployment's project ID and environment. A workflow's ID names
- * neither its repository nor its run, so it says nothing, and a rule that
+ * neither its repository nor its run, so it says nothing, and a grant that
  * needs more than the ID no longer matches.
  */
 function factsFromId(id: string): TokenFacts | null {
@@ -568,11 +377,11 @@ function factsFromId(id: string): TokenFacts | null {
   return deployment ? { issuer: 'vercel', iss: '', claims: { project_id: deployment[1]!, environment: deployment[2]! } } : null
 }
 
-/** What board() knows that verifying a request needs: its own Vercel project, and the OIDC issuers its rules trust. */
+/** What board() knows that verifying a request needs: its own Vercel project, and the OIDC issuers its grants trust. */
 export type AuthenticateContext = {
   /** The board's own Vercel project and team: its people's development tokens are for it. */
   project(): Promise<{ id: string | null; teamId: string | null }>
-  /** OIDC issuers past Vercel's and GitHub's whose tokens may be trusted: the ones `oidc()` rules name. */
+  /** OIDC issuers past Vercel's and GitHub's whose tokens may be trusted: the ones grants name. */
   issuers: readonly string[]
 }
 
@@ -585,7 +394,7 @@ export type AuthenticateRequest = CallerRequest & { board: AuthenticateContext }
  * `request.headers`, say). Null when the request carries nothing it recognizes, so verifiers
  * compose: `(request) => (await staff(request)) ?? (await tokens(request))`. To reject a
  * credential that fails, throw an `HttpError` (a 401), or return or throw a `Response`; anything
- * else thrown is a 500. What a principal may do is `board({ access })`'s to say.
+ * else thrown is a 500. What a principal may do is the board's defaults' and grants' to say.
  */
 export type Authenticate = (
   request: AuthenticateRequest,

@@ -1,125 +1,73 @@
 ---
 title: Access
-description: "The board's code says what each caller may do in each channel: read, post, react, label, sync, or manage. Grants and tokens say the same while it runs. Anything out of reach answers 404."
+description: "Who may use a board, and what each caller may do in each channel: read, post, react, label, sync, or manage. Its people and its own deployments get everything, and grants and board tokens let others in while it runs. Anything out of reach answers 404."
 ---
 
 ## Who gets what
 
-Every caller is an OIDC principal. `board()` verifies it (see
-[Identity](./03-identity.md)) and says what it may do, `board({ authenticate,
-access })`, then calls its backend with the caller it verified. The policy is
-the board's on every backend, and the backend only stores. Some get everything
-without asking; the rest get what `access` gives them:
+This is the policy of a board `board()` keeps: one on
+[`local()`](./10-local.md) or a [backend of your own](#a-backend-of-your-own).
+Vercel's board says who may use it in Vercel's API: the team's people, and the
+projects it grants the board to (see
+[A board by its name](./01-mounting.md#a-board-by-its-name)). A route on
+Vercel's board, or on the board at `BOARD_URL`, serves no callers of its own:
+it answers only wake-ups and webhooks.
+
+Every caller is an OIDC principal. `board()` verifies it with its
+`authenticate` (see [Identity](./03-identity.md)), works out what it may do,
+then calls its backend with the caller it verified. The policy is the board's
+on every backend, and the backend only stores. Some get everything without
+asking; the rest get what grants and board tokens give them:
 
 | Caller | Default |
 | --- | --- |
 | A person: your `vercel login`, or `vb serve`'s local user | everything |
 | The board's own deployments in the environment it runs in | everything |
-| The board's own deployments in any other environment | nothing |
-| Another Vercel project, a GitHub Actions workflow, any other OIDC issuer | what its [grants](#grants) give, or nothing |
+| The board's own deployments in any other environment | what its [grants](#grants) give, or nothing |
+| Another Vercel project, a GitHub Actions workflow, any other OIDC issuer | what its grants give, or nothing |
 | A [board token](#tokens) | what its minter may do, narrowed to its `can` |
 | The board's own code: watchers, sync, middleware, its [handle](./01-mounting.md#the-handle) | everything |
 
-A caller no rule or grant matches is refused with 403, whatever it asks.
+A token no grant lets in is refused with 403, whatever it asks, and one from
+an issuer no grant names with 401.
 
 The board's environment is the one Vercel runs it in (`VERCEL_TARGET_ENV`,
 which names custom environments, or `VERCEL_ENV`). A production board trusts
 its production and refuses its previews, which run any branch's code. A
 preview board trusts its own previews, so a preview can call itself. Outside
-Vercel, only people get in without a rule. A refused token gets a 403 that
-says what would let it in:
+Vercel, only people get in without a grant. A refused token's 403 says which
+grant would let it in, as a command to run:
 
-```text
-this token can't use this board: it runs in production, so its preview deployments need vercelProject({ project: 'self', environments: ['preview'], can })
+```json
+{
+  "error": {
+    "code": "forbidden",
+    "message": "this token can't use this board: no grant lets in acme/www",
+    "hint": "Grant it: vb grants create github --claim repository=acme/www"
+  }
+}
 ```
 
-A token no rule matches is refused the same way, with the rule that would let
-it in: `this token can't use this board: add githubActions({ repository:
-'acme/www', can }) to access`.
-
-## Configure it
-
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { githubActions, oidc, vercelProject } from '@vercel/board/access'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
-const team = board({
-  backend,
-  access: [
-    // front's feedback intake posts and never reads.
-    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-    // CI reports in ci/ and waits for replies there.
-    githubActions({ repository: 'acme/web', workflow: '.github/workflows/ci.yml', can: { 'ci/': ['read', 'post'] } }),
-    // Any other OIDC issuer: pinned here, matched on exact claims.
-    oidc({ issuer: 'https://gitlab.com', claims: { project_path: 'acme/api' }, can: { 'ci/': ['post'] } }),
-    // On a production board, this project's previews read dev/ and nothing else.
-    vercelProject({ project: 'self', environments: ['preview'], can: { 'dev/': ['read'] } }),
-  ],
-})
-export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
-```
-
-- **The first rule that matches decides.** Order them from most specific to
-  least.
-- **`vercelProject({ project, team?, environments?, can })`** matches a
-  project's deployments by name or ID. `project: 'self'` is the board's own
-  project. A rule for the board's own environment replaces its default of
-  everything, and one for any other environment lets it in. Its development
-  tokens are people, which no rule changes. Since `self` means the board's
-  project, name a project that's really called `self` by its ID.
-- **`githubActions({ repository, event?, workflow?, ref?, can })`** matches a
-  workflow run. See [CI](../03-guides/03-ci.md) for what a `pull_request` run's
-  token carries.
-- **`oidc({ issuer, claims, can })`** matches any other issuer's tokens:
-  GitLab, Buildkite, a cloud's workload identity. The issuer is an https URL
-  pinned in code, and the board fetches keys only for issuers a rule names.
-  Every claim you list must match exactly (a list is any of its values), and
-  you list at least one, since an issuer signs tokens for everyone it serves.
-  A claim with no value, such as an unset environment variable, throws when
-  the rule is built rather than matching everyone. The principal is
-  `oidc:<issuer host and path>:<sub>`, with a `:` or `%` in the issuer part
-  percent-encoded (`oidc:ci.test%3A8443:<sub>`). Two rules whose issuers
-  differ only by a trailing slash, the host's case, or a default port would
-  name the same principals, so the board throws when it starts. `board()`
-  verifies these issuers' tokens because its rules name them.
-- **A function is a rule of your own:** `(principal) => can` gives what a
-  rule's `can` takes (`'all'`, `['read']`, `{ 'dev/': ['post'] }`), null for
-  nothing, or undefined to leave the principal to the next rule. The token
-  rules match only tokens, so a function is how principals your own verifier
-  returns get anything (see [below](#a-hosts-own-verifier)). It's asked again
-  whenever a principal acts, a schedule's send and a registered watcher's
-  match included. The defaults come first: it's never asked about a person, or
-  the board's own deployments in its environment.
-- **It holds outside requests too.** A schedule sends only while its creator
-  may post there, a watcher registered from another board matches only what
-  its registrant may read at each event, and the middleware sees every write
-  that reaches the backend, its own code's included.
+A production board's own previews hear `it runs in production, and its
+preview deployments need a grant`, with the grant for their project in
+`preview`.
 
 ## Grants
 
-`access` is the board's code. A grant is the same trust kept on the board, so
-people let a CI run or another project in while the board runs, with no
-deploy:
+A grant lets callers in by their tokens: an issuer, the claims its tokens
+carry, and what they may do in each channel. The board keeps it, so people let
+a CI run or another project in while the board runs, with no deploy:
 
 ```ts scripts/grants.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 
-const team = board({ backend: http('https://acme.vercel.app/api/board') })
+// The board at BOARD_URL, one that keeps grants: vb serve's, say.
+const team = board()
 
 // acme/web's runs report in ci/ and read the replies there.
 const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
-// Another team's production deployments post feedback, and do nothing else.
-await team.createGrant({ issuer: 'vercel', claims: { owner_id: 'team_partner', project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
+// front's production deployments post feedback, and do nothing else.
+await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_front', environment: 'production' }, can: { 'feedback/': ['post'] } })
 console.log(await team.grants())
 await team.revokeGrant(grant.id)
 ```
@@ -127,11 +75,17 @@ await team.revokeGrant(grant.id)
 ```text
 $ vb grants create github --claim repository=acme/web --can ci/=read,post
 granted g1
+$ vb grants create vercel --claim project_id=prj_www --claim environment=preview --can dev/=read
+granted g2
 $ vb grants
-g1  github  repository=acme/web  ci/=read,post
+g1  github  repository=acme/web                     ci/=read,post
+g2  vercel  environment=preview project_id=prj_www  dev/=read
 $ vb grants revoke g1
 revoked g1
 ```
+
+The second lets a production board's own previews, `prj_www`'s, read `dev/`
+and nothing else.
 
 - **A grant is an issuer, the claims its tokens carry, and `can`.** `vercel`
   and `github` name those issuers; any other is an https URL on the internet,
@@ -142,19 +96,19 @@ revoked g1
 - **It names who it lets in.** A Vercel grant names `project_id` and
   `environment`, since a preview runs any branch's code, and a GitHub grant
   `repository` or `repository_id`: those issuers sign tokens for everyone they
-  serve. Any other issuer's names at least one claim. `owner_id` keeps a
-  project's grant to its team.
+  serve. Any other issuer's names at least one claim. A claim is any one its
+  tokens carry: GitHub's `event_name` or `ref`, GitLab's `project_path`.
+- **It's for callers on the board's team.** Until cross-team access exists, a
+  caller on another team gets in only with a [board token](#tokens) that
+  someone on the board's team mints for it.
 - **The same issuer and claims are one grant.** Setting it again changes its
   `can` (`updated g1`). Claims that differ, such as another environment, are
   another grant.
 - **`can` left out is read, post, react, and label everywhere,** what Vercel's
   API gives a project it lets use a board.
-- **Grants add to the rules.** A principal gets what the rule that matches it
-  gives, and what every grant that matches gives, added up: a grant never goes
-  unused because a rule matched first. People and the board's own deployments
-  where it runs are never a grant's, and a rule function that answers `null`
-  refuses, grants or not. A board whose `access` is one function decides
-  alone, and answers 501 `no_grants`.
+- **Grants add up.** A caller gets what every grant that matches its token
+  gives. People and the board's own deployments where it runs are never a
+  grant's: they have everything already.
 - **Grants are the board's bookkeeping:** setting, listing, and revoking them
   takes `manage` in every channel. A revoke holds from the next request, and a
   schedule a principal made stops as any creator's does when it loses access.
@@ -181,9 +135,9 @@ revoked t1
 
 ```ts scripts/sandbox-token.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 
-const team = board({ backend: http('https://acme.vercel.app/api/board') })
+// The board at BOARD_URL, one that issues tokens: vb serve's, say.
+const team = board()
 
 // Every request with it writes as clever-lemur, from session thread-1956, in dev/ at most.
 const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post', 'react'] }, profile: 'clever-lemur', session: 'thread-1956', expires: '7d' })
@@ -195,8 +149,8 @@ await team.revokeToken(token.id)
   characters. The board keeps its SHA-256. It goes where any token does,
   `Authorization: Bearer`, and `BOARD_TOKEN` for `vb` and the handle.
 - **It's its minter, narrowed.** Any caller mints one: a person, a deployment,
-  a workflow. Its access is worked out on every request, under the rules and
-  grants as they are then, and narrowed to its `can`, so it never does more
+  a workflow. Its access is worked out on every request, under the grants as
+  they are then, and narrowed to its `can`, so it never does more
   than its minter could at that moment. A person's token writes under their
   handle; a workflow's token loses what its grant gave once the grant goes.
 - **`can` left out is a grant's default:** read, post, react, and label
@@ -225,197 +179,11 @@ await team.revokeToken(token.id)
   A token lists and revokes only itself and the tokens minted with it, so a
   widget's token never reaches your others. Revoking someone else's answers as
   one that isn't there: `revoked: false`.
-- **`board()` checks its own,** before `authenticate` runs, so a host's
-  verifier never sees them. On a board on `http()`, a token is the board it
-  uses', and its callers can't mint one there: it would act as the project.
-
-## A board on `http()`
-
-A board on `http()` keeps no log, and with no `access` of its own it serves no
-requests but its wake-ups and webhooks. With one, it
-serves its own callers as a gateway to the board it uses: it verifies and
-limits them, then acts on that board as its project.
-
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
-import type { CallerRequest } from '@vercel/board/access'
-
-/** Whoever the app's session cookie names, or null for a request without one. */
-async function session(request: CallerRequest) {
-  // const user = await readSession(request.headers.get('cookie'))   // yours
-  const user = null as { id: string; username: string } | null
-  return user ? ({ id: `support:user:${user.id}`, kind: 'person', handle: user.username } as const) : null
-}
-
-const gateway = board({
-  backend: http(process.env.TEAM_BOARD_URL),
-  authenticate: session,
-  access: (principal) => (principal.kind === 'person' ? { 'support/': ['read', 'post'] } : null),
-})
-export const GET = gateway.fetch
-// A cookie rides along on other sites' requests: see the next section.
-export const POST = async (request: Request) => {
-  if (request.headers.has('cookie') && request.headers.get('origin') !== 'https://support.example.com') return new Response('forbidden', { status: 403 })
-  return gateway.fetch(request)
-}
-```
-
-The policies stack: yours decides what your users may do, and the team's board
-decides what your project may do, so a user gets only what both allow. The
-team's board sees the project, labeled with who it was: Ada via support.
-
-- **It never vouches for a person.** Each call goes with the project's
-  credentials, with the caller's handle as its profile (`ada`, shown as
-  `support/ada`), a label under the project and never who it is there, and its
-  access as [`x-board-scope`](#narrowing-a-token). A handle that's one of this
-  board's watchers' IDs gets a number (`fix-2`), since a watcher's own writes
-  never wake it.
-- **What's the project's own there, its callers can't do.** The team's board
-  sees one principal, so editing, deleting, scheduling, and uploading, which
-  go by it (a file is its uploader's until a message carries it), and the
-  project's registration, sync, and links answer 403. Posts, replies,
-  reactions, labels, and reads go through, files in messages a caller can read
-  included. A post's `id` is its caller's own.
-- **`GET /me` answers who the caller is here,** as this board verified it.
-
-## A host's own verifier
-
-`board({ authenticate })` says who a request is. It's one function,
-`oidcTokens()` from `@vercel/board/access` by default, and composing verifiers is
-plain code. Each answers null when the request carries nothing it recognizes,
-so the next one gets it, and a 401 when it carries a credential that fails. A
-board on an app's own site can take the app's session cookie, from its staff
-and its customers, and `vb`'s tokens, from people, agents, and deployments:
-
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { vercelProject, oidcTokens, type CallerRequest } from '@vercel/board/access'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const tokens = oidcTokens()
-
-/** Whoever the app's session cookie names, or null for a request without one. */
-async function session(request: CallerRequest) {
-  // const user = await readSession(request.headers.get('cookie'))   // yours
-  const user = null as { id: string; username: string; staff: boolean } | null
-  if (!user) return null
-  return user.staff
-    ? ({ id: `vercel:user:${user.id}`, kind: 'person', handle: user.username } as const)
-    : ({ id: `support:customer:${user.id}`, kind: 'external', handle: user.username } as const)
-}
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
-export const team = board({
-  backend,
-  authenticate: async (request) => (await session(request)) ?? (await tokens(request)),
-  access: [
-    vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
-    // Customers read and write in support/, and nowhere else.
-    (principal) => (principal.id.startsWith('support:customer:') ? { 'support/': ['read', 'post'] } : undefined),
-  ],
-})
-export const GET = team.fetch
-export const POST = async (request: Request) => {
-  if (request.headers.has('cookie') && request.headers.get('origin') !== 'https://support.example.com') return new Response('forbidden', { status: 403 })
-  return team.fetch(request)
-}
-export const { scheduler } = backend
-```
-
-A browser sends the cookie with requests that other sites' pages make, so the
-route checks the `Origin` of every write that carries one. A bearer token
-doesn't ride along like that, so `vb`, deployments, and webhooks need no such
-check. board ships no helper for it: it's the route's to say which pages may
-write.
-
-- **A verifier gets what the request said:** `credential`, its bearer token or
-  null, `headers`, for a cookie, `audience`, the board's URL, `claims`, what it
-  claims for itself, and `board`, what the board knows that verifying needs
-  (its project, and the issuers its rules trust), which `oidcTokens()` reads.
-- **A host's own returns the principal:** `id` in the board's scheme
-  (`vercel:user:<id>`, `vercel:project:<id>:<env>`, …), `kind`, `handle`, and
-  optionally `expiresAt`. Its handle stands: the one the CLI sends doesn't
-  replace it, so a verifier that wants it returns `request.claims.handle`
-  itself. The name, profile, and `x-board-scope` the caller sends still apply
-  on top of it.
-- **`kind: 'person'` is a full member of the board:** it may do everything,
-  as the board's own people do, whatever the rules say. So your verifier
-  decides who counts as one. Staff are people here; customers are `external`.
-- **Anyone else gets what the first rule that matches gives,** and only a
-  function matches a host's IDs, like `support:customer:99`. One that no rule
-  matches is refused with 403. One whose `expiresAt` has passed is refused,
-  and a schedule it made is canceled `revoked`.
-- **Name your principals in a scheme no sync registers.** A sync writes as
-  the users of the platforms it registers, `support:…` for a platform named
-  `support`, and the board tells a host's principal from them only once that
-  principal has written or registered watchers. So if a sync could register
-  platform `support`, `support:customer:99` is one of its users until that
-  customer first writes. Give `sync` carefully: see
-  [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
-- **To reject, throw an `HttpError` or return or throw a `Response`.** The
-  board sends that response as is. Anything else thrown is a 500, so turn a
-  bad credential into a 401 yourself.
-- **It's asked once per request,** however many times a stream polls, and a
-  token `oidcTokens()` verified is kept until it expires. What `access` gives
-  is worked out again for each page a stream sends.
-
-A host that serves many teams' boards from one deployment can't use the
-built-in verifier at all: its callers can't access the host's project, and
-every team's board would trust the host's own deployments. Its verifier
-replaces `oidcTokens()`, and a function as `access` says what each principal
-may do:
-
-```ts lib/boards.ts
-import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { redis } from '@vercel/board/backend-a2/store-redis'
-
-/** One team's board. Make each once, and cache it. */
-export function teamBoard(teamId: string) {
-  return board({
-    backend: a2({
-      store: redis({ url: process.env.REDIS_URL!, keyPrefix: `board:${teamId}:` }),
-      scheduler: vercelQueues({ topic: `board-${teamId}` }),
-      blob: vercelBlob({ prefix: teamId }),
-    }),
-    authenticate: async (request) => {
-      if (request.credential === null) return null
-      // const caller = await verifyPlatformToken(request.credential)   // yours
-      const caller = null as { teamId: string; userId: string; username: string; expiresAt: Date } | null
-      if (caller?.teamId !== teamId) return new Response(null, { status: 404 })
-      return { id: `vercel:user:${caller.userId}`, kind: 'person', handle: caller.username, expiresAt: caller.expiresAt }
-    },
-    // access: async (principal) => canOf(teamId, principal.id),   // yours
-    access: async (principal) => (principal.kind === 'person' ? 'all' : null),
-  })
-}
-```
-
-- **A function as `access` decides for everyone** it's asked about, people
-  and the board's own deployments too, as a rule's `can` (`'all'`, `['read']`,
-  `{ 'dev/': ['post'] }`), or null for nothing. It's asked again whenever a
-  principal acts, a schedule's send included, so what it says now is what
-  holds.
-- **Nothing else is trusted.** Without `oidcTokens()` in its verifier, no
-  people, own-project deployments, audience check, or platform token header
-  count. A board whose verifier is `oidcTokens()` alone takes no host's
-  principals: schedules one made before the board switched are revoked. The
-  board's own code's (its handle's, watchers') keep sending.
-- **One board per team.** Create a `board()` for each team and cache them.
-  Give each its own store prefix, scheduler topic, and attachments prefix, so
-  no team's board reads another's log or files. On a scheduler like
-  `vercelQueues()`, a board holds no timers between requests, so dropping an
-  evicted one is enough once you close its store (`close()`), which ends the
-  connections it opened.
+- **`board()` checks its own,** before `authenticate` runs, so a
+  [verifier of your own](./01-mounting.md#callers-of-your-own) never sees
+  them.
+- **It's how another team's callers get in,** until cross-team access exists:
+  someone on the board's team mints one for them, narrowed to what they need.
 
 ## A backend of your own
 
@@ -447,10 +215,10 @@ through the binding's `handle(caller)`, so the middleware sees it.
 
 | Export | What it does |
 | --- | --- |
-| `vercelProject()`, `githubActions()`, `oidc()` | The rules, as above |
-| `oidcTokens(options?)` | An `authenticate`: the OIDC tokens made out to this board. It verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer `board.issuers` names, or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `board()`'s default |
+| `oidcTokens(options?)` | An `authenticate`: the OIDC tokens made out to this board. It verifies a request's bearer token for its audience, from Vercel, GitHub Actions, an issuer a grant names (`board.issuers`), or `local` (`vb serve`'s). Null with no token, a 401 for a bad one. Without `board`, the project is the environment's. `board()`'s default |
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
-| `compileRules(rules, { project })` | What a principal may do under `rules`, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
+| `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as an `Access`: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, `summary()` for `me`, and `narrow(scope)` to keep only what both allow. `union` adds up what several allow, as grants do: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that checks a caller against a `can` of its own |
+| `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions
 
@@ -472,8 +240,8 @@ through the binding's `handle(caller)`, so the middleware sees it.
   inbox needs `sync` in all of them, since raw events span them.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
-  there as any Slack, GitHub, or Linear user it names, which is what a board
-  on `http()` that syncs needs on the board it uses. Who those users are (name,
+  there as any Slack, GitHub, or Linear user it names, which is what a
+  deployment that syncs onto this board needs. Who those users are (name,
   handle, avatar) shows in every channel, so only the board's own sync, or one
   with `sync` in every channel, changes that: anyone else's imports name their
   author and leave the record be. Give it only to the deployment that runs the
@@ -534,8 +302,8 @@ Reads show only what the caller can read, everywhere:
 
 ## 404 or 403
 
-- **What you can't read answers 404,** as if it didn't exist. On `a2()`,
-  message IDs are sequential, so a 403 would confirm a message is there.
+- **What you can't read answers 404,** as if it didn't exist. On a local
+  board, message IDs are sequential, so a 403 would confirm a message is there.
 - **A refused write you can read answers 403** and names what's missing:
   `this token can't label in dev`.
 - **A channel the request names is yours to know,** so a post to a channel you
@@ -577,7 +345,7 @@ would bring into the narrowed caller's channels.
 ## Schedules
 
 A schedule sends as its creator with the creator's access when it fires, under
-the rules and grants as they are then, and only while the board token it was
+the grants as they are then, and only while the board token it was
 made with, if any, is live. The board keeps the token's verified claims and
 any scope, never the token. A creator that can no longer post there has the
 schedule canceled with `revoked`. Only its creator, while it can post there, or
@@ -604,11 +372,8 @@ left out for full access. `GET /me` returns the same as `can`.
 
 ### How do I keep a channel from the project's own people?
 
-Not with rules: people who can access the board's Vercel project can do
-everything. A function as `access` decides for people too, so it can, as long
-as it says what everyone else may do as well (see
-[A host's own verifier](#a-hosts-own-verifier)). Otherwise, content that needs
-privacy from them needs a second board.
+You can't, on one board: people who can access the board's Vercel project can
+do everything. Content that needs privacy from them needs a second board.
 
 ### Does a mirrored channel stay private?
 
@@ -618,9 +383,9 @@ platforms it syncs with.
 
 ### Do message IDs leak anything?
 
-How busy the board is. On `a2()`, IDs and cursors are log indexes, so a
-caller that can read one channel sees how many events happened in all of them.
-They don't say where or what.
+How busy the board is. On a local board, IDs and cursors are positions in its
+log, so a caller that can read one channel sees how many events happened in
+all of them. They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 
@@ -628,4 +393,4 @@ Yes: a [board token](#tokens), which you mint, list, and revoke, and which
 lives 90 days at most. Callers with an OIDC token need none: a
 [grant](#grants) lets them in by their claims, each living as long as its
 token. A credential of your own, such as a session cookie, takes
-[a verifier of your own](#a-hosts-own-verifier).
+[a verifier of your own](./01-mounting.md#callers-of-your-own).

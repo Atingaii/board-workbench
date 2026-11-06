@@ -12,6 +12,8 @@ import {
   type Can,
   type Permission,
 } from '../src/server/access.ts'
+import * as publicAccess from '../src/access/index.ts'
+import { checkGrant } from '../src/server/auth.ts'
 import { HttpError } from '../src/server/errors.ts'
 
 const CHANNELS = ['dev', 'dev/pi', 'dev/pi/deep', 'devops', 'ci', 'ci/main', 'security', 'security/vuln', 'feedback']
@@ -252,5 +254,46 @@ describe('authorize', () => {
   it('refuses with a 403 when there’s nothing to hide, like a new thread’s own channel', () => {
     expect(() => authorize(access, 'post', 'dev')).toThrow("this token can't post in dev")
     expect(() => authorize(compileAccess([]), 'read', 'dev')).toThrow("this token can't read dev")
+  })
+})
+
+describe('@vercel/board/access', () => {
+  it('evaluates a can on its own, for a copy of these rules to check itself against', () => {
+    const ci = publicAccess.compileAccess({ 'ci/': ['post'] })
+    expect(ci.can('post', 'ci/main')).toBe(true)
+    expect(ci.readable('ci/main')).toBe(false)
+    expect(publicAccess.union([ci, publicAccess.compileAccess({ dev: ['label'] })]).summary()).toEqual({ 'ci/': ['post'], dev: ['read', 'label'] })
+    expect(publicAccess.FULL_ACCESS.everywhere('manage')).toBe(true)
+    expect(() => publicAccess.compileAccess({ 'ci/*': ['post'] })).toThrow('write ci/ for ci and its subtree')
+  })
+
+  it("can't be changed by code that imports it, so board's own decisions stay its own", () => {
+    const stub = () => {
+      ;(publicAccess.FULL_ACCESS as { can: Access['can'] }).can = () => false
+    }
+    expect(stub).toThrow(TypeError)
+    expect(publicAccess.FULL_ACCESS.can('manage', 'dev')).toBe(true)
+    expect(() => Object.assign(publicAccess.compileAccess(['read']), { readsAll: false })).toThrow(TypeError)
+  })
+
+  it("can't have its default can widened by code that imports it", () => {
+    const defaults = publicAccess.DEFAULT_CAN as Record<string, Permission[]>
+    expect(() => defaults['*']!.push('manage')).toThrow(TypeError)
+    expect(() => {
+      defaults.dev = ['manage']
+    }).toThrow(TypeError)
+    const grant = checkGrant({ issuer: 'github', claims: { repository: 'acme/app' } }, [])
+    expect(compileAccess(grant.can).anywhere('manage')).toBe(false)
+    expect(compileAccess(grant.can).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
+  })
+
+  it('gives a grant or a token that names no can read, post, react, and label everywhere', () => {
+    expect(publicAccess.compileAccess(publicAccess.DEFAULT_CAN).summary()).toEqual({ '*': ['read', 'post', 'react', 'label'] })
+  })
+
+  it('adds up only accesses it made: anything else counts as nothing', () => {
+    const handWritten = { can: () => true, readable: () => true, readsAll: true, everywhere: () => true, anywhere: () => true } as unknown as Access
+    expect(publicAccess.union([handWritten]).anywhere('read')).toBe(false)
+    expect(publicAccess.union([handWritten, publicAccess.compileAccess({ dev: ['read'] })]).summary()).toEqual({ dev: ['read'] })
   })
 })

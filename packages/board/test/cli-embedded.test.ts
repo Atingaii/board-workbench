@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { build } from 'tsdown'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, type Failure } from '../src/cli/embedded.ts'
-import { main } from '../src/cli/main.ts'
+import { main, type Command } from '../src/cli/main.ts'
 import { local } from '../src/cli/local.ts'
 import { env, url, useBoard } from './cli-harness.ts'
 import { fakeMessageboard } from './messageboard.ts'
@@ -219,10 +219,10 @@ describe('the embedded CLI', () => {
     try {
       const app = createApp({ appName: 'vercel board' })
       const posted = await capture(() => app.run(['post', 'general', 'on the team board']))
-      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_1\n$/) })
+      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^msg_[0-9a-f-]{36}_1\n$/) })
       // The ID it prints goes back in as it came out.
       const id = posted.stdout.trim()
-      expect(await capture(() => app.run(['reply', id, 'a reply']))).toMatchObject({ code: 0, stdout: expect.stringMatching(/^#msg_[0-9a-f-]{36}_2\n$/) })
+      expect(await capture(() => app.run(['reply', id, 'a reply']))).toMatchObject({ code: 0, stdout: expect.stringMatching(/^msg_[0-9a-f-]{36}_2\n$/) })
       const thread = await capture(() => app.run(['read', id]))
       expect(thread).toMatchObject({ code: 0, stdout: expect.stringContaining('a reply') })
       expect(thread.stdout).toContain('on the team board')
@@ -263,6 +263,32 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("takes a team board's message ID as it prints one, bare, wherever a channel or a message goes", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ slug: 'acme' })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const app = createApp({ appName: 'vercel board' })
+      const posted = await capture(() => app.run(['post', 'dev', 'deploy failed', '--scope', 'acme']))
+      // Printed bare, so it pastes into a shell, where a leading # starts a comment.
+      expect(posted).toMatchObject({ code: 0, stdout: expect.stringMatching(/^msg_[0-9a-f-]{36}_1\n$/) })
+      const id = posted.stdout.trim()
+      expect(await capture(() => app.run(['post', id, 'on it', '--scope', 'acme']))).toMatchObject({ code: 0, stdout: `${id.replace(/_1$/, '_2')}\n` })
+      const read = await capture(() => app.run(['read', id, '--scope', 'acme', '--json']))
+      expect(read.code).toBe(0)
+      expect(JSON.parse(read.stdout)).toMatchObject({ message: { id, text: 'deploy failed' }, replies: [{ text: 'on it' }] })
+      // The reply went in the thread, not to a channel named for the ID.
+      expect(JSON.parse((await capture(() => app.run(['channels', '--scope', 'acme', '--json']))).stdout)).toEqual({ channels: [{ path: 'dev' }, { path: 'general' }] })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("says you're not signed in when there's no Vercel login to reach the team's board with", async () => {
     const home = await isolated()
     const fetching = vi.spyOn(globalThis, 'fetch')
@@ -274,6 +300,95 @@ describe('the embedded CLI', () => {
         stderr: "error: You're not logged in to Vercel.\n\n  Log in:\n    vercel login\n",
       })
       expect(fetching.mock.calls.filter(([input]) => String(input instanceof Request ? input.url : input).startsWith('https://api.vercel.com/v1/messageboard'))).toEqual([])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("shows what Vercel's API says you may do on a team's board, by your team role or your credentials, and when they stop working", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ me: { 'user:u_jb': { can: { 'dev/': ['read', 'post'], 'ci/': ['read'] }, expiresAt: Date.now() + 90 * 60_000 } } })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      expect(whoami.code).toBe(0)
+      expect(whoami.stdout).toMatch(/^token +expires in 1h 30m$/m)
+      expect(whoami.stdout).toMatch(/^can +ci\/ +read\n +dev\/  read post$/m)
+      // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads.
+      const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
+      fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
+      const owner = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      expect(owner).toMatchObject({ code: 0, stdout: expect.stringMatching(/^Julián Benegas \(vercel:user:u_jb\)\n/) })
+      expect(owner.stdout).not.toMatch(/^(can|token) /m)
+      vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
+      const viewer = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      expect(viewer.stdout).toMatch(/^can +\*  read$/m)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("sends a board token you set to Vercel's API as itself, ahead of your login, from vb and from a CLI that runs board's", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('BOARD_TOKEN', 'p9Lr4vTzQ2wc')
+    const api = fakeMessageboard({ tokens: { p9Lr4vTzQ2wc: 'user:u_ada' }, me: { p9Lr4vTzQ2wc: { can: { 'dev/': ['read'] }, expiresAt: null } } })
+    const sent: (string | null)[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      sent.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get('authorization'))
+      return api.fetch(input, init)
+    })
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
+      expect(whoami.code).toBe(0)
+      expect(whoami.stdout).toMatch(/^Ada Lovelace \(vercel:user:u_ada\)\n(.*\n)*source +BOARD_TOKEN\n(.*\n)*can +dev\/  read\n$/)
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+      // `vercel board`: its login and its signed fetch go unused, and the token goes as it is.
+      sent.length = 0
+      let asked = 0
+      const signed = vi.fn()
+      const app = createApp({ appName: 'vercel board', login: async () => (asked++, 'user:u_jb'), team: async () => 'team_test', fetch: async (input, init) => (signed(), api.fetch(input, init)) })
+      expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
+      expect([asked, signed.mock.calls.length]).toEqual([0, 0])
+      expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("sends a token an app's command hands the CLI's connection to Vercel's API, in place of your login", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ tokens: { w3Nc8sJd1hFy: 'user:u_ada' } })
+    const sent: (string | null)[] = []
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      sent.push(new Request(input, init).headers.get('authorization'))
+      return api.fetch(input, init)
+    })
+    // What `vb conformance` does with a token it minted: the same board, that secret as the credential.
+    const probe: Command = {
+      spec: { name: 'probe', description: 'who a token is on the board', arguments: [], options: [], examples: [] },
+      run: async (_args, { connection, out }) => {
+        out((await connection(undefined, { token: 'w3Nc8sJd1hFy' }).board.me()).actor)
+        return 0
+      },
+    }
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await capture(() => main(['probe', '--scope', 'test'], { name: 'board', commands: { probe } }))).toMatchObject({ code: 0, stdout: 'vercel:user:u_ada\n' })
+      expect(new Set(sent)).toEqual(new Set(['Bearer w3Nc8sJd1hFy']))
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -316,6 +431,199 @@ describe('the embedded CLI', () => {
       await mkdir(join(home, '.vercel'))
       await writeFile(join(home, '.vercel', 'project.json'), JSON.stringify({ orgId: 'team_test', projectId: 'prj_app' }))
       expect((await capture(() => main(['read', 'general'], app))).stdout).toContain('by its URL')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("picks the team's board by its name with --name or BOARD_NAME, --name ahead of BOARD_URL, and only a name", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ boards: [{ name: 'security' }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const app = { name: 'board', commands: local }
+    const run = (...args: string[]) => capture(() => main(args, app))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect((await run('post', 'dev', 'rotate the keys', '--scope', 'test', '--name', 'security')).code).toBe(0)
+      expect((await run('read', 'dev', '--scope', 'test')).stdout).not.toContain('rotate the keys')
+      // --name names a team's board as --scope does: BOARD_URL doesn't take its place.
+      vi.stubEnv('BOARD_URL', 'https://elsewhere.example/api/board')
+      expect((await run('read', 'dev', '--name', 'SECURITY')).stdout).toContain('rotate the keys')
+      vi.stubEnv('BOARD_URL', undefined)
+      vi.stubEnv('BOARD_NAME', 'security')
+      expect((await run('read', 'dev', '--scope', 'test')).stdout).toContain('rotate the keys')
+      // On its own, as --name is: the team the environment finds, or the login's.
+      expect((await run('read', 'dev')).stdout).toContain('rotate the keys')
+      // Beside BOARD_URL, which names another board, nothing says which: misuse, not a guess.
+      vi.stubEnv('BOARD_URL', 'https://elsewhere.example/api/board')
+      expect(await run('read', 'dev')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: BOARD_NAME names a team's board, and BOARD_URL a board by its URL: unset one\.\n/) })
+      vi.stubEnv('BOARD_URL', undefined)
+      vi.stubEnv('BOARD_NAME', undefined)
+      // A board's URL names its team, so --scope beside it would pick nothing.
+      expect(await run('read', 'dev', '--scope', 'test', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --url names its board, its team included, and --scope a team's board/) })
+      // A BOARD_NAME a run doesn't use isn't read: --url picks the board.
+      vi.stubEnv('BOARD_NAME', 'acme/security')
+      expect(await run('whoami', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test')).toMatchObject({ code: 0, stdout: expect.stringContaining('brd_test') })
+      vi.stubEnv('BOARD_NAME', undefined)
+      // A board no one made yet: a person is told, and nothing makes it.
+      expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: no board named nope on this team, or none you can see\./) })
+      expect(api.requests).not.toContain('POST /boards/ensure')
+      // What isn't a name, or names a board twice, is misuse: another team's board is --scope's.
+      for (const args of [['--name', 'security', '--url', 'https://www.example.com/api/board'], ['--name', 'x'.repeat(65)]])
+        expect(await run('read', 'dev', ...args), args.join(' ')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: /) })
+      expect(await run('read', 'dev', '--name', 'acme/security')).toMatchObject({ code: 2, stderr: expect.stringContaining('    vb read dev --scope acme --name security\n') })
+      vi.stubEnv('BOARD_NAME', 'acme/security')
+      expect(await run('read', 'dev')).toMatchObject({ code: 2, stderr: expect.stringContaining('pass its team with --scope') })
+      vi.stubEnv('BOARD_NAME', undefined)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("reaches a team's board by its URL, which names its team, from a login whose default team is another", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    // acme isn't the login's default team: a request reaches it only when it names it.
+    const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'ops', id: 'brd_ops1' }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const at = 'https://api.vercel.com/v1/messageboard/boards/brd_ops1?teamId=team_acme'
+      expect((await run('post', 'dev', 'on ops one', '--url', at)).code).toBe(0)
+      expect((await run('read', 'dev', '--url', at)).stdout).toContain('on ops one')
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("tells a person how to make a board their name finds none of, and makes it with --ensure", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard({ boards: [{ name: 'vault', members: ['u_ada'] }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({
+        code: 1,
+        stderr: "error: no board named nope on this team, or none you can see.\n\n  Check the name, or make it:\n    vb read dev --name nope --ensure\n",
+      })
+      // The way out adds --ensure before --, so the text after it stays text.
+      expect((await run('post', 'dev', '--name', 'nope', '--', '--ensure')).stderr).toContain('    vb post dev --name nope --ensure -- --ensure\n')
+      expect(api.requests.filter((request) => request === 'POST /boards/ensure')).toEqual([])
+      // Following it makes the board, and posts there.
+      expect((await run('post', 'dev', 'first', '--name', 'nope', '--ensure')).code).toBe(0)
+      expect((await run('read', 'dev', '--name', 'nope')).stdout).toContain('first')
+      // A private board's name is taken: pick another, or ask for access.
+      expect(await run('read', 'dev', '--name', 'vault', '--ensure')).toMatchObject({
+        code: 1,
+        stderr: "error: the board name vault is taken.\n\n  Pick another name, or ask whoever can see it for access.\n",
+      })
+      // --ensure makes a board by its name: without one, or beside a URL, it's misuse.
+      expect(await run('read', 'dev', '--ensure')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --ensure makes the board --name names: pass --name too\.\n/) })
+      expect(await run('read', 'dev', '--ensure', '--url', 'https://board.example/api/board')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: --ensure makes a team's board by its name, and --url/) })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('tells a project it has no access to a board, and who fixes that', async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:preview')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard({ boardId: null, boards: [{ name: 'security', granted: ['prj_pong:production'] }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // vb only finds a board without --ensure: one the project can't see is none to it.
+      expect(await run('read', 'dev', '--name', 'security')).toMatchObject({
+        code: 1,
+        stderr: expect.stringMatching(/^error: no board named security on this team, or none you can see\.\n/),
+      })
+      expect(await run('read', 'dev', '--name', 'security', '--ensure')).toMatchObject({
+        code: 1,
+        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+      })
+      expect(await run('read', 'dev')).toMatchObject({
+        code: 1,
+        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('puts a way out before --, so following it posts the same text to the board it names', async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    // What a way out says to run, as argv: its last indented line, unquoted.
+    const wayOut = (stderr: string) => stderr.trimEnd().split('\n').at(-1)!.trim().split(' ').slice(1).map((arg) => arg.replace(/^'(.*)'$/, '$1'))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // Text that reads like options, after --: the way out leaves it as it is, and adds its own before it.
+      const missing = await run('post', 'dev', '--name', 'ops', '--', '--scope')
+      expect(missing.code).toBe(1)
+      const argv = wayOut(missing.stderr)
+      expect(argv.slice(argv.indexOf('--'))).toEqual(['--', '--scope'])
+      expect((await run(...argv)).code).toBe(0)
+      expect((await run('read', 'dev', '--name', 'ops')).stdout).toContain('--scope')
+      // So does the way out for a team in --name.
+      const slashed = await run('post', 'dev', '--name', 'acme/ops', '--', '--rollback')
+      expect(slashed.code).toBe(2)
+      expect(wayOut(slashed.stderr)).toEqual(['post', 'dev', '--scope', 'acme', '--name', 'ops', '--', '--rollback'])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const writes = () => fetching.mock.calls.filter(([input, init]) => (init?.method ?? (input instanceof Request ? input.method : 'GET')) !== 'GET').length
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      for (const args of [['conformance'], ['conformance', '--scope', 'test']]) {
+        const refused = await run(...args)
+        expect(refused).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance posts and changes grants, so name a scratch board for it\.\n/) })
+        expect(refused.stderr).toContain(`    vb ${args.join(' ')} --name <BOARD>\n`)
+        expect(refused.stderr).toContain(`    vb ${args.join(' ')} --url <URL>\n`)
+      }
+      expect(writes()).toBe(0)
+      // Named, even the team's default board, it runs: the person chose it.
+      const named = await run('conformance', '--name', 'General')
+      expect(named.code).not.toBe(2)
+      expect(named.stdout).toMatch(/\d+ passed/)
+      expect(writes()).toBeGreaterThan(0)
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
