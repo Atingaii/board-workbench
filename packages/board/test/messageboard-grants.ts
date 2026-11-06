@@ -183,15 +183,15 @@ export function fakeGrants(options: {
     }
   }
 
-  /** What decides `target` (a channel, or a pattern) for `who`, and what it gives. */
-  function decide(who: Who, target: string) {
+  /** What decides `target` (a channel, or a pattern) for `who`, and what it gives: by `who`'s own limits alone, without everyone's grants, when `own`. */
+  function decide(who: Who, target: string, own = false) {
     // Something other than everyone has to let it in: a person's place on the team, or a grant that names it.
     const admitted = (who.kind === 'user' && isMember(who.userId)) || [...grants.values()].some((grant) => grant.principals.some((principal) => principal.kind !== 'everyone' && names(principal, who, false)))
     const nothing = { pattern: null, over: [] as string[], level: null, grants: [] as Grant[], capped: null as string | null, can: [] as Permission[] }
     if (!admitted) return nothing
     const candidates: { grant: Grant; level: Level; pattern: string }[] = []
     for (const grant of grants.values()) {
-      const levels = grant.principals.filter((principal) => names(principal, who, true)).map(levelOf)
+      const levels = grant.principals.filter((principal) => !(own && principal.kind === 'everyone') && names(principal, who, true)).map(levelOf)
       if (levels.length === 0) continue
       const level = levels.sort((a, b) => LEVEL[a] - LEVEL[b])[0]!
       for (const pattern of Object.keys(grant.can)) if (covers(pattern, target)) candidates.push({ grant, level, pattern })
@@ -226,18 +226,18 @@ export function fakeGrants(options: {
   }
   /**
    * A 403 unless `who` may make or widen a grant to `patterns`, judged by the grants as they'd be
-   * after it (`after`). Reach: manage at each pattern, and at every spot under it where the grants
-   * naming `who` give it less, but where an `everyone` grant decides. Admission: whatever `everyone`
-   * gives anywhere, `who` has too, since anyone a grant lets in gets it. A team owner always may.
+   * after it (`after`), as the board's `checkGrantChange` does. Reach: manage at each pattern, with
+   * everyone's grants and without, and at every spot under it by `who`'s own limits, without them.
+   * Admission: whatever `everyone` gives anywhere, `who` has too, since anyone a grant lets in gets
+   * it. A team owner always may.
    */
   function mayGrant(who: Who, patterns: Iterable<string>, after: readonly Grant[], what: string) {
     if (isOwner(who)) return
     const spots = [...grants.values()].filter((grant) => grant.principals.some((principal) => names(principal, who, true))).flatMap((grant) => Object.keys(grant.can))
     const everyone = after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone')).flatMap((grant) => Object.keys(grant.can))
-    const manages = (spot: string) => decide(who, spot).can.includes('manage')
+    const manages = (spot: string, own = false) => decide(who, spot, own).can.includes('manage')
     for (const pattern of patterns) {
-      const shielded = (spot: string) => everyone.some((closed) => closed !== pattern && covers(pattern, closed) && covers(closed, spot))
-      if (!manages(pattern) || spots.some((spot) => spot !== pattern && covers(pattern, spot) && !manages(spot) && !shielded(spot)))
+      if (!manages(pattern) || !manages(pattern, true) || [...spots, ...everyone].some((spot) => spot !== pattern && covers(pattern, spot) && !manages(spot, true)))
         throw new GrantRefused(403, 'forbidden', `${what} takes manage wherever the grant reaches`)
     }
     for (const spot of new Set([...everyone, ...spots])) {
