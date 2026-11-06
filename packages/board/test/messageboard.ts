@@ -31,6 +31,7 @@ type Message = {
   from?: string
   origin?: Record<string, unknown>
   noSync?: boolean
+  links?: { url: string; message?: string | null; snapshot?: unknown; unavailable?: string | null }[]
 }
 type Schedule = {
   id: string
@@ -149,10 +150,11 @@ function fakeBoard(shared: Shared, boardId: string) {
   const platformThreads = new Map<string, string>()
   const platformMessages = new Map<string, string>()
   const importIds = new Map<string, string>()
-  const bindings = new Map<string, { target: string; targetKind: 'channel' | 'thread'; cause: string }[]>()
+  /** A thread's targets: `external` is the platform thread it is there, a channel's once its root lands. */
+  const bindings = new Map<string, { target: string; targetKind: 'channel' | 'thread'; cause: string; external?: string }[]>()
   const copies = new Map<string, Record<string, { thread: string; message: string; files?: string[] | null; asUser?: true }>>()
   const failures = new Map<string, Record<string, string>>()
-  type InboxEntry = { id: string; eventId: string; thread: string; event?: unknown; raw?: unknown; pushedAt: number; attempts: number; lease?: string; leaseUntil?: number; done?: boolean }
+  type InboxEntry = { id: string; eventId: string; thread: string; event?: unknown; raw?: unknown; pushedAt: number; attempts: number; lease?: string; leaseUntil?: number; retryAt?: number; done?: boolean }
   const inboxes = new Map<string, InboxEntry[]>()
 
   const seen = (actor: Actor) => {
@@ -193,6 +195,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     ...(m.from !== undefined ? { from: m.from } : {}),
     ...(m.origin ? { origin: m.origin } : {}),
     ...(m.noSync ? { noSync: true } : {}),
+    ...(m.links?.length ? { links: m.links } : {}),
   })
   const showThread = (t: Thread) => {
     const { messages, ...rest } = t
@@ -523,9 +526,13 @@ function fakeBoard(shared: Shared, boardId: string) {
     const owner = principalId(actor.principal)
     let found: RegExpExecArray | null
     if (method === 'POST' && rest === '/sync/imports') {
-      const key: string = body.from ?? (body.origin?.thread ? prefixOf(body.origin.thread) : prefixOf(body.author.id))
+      // The key it came through, or for a write a sync makes as the user, the user's own.
+      const key: string = (body.op === 'seen' ? undefined : body.from) ?? prefixOf(body.author.id)
       requireKey(actor, key)
-      if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(400, 'invalid_import')
+      if (!String(body.author.id).startsWith(`${key}:`)) throw new Refused(403, 'foreign_author')
+      if (body.origin && !body.from) throw new Refused(400, 'invalid_import', 'An import with an origin names the sync key it came through: pass `from`.')
+      // A change it imported says which sync it came through, so that sync doesn't send it back.
+      const through = body.from ? { from: body.from } : {}
       const author: Actor = { id: body.author.id, principal: { type: 'external', id: body.author.id, syncKey: key } }
       actors.set(author.id, { id: author.id, kind: 'external', handle: body.author.handle, name: body.author.name, ...(body.author.avatar ? { avatar: body.author.avatar } : {}), lastSeenAt: now() })
       if (body.op === 'seen') return { message: null }
@@ -544,13 +551,22 @@ function fakeBoard(shared: Shared, boardId: string) {
           const to = messageNamed(body.re)
           if (!to) throw new Refused(404, 'message_not_found')
           thread = threadAt(to.threadId)
+          // A platform reply lands only in the thread its platform thread syncs with.
+          const bound = origin ? platformThreads.get(`${key}|${origin.thread}`) : undefined
+          if (origin && bound !== undefined && bound !== thread.id) throw new Refused(409, 'already_synced')
+          if (origin && bound === undefined) throw new Refused(409, 'not_synced')
         } else throw new Refused(400, 'invalid_import')
         const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.after !== undefined ? { after: body.after } : {}) })
         if (body.from !== undefined && body.from !== null) message.from = body.from
         if (origin) message.origin = origin
         if (body.noSync) message.noSync = true
+        if (body.links?.length) message.links = body.links
         if (origin) {
-          if (body.channelId !== undefined) platformThreads.set(`${key}|${origin.thread}`, thread.id)
+          // A platform root binds its thread to its platform thread, which announces nothing.
+          if (body.channelId !== undefined) {
+            platformThreads.set(`${key}|${origin.thread}`, thread.id)
+            bindings.set(thread.id, [{ target: origin.thread, targetKind: 'thread', cause: 'import', external: origin.thread }])
+          }
           platformMessages.set(`${key}|${origin.thread}|${origin.message}`, message.id)
         }
         if (body.id !== undefined) importIds.set(`${owner}|${body.id}`, message.id)
@@ -581,12 +597,12 @@ function fakeBoard(shared: Shared, boardId: string) {
         message.revision++
         message.editedAt = now()
         message.changes++
-        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision }, author)
+        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision, ...through }, author)
       } else if (body.op === 'delete') {
         message.deletedAt = now()
         message.revision++
         message.changes++
-        emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision }, author)
+        emit(thread.channelId, { type: 'message.deleted', ...ref, revision: message.revision, ...through }, author)
       } else if (body.op === 'react') {
         const reactors = message.reactions.get(body.emoji) ?? new Map()
         if (body.remove) {
@@ -600,12 +616,24 @@ function fakeBoard(shared: Shared, boardId: string) {
           message.reactions.delete(body.emoji)
         }
         message.changes++
-        emit(thread.channelId, { type: body.remove ? 'message.reaction_removed' : 'message.reaction_added', ...ref, emoji: body.emoji }, author)
+        emit(thread.channelId, { type: body.remove ? 'message.reaction_removed' : 'message.reaction_added', ...ref, emoji: body.emoji, ...through }, author)
       } else if (body.op === 'labels') {
         for (const [label, value] of Object.entries(body.if ?? {})) if ((message.labels[label] ?? null) !== value) throw new Refused(409, 'label_conflict')
+        const before = { ...message.labels }
         for (const label of body.unset ?? []) delete message.labels[label]
         Object.assign(message.labels, body.set ?? {})
         message.changes++
+        const changed = Object.fromEntries(
+          [...new Set([...Object.keys(before), ...Object.keys(message.labels)])]
+            .filter((label) => before[label] !== message.labels[label])
+            .map((label) => [label, { ...(before[label] !== undefined ? { from: before[label] } : {}), ...(message.labels[label] !== undefined ? { to: message.labels[label] } : {}) }]),
+        )
+        if (Object.keys(changed).length) emit(thread.channelId, { type: 'message.labeled', ...ref, labels: changed, ...through }, author)
+      } else if (body.op === 'links') {
+        // The API keeps a message's links as an edit of it.
+        message.links = body.links
+        message.changes++
+        emit(thread.channelId, { type: 'message.edited', ...ref, revision: message.revision, ...through }, author)
       }
       return { message: message.id }
     }
@@ -623,7 +651,7 @@ function fakeBoard(shared: Shared, boardId: string) {
           platformThreads.set(`${prefixOf(body.target)}|${body.target}`, message.threadId)
         }
         const binding = { target: body.target, targetKind: body.targetKind, cause: body.cause }
-        list.push(binding)
+        list.push({ ...binding, ...(body.targetKind === 'thread' ? { external: body.target } : {}) })
         const thread = threadAt(message.threadId)
         emit(thread.channelId, { type: 'thread.synced', threadId: thread.id, messageId: thread.messages[0]!.id, binding }, actor)
         return { ok: true, attached: true }
@@ -632,6 +660,12 @@ function fakeBoard(shared: Shared, boardId: string) {
       copies.set(message.id, mine)
       if (body.kind === 'message') {
         mine[body.target] ??= { thread: body.external.thread, message: body.external.message, ...(body.external.asUser ? { asUser: true as const } : {}), ...(body.files !== undefined ? { files: body.files } : {}) }
+        // A channel's platform thread is the one its root landed in.
+        const bound = message.sequence === 1 ? bindings.get(message.threadId)?.find((one) => one.target === body.target && one.targetKind === 'channel') : undefined
+        if (bound && bound.external === undefined) {
+          bound.external = body.external.thread
+          platformThreads.set(`${prefixOf(body.target)}|${body.external.thread}`, message.threadId)
+        }
         platformMessages.set(`${prefixOf(body.target)}|${body.external.thread}|${body.external.message}`, message.id)
         delete failures.get(message.id)?.[body.target]
       } else if (body.kind === 'files') {
@@ -661,8 +695,14 @@ function fakeBoard(shared: Shared, boardId: string) {
       if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
       const thread = threadAt(decodeURIComponent(found[1]!))
       const owned = ownedKeys(actor)
-      const targets = (bindings.get(thread.id) ?? []).filter((bound) => owned.has(prefixOf(bound.target))).map((bound) => bound.target)
-      return { thread: thread.id, root: thread.messages[0]!.id, channel: thread.channelId, targets, external: Object.fromEntries(targets.map((target) => [target, target])) }
+      const mine = (bindings.get(thread.id) ?? []).filter((bound) => owned.has(prefixOf(bound.target)))
+      return {
+        thread: thread.id,
+        root: thread.messages[0]!.id,
+        channel: thread.channelId,
+        targets: mine.map((bound) => bound.target),
+        external: Object.fromEntries(mine.flatMap((bound) => (bound.external !== undefined ? [[bound.target, bound.external]] : []))),
+      }
     }
     if (method === 'GET' && rest === '/sync/copies') {
       if (actor.principal.type !== 'project') throw new Refused(403, 'sync_needs_project')
@@ -712,7 +752,7 @@ function fakeBoard(shared: Shared, boardId: string) {
         for (const thread of new Set(inbox.filter((entry) => !entry.done).map((entry) => entry.thread))) {
           if (items.length >= limit) break
           const head = inbox.find((entry) => !entry.done && entry.thread === thread)!
-          if (head.lease && head.leaseUntil! > Date.now()) continue
+          if ((head.lease && head.leaseUntil! > Date.now()) || (head.retryAt ?? 0) > Date.now()) continue
           if (head.lease) head.attempts++
           head.lease = randomUUID()
           head.leaseUntil = Date.now() + 5 * 60_000
@@ -724,8 +764,10 @@ function fakeBoard(shared: Shared, boardId: string) {
         const entry = inbox.find((one) => one.id === decodeURIComponent(found![3]!) && !one.done)
         if (!entry) throw new Refused(404, 'no_item')
         if (entry.lease !== body.lease) throw new Refused(409, 'stale_lease')
-        if (body.error !== undefined) {
+        // After an error it waits a second, doubling to 30, and the fifth is its last try.
+        if (body.error !== undefined && entry.attempts + 1 < 5) {
           entry.attempts++
+          entry.retryAt = Date.now() + Math.min(30_000, 1000 * 2 ** (entry.attempts - 1))
           delete entry.lease
           delete entry.leaseUntil
         } else entry.done = true

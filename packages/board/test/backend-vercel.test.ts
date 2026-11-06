@@ -10,7 +10,10 @@ import type { Authenticate } from '../src/access/index.ts'
 import { compileAccess } from '../src/server/access.ts'
 import type { Caller } from '../src/server/backend.ts'
 import type { Middleware } from '../src/server/middleware.ts'
+import { slack } from '../src/sync/slack.ts'
+import { channels } from '../src/sync/fn.ts'
 import { as, fakeMessageboard } from './messageboard.ts'
+import { fakePlatform } from './sync-fixtures.ts'
 
 const API = 'http://localhost'
 
@@ -810,10 +813,10 @@ describe('vercel()', () => {
     const origin = { thread: 'slack:C1:1', subthread: null, message: '1', context: null }
     await expect(refusing(/\/sync\/imports$/, 413, 'mutation_too_large').syncImport({ op: 'post', author: { ...author, id: 'slack:user:U1' }, from: 'slack', channel: 'general', text: 'hi', origin })).rejects.toMatchObject({ status: 413, code: 'too_large' })
     await expect(refusing(/\/sync\/receipts$/, 409, 'operation_conflict').syncReceipt({ kind: 'thread', message: 'msg_00000000-0000-0000-0000-000000000000_1', target: 'slack:C1', targetKind: 'channel', cause: 'request' })).rejects.toMatchObject({ status: 409, code: 'conflict' })
-    await expect(refusing(/\/threads$/, 403, 'not_a_member').post('general', { text: 'hi' })).rejects.toMatchObject({ status: 403, code: 'not_a_member' })
+    await expect(refusing(/\/threads$/, 403, 'foreign_author').post('general', { text: 'hi' })).rejects.toMatchObject({ status: 403, code: 'foreign_author' })
   })
 
-  it("names the sync a platform user's edit, delete, or reaction came through as its from", async () => {
+  it("names the sync a platform user's edit, delete, or reaction came through as its from, and none for one a sync makes as the user", async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
     await pong.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
@@ -823,14 +826,90 @@ describe('vercel()', () => {
     await pong.syncImport({ op: 'edit', author, from: 'slack', origin, text: 'edited on slack' })
     await pong.syncImport({ op: 'react', author, from: 'slack', origin, emoji: 'eyes' })
     await handleOn(api).react(message!, 'tada')
+    // A sync callback's own write as the user syncs out everywhere, Slack included.
+    await pong.syncImport({ op: 'edit', author, from: null, message: message!, text: 'edited by the sync, as Julián' })
     await pong.syncImport({ op: 'delete', author, from: 'slack', origin })
     expect((await drain(pong)).map((match) => [match.event.type, (match.event.payload as { from: string | null }).from])).toEqual([
       ['message.posted', 'slack'],
       ['message.edited', 'slack'],
       ['reaction.added', 'slack'],
       ['reaction.added', null],
+      ['message.edited', null],
       ['message.deleted', 'slack'],
     ])
+  })
+
+  it("syncs Slack through the engine from its first webhook, a file as a link to it on Slack, and a board reply back to Slack", async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'general' })) },
+    })
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    s.served.set('https://files.slack.test/shot.png', png)
+    // The deployment's first request: nothing has registered its sync key with the API yet.
+    const webhook = await pong.fetch(
+      new Request(`${PONG_URL}/webhooks/slack`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'message', threadId: 'slack:C1:300', id: '300', text: 'the export page', user: 'U_ADA',
+          files: [{ name: 'shot.png', mimeType: 'image/png', url: 'https://files.slack.test/shot.png', size: png.byteLength }],
+        }),
+      }),
+    )
+    expect(webhook.status).toBe(200)
+    const julian = handleOn(api)
+    await vi.waitFor(async () => {
+      const { messages } = await julian.messages({ channel: 'general' })
+      expect(messages.map((message) => [message.from, message.text, message.attachments])).toEqual([
+        ['slack', "the export page\n\n📎 [shot.png](https://files.slack.test/shot.png) (7 B) didn't come over: Vercel's board takes no files from sync yet", []],
+      ])
+    })
+    // Vercel's API keeps no file for it.
+    expect(api.requests.filter((request) => request.includes('/attachments'))).toEqual([])
+    const [root] = (await julian.messages({ channel: 'general' })).messages
+    await julian.reply(root!.id, { text: 'looking' })
+    await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
+    await vi.waitFor(() => expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([['slack:C1:300', expect.stringContaining('looking')]]))
+  })
+
+  it('reads, joins, and shows typing on Slack through its own sync, which has the app to do it with', async () => {
+    const api = fakeMessageboard()
+    const s = fakePlatform('slack')
+    const web = {
+      conversations: {
+        list: async () => ({}),
+        info: async ({ channel }: { channel: string }) => ({ channel: { id: channel, name: channel === 'C1' ? 'general' : 'random', is_member: channel === 'C1' } }),
+        history: async () => ({ messages: [{ ts: '1700000000.000100', user: 'U_ADA', text: 'deploy is red' }] }),
+        join: async () => ({}),
+      },
+      users: { info: async () => ({ user: { real_name: 'Ada' } }) },
+    }
+    const pong = board({
+      backend: vercel({ team: 'team_test', api: API, fetch: as(api, 'project:prj_pong:production'), files: api.files }),
+      url: PONG_URL,
+      basePath: '/api/board',
+      sync: { slack: slack({ adapter: s.adapter, client: async () => web as never, join: true }, channels({ C1: 'general' })) },
+    })
+    expect(await pong.readSource('slack', 'C1')).toMatchObject({ channel: 'C1', name: 'general', messages: [{ author: 'Ada', text: 'deploy is red' }] })
+    expect(await pong.joinSource('slack', 'C2')).toEqual({ channel: 'C2', name: 'random', joined: true })
+    await pong.fetch(
+      new Request(`${PONG_URL}/webhooks/slack`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'the export page', user: 'U_ADA' }),
+      }),
+    )
+    const [root] = await vi.waitUntil(async () => {
+      const { messages } = await handleOn(api).messages({ channel: 'general' })
+      return messages.length > 0 && messages
+    })
+    await pong.typing(root!.id)
+    expect(s.typing).toEqual(['slack:C1:300'])
   })
 
   it("hands a thread's new target to the sync that owns its key as thread.synced, about the thread's root", async () => {

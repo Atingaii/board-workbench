@@ -94,6 +94,8 @@ type ApiChange = {
   cursor?: string
   /** With `include=message`, the message as it is now. */
   currentMessage?: ApiMessage
+  /** The sync key a change a sync imported came through, so that sync doesn't send it back. */
+  from?: string
   /** For `thread.synced`, which only the sync owning the target's key gets: what the thread was bound to. */
   binding?: { target: string; targetKind: 'channel' | 'thread'; cause: 'config' | 'request' }
 }
@@ -176,6 +178,7 @@ const WAIT_MAX_S = 25
 const INBOX_LIST_MAX = 100
 /** The API's codes board()'s sync doesn't know: on sync's routes, each is answered as the board's code for its status. */
 const API_ONLY_CODES = new Set([
+  'board_only',
   'duplicate_sync_key',
   'event_too_large',
   'foreign_author',
@@ -185,7 +188,6 @@ const API_ONLY_CODES = new Set([
   'invalid_receipt',
   'message_not_owned',
   'mutation_too_large',
-  'not_a_member',
   'operation_conflict',
   'operation_expired_or_unknown',
   'sync_key_not_owned',
@@ -373,7 +375,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** A request on sync's routes, whose refusals board()'s sync knows only by the board's codes. */
   async function syncApi<T>(...args: Parameters<typeof api>): Promise<T> {
     try {
-      return await api<T>(...args)
+      return await api<T>(...args).catch(async (error: unknown) => {
+        // A sync key is this deployment's once it registers, which its first request starts without
+        // waiting: a webhook can get there first, so it registers and tries once more.
+        if (!(error instanceof HttpError && error.code === 'sync_key_not_owned' && (binding?.sync.length ?? 0) > 0)) throw error
+        await runner.registerNow()
+        return api<T>(...args)
+      })
     } catch (error) {
       if (error instanceof HttpError && API_ONLY_CODES.has(error.code)) {
         throw new HttpError(error.status, BOARD_CODES[error.status] ?? error.code, error.message)
@@ -852,7 +860,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!found || !matches(filters, found.message, found.thread, me)) return null
     const message = await view(who, found.message, channel)
     const by = authorOf(change.actor)
-    const from = change.actor.principal.type === 'external' ? change.actor.principal.syncKey : null
+    const from = change.from ?? null
     const base = { id: message.id, thread: message.thread }
     let type: BoardEventView['type']
     let payload: Record<string, unknown>
@@ -1396,6 +1404,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async upload(caller, { data, name, type }) {
       const who = whoOf(caller)
+      // What sync uploads is for its imports, which Vercel's API takes no files on: it links each where it lives.
+      if ('self' in caller && caller.self === 'sync') throw new HttpError(501, 'no_files', "Vercel's board takes no files from sync yet")
       if (data.byteLength === 0) throw new HttpError(400, 'bad_request', 'the file is empty')
       // This deployment's own code (sync's imports among it) holds the bytes already, with no request to fit under.
       if (data.byteLength > IMPORT_BYTES_MAX) throw new HttpError(413, 'too_large', `attachments are at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB`)
@@ -1631,12 +1641,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         await pause(Math.min(started + 1000, until) - Date.now(), signal)
       }
     },
-    // Nothing syncs here, so no platform shows typing.
-    async typing() {
-      return { targets: [] }
+    // Typing shows where this board's own sync has the thread: Vercel's API keeps no platform's app.
+    async typing(caller, { id, status }, signal) {
+      if (!binding || binding.sync.length === 0) return { targets: [] }
+      const { message, replies } = await methods.message(caller, { id }, signal)
+      return { targets: await binding.typing([message, ...replies], status) }
     },
-    async readSource(_caller, { key }) {
-      throw notFound(`this board doesn't run sync entry ${key}`, 'not_synced_here')
+    // A source is read, and joined, with the app of the sync that runs it here.
+    async readSource(_caller, { key, target, limit, after }) {
+      if (!binding?.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: read it where its sync runs`, 'not_synced_here')
+      return binding.readSource(key, target, limit ?? 50, after ?? null)
+    },
+    async joinSource(_caller, { key, target }) {
+      if (!binding?.sync.some((entry) => entry.key === key)) throw notFound(`this board doesn't run sync entry ${key}: join it where its sync runs`, 'not_synced_here')
+      return binding.joinSource(key, target)
     },
     async syncImport(caller, body, signal) {
       const who = whoOf(caller)
