@@ -201,6 +201,9 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
   z.strictObject({ kind: z.literal('all-users') }),
   z.strictObject({ kind: z.literal('all-projects'), environments: Environments.optional() }),
+  // An app by its slug or its client ID.
+  z.strictObject({ kind: z.literal('app'), app: z.string().min(1).max(200) }),
+  z.strictObject({ kind: z.literal('all-apps') }),
   z.strictObject({ kind: z.literal('everyone') }),
 ])
 
@@ -539,6 +542,8 @@ export type PrincipalView =
   | { kind: 'oidc'; issuer: string; claims: Record<string, string | string[]> }
   | { kind: 'all-users' }
   | { kind: 'all-projects'; environments: string[] }
+  | { kind: 'app'; clientId: string; name: string | null }
+  | { kind: 'all-apps' }
   | { kind: 'everyone' }
 
 /** A grant: who it names, what it lets them do, and who changed it last, when. */

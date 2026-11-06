@@ -138,6 +138,8 @@ await team.revokeGrant(grant.id)
 | `oidc` | an `issuer`'s tokens that carry every one of its `claims` | one principal |
 | `all-users` | every person on the team | a group |
 | `all-projects` | every project's deployments on the board's team, in its `environments` | a group |
+| `app` | an app on the team, by its slug or client ID (`clientId` on a board that verifies tokens itself) | one principal |
+| `all-apps` | every app installed on the board's team | a group |
 | `everyone` | everyone the board lets in some other way | everyone |
 
 ### How grants combine
@@ -160,10 +162,14 @@ more specific pattern decides first. The rule that matches a principal in
 - **`everyone` never lets anyone in.** It only shapes what callers something
   else lets in get: a person on the team, or a project or workflow a grant or
   a rule names. A caller nothing else names is refused.
-- **Every board starts with two grants,** as a team's board in Vercel's API
+- **Every board starts with three grants,** as a team's board in Vercel's API
   does. g1 names `all-users` with `*` at `all`, capped by role. g2 names
-  `all-projects` in production, preview, and development, with read, post,
-  react, and label everywhere. Revoke or change them like any other.
+  `all-projects` in production, preview, and development, and g3
+  `all-apps`, each with read, post, react, and label everywhere. A local
+  board has no apps, so g3 lets no one in there. Revoke or change them like
+  any other.
+- **A person's role, and an app's scopes, cap what grants give:** a viewer,
+  or an app with only `read:messageboard`, only reads.
 
 > [!WARNING]
 > g2 lets in every project on the team, previews included, and a preview runs
@@ -492,7 +498,9 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileRules(rules, { project })` | What a principal may do under `rules` alone, no grants met, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
 | `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as the same `Access`, with `narrow(scope)` to keep only what both allow. `union` adds up what several allow, channel by channel: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that keeps its own copy of these rules to check itself against |
+| `grantAccess(facts)` | What a caller may do by a board's grants, from plain data: `caller`, all of it, and `own`, without `everyone`'s grants, or null when nothing lets it in. `facts` is the `caller` (`{ kind: 'user', userId }`, a project in an environment, a run, an issuer's token, or `{ kind: 'app', clientId }`), the `grants`, whether a user, project, or app is on the team (`member`, `teamProject`, `teamApp`), a `cap` (`['read']` for a viewer), and a token's `can` |
 | `checkGrantChange({ caller, own, owner, after, changed, revoked })` | Whether a caller may change grants so, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says and `own` the same without `everyone`'s grants, `after` every grant as the change leaves them, `changed` a grant made or widened, and `revoked` one revoked, removed from, or updated, as it was. It does no I/O, so a backend that keeps grants runs the same rule |
+| `InvalidCan` | What a `can`, a pattern, or a permission that doesn't parse throws, with `code` `invalid_can`, for a backend to answer 400 |
 | `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions

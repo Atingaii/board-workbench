@@ -66,8 +66,10 @@ export type AccessState = {
 
 /**
  * The grants a board starts with, as a team's board in Vercel's API does: g1, every person may do
- * everything (no team roles cap it here), and g2, every project on the board's team, in every
- * environment, reads, posts, reacts, and labels everywhere. Revoke or change them like any other.
+ * everything (no team roles cap it here), g2, every project on the board's team, in every
+ * environment, reads, posts, reacts, and labels everywhere, and g3, every app on the team, the
+ * same. A local board has no apps, so g3 names no one here, but the defaults are the same
+ * everywhere. Revoke or change them like any other.
  */
 const STARTING_GRANTS: Record<string, GrantRow> = {
   1: { id: 1, event: null, principals: [{ kind: 'all-users' }], can: { '*': 'all' }, by: null, at: null },
@@ -79,10 +81,11 @@ const STARTING_GRANTS: Record<string, GrantRow> = {
     by: null,
     at: null,
   },
+  3: { id: 3, event: null, principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, by: null, at: null },
 }
 
 /** The access session before its first event: the grants every board starts with, and no tokens. */
-export const startingAccess = (): AccessState => ({ grants: structuredClone(STARTING_GRANTS), nextGrant: 3, tokens: {}, hashes: {}, expiring: {}, pruned: null })
+export const startingAccess = (): AccessState => ({ grants: structuredClone(STARTING_GRANTS), nextGrant: 4, tokens: {}, hashes: {}, expiring: {}, pruned: null })
 
 const DAY_MS = 24 * 3600_000
 
@@ -192,6 +195,8 @@ function principalView(principal: GrantPrincipal): PrincipalView {
       return { kind: 'oidc', issuer: principal.issuer, claims: Object.fromEntries(Object.entries(principal.claims).map(([name, value]) => [name, typeof value === 'string' ? value : [...value]])) }
     case 'all-projects':
       return { kind: 'all-projects', environments: [...principal.environments] }
+    case 'app':
+      return { kind: 'app', clientId: principal.clientId, name: principal.name ?? null }
     default:
       return { kind: principal.kind }
   }

@@ -901,9 +901,11 @@ await team.revokeToken(token.id)
   deployments in its environments), `github` (Actions runs in a repository,
   narrowed by workflow, branch, or event, matched as `githubActions()` does),
   and `oidc` (an issuer's tokens carrying every claim it names) are one
-  principal each. `all-users` (every person on the team) and `all-projects`
-  (every project on the board's team, in production, preview, or development)
-  are groups. `everyone` is everyone the board lets in some other way. A
+  principal each, and so is `app` (an app on the team, named by slug or client
+  ID and kept by client ID). `all-users` (every person on the team),
+  `all-projects` (every project on the board's team, in production, preview,
+  or development), and `all-apps` (every app installed on the team) are
+  groups. `everyone` is everyone the board lets in some other way. A
   development token that carries a user is that user.
 - **Names in, IDs kept.** A request names a user by `email`, a project by name
   or ID, a repository by `owner/name`; the board resolves them and keeps IDs,
@@ -916,17 +918,23 @@ await team.revokeToken(token.id)
   name it: the most specific pattern wins (an exact channel, then the longest
   subtree, then `*`); among the grants naming that pattern, the closest
   principal (one principal, then a group, then `everyone`); grants tied there
-  add up; and a person's team role caps the result, so a viewer only reads.
+  add up; and a cap limits the result, a person's team role (a viewer only
+  reads) or an app's scopes (`read:messageboard` alone only reads).
+  `grantAccess` in `@vercel/board/access` is this, from plain data, which a
+  board and Vercel's API both run: the caller, the grants, whether a user,
+  project, or app is on the team, the cap, and a token's `can`. A `can` that
+  doesn't parse throws `InvalidCan`, `code` `invalid_can`.
   The first of `access`'s rules that matches a principal counts as one
   principal of its kind. `everyone` never lets anyone in: it only shapes what
   callers something else lets in get, a person on the team, or a project or
   workflow a grant or rule names.
-- **Every board starts with two grants,** as Vercel's API seeds a team's
-  board: g1 names `all-users` with `*` at `all`, capped by role, and g2 names
-  `all-projects` in production, preview, and development, with read, post,
-  react, and label everywhere. On a local board they're in the access fold's initial
-  state, so every board has them without a write, and a grant's ID comes
-  from the fold's counter (g3 next). A rule that names `feedback/` alone
+- **Every board starts with three grants,** as Vercel's API seeds a team's
+  board: g1 names `all-users` with `*` at `all`, capped by role, g2 names
+  `all-projects` in production, preview, and development, and g3 names
+  `all-apps`, each with read, post, react, and label everywhere. On a local
+  board they're in the access fold's initial state, so every board has them
+  without a write, and a grant's ID comes from the fold's counter (g4 next).
+  A local board has no apps, so g3 lets no one in there. A rule that names `feedback/` alone
   leaves `*` to g2.
 - **You can't grant what you don't have:** your token's and your own grants'
   limits count, an `everyone` lock doesn't, and anyone you let in gets what

@@ -29,7 +29,8 @@ describe("the access session's fold", () => {
     expect(Object.values(state.grants).map((grant) => [grant.id, grant.principals])).toEqual([
       [1, [{ kind: 'all-users' }]],
       [2, [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }]],
-      [3, [{ kind: 'everyone' }]],
+      [3, [{ kind: 'all-apps' }]],
+      [4, [{ kind: 'everyone' }]],
     ])
   })
 

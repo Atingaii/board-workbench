@@ -21,11 +21,12 @@ const everyone = { kind: 'everyone' } as const
 const user = (userId: string) => ({ kind: 'user', userId }) as const
 
 describe('grants', () => {
-  it('starts with every person doing everything, and every project on the team reading, posting, reacting, and labeling', async () => {
+  it('starts with every person doing everything, and every project and app on the team reading, posting, reacting, and labeling', async () => {
     const { person, as } = await setUp()
     expect((await person('GET', '/grants')).body.grants).toEqual([
       { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: false, by: null, at: null },
       { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+      { id: 'g3', principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
     ])
     expect((await (await as(personToken('u_ada')))('GET', '/me')).body.can).toEqual({ '*': ALL })
     // Any project on the board's team, its previews included; none on another team.
@@ -241,12 +242,12 @@ describe('grants', () => {
     const grant = { principals: [{ kind: 'project', project: 'prj_front', environments: ['production', 'preview', 'production'] }], can: { '*': ['label', 'read'], 'feedback/': [] } }
     const first = await person('POST', '/grants', grant)
     const again = await person('POST', '/grants', grant)
-    expect([first.body.grant.id, again.body.grant.id]).toEqual(['g3', 'g4'])
+    expect([first.body.grant.id, again.body.grant.id]).toEqual(['g4', 'g5'])
     expect(first.body.grant).toMatchObject({
       principals: [{ kind: 'project', projectId: 'prj_front', name: null, environments: ['production', 'preview'] }],
       can: { '*': ['read', 'label'], 'feedback/': [] },
     })
-    expect((await person('GET', '/grants')).body.grants.map((listed: { id: string }) => listed.id)).toEqual(['g1', 'g2', 'g3', 'g4'])
+    expect((await person('GET', '/grants')).body.grants.map((listed: { id: string }) => listed.id)).toEqual(['g1', 'g2', 'g3', 'g4', 'g5'])
   })
 
   it('updates a grant by its ID: adds principals, removes them by who they are, and replaces its can', async () => {
@@ -378,7 +379,7 @@ describe('grants', () => {
     expect(await refused(everyone, { 'ci/*': ['post'] })).toEqual(invalid)
     expect(await refused(everyone, {})).toEqual(invalid)
     expect((await person('POST', '/grants', { principals: [], can: { '*': ['read'] } })).status).toBe(400)
-    expect((await person('GET', '/grants')).body.grants.map((grant: { id: string }) => grant.id)).toEqual(['g1', 'g2'])
+    expect((await person('GET', '/grants')).body.grants.map((grant: { id: string }) => grant.id)).toEqual(['g1', 'g2', 'g3'])
   })
 
   it('refuses an issuer that names the same principals as one a grant trusts', async () => {

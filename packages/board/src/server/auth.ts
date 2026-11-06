@@ -2,6 +2,7 @@ import type { JWTPayload, JWTVerifyGetKey } from 'jose'
 import type { PrincipalInput } from '../api/routes.ts'
 import { combine, compileAccess, FULL_ACCESS, LEVELS, parseScope, writtenCan, type Access, type Can, type Level, type Matched, type WrittenCan } from './access.ts'
 import { badRequest, unauthorized, forbidden } from './errors.ts'
+import { admits, grantAccess, type GrantFacts, type GrantSource } from './grants.ts'
 
 /**
  * What a request says about who's calling, beside its credential: labels the caller picks for
@@ -325,6 +326,8 @@ export type GrantPrincipal =
   | { kind: 'oidc'; issuer: string; claims: Readonly<Record<string, string | readonly string[]>> }
   | { kind: 'all-users' }
   | { kind: 'all-projects'; environments: readonly string[] }
+  | { kind: 'app'; clientId: string; name?: string }
+  | { kind: 'all-apps' }
   | { kind: 'everyone' }
 
 /** A grant the board keeps: who it names, and one `can` for all of them, as written. */
@@ -367,6 +370,8 @@ const GRANT_PRINCIPALS_MAX = 32
 export const TEAM_ENVIRONMENTS: readonly string[] = ['production', 'preview', 'development']
 const PROJECT_ID = /^prj_[A-Za-z0-9]+$/
 const USER_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$/
+/** An app's client ID, as a board that verifies tokens itself takes it. */
+const APP_ID = USER_ID
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 /** An OIDC issuer a grant may name: an https URL on the internet, not Vercel's or GitHub's, which have kinds of their own. */
@@ -452,7 +457,11 @@ export function checkPrincipal(input: PrincipalInput, trusted: readonly string[]
     case 'oidc':
       checkIssuer(input.issuer, trusted)
       return { kind: 'oidc', issuer: input.issuer, claims: checkClaims(input.issuer, input.claims) }
+    case 'app':
+      if (!APP_ID.test(input.app)) throw invalidGrant(`an app is its client ID, letters, numbers, and ._-, got ${input.app}`)
+      return { kind: 'app', clientId: input.app }
     case 'all-users':
+    case 'all-apps':
     case 'everyone':
       return { kind: input.kind }
   }
@@ -510,6 +519,8 @@ export function removes(removal: GrantPrincipal, principal: GrantPrincipal): boo
       const other = principal as typeof removal
       return removal.issuer === other.issuer && JSON.stringify(removal.claims) === JSON.stringify(other.claims)
     }
+    case 'app':
+      return removal.clientId === (principal as typeof removal).clientId
     default:
       return true
   }
@@ -534,56 +545,33 @@ export function joined(added: GrantPrincipal, principal: GrantPrincipal): GrantP
 export const userIdOf = (id: string) => id.split(':').slice(2).join(':')
 
 /**
- * How close `principal` is to a caller: `principal` for a user, a project, a repository's runs, or
- * an issuer's claims that are the caller's; `group` for every person (`all-users`) or every
- * project on the board's team (`all-projects`), in its environments; `everyone` for everyone.
- * Null when it doesn't name the caller. `team` is the board's own Vercel team, when it's known.
+ * A verified principal as `grantAccess` takes it: who it is in grants' terms, and what the board
+ * knows of its team. A person on a board that lets them in is on its team; a deployment's project
+ * is when its token's `owner_id` is the board's `team`. Null for one no grant names, such as the
+ * board's own code.
  */
-export function closeness(principal: GrantPrincipal, caller: Known, team: string | null): Level | null {
-  const facts = caller.facts
+export function callerFacts(principal: Known, team: string | null): Pick<GrantFacts, 'caller' | 'member' | 'teamProject'> | null {
+  const facts = principal.facts
   const claims = facts?.claims ?? {}
-  const environment = String(claims.environment ?? '')
-  switch (principal.kind) {
-    case 'everyone':
-      return 'everyone'
-    case 'all-users':
-      return caller.kind === 'person' ? 'group' : null
-    case 'user':
-      return caller.kind === 'person' && userIdOf(caller.id) === principal.userId ? 'principal' : null
-    case 'all-projects':
-      return facts?.issuer === 'vercel' && team !== null && claims.owner_id === team && principal.environments.includes(environment) ? 'group' : null
-    case 'project':
-      return facts?.issuer === 'vercel' && claims.project_id === principal.projectId && principal.environments.includes(environment) ? 'principal' : null
-    case 'github': {
-      if (facts?.issuer !== 'github') return null
-      const repository = String(claims.repository ?? '')
-      const same = principal.repositoryId !== undefined ? String(claims.repository_id ?? '') === principal.repositoryId : repository === principal.repository
-      const workflow = principal.workflow === undefined || String(claims.workflow_ref ?? '').startsWith(`${repository}/${principal.workflow}@`)
-      const branch = principal.branch === undefined || claims.ref === `refs/heads/${principal.branch}`
-      const event = principal.event === undefined || claims.event_name === principal.event
-      return same && workflow && branch && event ? 'principal' : null
+  if (principal.kind === 'person') return { caller: { kind: 'user', userId: userIdOf(principal.id) }, member: () => true }
+  if (facts?.issuer === 'vercel')
+    return {
+      caller: { kind: 'project', projectId: String(claims.project_id ?? ''), environment: String(claims.environment ?? '') },
+      teamProject: () => team !== null && claims.owner_id === team,
     }
-    case 'oidc':
-      return facts?.issuer === 'oidc' &&
-        facts.iss === principal.issuer &&
-        Object.entries(principal.claims).every(([name, allowed]) => {
-          const value = claims[name]
-          if (value === undefined) return false
-          return typeof allowed === 'string' ? String(value) === allowed : allowed.includes(String(value))
-        })
-        ? 'principal'
-        : null
-  }
-}
-
-/** How close the closest of a grant's principals is to a caller, or null when it names none of them. */
-export function grantLevel(grant: Pick<StoredGrant, 'principals'>, caller: Known, team: string | null): Level | null {
-  let best: Level | null = null
-  for (const principal of grant.principals) {
-    const level = closeness(principal, caller, team)
-    if (level !== null && (best === null || LEVELS.indexOf(level) < LEVELS.indexOf(best))) best = level
-  }
-  return best
+  if (facts?.issuer === 'github')
+    return {
+      caller: {
+        kind: 'github',
+        repository: String(claims.repository ?? ''),
+        ...(claims.repository_id !== undefined ? { repositoryId: String(claims.repository_id) } : {}),
+        ...(claims.workflow_ref !== undefined ? { workflowRef: String(claims.workflow_ref) } : {}),
+        ...(claims.ref !== undefined ? { ref: String(claims.ref) } : {}),
+        ...(claims.event_name !== undefined ? { event: String(claims.event_name) } : {}),
+      },
+    }
+  if (facts?.issuer === 'oidc') return { caller: { kind: 'oidc', issuer: facts.iss, claims } }
+  return null
 }
 
 /**
@@ -613,14 +601,14 @@ export const grantIssuers = (grants: readonly Pick<StoredGrant, 'principals'>[])
 ]
 
 /** What decided part of a principal's access: a grant the board keeps, or a rule in its code. */
-export type Source = { grant: StoredGrant } | { rule: string }
+export type Source = GrantSource<StoredGrant>
 
 /**
  * What decides a principal's access: `fixed` for what no grant meets (the board's own code, its
- * own deployments where it runs, a board that keeps no grants), or the rule and the grants that
- * match it, which `combine` meets.
+ * own deployments where it runs, a board that keeps no grants), or the facts `grantAccess` decides
+ * from: who it is, the grants, and the rule in code that matched it.
  */
-export type Resolved = { fixed: Access; rule: string | null } | { matched: Matched<Source>[] }
+export type Resolved = { fixed: Access; rule: string | null } | { facts: GrantFacts<StoredGrant> }
 
 /**
  * What principals may do, under a board's rules and grants. The first of the rules that matches a
@@ -643,14 +631,11 @@ export function createAuthority(options: {
   const host = typeof options.access === 'function' ? options.access : null
   const oidcIssuers = trustedIssuers(issuersOf(rules))
 
-  /** The grants that name `principal`, each as close as its closest principal: of `snapshot`, when given, or as they are now. */
-  async function matching(principal: Known, team: string | null, snapshot?: readonly StoredGrant[]): Promise<{ grants: readonly StoredGrant[]; matched: Matched<Source>[] }> {
+  /** What `grantAccess` decides `principal` from: the grants of `snapshot`, when given, or as they are now. Null facts for one no grant names. */
+  async function factsFor(principal: Known, team: string | null, snapshot?: readonly StoredGrant[]): Promise<{ grants: readonly StoredGrant[]; facts: GrantFacts<StoredGrant> | null }> {
     const grants = snapshot ?? (options.grants ? await options.grants() : [])
-    const matched = grants.flatMap((grant) => {
-      const level = grantLevel(grant, principal, team)
-      return level === null ? [] : [{ level, can: grant.can, source: { grant } }]
-    })
-    return { grants, matched }
+    const known = callerFacts(principal, team)
+    return { grants, facts: known ? { ...known, grants } : null }
   }
 
   /**
@@ -671,7 +656,7 @@ export function createAuthority(options: {
     const here = boardEnvironment()
     const ownDeployment = own !== null && own.id !== null && claims.project_id === own.id
     const ownHere = ownDeployment && here !== null && environment === here
-    let ruled: Matched<Source> | null = null
+    let ruled: { rule: string; can: Can } | null = null
     for (const rule of rules) {
       if (typeof rule === 'function') {
         // A function never takes the default of everything away: only a token's rule replaces it.
@@ -680,18 +665,20 @@ export function createAuthority(options: {
         if (can === undefined) continue
         if (can === null) throw forbidden("this token can't use this board")
         compileAccess(can)
-        ruled = { level: 'principal', can, source: { rule: rule.name ? `${rule.name}()` : 'an access function' } }
+        ruled = { rule: rule.name ? `${rule.name}()` : 'an access function', can }
         break
       }
       if (facts && rule.issuer === facts.issuer && (rule.issuer !== 'oidc' || rule.url === facts.iss) && rule.matches(claims, context)) {
-        ruled = { level: 'principal', can: rule.can, source: { rule: rule.name } }
+        ruled = { rule: rule.name, can: rule.can }
         break
       }
     }
-    if (ownHere) return ruled ? { fixed: compileAccess(ruled.can), rule: (ruled.source as { rule: string }).rule } : { fixed: FULL_ACCESS, rule: null }
-    const { grants, matched } = await matching(principal, context.teamId, snapshot)
-    if (ruled) matched.unshift(ruled)
-    if (ruled || matched.some((found) => found.level !== 'everyone')) return { matched }
+    if (ownHere) return ruled ? { fixed: compileAccess(ruled.can), rule: ruled.rule } : { fixed: FULL_ACCESS, rule: null }
+    const { grants, facts: found } = await factsFor(principal, context.teamId, snapshot)
+    // A rule counts as one principal of its kind, beside the grants that name it.
+    if (!found && ruled) return { fixed: compileAccess(ruled.can), rule: ruled.rule }
+    const decided = found && (ruled ? { ...found, rules: [ruled] } : found)
+    if (decided && admits(decided)) return { facts: decided }
     if (!facts) throw forbidden("this token can't use this board")
     // An issuer a grant names is trusted: its token just isn't one the grant lets in.
     const named = grantIssuers(grants)
@@ -730,7 +717,8 @@ export function createAuthority(options: {
     }
     if (principal.kind === 'person') {
       if (!options.grants) return { fixed: FULL_ACCESS, rule: null }
-      return { matched: (await matching(principal, null, snapshot)).matched }
+      const { facts } = await factsFor(principal, null, snapshot)
+      return { facts: facts! }
     }
     // A host's says nothing past its ID, as a principal stored before the board kept claims.
     return byRules(principal, (hosted ? undefined : principal.facts) ?? factsFromId(principal.id), snapshot)
@@ -742,8 +730,11 @@ export function createAuthority(options: {
    */
   async function grant(principal: Known, snapshot?: readonly StoredGrant[]): Promise<Access> {
     const resolved = await resolve(principal, snapshot)
-    const access = 'fixed' in resolved ? resolved.fixed : combine(resolved.matched)
-    return principal.scope === undefined ? access : access.narrow(parseScope(principal.scope))
+    const scope = principal.scope === undefined ? undefined : parseScope(principal.scope)
+    if ('fixed' in resolved) return scope === undefined ? resolved.fixed : resolved.fixed.narrow(scope)
+    const decided = grantAccess({ ...resolved.facts, ...(scope !== undefined ? { can: scope } : {}) })
+    if (!decided) throw forbidden("this token can't use this board")
+    return decided.caller
   }
 
   /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing. */

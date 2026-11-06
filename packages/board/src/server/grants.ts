@@ -1,0 +1,126 @@
+// What a caller may do by a board's grants: plain data in, accesses out, with no I/O, so a board
+// and Vercel's API decide the same way. `@vercel/board/access` exports it.
+import { combine, compileAccess, type Access, type Can, type Level, type Matched, type Permission, type WrittenCan } from './access.ts'
+import type { GrantPrincipal } from './auth.ts'
+
+/** Who asks, as a verified token says, in the terms grants name them by. */
+export type Caller =
+  | { kind: 'user'; userId: string }
+  | { kind: 'project'; projectId: string; environment: string }
+  | { kind: 'github'; repository: string; repositoryId?: string; workflowRef?: string; ref?: string; event?: string }
+  | { kind: 'oidc'; issuer: string; claims: Readonly<Record<string, unknown>> }
+  | { kind: 'app'; clientId: string }
+
+/** A grant as the decision reads it: whom it names, and what it gives where. */
+export type DecidingGrant = { readonly principals: readonly GrantPrincipal[]; readonly can: WrittenCan }
+
+/** What decides a caller's access, all of it plain data or a predicate the backend answers. */
+export type GrantFacts<G extends DecidingGrant = DecidingGrant> = {
+  caller: Caller
+  /** The board's grants, as they are, or as a write is about to leave them. */
+  grants: readonly G[]
+  /** Whether a user is a person on the board's team: `all-users` names them, and that lets them in. None is, without it. */
+  member?: (userId: string) => boolean
+  /** Whether a project is on the board's team: `all-projects` names it. None is, without it. */
+  teamProject?: (projectId: string) => boolean
+  /** Whether an app is installed on the board's team: `all-apps` names it. None is, without it. */
+  teamApp?: (clientId: string) => boolean
+  /**
+   * The most the caller may do anywhere, whatever the grants say: what a backend makes of a
+   * person's team role (a viewer is `['read']`) or an app's scopes. Nothing caps it, without it.
+   */
+  cap?: readonly Permission[]
+  /** A token's `can`, which narrows what the grants give. */
+  can?: Can
+  /** Rules in a board's own code that matched the caller, each one principal of its kind. */
+  rules?: readonly { rule: string; can: Can }[]
+}
+
+/** Where a matched grant came from: one the board keeps, or a rule in its code. */
+export type GrantSource<G extends DecidingGrant = DecidingGrant> = { grant: G } | { rule: string }
+
+/**
+ * How close `principal` is to the caller, or null when it doesn't name it: `principal` for its own
+ * user, project, repository's runs, issuer's claims, or app; `group` for every person, every
+ * project on the team in its environments, or every app on it; `everyone` for everyone.
+ */
+export function levelOf(principal: GrantPrincipal, facts: Pick<GrantFacts, 'caller' | 'member' | 'teamProject' | 'teamApp'>): Level | null {
+  const { caller } = facts
+  switch (principal.kind) {
+    case 'everyone':
+      return 'everyone'
+    case 'all-users':
+      return caller.kind === 'user' && (facts.member?.(caller.userId) ?? false) ? 'group' : null
+    case 'user':
+      return caller.kind === 'user' && caller.userId === principal.userId ? 'principal' : null
+    case 'all-projects':
+      return caller.kind === 'project' && (facts.teamProject?.(caller.projectId) ?? false) && principal.environments.includes(caller.environment) ? 'group' : null
+    case 'project':
+      return caller.kind === 'project' && caller.projectId === principal.projectId && principal.environments.includes(caller.environment) ? 'principal' : null
+    case 'github': {
+      if (caller.kind !== 'github') return null
+      const same = principal.repositoryId !== undefined ? caller.repositoryId === principal.repositoryId : caller.repository === principal.repository
+      const workflow = principal.workflow === undefined || (caller.workflowRef ?? '').startsWith(`${caller.repository}/${principal.workflow}@`)
+      const branch = principal.branch === undefined || caller.ref === `refs/heads/${principal.branch}`
+      const event = principal.event === undefined || caller.event === principal.event
+      return same && workflow && branch && event ? 'principal' : null
+    }
+    case 'app':
+      return caller.kind === 'app' && caller.clientId === principal.clientId ? 'principal' : null
+    case 'all-apps':
+      return caller.kind === 'app' && (facts.teamApp?.(caller.clientId) ?? false) ? 'group' : null
+    case 'oidc':
+      return caller.kind === 'oidc' &&
+        caller.issuer === principal.issuer &&
+        Object.entries(principal.claims).every(([name, allowed]) => {
+          const value = caller.claims[name]
+          if (value === undefined) return false
+          return typeof allowed === 'string' ? String(value) === allowed : allowed.includes(String(value))
+        })
+        ? 'principal'
+        : null
+  }
+}
+
+const RANK: Record<Level, number> = { principal: 0, group: 1, everyone: 2 }
+
+/** The grants and rules that name the caller, each as close as its closest principal; without `everyone`'s, when `own`. */
+export function matchedFor<G extends DecidingGrant>(facts: GrantFacts<G>, own = false): Matched<GrantSource<G>>[] {
+  const matched: Matched<GrantSource<G>>[] = (facts.rules ?? []).map(({ rule, can }) => ({ level: 'principal', can, source: { rule } }))
+  for (const grant of facts.grants) {
+    let best: Level | null = null
+    for (const principal of grant.principals) {
+      if (own && principal.kind === 'everyone') continue
+      const level = levelOf(principal, facts)
+      if (level !== null && (best === null || RANK[level] < RANK[best])) best = level
+    }
+    if (best !== null) matched.push({ level: best, can: grant.can, source: { grant } })
+  }
+  return matched
+}
+
+/** Whether anything but `everyone` lets the caller in: a rule, a grant, or, for a person, the team. */
+export function admits<G extends DecidingGrant>(facts: GrantFacts<G>, matched: readonly Matched<GrantSource<G>>[] = matchedFor(facts)): boolean {
+  if (facts.caller.kind === 'user' && (facts.member?.(facts.caller.userId) ?? false)) return true
+  return matched.some((found) => found.level !== 'everyone')
+}
+
+/** `access`, capped and narrowed by its token. */
+function limited(access: Access, facts: GrantFacts<DecidingGrant>): Access {
+  let out = facts.cap === undefined ? access : access.narrow({ '*': [...facts.cap] })
+  if (facts.can !== undefined) out = out.narrow(compileAccess(facts.can))
+  return out
+}
+
+/**
+ * What the caller may do by the board's grants: `caller`, all of it, as `GET /me` says, and `own`,
+ * the same without `everyone`'s grants, what `checkGrantChange` judges reach by. At each channel the
+ * most specific pattern a grant naming it gives decides, then the closest principal there, and
+ * grants tied there add up; `cap` caps both, and a token's `can` narrows them. Null when
+ * nothing but `everyone` names it, since `everyone` lets no one in itself.
+ */
+export function grantAccess<G extends DecidingGrant>(facts: GrantFacts<G>): { caller: Access; own: Access } | null {
+  const matched = matchedFor(facts)
+  if (!admits(facts, matched)) return null
+  return { caller: limited(combine(matched), facts), own: limited(combine(matchedFor(facts, true)), facts) }
+}
