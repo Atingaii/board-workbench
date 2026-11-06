@@ -451,6 +451,65 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it('puts a way out before --, so following it posts the same text to the board it names', async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'ops', id: 'brd_ops1' }, { name: 'Ops', id: 'brd_ops2' }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    // What a way out says to run, as argv: its last indented line, unquoted.
+    const wayOut = (stderr: string) => stderr.trimEnd().split('\n').at(-1)!.trim().split(' ').slice(1).map((arg) => arg.replace(/^'(.*)'$/, '$1'))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // Text that reads like options, after --: the way out leaves it as it is, and adds its own before it.
+      const ambiguous = await run('post', 'dev', '--scope', 'acme', '--name', 'ops', '--', '--scope')
+      expect(ambiguous.code).toBe(1)
+      const argv = wayOut(ambiguous.stderr).map((arg) => arg.replace('<ID>', 'brd_ops1'))
+      expect(argv.slice(argv.indexOf('--'))).toEqual(['--', '--scope'])
+      expect((await run(...argv)).code).toBe(0)
+      expect((await run('read', 'dev', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_ops1?teamId=team_acme')).stdout).toContain('--scope')
+      // So does the way out for a team in --name.
+      const slashed = await run('post', 'dev', '--name', 'acme/ops', '--', '--rollback')
+      expect(slashed.code).toBe(2)
+      expect(wayOut(slashed.stderr)).toEqual(['post', 'dev', '--scope', 'acme', '--name', 'ops', '--', '--rollback'])
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const writes = () => fetching.mock.calls.filter(([input, init]) => (init?.method ?? (input instanceof Request ? input.method : 'GET')) !== 'GET').length
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      for (const args of [['conformance'], ['conformance', '--scope', 'test']]) {
+        const refused = await run(...args)
+        expect(refused).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance posts and changes grants, so name a scratch board for it\.\n/) })
+        expect(refused.stderr).toContain(`    vb ${args.join(' ')} --name <BOARD>\n`)
+        expect(refused.stderr).toContain(`    vb ${args.join(' ')} --url <URL>\n`)
+      }
+      expect(writes()).toBe(0)
+      // Named, even the team's default board, it runs: the person chose it.
+      const named = await run('conformance', '--name', 'General')
+      expect(named.code).not.toBe(2)
+      expect(named.stdout).toMatch(/\d+ passed/)
+      expect(writes()).toBeGreaterThan(0)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('says how to point it at a board with the commands it has, standalone, where there is no team board', async () => {
     const home = await isolated()
     const cwd = process.cwd()

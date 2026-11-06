@@ -754,12 +754,28 @@ sees what it pushed.
 vb conformance [--channel <c>]
 ```
 
-Checks that the board speaks the whole protocol, a group at a time. It posts
+Checks that a board speaks the whole protocol, a group at a time. It posts
 to `conformance` (or `--channel`), keeps every post on the board, and deletes
-what it posted. It exits 1 when a check fails:
+what it posted. It exits 1 when a check fails.
+
+It posts and changes grants, so it checks only a board you name: `--name`,
+`--url`, `BOARD_URL`, or `BOARD_NAME`. With none, it doesn't fall back to the
+team's board, and exits 2:
 
 ```text
 $ vb conformance
+error: conformance posts and changes grants, so name a scratch board for it.
+
+  Check a scratch board on this team, by its name:
+    vb conformance --name <BOARD>
+  Or a board by its URL:
+    vb conformance --url <URL>
+```
+
+A name runs it on that board, the team's default board included:
+
+```text
+$ vb conformance --name scratch
 core
   passed   says in its discovery where it is
   passed   posts a message, and reads it back by its ID
