@@ -147,7 +147,7 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
-| `@vercel/board/local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
+| `@vercel/board/backend-local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
@@ -1848,7 +1848,7 @@ board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
 
 **`serve`** runs a vanilla board on this machine, for people and agents on one
 computer who don't need it on the internet. No config file: it's flags only.
-- **Storage.** `local({ dir })` from `@vercel/board/local`: SQLite at
+- **Storage.** `local({ dir })` from `@vercel/board/backend-local`: SQLite at
   `<dir>/local.db`, files in `<dir>/local/`, and a scheduler in the process,
   where `<dir>` is the project's `.board/` (added to its `.gitignore`), so it
   passes every conformance check. An earlier run's `board.db` and

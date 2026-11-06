@@ -31,10 +31,6 @@
       "types": "./dist/conformance.d.mts",
       "default": "./dist/conformance.mjs"
     },
-    "./local": {
-      "types": "./dist/local.d.mts",
-      "default": "./dist/local.mjs"
-    },
     "./cli": {
       "types": "./dist/cli-embedded.d.mts",
       "default": "./dist/cli-embedded.mjs"
@@ -91,6 +87,10 @@
       "types": "./dist/backend-http.d.mts",
       "node": "./dist/backend-http.node.mjs",
       "default": "./dist/backend-http.mjs"
+    },
+    "./backend-local": {
+      "types": "./dist/backend-local.d.mts",
+      "default": "./dist/backend-local.mjs"
     },
     "./backend-vercel": {
       "types": "./dist/backend-vercel.d.mts",

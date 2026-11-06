@@ -58,10 +58,10 @@ function declarations(start: string): [string, string][] {
   return [...seen].map(([file, text]) => [file.slice(root.length + 1), text])
 }
 
-describe("`@vercel/board/local`'s types", () => {
+describe("`@vercel/board/backend-local`'s types", () => {
   it('name nothing of A2: not its store, its scheduler, its options, or its name', () => {
-    const files = declarations('dist/local.d.mts')
-    expect(files.map(([file]) => file)).toContain('dist/local.d.mts')
+    const files = declarations('dist/backend-local.d.mts')
+    expect(files.map(([file]) => file)).toContain('dist/backend-local.d.mts')
     const named = files.flatMap(([file, text]) => [...text.matchAll(/\b(A2\w*|BoardStore|experimental-a2)\b/g)].map((match) => `${file}: ${match[1]}`))
     expect(named).toEqual([])
   })

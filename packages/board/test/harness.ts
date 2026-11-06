@@ -7,7 +7,7 @@ import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type BoardOptions } from '../src/server/index.ts'
 import { a2, memoryBlob, type A2Options } from '../src/backend-a2/index.ts'
-import { local } from '../src/local/index.ts'
+import { local } from '../src/backend-local/index.ts'
 import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
