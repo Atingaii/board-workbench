@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { memory } from '../src/store/memory.ts'
 import { board, type Middleware, type MiddlewareContext, type Watcher, type WatcherContext } from '../src/server/index.ts'
 import { oidcTokens, vercelProject, type Can, type HostPrincipal } from '../src/access/index.ts'
-import { a2 } from '../src/backend-a2/index.ts'
+import { a2 } from '../src/server/a2.ts'
 import { http } from '../src/backend-http/index.ts'
-import { bearer, BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { board as projectBoard, bearer, BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, TEAM_ID, testAuth, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
 // Who may use a board, and what its writes go through, are board()'s, on any backend: it
@@ -177,7 +177,7 @@ describe('a board on http() with an access of its own', () => {
   })
 })
 
-describe("a2()'s own writes, through board()", () => {
+describe("a local board's own writes, through board()", () => {
   it('sends a schedule as its creator through the middleware, and cancels it once access gives the creator nothing', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const queue = fakeQueue()
@@ -187,10 +187,9 @@ describe("a2()'s own writes, through board()", () => {
       seen.push({ source, author, write })
       return next({ text: `${write.text} (checked)` })
     }
-    const kept = board({
+    const kept = projectBoard({
       backend: a2({ store: memory(), scheduler: queue.scheduler }),
       url: BOARD_URL,
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
       authenticate: oidcTokens(testAuth),
       access: [(principal) => (principal.id === MARKETING ? (open.ops ? { ops: ['read', 'post'] } : null) : undefined)],
       middleware: [middleware],

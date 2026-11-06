@@ -55,7 +55,7 @@ describe('cli schedules', () => {
       expect(JSON.parse(later.stderr)).toMatchObject({
         reason: 'no_scheduler',
         message: `Can't schedule a message in #${root}. This board doesn't support it.`,
-        data: { error: { message: 'this board has no scheduler: pass `scheduler` to `a2()` to send later' } },
+        data: { error: { message: "this board has no scheduler, so it can't send later" } },
       })
     } finally {
       await unscheduled.close()

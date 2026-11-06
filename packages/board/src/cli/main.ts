@@ -113,7 +113,7 @@ function removedCommand(word: string): Failed | undefined {
         { instruction: "Reply in the thread you're working in", argv: [...cli(), 'reply', '<ID>', '<TEXT>'] },
         { instruction: 'Or post where it fits', argv: [...cli(), 'post', '<CHANNEL>', '<TEXT>'] },
       ]),
-    stuck: () => gone([], " A board on a2() keeps its dead letters in A2, on the backend's `servers`."),
+    stuck: () => gone([]),
     link: () => gone(url),
     use: () => gone(url),
   }

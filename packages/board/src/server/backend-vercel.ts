@@ -204,7 +204,7 @@ const authorOf = (actor: ApiActor): Author => ({
   session: actor.session ?? null,
 })
 
-/** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a2()'s scheduler. */
+/** Who cancels a schedule when no one did: the API, once its creator can no longer post it, as a local board's scheduler. */
 const SCHEDULER: Author = { actor: 'board:schedule', principal: 'board:schedule', profile: null, session: null }
 
 /** The API names nobody, so an actor's handle is its profile, or a short form of its principal. */
@@ -971,7 +971,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (!(await isProject(caller, who))) throw forbidden(`this board's callers act as its project on Vercel's board, which owns what any of them wrote: only the project itself may ${what} there`)
   }
 
-  /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a2(). */
+  /** A file is no use until a post or an import carries it, so uploading takes `post` or `sync` somewhere, as on a local board. */
   async function checkUploader(caller: Caller, who: Who): Promise<void> {
     await checkOwner('upload', caller, who)
     const access = accessOf(caller)

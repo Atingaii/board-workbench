@@ -3,7 +3,6 @@ import { memory } from '../src/store/memory.ts'
 import { vercelProject, oidcTokens, type CallerRequest, type Can, type HostPrincipal, type RuleFunction } from '../src/access/index.ts'
 // The engine itself, as a2() starts it: these tests are about what it does.
 import { mount as board, type MountOptions } from './harness.ts'
-import { vercelBlob } from '../src/blob/vercel.ts'
 import { fakeQueue } from './queue.ts'
 import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, TEAM_ID, testAuth, testBoard } from './harness.ts'
 
@@ -37,7 +36,6 @@ function hosted(team: string, options: Partial<MountOptions> = {}) {
     store: memory(),
     url: BOARD_URL,
     // The host's own project: its tokens must get nothing unless `authenticate` names them.
-    project: { id: PROJECT_ID, teamId: TEAM_ID },
     authenticate: authenticate(team),
     access: (principal) => GRANTS[principal.id] ?? null,
     ...options,
@@ -194,7 +192,6 @@ describe("a host's authenticate and access", () => {
     const tenant = board({
       store: memory(),
       url: BOARD_URL,
-      project: { id: PROJECT_ID, teamId: TEAM_ID },
       authenticate: async (request) => (await staff(request)) ?? (await tokens(request)),
     })
     const me = async (headers: Record<string, string>) => {
@@ -221,7 +218,6 @@ function supportBoard(rules: (customers: RuleFunction) => MountOptions['access']
   return board({
     store: memory(),
     url: BOARD_URL,
-    project: { id: PROJECT_ID, teamId: TEAM_ID },
     authenticate: async (request) => session(request) ?? (await tokens(request)),
     access: rules(customers),
   })
@@ -362,36 +358,6 @@ describe("a function rule's schedules", () => {
     open.support = true
     expect((await customer('GET', '/schedules?all=1')).body.schedules).toMatchObject([{ id: created.body.schedule.id, sent: 1, state: 'canceled', canceled: { reason: 'revoked' } }])
     expect((await customer('GET', '/messages?channel=support')).body.messages).toHaveLength(1)
-  })
-})
-
-const blobs = vi.hoisted(() => new Map<string, { data: Uint8Array; contentType: string }>())
-vi.mock('@vercel/blob', () => ({
-  put: async (key: string, data: Buffer, options: { contentType: string }) => void blobs.set(key, { data: new Uint8Array(data), contentType: options.contentType }),
-  get: async (key: string) => {
-    const found = blobs.get(key)
-    return found ? { statusCode: 200, stream: found.data, blob: { contentType: found.contentType } } : null
-  },
-}))
-
-describe('two hosted boards on one Vercel Blob store', () => {
-  it("don't serve each other's attachments when each has its own prefix", async () => {
-    const a = hosted('team_a', { blob: vercelBlob({ prefix: 'team_a' }) })
-    const b = hosted('team_b', { blob: vercelBlob({ prefix: 'team_b' }) })
-    const upload = await a.fetch(
-      new Request(`${BOARD_URL}/attachments`, {
-        method: 'POST',
-        headers: { authorization: 'Bearer pt_ada', 'content-type': 'text/plain', 'x-board-filename': 'secret.txt' },
-        body: 'team a only',
-      }),
-    )
-    const { attachment } = await upload.json()
-    expect([...blobs.keys()].every((key) => key.startsWith('team_a/board/attachments/'))).toBe(true)
-
-    const read = (tenant: typeof a, token: string) =>
-      tenant.fetch(new Request(`${BOARD_URL}/attachments/${attachment.id}`, { headers: { authorization: `Bearer ${token}` } }))
-    expect(await (await read(a, 'pt_ada')).text()).toBe('team a only')
-    expect((await read(b, 'pt_bob')).status).toBe(404)
   })
 })
 

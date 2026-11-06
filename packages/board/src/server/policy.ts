@@ -54,20 +54,14 @@ export type PolicyOptions = {
    * its callers within it, as its project on the board it uses.
    */
   access?: readonly (AccessRule | RuleFunction)[] | AccessFunction
-  /**
-   * The board's Vercel project: `self` in the rules, whose people's development tokens it takes,
-   * and what discovery names for clients to mint them. Defaults to `VERCEL_PROJECT_ID` or
-   * `.vercel/project.json`.
-   */
-  project?: { id: string; teamId?: string }
 }
 
 /** What a build of board finds in its environment for a board's policy: Node's verifies OIDC tokens and reads the board's Vercel project. */
 export type Serving = {
   oidcTokens(): Authenticate
-  ownProjectId(configured?: { id: string }): Promise<string | null>
-  ownTeamId(configured?: { teamId?: string }): Promise<string | null>
-  discoveryIdentity(headers: Headers | null, configured?: { id: string; teamId?: string }): Promise<ProjectIdentity>
+  ownProjectId(): Promise<string | null>
+  ownTeamId(): Promise<string | null>
+  discoveryIdentity(headers: Headers | null): Promise<ProjectIdentity>
 }
 
 /** board()'s policy: who each request is, and what principals may do, now and at every send and match. */
@@ -85,13 +79,13 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
   // A board whose `access` is one function decides alone: it keeps no grants.
   const grants = trust && typeof access !== 'function' ? () => trust.grants() : null
 
-  /** The board's own Vercel project and team, from `project` or the environment, asked once. */
+  /** The board's own Vercel project and team, from the environment, asked once. */
   let own: Promise<{ id: string | null; teamId: string | null }> | null = null
   const project = () =>
     (own ??= (async () => {
-      if (!serving) return { id: options.project?.id ?? null, teamId: options.project?.teamId ?? null }
+      if (!serving) return { id: null, teamId: null }
       const found = await serving()
-      const [id, teamId] = await Promise.all([found.ownProjectId(options.project), found.ownTeamId(options.project)])
+      const [id, teamId] = await Promise.all([found.ownProjectId(), found.ownTeamId()])
       return { id, teamId }
     })()).catch((error: unknown) => {
       own = null
@@ -100,8 +94,8 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
 
   /** What discovery says the board's project is, as a request shows it: clients mint tokens with it. */
   async function discoveryIdentity(headers: Headers): Promise<ProjectIdentity> {
-    if (!serving) return { projectId: options.project?.id ?? null, teamId: options.project?.teamId ?? null }
-    return (await serving()).discoveryIdentity(headers, options.project)
+    if (!serving) return { projectId: null, teamId: null }
+    return (await serving()).discoveryIdentity(headers)
   }
 
   let tokens: Promise<Authenticate> | null = null

@@ -34,7 +34,7 @@ function reached(start: string): string[] {
 }
 
 describe('the published types', () => {
-  const entries = Object.entries(pkg.exports).filter(([path]) => !/backend-a2|sync-|package\.json/.test(path))
+  const entries = Object.entries(pkg.exports).filter(([path]) => !/sync-|package\.json/.test(path))
 
   it.each(entries)('%s reaches no optional peer', (_path, entry) => {
     const types = typesOf(entry)
@@ -58,12 +58,15 @@ function declarations(start: string): [string, string][] {
   return [...seen].map(([file, text]) => [file.slice(root.length + 1), text])
 }
 
-describe("`@vercel/board/local`'s types", () => {
-  it('name nothing of A2: not its store, its scheduler, its options, or its name', () => {
-    const files = declarations('dist/local.d.mts')
-    expect(files.map(([file]) => file)).toContain('dist/local.d.mts')
-    const named = files.flatMap(([file, text]) => [...text.matchAll(/\b(A2\w*|BoardStore|experimental-a2)\b/g)].map((match) => `${file}: ${match[1]}`))
+describe('the published types', () => {
+  const entries = Object.entries(pkg.exports).filter(([path]) => path !== './package.json')
+
+  it.each(entries)('%s names nothing of A2: not its store, its scheduler, its options, or a2()', (path, entry) => {
+    const files = typesOf(entry).flatMap(declarations)
+    expect(files.length).toBeGreaterThan(0)
+    const named = files.flatMap(([file, text]) => [...text.matchAll(/\b(A2\w*|BoardStore|experimental-a2|backend-a2|a2\(\))/g)].map((match) => `${file}: ${match[1]}`))
     expect(named).toEqual([])
+    if (path === './local') expect(files.map(([file]) => file)).toContain('dist/local.d.mts')
   })
 })
 

@@ -30,7 +30,7 @@ export type SelfCaller = {
   /**
    * A handle (`via: client`, with the profile from `as(profile)`, or null for the board's own), a
    * watcher, the middleware's handle (`via: middleware`), or sync (`via: engine`). Each backend
-   * decides who that is on its board: `board:client` and `board:client:<profile>` on a2(), the
+   * decides who that is on its board: `board:client` and `board:client:<profile>` on local(), the
    * token's holder with that profile elsewhere.
    */
   self: string | null
@@ -175,19 +175,19 @@ export interface Backend extends ProtocolMethods {
   /** Routes of its own, beside the protocol: one at a protocol route's path takes its place. */
   readonly routes: readonly BackendRoute[]
   /**
-   * Whether the board lives here. One that keeps it (`a2()`) lets in, when board()'s `access` is left
+   * Whether the board lives here. One that keeps it (`local()`) lets in, when board()'s `access` is left
    * out, its people and the board's own deployments; one that uses another board (`http()`) serves no
    * requests then but wake-ups and webhooks, and with an `access`, serves its callers as that board's
    * project.
    */
   readonly keeps: boolean
   /**
-   * Whether a schedule's sends come back through board(), as a2()'s do, so its middleware screens
+   * Whether a schedule's sends come back through board(), as local()'s do, so its middleware screens
    * each. A backend whose sends post elsewhere, as vercel()'s do from Vercel's API, says false, and
    * board() screens a schedule's message once, when it's made. True when left out.
    */
   readonly sendsSchedulesHere?: boolean
-  /** Its grants and tokens, for a backend that keeps them (`a2()`): board() checks requests against them. */
+  /** Its grants and tokens, for a backend that keeps them (`local()`): board() checks requests against them. */
   readonly trust?: Trust
   /**
    * board() calls it once, when it's created, before any request: what background work needs

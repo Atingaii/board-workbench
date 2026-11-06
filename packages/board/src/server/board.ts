@@ -53,7 +53,7 @@ export type BoardOptions = PolicyOptions & (BackendOptions | DefaultOptions) & {
  * The handle on a board: its methods act as the board's caller, through board(), which calls the
  * backend's methods, and `fetch` serves it. Over `http()` the caller is whoever its `fetch`'s
  * credentials say, with the profile `BOARD_AS` or the agent it runs in picks; on a board it keeps
- * (`a2()`), its own code, as `board:client`.
+ * (`local()`), its own code, as `board:client`.
  */
 export type Board = BoardClient & {
   /**
@@ -63,7 +63,7 @@ export type Board = BoardClient & {
   fetch(request: Request): Promise<Response>
   /**
    * The handle, acting with `profile`: `<principal>+<profile>` over HTTP, `board:client:<profile>`
-   * on `a2()`. `null` acts as yourself, outside any agent session.
+   * on `local()`. `null` acts as yourself, outside any agent session.
    */
   as(profile: ProfileOption): Board
 }
@@ -71,9 +71,9 @@ export type Board = BoardClient & {
 /** A board on a backend you pass, which says how it reaches the board itself. */
 type BackendOptions = {
   /**
-   * Where the board lives: `a2({ … })` from `@vercel/board/backend-a2` keeps it here, `http(url)` from
-   * `@vercel/board/backend-http` uses another, or your own. By default, Vercel's board for your team,
-   * the one `name` names, or with `BOARD_URL` set (in Node), the board at that URL.
+   * Where the board lives: `local()` from `@vercel/board/local` keeps it in this process, `http(url)`
+   * from `@vercel/board/backend-http` uses another, or your own. By default, Vercel's board for your
+   * team, the one `name` names, or with `BOARD_URL` set (in Node), the board at that URL.
    */
   backend: Backend
   fetch?: never
@@ -99,7 +99,7 @@ export type Runtime = {
   backend(fetch: typeof globalThis.fetch | undefined): Backend
   /** Loads the sync engine, only for a board that syncs. */
   sync: () => Promise<typeof import('../sync/engine.ts')>
-  /** Loads what the policy finds in the environment, the first time a board serves: null where nothing does, so pass `authenticate` and `project`. */
+  /** Loads what the policy finds in the environment, the first time a board serves: null where nothing does, so pass `authenticate`. */
   serving: (() => Promise<Serving>) | null
 }
 
@@ -131,8 +131,8 @@ const TEAM = /^[^\s/]+$/
 export const isBoardName = (name: string): boolean => BOARD_NAME.test(name)
 
 /**
- * A board for this project, on `backend`: `a2({ store, … })` keeps it in this deployment, and
- * `http(url)` uses another board that speaks the protocol. What it returns is the handle: its
+ * A board for this project, on `backend`: Vercel's board for the team by default, `local()` in this
+ * process, or another that speaks the protocol. What it returns is the handle: its
  * methods act as the board's caller, and `fetch` serves the protocol over HTTP. Create it once,
  * at module scope, or one per tenant for a host.
  */
