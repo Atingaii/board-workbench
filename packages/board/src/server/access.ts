@@ -163,8 +163,8 @@ export type Access = {
   anywhere(permission: Permission): boolean
   /**
    * `permission` where `pattern` itself decides: at `*`, what `*` gives, whatever a more specific
-   * pattern says; at `security/`, what covers `security` as a subtree. Changing a grant checks
-   * `manage` this way at each pattern it names.
+   * pattern says; at `security/`, what covers `security` as a subtree. `checkGrantChange` checks
+   * `manage` this way.
    */
   at(permission: Permission, pattern: ChannelPattern): boolean
   /** Only what both this and `scope` allow, channel by channel. It never widens. */
@@ -440,8 +440,13 @@ export type GrantChange = {
   owner?: boolean
   /** Every grant as it would be after the change, the changed one included. */
   after: readonly GrantShape[]
-  /** The grant made or widened, as it would be after the change. */
-  changed: { readonly can: WrittenCan }
+  /** The grant made or widened, as it would be after the change: judged by reach and admission. */
+  changed?: { readonly can: WrittenCan }
+  /**
+   * A grant revoked, or the one principals are removed from, or an update's grant as it was:
+   * judged by reach alone. Lifting what it held back widens whoever it named, but lets no one new in.
+   */
+  revoked?: { readonly can: WrittenCan }
 }
 
 /** Why `checkGrantChange` refuses a change, and where: `pattern` is the spot it failed at. */
@@ -452,9 +457,10 @@ const isUnder = (other: string, pattern: string) =>
   other !== pattern && (pattern === '*' || (pattern.endsWith('/') && (other === pattern.slice(0, -1) || other.startsWith(pattern))))
 
 /**
- * Whether a caller may make or widen a grant: you can't grant what you don't have. Your token's and
- * your own grants' limits count, an `everyone` lock doesn't, and anyone you let in gets what
- * `everyone` gets. Null when it may; otherwise why not, and where.
+ * Whether a caller may change grants so: make or widen one (`changed`), or revoke one or remove
+ * from it (`revoked`). You can't grant what you don't have. Your token's and your own grants'
+ * limits count, an `everyone` lock doesn't, and anyone you let in gets what `everyone` gets. Null
+ * when it may; otherwise why not, and where.
  *
  * - **Reach:** `manage` at each of the changed grant's patterns, by `caller` and by `own`, and at
  *   every more specific spot under them by `own`. A lock binds whoever the grant names as much as
@@ -462,22 +468,25 @@ const isUnder = (other: string, pattern: string) =>
  *   caller's own limits do. At the grant's own patterns it counts too: there the grant would meet
  *   the lock at the same pattern, and its principal is closer.
  * - **Admission:** wherever `everyone` gives something, `caller` has it too, since any principal a
- *   grant lets in gets what `everyone` gives.
+ *   grant lets in gets what `everyone` gives. A revoke or a removal lets no one in, so it's judged
+ *   by reach alone, at the patterns of the grant as it was.
  *
- * It looks only at the spots where access can change: the changed grant's patterns, the `everyone`
+ * It looks only at the spots where access can change: the grants' patterns, the `everyone`
  * grants', and the caller's own, from `summary()`. It does no I/O, so a board and Vercel's API run
- * the same rule. Revoking a grant, or removing from one, needs only `manage` at its patterns.
+ * the same rule.
  */
 export function checkGrantChange(change: GrantChange): GrantChangeRefusal | null {
   if (change.owner) return null
   const { caller, own } = change
   const everyone = change.after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone'))
-  const patterns = Object.keys(change.changed.can)
-  const spots = [...new Set([...patterns, ...everyone.flatMap((grant) => Object.keys(grant.can)), ...Object.keys(caller.summary()), ...Object.keys(own.summary())])]
-  for (const pattern of patterns) {
+  const lifted = Object.keys(change.revoked?.can ?? {})
+  const made = Object.keys(change.changed?.can ?? {})
+  const spots = [...new Set([...lifted, ...made, ...everyone.flatMap((grant) => Object.keys(grant.can)), ...Object.keys(caller.summary()), ...Object.keys(own.summary())])]
+  for (const pattern of new Set([...lifted, ...made])) {
     if (!caller.at('manage', pattern) || !own.at('manage', pattern)) return { reason: 'reach', pattern, permission: 'manage' }
     for (const spot of spots) if (isUnder(spot, pattern) && !own.at('manage', spot)) return { reason: 'reach', pattern: spot, permission: 'manage' }
   }
+  if (made.length === 0) return null
   const gives = combine(everyone.map((grant) => ({ level: 'everyone' as const, can: grant.can, source: null })))
   for (const spot of spots) for (const permission of PERMISSIONS) if (gives.at(permission, spot) && !caller.at(permission, spot)) return { reason: 'admission', pattern: spot, permission }
   return null

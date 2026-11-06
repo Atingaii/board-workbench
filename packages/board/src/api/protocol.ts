@@ -90,7 +90,7 @@ export type Protocol = {
   grants: { input: Nothing; output: { grants: GrantView[] } }
   /** A new grant, always: the same principals again are another. Needs `manage` at each pattern its `can` names. */
   createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView } }
-  /** Adds and removes principals, or replaces its `can`: needs `manage` at each pattern it names, before and after. 404 `grant_not_found`. */
+  /** Adds and removes principals, or replaces its `can`: needs what `checkGrantChange` says, for the grant as it was and as it'd be. 404 `grant_not_found`. */
   updateGrant: { input: Id & Input<typeof UpdateGrantBody>; output: { grant: GrantView } }
   /** `revoked` is false when it was already gone. */
   revokeGrant: { input: Id; output: { revoked: boolean } }

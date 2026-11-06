@@ -148,15 +148,25 @@ describe('grants', () => {
     expect([made.status, made.body.error?.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
   })
 
-  it('revokes, or removes from, a grant with manage where it applies, however narrow the caller is elsewhere', async () => {
-    const { owner, as } = await setUp()
-    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })
-    await owner('POST', '/grants', { principals: [user('u_carol')], can: { 'security/incidents': [] } })
+  it("revokes, or removes from, a grant only where the caller's own limits reach, since lifting it widens whoever it named", async () => {
+    const { owner, person, as } = await setUp()
+    // A project the grant keeps out of everything: revoking it gives the project g2 back, secret/ included.
+    const shut = await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_x', environments: ['production'] }, { kind: 'project', project: 'prj_y', environments: ['production'] }], can: { '*': [] } })
+    const minted = await person('POST', '/tokens', { name: 'no-secret', can: { '*': 'all', 'secret/': [] } })
+    const scoped = await as(minted.body.secret)
+    const revoked = await scoped('POST', `/grants/${shut.body.grant.id}/revoke`, {})
+    // It may list grants, so it's told where.
+    expect([revoked.status, revoked.body.error.message]).toEqual([403, `this token can't revoke ${shut.body.grant.id}: it reaches secret/, where you can't manage grants`])
+    expect((await scoped('PATCH', `/grants/${shut.body.grant.id}`, { remove: [{ kind: 'project', project: 'prj_x' }] })).status).toBe(403)
+    // A member lifts a grant on * once a channel is closed to everyone, since the lock binds whoever it named too.
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
     const wide = await owner('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }, { kind: 'github', repository: 'acme/api' }], can: { '*': ['read'] } })
-    const carol = await as(personToken('u_carol'))
-    expect((await carol('PATCH', `/grants/${wide.body.grant.id}`, { add: [{ kind: 'github', repository: 'acme/cli' }] })).status).toBe(403)
-    expect((await carol('PATCH', `/grants/${wide.body.grant.id}`, { remove: [{ kind: 'github', repository: 'acme/api' }] })).status).toBe(200)
-    expect((await carol('POST', `/grants/${wide.body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
+    const bob = await as(personToken('u_bob'))
+    expect((await bob('PATCH', `/grants/${wide.body.grant.id}`, { remove: [{ kind: 'github', repository: 'acme/api' }] })).status).toBe(200)
+    expect((await bob('POST', `/grants/${wide.body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
+    // But not the lock itself, where he's shut out.
+    const lock = (await owner('GET', '/grants')).body.grants.find((grant: { principals: { kind: string }[] }) => grant.principals[0]?.kind === 'everyone')
+    expect((await bob('POST', `/grants/${lock.id}/revoke`, {})).status).toBe(403)
   })
 
   it('lets no token reach past its own can by granting someone else', async () => {

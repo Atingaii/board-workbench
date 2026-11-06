@@ -197,9 +197,12 @@ more specific pattern decides first. The rule that matches a principal in
   `everyone` gets. So making or widening a grant takes `manage` at each pattern
   it names, and under each wherever your own limits narrow you, and you let no
   one in while `everyone` gets something somewhere that you don't.
-- **Revoking a grant, or removing from one, takes `manage` at its patterns.**
-  Naming an `oidc` principal takes `manage` everywhere, since the board then
-  fetches its issuer's keys. Listing grants takes `manage` at `*`.
+- **Revoking a grant, or removing from one, is judged the same way,** since
+  lifting what it held back widens whoever it named: `manage` at its patterns,
+  and under each wherever your own limits narrow you. It lets no one new in,
+  so what `everyone` gets doesn't count.
+- **Naming an `oidc` principal takes `manage` everywhere,** since the board
+  then fetches its issuer's keys. Listing grants takes `manage` at `*`.
 - **Owners always may.** On Vercel's API, the team's owners. On a local board,
   its local user, the one `vb serve` mints a token for: a person on the team
   is a principal like any other. Reading a closed channel still takes a
@@ -489,7 +492,7 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileRules(rules, { project })` | What a principal may do under `rules` alone, no grants met, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
 | `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as the same `Access`, with `narrow(scope)` to keep only what both allow. `union` adds up what several allow, channel by channel: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that keeps its own copy of these rules to check itself against |
-| `checkGrantChange({ caller, owner, after, changed })` | Whether a caller may make or widen a grant, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says, `after` every grant as the change leaves them. It does no I/O, so a backend that keeps grants runs the same rule |
+| `checkGrantChange({ caller, own, owner, after, changed, revoked })` | Whether a caller may change grants so, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says and `own` the same without `everyone`'s grants, `after` every grant as the change leaves them, `changed` a grant made or widened, and `revoked` one revoked, removed from, or updated, as it was. It does no I/O, so a backend that keeps grants runs the same rule |
 | `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions

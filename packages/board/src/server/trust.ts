@@ -272,23 +272,27 @@ async function changerAccess({ principal }: Identity, grants: readonly StoredGra
 }
 
 /**
- * A 403 unless `identity` may make or widen a grant to `can`, on `before`, the grants the write
- * appends to, and `after`, as they'd be: `checkGrantChange`'s rule, which Vercel's API runs too.
+ * A 403 unless `identity` may change grants so, on `before`, the grants the write appends to, and
+ * `after`, as they'd be: `checkGrantChange`'s rule, which Vercel's API runs too. `changed` is a
+ * grant made or widened, `revoked` one revoked, removed from, or updated, as it was. A refusal that
+ * involves a stored grant names its patterns only to whoever may list the grants.
  */
-async function mayGrant(identity: Identity, can: WrittenCan, before: readonly StoredGrant[], after: readonly GrantShape[], accessIn: AccessIn, what = 'this grant') {
+async function mayGrant(
+  identity: Identity,
+  change: { changed?: { can: WrittenCan }; revoked?: { can: WrittenCan } },
+  before: readonly StoredGrant[],
+  after: readonly GrantShape[],
+  accessIn: AccessIn,
+  what = 'this grant',
+) {
   const access = await changerAccess(identity, before, accessIn)
   if (access === null) return
-  const refused = checkGrantChange({ ...access, after, changed: { can } })
-  if (refused?.reason === 'reach') throw forbidden(`${what} reaches ${refused.pattern}, where you can't manage grants`)
+  const refused = checkGrantChange({ ...access, after, ...change })
+  if (refused?.reason === 'reach') {
+    if (change.revoked && !lists(identity)) throw forbidden(`this token can't ${what}: it needs manage wherever that grant reaches`)
+    throw forbidden(`${change.revoked ? `this token can't ${what}: it` : what} reaches ${refused.pattern}, where you can't manage grants`)
+  }
   if (refused) throw forbidden(`you can't let anyone in: everyone gets ${refused.permission} in ${refused.pattern}, which you can't`)
-}
-
-/** A 403 unless `identity` manages each of a stored grant's `patterns`, on `grants`: what revoking it, or removing from it, takes. */
-async function mayManage(identity: Identity, patterns: Iterable<string>, grants: readonly StoredGrant[], accessIn: AccessIn, what: string) {
-  const access = await changerAccess(identity, grants, accessIn)
-  if (access === null) return
-  for (const pattern of patterns)
-    if (!access.caller.at('manage', pattern)) throw forbidden(lists(identity) ? `this token can't ${what}: it needs manage at ${pattern}` : `this token can't ${what}: it needs manage wherever that grant applies`)
 }
 
 /** An oidc principal: naming one makes the board fetch its issuer's keys, so it takes manage everywhere. */
@@ -305,7 +309,6 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
   const row = index === null ? undefined : state.grants[index]
   if (!row) throw notFound(`grant not found: ${id}`, 'grant_not_found')
   const before = Object.values(state.grants).map(storedGrant)
-  await mayManage(identity, patternsOf(row.can), before, accessIn, `update ${id}`)
   const others = grantIssuers(Object.values(state.grants).filter((other) => other.id !== row.id).map(storedGrant))
   let principals = [...row.principals]
   for (const input of remove ?? []) {
@@ -324,12 +327,11 @@ async function updated(identity: Identity, state: AccessState, { id, add, remove
   if (principals.length === 0) throw badRequest(`that leaves ${id} naming no one: revoke it instead`, 'grant_empty')
   if (principals.length > 32) throw badRequest('a grant names at most 32 principals', 'invalid_grant')
   const next = can === undefined ? row.can : checkCan(can)
-  // Adding principals or changing what it gives widens it: removing only narrows, which manage there allows.
-  if (add !== undefined || can !== undefined) {
-    const after = [...Object.values(state.grants).filter((other) => other.id !== row.id), { principals, can: next }]
-    await mayGrant(identity, next, before, after, accessIn)
-    if (namesIssuer(principals.filter((principal) => !row.principals.includes(principal)))) await mayGrant(identity, { '*': 'all' }, before, after, accessIn, 'naming an oidc issuer')
-  }
+  // As it was, it's lifted, so it's judged by reach; adding principals or setting `can` widens it too.
+  const after = [...Object.values(state.grants).filter((other) => other.id !== row.id), { principals, can: next }]
+  const widens = add !== undefined || can !== undefined
+  await mayGrant(identity, { revoked: row, ...(widens ? { changed: { can: next } } : {}) }, before, after, accessIn, `update ${id}`)
+  if (namesIssuer(principals.filter((principal) => !row.principals.includes(principal)))) await mayGrant(identity, { changed: { can: { '*': 'all' } } }, before, after, accessIn, 'naming an oidc issuer')
   return { type: 'grant.updated' as const, payload: { id: row.id, principals: principals as never, can: next as never, by: identity.actor.id } }
 }
 
@@ -416,8 +418,8 @@ export function createTrust(options: {
         const checked = checkGrant(body, [...options.issuers(), ...grantIssuers(Object.values(state.grants).map(storedGrant))])
         const before = Object.values(state.grants).map(storedGrant)
         const after = [...before, checked]
-        await mayGrant(identity, checked.can, before, after, accessIn)
-        if (namesIssuer(checked.principals)) await mayGrant(identity, { '*': 'all' }, before, after, accessIn, 'naming an oidc issuer')
+        await mayGrant(identity, { changed: checked }, before, after, accessIn)
+        if (namesIssuer(checked.principals)) await mayGrant(identity, { changed: { can: { '*': 'all' } } }, before, after, accessIn, 'naming an oidc issuer')
         return session.append.ifLastIndex(index, { type: 'grant.created', payload: { principals: checked.principals as never, can: checked.can as never, by: identity.actor.id } })
       })
       const made = row && Object.values((await read()).grants).find((grant) => grant.event === row.index)
@@ -444,7 +446,8 @@ export function createTrust(options: {
           mayList(identity, 'revoke grants')
           return { revoked: false }
         }
-        await mayManage(identity, patternsOf(row.can), Object.values(state.grants).map(storedGrant), accessIn, `revoke ${id}`)
+        const before = Object.values(state.grants).map(storedGrant)
+        await mayGrant(identity, { revoked: row }, before, before.filter((other) => other.id !== storedGrant(row).id), accessIn, `revoke ${id}`)
         await session.append.ifLastIndex(index, { type: 'grant.deleted', payload: { id: row.id, by: identity.actor.id } })
         return { revoked: true }
       })

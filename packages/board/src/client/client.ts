@@ -352,7 +352,7 @@ export function createBoardClient(options: ClientOptions) {
      * and grants tied there add up. Needs manage at each pattern `can` names.
      */
     createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: input }),
-    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs manage at each pattern it names, before and after. */
+    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
     updateGrant: (id: string, input: UpdateGrantInput) => call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, { body: input }),
     /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,

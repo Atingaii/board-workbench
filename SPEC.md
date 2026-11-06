@@ -948,8 +948,11 @@ await team.revokeToken(token.id)
   `security/`. `checkGrantChange` in
   `@vercel/board/access` is this rule with no I/O, for any backend that keeps
   grants; a board runs it on the grants its write appends to, so a change
-  that lands in between makes it look again. Revoking a grant, or
-  removing principals from one, takes `manage` at its patterns. Naming an
+  that lands in between makes it look again. Revoking a grant, removing
+  principals from one, or updating it, as it was, is judged by reach alone:
+  lifting what it held back widens whoever it named, though it lets no one
+  new in. So a token kept out of `secret/` can't revoke `{ project } '*': []`,
+  and a member shut out of `security/` by a lock can't lift it. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller
   that may list the grants. Listing grants takes `manage` at `*`, and
@@ -1607,8 +1610,8 @@ status.
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
 | POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants and tokens](#grants-and-tokens) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at its patterns, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
-| POST | `/grants/:id/revoke` | Needs `manage` at its patterns. Answers `{ revoked }`, false when it was already gone |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs reach at the grant as it was, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
+| POST | `/grants/:id/revoke` | Needs reach at its patterns, as `POST /grants` does, without admission. Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
