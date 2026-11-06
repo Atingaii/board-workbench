@@ -240,7 +240,8 @@ export function fakeGrants(options: {
     return { pattern, over, level, grants: deciding.map((candidate) => candidate.grant), capped, can }
   }
 
-  const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'owner'
+  // A board token is held to its can, an owner's too.
+  const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'owner' && who.limit === undefined
   /** Whether `who` may list the grants, or explain anyone: manage at `*`, or a team owner. */
   const lists = (who: Who) => isOwner(who) || decide(who, '*').can.includes('manage')
   /** What `everyone` gives at `spot`, by the grants in `after` that name it: what anyone a grant lets in gets there, where nothing closer decides. */
