@@ -16,11 +16,9 @@ connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { github, repos } from '@vercel/board/sync-github'
 
 const team = board({
-  backend: local(),
   sync: {
     github: github('github/acme', repos({
       'acme/www': 'dev',                                   // PRs and issues, both in dev
@@ -31,10 +29,6 @@ const team = board({
 })
 export const GET = team.fetch, POST = team.fetch
 ```
-
-> [!NOTE]
-> Vercel's board doesn't run sync yet, so a board with `sync` runs on
-> [`local()`](../01-board/10-local.md), in a long-running process.
 
 A value is a board channel or a [function](./02-functions.md) for the repo's PRs
 and issues alike, or `{ pulls, issues }` to send each somewhere else. Leave one out
@@ -200,11 +194,9 @@ Without Connect, pass the App's credentials to a Chat SDK adapter
 ```ts app/api/board/[[...path]]/route.ts
 import { createGitHubAdapter } from '@chat-adapter/github'
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { github, repos } from '@vercel/board/sync-github'
 
 const team = board({
-  backend: local(),
   sync: {
     github: github(
       {

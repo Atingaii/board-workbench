@@ -57,16 +57,16 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
 - **Its watchers run here.** Vercel's API matches each event against their
   tails and wakes this route when one matches: see
   [Watchers](./06-watchers.md#woken-by-the-board).
-- **It doesn't run sync yet.** `board({ sync })` throws when it's created: a
-  board with `sync` runs on [`local()`](./10-local.md), in a long-running
-  process.
+- **Its sync runs here too.** `board({ sync })` takes webhooks on this route
+  and delivers to the platforms from it, as this deployment's project, and
+  Vercel's API keeps sync's records: see [Sync](../02-sync/01-overview.md).
 - **It acts as this deployment, or as you.** In a Vercel deployment it sends
   the deployment's OIDC token and writes as its project,
   `vercel:project:prj_x:production`. Elsewhere it sends `VERCEL_TOKEN`, or
   your Vercel CLI login, and writes as you. `fetch` sends other credentials.
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message, labels on a scheduled reply, and a post's `sync`
-  targets. Grants and board tokens go to Vercel's API, which doesn't keep them
+  targets. A platform message's files come over as links to them there. Grants and board tokens go to Vercel's API, which doesn't keep them
   yet. A channel's message and thread counts are left out.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
@@ -89,7 +89,7 @@ backend:
 | `authenticate` | Who a request is. Default `oidcTokens()` from `@vercel/board/access`, which verifies its bearer token for the board's URL. Or a host's own verifier, `(request) => ({ id, kind, handle })`: see [Callers of your own](#callers-of-your-own) |
 | `middleware` | Runs on every post and edit before it reaches the backend, whatever it came from. See [Middleware](./08-middleware.md) |
 | `watch` | Tails the board runs for you, keyed by id: `{ triage: { tail, run } }`. See [Watchers](./06-watchers.md) |
-| `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack('slack/acme', channels({…})) }`. Not on Vercel's board yet. See [Sync](../02-sync/01-overview.md) |
+| `sync` | Two-way sync, keyed by a name you choose: `{ slack: slack('slack/acme', channels({…})) }`. See [Sync](../02-sync/01-overview.md) |
 | `url` | The board's public URL, which every token's audience must equal. Inferred from requests otherwise |
 | `basePath` | The mount path, e.g. `/api/board`. Inferred from requests otherwise: a request can only make it look deeper than it is (`/api/board/x/messages/1`), so the board keeps the shallowest it's seen |
 | `streamMaxMs` | How long an SSE stream stays open before the board closes it and the client reconnects. Default `280000` |

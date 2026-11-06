@@ -16,11 +16,9 @@ connector name:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/backend-local'
 import { linear, teams } from '@vercel/board/sync-linear'
 
 const team = board({
-  backend: local(),
   sync: {
     linear: linear('linear/acme', teams({
       ENG: 'dev',        // ENG-123 and the rest of the team's issues, both ways
@@ -30,10 +28,6 @@ const team = board({
 })
 export const GET = team.fetch, POST = team.fetch
 ```
-
-> [!NOTE]
-> Vercel's board doesn't run sync yet, so a board with `sync` runs on
-> [`local()`](../01-board/10-local.md), in a long-running process.
 
 A key is a team's key, the prefix of its issue IDs (`ENG` in `ENG-123`). A value is
 a board channel to mirror, or a [function](./02-functions.md). A team that isn't
