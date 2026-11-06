@@ -1,5 +1,5 @@
 import type { Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type InboxEntry, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView, type TokenView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -259,6 +259,11 @@ function operationId(): string {
 }
 
 const iso = (ms: number) => new Date(ms).toISOString()
+
+/** A grant as the API answers it, its `at` in milliseconds, as the protocol has it: an ISO string. */
+const grantFrom = (grant: GrantView): GrantView => ({ ...grant, at: expiryOf(grant.at) })
+/** A token as the API answers it, its times in milliseconds, as the protocol has them. */
+const tokenFrom = (token: TokenView): TokenView => ({ ...token, at: expiryOf(token.at) ?? token.at, expiresAt: expiryOf(token.expiresAt) ?? token.expiresAt })
 const idAt = (threadId: string, sequence: number) => `msg_${threadId.slice('thr_'.length)}_${sequence}`
 
 /** Where a message ID points: its thread and its place in it. Null for one that isn't a message's. */
@@ -369,6 +374,9 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     } catch {}
     if (response.ok) return body as T
     const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error
+    // A board token reaches its own board by ID, and none of the team's routes: finding a board by its name or as the team's is one.
+    if (error?.code === 'board_token_scope')
+      throw new HttpError(403, 'board_token_scope', 'a board token reaches only its own board, by its ID.', { hint: 'Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).', origin: 'handle' })
     throw new HttpError(response.status, error?.code ?? 'remote_error', error?.message ?? `Vercel's API answered ${response.status}`)
   }
 
@@ -425,7 +433,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const { board: made } = await api<{ board: { id: string }; created: boolean }>(who, 'POST', '/boards/ensure', { body: { name, operationId: operationId() } })
       return made.id
     } catch (error) {
-      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(`board ${name}`, principal)
+      if (error instanceof HttpError && error.code === 'board_not_granted') throw notLetIn(name, principal)
       // Names are unique across the team's boards, private ones included: this one is someone else's to show.
       if (error instanceof HttpError && error.code === 'board_name_taken')
         throw new HttpError(409, 'board_name_taken', `the board name ${name} is taken.`, { hint: 'Pick another name, or ask whoever can see it for access.', origin: 'handle' })
@@ -433,12 +441,20 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     }
   }
 
-  /** A project a board's grants don't let in: they were narrowed, since every project on the team gets in by default. */
-  const notLetIn = (board: string, principal: ApiPrincipal) =>
-    new HttpError(403, 'board_not_granted', `this project has no access to ${board}${principal.type === 'project' ? ` (${principal.projectId}, ${principal.environment})` : ''}.`, {
-      hint: 'Someone who manages the board can grant it.',
+  /**
+   * A project a board's grants don't let in, the one `name`s or the team's (null): they were narrowed,
+   * since every project on the team gets in by default. Its way out is the grant that lets it back in,
+   * naming the project by ID, since `/me` carries no name.
+   */
+  const notLetIn = (name: string | null, principal: ApiPrincipal) => {
+    const board = name === null ? "the team's board" : `board ${name}`
+    if (principal.type !== 'project') return new HttpError(403, 'board_not_granted', `this project has no access to ${board}.`, { hint: 'Someone who manages the board can grant it.', origin: 'handle' })
+    const grant = `vb grants create --project ${principal.projectId} --environment ${principal.environment}${name === null ? '' : ` --name ${name}`} --can '*=read,post,react,label'`
+    return new HttpError(403, 'board_not_granted', `this project has no access to ${board} (${principal.projectId}, ${principal.environment}).`, {
+      hint: `Grant it: ${grant}`,
       origin: 'handle',
     })
+  }
 
   let board: Promise<string> | null = null
   /**
@@ -455,7 +471,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         : api<{ defaultBoardId: string | null }>(who, 'GET', '/boards').then(async ({ defaultBoardId }) => {
             if (defaultBoardId) return defaultBoardId
             const { principal } = (await self(who)).actor
-            if (principal.type === 'project') throw notLetIn("the team's board", principal)
+            if (principal.type === 'project') throw notLetIn(null, principal)
             const { board: made } = await api<{ board: { id: string } }>(who, 'POST', '/boards/default', { body: { operationId: operationId() } })
             return made.id
           })).catch((error: unknown) => {
@@ -1126,9 +1142,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     const filters = Object.fromEntries(await Promise.all(Object.entries(specs).map(async ([id, spec]) => [id, await filterOf(who, id, spec, fromHere)] as const)))
     const entries = sync.map(({ key, platform }) => ({ key, platform }))
     // vboard's own hash of the tails and sync entries, which every wake-up carries back, so a board can tell its registration is stale.
-    const made = await syncApi<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), {
-      body: { ...where, watch: filters, tag: await tagOf(specs, entries), ...(entries.length ? { sync: entries } : {}) },
-    })
+    let made: ApiRegistration
+    try {
+      made = await syncApi<ApiRegistration>(who, 'PUT', await onBoard(who, '/watchers'), {
+        body: { ...where, watch: filters, tag: await tagOf(specs, entries), ...(entries.length ? { sync: entries } : {}) },
+      })
+    } catch (error) {
+      // Vercel's API takes no board token for watchers, for now.
+      if (error instanceof HttpError && error.code === 'board_token_unsupported')
+        throw new HttpError(403, 'board_token_unsupported', "a board token can't register watchers yet.", { hint: "Register them with a person's or a deployment's own credentials.", origin: 'handle' })
+      throw error
+    }
     return { owner: made.owner, ...whereOf(made), watch: specs, sync: syncOf(made), hash: made.hash }
   }
 
@@ -1527,11 +1551,26 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     // Grants and tokens are the API's, in the protocol's shapes: what it doesn't keep yet, it answers.
     async grants(caller, _input, signal) {
       const who = whoOf(caller)
-      return api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
+      const { grants } = await api<Protocol['grants']['output']>(who, 'GET', await onBoard(who, '/grants'), signal ? { signal } : {})
+      return { grants: grants.map(grantFrom) }
     },
     async createGrant(caller, input, signal) {
       const who = whoOf(caller)
-      return api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      return { grant: grantFrom(grant) }
+    },
+    async updateGrant(caller, { id, ...change }, signal) {
+      const who = whoOf(caller)
+      const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) })
+      return { grant: grantFrom(grant) }
+    },
+    async explain(caller, { claim, ...query }, signal) {
+      const who = whoOf(caller)
+      const params = new URLSearchParams()
+      for (const [name, value] of Object.entries(query)) if (value !== undefined) params.set(name, value)
+      for (const pair of claim ?? []) params.append('claim', pair)
+      const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {})
+      return { ...explained, grants: explained.grants.map(grantFrom) }
     },
     async revokeGrant(caller, { id }, signal) {
       const who = whoOf(caller)
@@ -1539,11 +1578,13 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async tokens(caller, _input, signal) {
       const who = whoOf(caller)
-      return api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+      const { tokens } = await api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+      return { tokens: tokens.map(tokenFrom) }
     },
     async createToken(caller, input, signal) {
       const who = whoOf(caller)
-      return api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      const created = await api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      return { ...created, token: tokenFrom(created.token) }
     },
     async revokeToken(caller, { id }, signal) {
       const who = whoOf(caller)
