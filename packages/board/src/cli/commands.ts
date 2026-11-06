@@ -271,7 +271,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         name: 'explain',
         description: 'which grant decides a channel, for you or anyone',
         arguments: [{ name: 'channel', required: true, description: 'a channel, such as security/incidents' }],
-        options: [...(['user', 'project', 'github', 'oidc', 'environment', 'workflow', 'branch', 'event', 'claim'] as const).map((name) => option(name))],
+        options: [...(['user', 'project', 'github', 'oidc', 'app', 'environment', 'workflow', 'branch', 'event', 'claim'] as const).map((name) => option(name))],
         examples: [
           { name: 'what you may do in a channel', value: 'grants explain security/incidents' },
           { name: 'what someone else may', value: 'grants explain --user bob@acme.com security/incidents' },
