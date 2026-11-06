@@ -12,6 +12,6 @@ const security = board({ backend: vercel(), name: 'security' })
 const acme = board({ backend: vercel(), team: 'acme', name: 'security' })
 ```
 
-`vb --name <board>` (or `BOARD_NAME`) picks it from the CLI, a name alone on `--scope`'s team, ahead of `BOARD_URL`.
+`vb --name <board>` (or `BOARD_NAME`) picks it from the CLI, a name alone on `--scope`'s team. `--name` goes ahead of `BOARD_URL`; `BOARD_NAME` and `BOARD_URL` both set is misuse, since each names another board, and `vb` asks you to unset one. `--scope` beside `--url` is misuse too: a board's URL names its team. A name several boards share says how to use one by its URL, on its team (`…/boards/<ID>?teamId=team_…`).
 
 A backend of your own reads both once, as `binding.name` and `binding.team` in `bind` (each null when left out).
