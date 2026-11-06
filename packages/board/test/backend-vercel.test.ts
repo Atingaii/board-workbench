@@ -763,6 +763,9 @@ describe('vercel()', () => {
       { kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production'] },
       { kind: 'github', repositoryId: '700001', repository: 'acme/web', workflow: 'ci.yml' },
     ])
+    // A project it names already gets the new environments.
+    const joined = await jb.updateGrant(grant.id, { add: [{ kind: 'project', project: 'prj_web', environments: ['preview'] }] })
+    expect(joined.grant.principals[1]).toEqual({ kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production', 'preview'] })
     const updated = await jb.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }], remove: [{ kind: 'project', project: 'web' }] })
     expect(updated.grant.principals.map((principal) => ('userId' in principal ? principal.userId : principal.kind))).toEqual(['u_ada', 'github', 'u_bob'])
     expect(await jb.explain('security/incidents', { user: 'bob@acme.com' })).toEqual({

@@ -318,7 +318,11 @@ export function fakeGrants(options: {
         }
         for (const input of body.add ?? []) {
           const added = resolve(input)
-          if (!principals.some((principal) => sameKey(principal, added))) principals.push(added)
+          // One it names already gets the new environments: an add never narrows.
+          const at = principals.findIndex((principal) => principal.kind === added.kind && (added.kind === 'project' ? (principal as typeof added).projectId === added.projectId : added.kind === 'all-projects' || sameKey(principal, added)))
+          const found = principals[at]
+          if (!found) principals.push(added)
+          else if ('environments' in found && 'environments' in added) principals[at] = { ...found, environments: [...new Set([...found.environments, ...added.environments])] }
         }
         if (principals.length === 0) throw new GrantRefused(400, 'grant_empty', `that leaves ${grant.id} naming no one`)
         const can = body.can === undefined ? grant.can : checkCan(body.can)
