@@ -29,7 +29,7 @@ import { HttpError, RejectedError, unauthorized } from './errors.ts'
 import type { ProjectIdentity } from './identity.ts'
 
 /** What decides a channel for a principal: the winning pattern and level, the grants there or the rule, and what they give. */
-export type Decided = { pattern: string | null; level: Level | null; grants: StoredGrant[]; rule: string | null; permissions: Permission[] }
+export type Decided = { pattern: string | null; over: string[]; level: Level | null; grants: StoredGrant[]; rule: string | null; permissions: Permission[] }
 
 /** Who may use a board, and what they may do: `board()`'s options for it. */
 export type PolicyOptions = {
@@ -212,16 +212,17 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       resolved = await authority.resolve(principal)
     } catch (error) {
       const status = (error as { status?: number }).status
-      if (status === 401 || status === 403) return { pattern: null, level: null, grants: [], rule: null, permissions: [] }
+      if (status === 401 || status === 403) return { pattern: null, over: [], level: null, grants: [], rule: null, permissions: [] }
       throw error
     }
     const scope = principal.scope === undefined ? null : compileAccess(parseScope(principal.scope))
     const allowed = (permissions: readonly Permission[]) => (scope ? permissions.filter((permission) => scope.can(permission, channel)) : [...permissions])
     if ('fixed' in resolved)
-      return { pattern: null, level: null, grants: [], rule: resolved.rule, permissions: allowed(PERMISSIONS.filter((permission) => resolved.fixed.can(permission, channel))) }
+      return { pattern: null, over: [], level: null, grants: [], rule: resolved.rule, permissions: allowed(PERMISSIONS.filter((permission) => resolved.fixed.can(permission, channel))) }
     const decision = decide(resolved.matched, channel)
     return {
       pattern: decision.pattern,
+      over: decision.over,
       level: decision.level,
       grants: decision.sources.flatMap((source) => ('grant' in source ? [source.grant] : [])),
       rule: decision.sources.flatMap((source) => ('rule' in source ? [source.rule] : []))[0] ?? null,

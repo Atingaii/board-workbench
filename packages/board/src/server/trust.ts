@@ -411,6 +411,7 @@ export function createTrust(options: {
       return {
         channel: query.channel,
         pattern: decided.pattern,
+        over: decided.over,
         level: decided.level,
         grants: shown.flatMap((grant) => {
           const row = grants[indexOf(grant.id, 'g') ?? 0]
