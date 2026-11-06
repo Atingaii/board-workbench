@@ -933,8 +933,9 @@ await team.revokeToken(token.id)
   (`user`, `project` and `environment`, `github` and `workflow`, `branch`,
   `event`, or `oidc` and `claim`): `{ channel, pattern, over, level, grants,
   rule, capped, can }`, `over` the other patterns its grants and rules name
-  that cover the channel, most specific first. It runs on the board, which
-  knows roles and membership.
+  that cover the channel, most specific first. A `github` query is a run on
+  main unless it names a `branch`. It runs on the board, which knows roles
+  and membership.
   `grants` is empty for a caller that can't list grants, since a grant names
   everyone it lets in; `rule` names the rule in code that decided; `pattern`
   and `level` are null where no grant decides (the board's own code and
