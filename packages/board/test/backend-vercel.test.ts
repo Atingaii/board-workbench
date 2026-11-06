@@ -369,7 +369,7 @@ describe('vercel()', () => {
     await expect(pong.post('dev', { text: 'hello' })).rejects.toMatchObject({
       status: 403,
       code: 'board_not_granted',
-      message: "the team's board doesn't let this project in (prj_pong, production).",
+      message: "this project has no access to the team's board (prj_pong, production).",
       hint: 'Someone who manages the board can grant it.',
     })
     const api = fakeMessageboard({ boardId: null })
@@ -411,7 +411,7 @@ describe('vercel()', () => {
         status: 403,
         code: 'board_not_granted',
         origin: 'handle',
-        message: "board security doesn't let this project in (prj_pong, preview).",
+        message: 'this project has no access to board security (prj_pong, preview).',
         hint: 'Someone who manages the board can grant it.',
       })
     })
@@ -446,8 +446,8 @@ describe('vercel()', () => {
         status: 409,
         code: 'board_name_taken',
         origin: 'handle',
-        message: "there's a board named Vault you can't see.",
-        hint: 'Ask someone who can see it for access.',
+        message: 'the board name Vault is taken.',
+        hint: 'Pick another name, or ask whoever can see it for access.',
       })
       // Its member still reads it, and nothing was posted there.
       expect((await named(api, 'vault', 'user:u_ada').messages({ channel: 'dev' })).messages).toEqual([])
@@ -457,17 +457,11 @@ describe('vercel()', () => {
       expect(() => board({ ensure: true, backend: vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') }) })).toThrow('ensure makes the board `name` names: pass name too')
     })
 
-    it('picks none of the boards an older name is shared by, and names them', async () => {
+    it('takes the first board the API lists for a name an older board shares, and makes none', async () => {
+      // The API lists the oldest first: here the default board, General, made before brd_old.
       const api = fakeMessageboard({ boards: [{ name: 'general', id: 'brd_old', granted: ['prj_pong:production'] }] })
-      for (const principal of ['user:u_jb', 'project:prj_pong:production'])
-        await expect(named(api, 'General', principal).post('dev', { text: 'hi' })).rejects.toMatchObject({
-          status: 409,
-          code: 'ambiguous_board_name',
-          origin: 'handle',
-          message: expect.stringMatching(/brd_test, brd_old|brd_old, brd_test/),
-          // Its way out is on this team: a URL that named none would reach the login's default team.
-          hint: expect.stringContaining(`${API}/v1/messageboard/boards/<ID>?teamId=team_test`),
-        })
+      for (const principal of ['user:u_jb', 'project:prj_pong:production']) await named(api, 'General', principal).post('dev', { text: `from ${principal}` })
+      expect((await handleOn(api).messages({ channel: 'dev' })).messages.map((m) => m.text)).toEqual(['from user:u_jb', 'from project:prj_pong:production'])
       expect(lookups(api, 'POST /boards/ensure')).toBe(0)
     })
 
