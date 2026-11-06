@@ -1,10 +1,6 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
-import { memory } from '../src/store/memory.ts'
 import { describe, expect, it } from 'vitest'
-import { vercelProject } from '../src/access/index.ts'
-// The engine itself, as a2() starts it.
-import { mount as board } from './harness.ts'
-import { BOARD_URL, caller, PROJECT_ID, TEAM_ID, testBoard } from './harness.ts'
+import { BOARD_URL, caller, TEAM_ID, testBoard } from './harness.ts'
 
 // Vercel signs every team's tokens, each under its own issuer
 // (`https://oidc.vercel.com/<team>`), and production accepts any of them.
@@ -31,40 +27,29 @@ const deployment = (team: string, teamId: string, project: string, projectId: st
 
 const ours = () => deployment('test', TEAM_ID, 'marketing', 'prj_marketing')
 const theirs = () => deployment('attacker', 'team_attacker', 'marketing', 'prj_attacker')
-const access = [vercelProject({ project: 'marketing', environments: ['production'], can: 'all' })]
 
-describe('a trusted Vercel project named without its team', () => {
-  const configured = () => testBoard({ auth, access })
-
-  it("trusts the board's own team's project of that name", async () => {
-    const me = await caller(configured().fetch, await ours())('GET', '/me')
-    expect({ status: me.status, actor: me.body?.actor }).toEqual({
-      status: 200,
-      actor: 'vercel:project:prj_marketing:production',
+describe("a Vercel grant, across teams' issuers", () => {
+  it("lets in another team's project it names by ID, and no project of the same name", async () => {
+    const board = testBoard({ auth })
+    const call = async (token: string) => caller(board.fetch, token)('GET', '/me')
+    expect((await call(await theirs())).body.error).toEqual({
+      code: 'forbidden',
+      message: "this token can't use this board: no grant lets in project prj_attacker in production",
+      hint: 'Grant it: vb grants create vercel --claim project_id=prj_attacker --claim environment=production',
     })
+    await board.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_attacker', environment: 'production' }, can: 'all' })
+    const me = await call(await theirs())
+    expect({ status: me.status, actor: me.body?.actor }).toEqual({ status: 200, actor: 'vercel:project:prj_attacker:production' })
+    // The board's own team's project that took the same name isn't the grant's.
+    expect((await call(await ours())).status).toBe(403)
   })
 
-  it("doesn't trust another team's project that took the same name", async () => {
-    const call = caller(configured().fetch, await theirs())
+  it('keeps one that names owner_id to that team, whichever projects it lists', async () => {
+    const board = testBoard({ auth })
+    await board.createGrant({ issuer: 'vercel', claims: { project_id: ['prj_marketing', 'prj_attacker'], environment: 'production', owner_id: TEAM_ID }, can: 'all' })
+    expect((await caller(board.fetch, await ours())('POST', '/messages', { channel: 'general', text: 'deploy approved' })).status).toBe(201)
+    const call = caller(board.fetch, await theirs())
     expect((await call('GET', '/me')).status).toBe(403)
     expect((await call('POST', '/messages', { channel: 'general', text: 'deploy approved' })).status).toBe(403)
-  })
-
-  it('trusts a project named by ID on any team, since IDs are unique', async () => {
-    const { fetch } = testBoard({ auth, access: [vercelProject({ project: 'prj_attacker', can: 'all' })] })
-    expect((await caller(fetch, await theirs())('GET', '/me')).status).toBe(200)
-  })
-
-  it('learns its team from the platform token for its own project', async () => {
-    const { fetch } = board({ store: memory(), url: BOARD_URL, project: { id: PROJECT_ID }, auth, access })
-    const call = async (token: string, platform?: string) =>
-      (await caller(fetch, token, platform ? { 'x-vercel-oidc-token': platform } : {})('GET', '/me')).status
-    // With no team to scope it to, a name matches nothing.
-    expect(await call(await ours())).toBe(403)
-    // A token for some other project says nothing about the board's team.
-    expect(await call(await theirs(), await deployment('attacker', 'team_attacker', 'x', 'prj_x', 'https://vercel.com/attacker'))).toBe(403)
-    const platform = await deployment('test', TEAM_ID, 'board', PROJECT_ID, 'https://vercel.com/test')
-    expect(await call(await ours(), platform)).toBe(200)
-    expect(await call(await theirs(), platform)).toBe(403)
   })
 })

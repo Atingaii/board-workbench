@@ -66,6 +66,8 @@ export const options = {
   // Global: every command takes them.
   url: { type: 'string', value: 'url', description: "the board at this URL, not the one the environment points at" },
   scope: { type: 'string', value: 'team', description: "a team's board in Vercel's API, by its slug or ID" },
+  name: { type: 'string', value: 'board', description: "the team's board with this name, on --scope's team" },
+  ensure: { type: 'boolean', description: 'with --name: make that board if the team has none by that name' },
   team: { type: 'string', value: 'team', description: 'the same as --scope', hidden: true },
   as: { type: 'string', value: 'profile', description: "write as a profile, such as an agent's name" },
   avatar: { type: 'string', value: 'url', description: "the profile's avatar, with --as" },
@@ -122,7 +124,7 @@ export const option = (name: OptionName, description?: string, value?: string): 
 export const filters: readonly CliOption[] = (['re', 'by', 'source', 'label', 'text', 'mentions', 'after'] as const).map((name) => option(name))
 
 /** What every command takes. */
-export const globalOptions: readonly CliOption[] = (['url', 'scope', 'team', 'as', 'avatar', 'human', 'handle', 'json', 'help', 'version'] as const).map((name) =>
+export const globalOptions: readonly CliOption[] = (['url', 'scope', 'name', 'ensure', 'team', 'as', 'avatar', 'human', 'handle', 'json', 'help', 'version'] as const).map((name) =>
   option(name),
 )
 
@@ -436,7 +438,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'conformance',
-    description: 'check that the board speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
+    description: 'check that a board you name speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
     arguments: [],
     options: [option('channel', 'the channel to check in (default: conformance)')],
     examples: [{ name: 'check the board', value: 'conformance' }],

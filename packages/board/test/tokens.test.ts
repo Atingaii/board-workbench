@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { githubActions } from '../src/server/auth.ts'
 import { caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -33,7 +32,7 @@ describe('tokens', () => {
   })
 
   it("never does more than its minter can now: a workflow's token loses what its grant gave", async () => {
-    const { julian, as, mint } = await setUp({ access: [] })
+    const { julian, as, mint } = await setUp()
     const { body } = await julian('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'] } })
     const workflow = as(await workflowToken())
     const { secret } = await mint({ name: 'ci-helper', can: 'all' }, workflow)
@@ -60,7 +59,7 @@ describe('tokens', () => {
   })
 
   it('lists what each token may do now, not the most it could', async () => {
-    const { julian, as, mint } = await setUp({ access: [] })
+    const { julian, as, mint } = await setUp()
     const { body } = await julian('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'] } })
     const minted = await mint({ name: 'ci-helper', can: 'all' }, as(await workflowToken()))
     expect((minted.token as unknown as { can: unknown }).can).toEqual({ 'ci/': ['read', 'post'] })
@@ -136,7 +135,8 @@ describe('tokens', () => {
   })
 
   it("lists its minter's tokens for them, everyone's with manage, and never a secret", async () => {
-    const { board, julian, as, mint } = await setUp({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'] } })] })
+    const { board, julian, as, mint } = await setUp()
+    await julian('POST', '/grants', { issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'] } })
     const workflow = as(await workflowToken())
     const theirs = await mint({ name: 'theirs' }, workflow)
     const mine = await mint({ name: 'mine' })
