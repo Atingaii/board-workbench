@@ -4,7 +4,7 @@ import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
-import { PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
+import { compileAccess, parsePattern, PERMISSIONS, type Access, type AccessSummary, type Permission } from './access.ts'
 import { type Backend, type BoardBinding, type Caller, type Identity, type ProtocolMethods } from './backend.ts'
 import { callerProfile, PROJECTS_OWN } from './backend-http.ts'
 import { fileName, mediaType } from '../contract/files.ts'
@@ -183,21 +183,37 @@ const notSupported = (what: string) => new HttpError(501, 'not_supported', `Verc
 const DEFAULT_CAN: AccessSummary = { '*': ['read', 'post', 'react', 'label'] }
 
 /**
- * What the API says these credentials may do, in board's words: each channel pattern's permissions
- * board knows, the rest dropped. `DEFAULT_CAN` when it says nothing board reads as one.
+ * What the API says these credentials may do, in board's words: each channel pattern board can
+ * read, with the permissions board knows, the rest dropped, and what those imply. `DEFAULT_CAN`
+ * when it says nothing board reads as one.
  */
 function canOf(can: unknown): AccessSummary {
   if (typeof can !== 'object' || can === null || Array.isArray(can)) return DEFAULT_CAN
   const known = new Set<string>(PERMISSIONS)
   const out: Record<string, Permission[]> = {}
-  for (const [pattern, permissions] of Object.entries(can))
-    if (Array.isArray(permissions)) out[pattern] = permissions.filter((permission): permission is Permission => known.has(permission))
-  return out
+  for (const [pattern, permissions] of Object.entries(can)) {
+    if (!Array.isArray(permissions)) continue
+    // A pattern board can't read would make whatever compiles this summary throw: it's dropped.
+    try {
+      parsePattern(pattern)
+    } catch {
+      continue
+    }
+    out[pattern] = permissions.filter((permission): permission is Permission => known.has(permission))
+  }
+  // Implications closed and in board's order, as board's own `me` says it.
+  return compileAccess(out).summary()
 }
 
-/** When the API says these credentials stop working, as an ISO time: from milliseconds or a time it gives, null for none. */
+/** Epoch milliseconds before this are the year 2001: a number under it is epoch seconds, as a JWT's `exp` is. */
+const SECONDS_BEFORE = 1e12
+
+/**
+ * When the API says these credentials stop working, as an ISO time: from epoch milliseconds (or
+ * epoch seconds, under `SECONDS_BEFORE`) or a time it gives, null for none.
+ */
 function expiryOf(at: unknown): string | null {
-  if (typeof at === 'number' && Number.isFinite(at)) return new Date(at).toISOString()
+  if (typeof at === 'number' && Number.isFinite(at)) return new Date(at < SECONDS_BEFORE ? at * 1000 : at).toISOString()
   if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) return new Date(at).toISOString()
   return null
 }

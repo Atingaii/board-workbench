@@ -995,8 +995,10 @@ does. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers and `read` for viewers, and a
 project's read, post, react, and label), and `expiresAt` in milliseconds, null
-until board tokens. Where it says neither, read, post, react, and label
-everywhere, with no expiry.
+until board tokens. Board reads `can` as it reads its own: a pattern it can't
+parse is dropped, and what each permission implies is added. An `expiresAt`
+under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
+post, react, and label everywhere, with no expiry.
 
 ### One person, several actors
 

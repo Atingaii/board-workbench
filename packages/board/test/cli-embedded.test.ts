@@ -318,7 +318,7 @@ describe('the embedded CLI', () => {
       const whoami = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toMatch(/^token +expires in 1h 30m$/m)
-      expect(whoami.stdout).toMatch(/^can +dev\/  read post\n +ci\/ +read$/m)
+      expect(whoami.stdout).toMatch(/^can +ci\/ +read\n +dev\/  read post$/m)
       // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads.
       const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
       fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
