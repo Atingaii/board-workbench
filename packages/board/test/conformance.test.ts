@@ -8,11 +8,11 @@ import { fakeQueue } from './queue.ts'
 
 type Fetch = (request: Request) => Promise<Response>
 
-/** A board with a scheduler that lets in v0's production deployments and basehub-ai/www's runs everywhere, as their own grants. */
+/** A board with a scheduler that lets in v0's production deployments and acme/web's runs everywhere, as their own grants. */
 async function ownPrincipals() {
   const team = testBoard({ scheduler: fakeQueue().scheduler })
   await team.createGrant({ principals: [{ kind: 'project', project: 'prj_v0', environments: ['production'] }], can: { '*': 'all' } })
-  await team.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': 'all' } })
+  await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
   return team
 }
 
@@ -254,7 +254,7 @@ describe('the conformance kit', () => {
     expect((await team.messages({ channel: 'conformance', limit: 10 })).messages).toEqual([])
     expect((await team.grants()).map((grant) => grant.id)).toEqual(before)
     const asRun = await clientAs(team.fetch, () => workflowToken())
-    await expect(conformance(asRun, { principals: { repository: 'basehub-ai/www' } })).rejects.toThrow("principals.repository is this run's own repository, basehub-ai/www")
+    await expect(conformance(asRun, { principals: { repository: 'acme/web' } })).rejects.toThrow("principals.repository is this run's own repository, acme/web")
   })
 
   it("fails a board that lets a token grant past its can, and still revokes what that board made", async () => {

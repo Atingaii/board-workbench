@@ -385,7 +385,7 @@ describe('a wake-up through Deployment Protection', () => {
       },
     }
     const remote = testBoard({ scheduler: fakeQueue().scheduler, transport })
-    await remote.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': 'all' } })
+    await remote.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
     await remote.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
     await grant(remote, 'prj_v0', 'all')
     const hosted = testBoard({

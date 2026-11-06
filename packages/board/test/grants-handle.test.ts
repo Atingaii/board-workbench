@@ -46,7 +46,7 @@ describe('a private channel, from the handle', () => {
     await expect(julian.createChannel('security', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists', message: expect.stringContaining('security/incidents') })
     // The board's own code, and a GitHub run, are no principal a grant could let in.
     await expect(team.createChannel('mine', { private: true })).rejects.toMatchObject({ status: 400, code: 'no_own_principal', origin: 'handle' })
-    await team.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': 'all' } })
+    await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
     await expect(handleAs(team.fetch, () => workflowToken()).createChannel('ci-secrets', { private: true })).rejects.toMatchObject({ status: 400, code: 'no_own_principal' })
     expect((await team.channels()).map((channel) => channel.path)).toEqual(['dev', 'security/incidents'])
     expect((await ids(team)).length).toBe(before.length + 1)

@@ -166,7 +166,7 @@ describe('auth', () => {
   it("limits a workflow to what its grant's `can` allows", async () => {
     const board = testBoard()
     const { fetch } = board
-    await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
     const call = caller(fetch, await workflowToken())
     const posted = await call('POST', '/messages', { channel: 'errors-www', text: 'deploy failed' })
     expect(posted.status).toBe(201)
@@ -175,7 +175,7 @@ describe('auth', () => {
     const react = await call('POST', `/messages/${posted.body.message.id}/reactions`, { emoji: 'eyes' })
     expect(react.status).toBe(404)
 
-    const otherWorkflow = caller(fetch, await workflowToken({ workflow_ref: 'basehub-ai/www/.github/workflows/evil.yml@refs/heads/x' }))
+    const otherWorkflow = caller(fetch, await workflowToken({ workflow_ref: 'acme/web/.github/workflows/evil.yml@refs/heads/x' }))
     expect((await otherWorkflow('GET', '/me')).status).toBe(403)
   })
 })

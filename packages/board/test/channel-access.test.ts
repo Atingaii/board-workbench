@@ -123,7 +123,7 @@ describe('what a grant lets in', () => {
     )
     expect(await caller(fetch, await workflowToken())('GET', '/me')).toMatchObject({
       status: 403,
-      body: { error: { message: "this token can't use this board: no grant lets in basehub-ai/www", hint: 'Grant it: vb grants create --github basehub-ai/www' } },
+      body: { error: { message: "this token can't use this board: no grant lets in acme/web", hint: 'Grant it: vb grants create --github acme/web' } },
     })
     expect(await caller(fetch, await deploymentToken())('GET', '/me')).toMatchObject({
       status: 403,
@@ -217,7 +217,7 @@ describe('x-board-scope', () => {
   })
 
   it('never widens it', async () => {
-    const { fetch } = await granting({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': ['post'] } })
+    const { fetch } = await granting({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': ['post'] } })
     const widened = caller(fetch, await workflowToken(), { 'x-board-scope': '*=all' })
     expect((await widened('GET', '/me')).body.can).toEqual({ '*': ['post'] })
   })

@@ -47,7 +47,7 @@ async function setup() {
   const provider = new Opaque()
   const board = testBoard({ sync: { tickets: provider } })
   // The outsider's workflow may read only open.
-  await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { open: ['read'] } })
+  await board.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { open: ['read'] } })
   const ada = caller(board.fetch, await personToken())
   const outsider = caller(board.fetch, await workflowToken())
   const webhook = (body: unknown) => board.fetch(new Request(`${BOARD_URL}/webhooks/tickets`, { method: 'POST', body: JSON.stringify(body) }))

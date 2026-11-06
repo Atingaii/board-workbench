@@ -513,12 +513,12 @@ describe('cli', () => {
 
   it('says what a token can do when it is less than everything', async () => {
     const granted = testBoard()
-    await granted.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
+    await granted.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
     const board = await serve(granted.fetch)
     try {
       const { stdout, code } = await vb(['whoami'], { BOARD_URL: `${board.origin}/api/board`, BOARD_TOKEN: await workflowToken() })
       expect(code).toBe(0)
-      expect(stdout).toContain('basehub-ai/www (github:repo:123456)\n')
+      expect(stdout).toContain('acme/web (github:repo:123456)\n')
       expect(stdout).toContain('source  BOARD_TOKEN\n')
       expect(stdout).toMatch(/\ncan     ci\/        read post\n        ci\/secret  nothing\n        feedback   post\n$/)
       // --json carries the same facts.

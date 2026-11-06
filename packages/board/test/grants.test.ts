@@ -37,9 +37,9 @@ describe('grants', () => {
     const { person, as } = await setUp()
     const workflow = await as(workflowToken())
     expect((await workflow('GET', '/me')).status).toBe(403)
-    const set = await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { 'ci/': ['read', 'post'] } })
+    const set = await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
     expect(set.status).toBe(200)
-    expect(set.body.grant).toMatchObject({ principals: [{ kind: 'github', repository: 'basehub-ai/www', repositoryId: null }], can: { 'ci/': ['read', 'post'] }, by: 'vercel:user:u_julian' })
+    expect(set.body.grant).toMatchObject({ principals: [{ kind: 'github', repository: 'acme/web', repositoryId: null }], can: { 'ci/': ['read', 'post'] }, by: 'vercel:user:u_julian' })
     expect((await workflow('POST', '/messages', { channel: 'ci', text: 'green' })).status).toBe(201)
     expect((await workflow('POST', '/messages', { channel: 'dev', text: 'not here' })).status).toBe(403)
     expect((await person('POST', `/grants/${set.body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
@@ -299,10 +299,10 @@ describe('grants', () => {
 
   it('matches a GitHub run by its workflow, branch, and event', async () => {
     const { person, as } = await setUp()
-    await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'basehub-ai/www', workflow: 'deploy.yml', branch: 'main', event: 'push' }], can: { 'ci/': ['post'] } })
+    await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web', workflow: 'deploy.yml', branch: 'main', event: 'push' }], can: { 'ci/': ['post'] } })
     const posts = async (claims: Record<string, unknown>) => (await (await as(workflowToken(claims)))('POST', '/messages', { channel: 'ci', text: 'run' })).status
     expect(await posts({})).toBe(201)
-    expect(await posts({ workflow_ref: 'basehub-ai/www/.github/workflows/other.yml@refs/heads/main' })).toBe(403)
+    expect(await posts({ workflow_ref: 'acme/web/.github/workflows/other.yml@refs/heads/main' })).toBe(403)
     expect(await posts({ ref: 'refs/heads/feature' })).toBe(403)
     expect(await posts({ event_name: 'pull_request' })).toBe(403)
   })
