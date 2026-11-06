@@ -543,6 +543,16 @@ $ vb grants revoke g4
 revoked g4
 ```
 
+Vercel's board keeps a grant for `--github` or `--oidc`, but doesn't sign in
+GitHub or OIDC callers yet, so `create` says so under it, and with `--json` in
+`warnings` (`callers_not_signed_in`):
+
+```text
+$ vb grants create --github acme/web --can 'ci/=post' --scope acme
+created g4  --github acme/web  ci/=post
+note  Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does
+```
+
 `explain` says which grant decides a channel: the pattern that won and those
 it won over, the closest grants there, and what they give. It explains you, or
 with `manage` at `*`, the one `--user`, `--project` (in one `--environment`),

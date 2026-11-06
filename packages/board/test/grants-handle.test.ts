@@ -132,6 +132,29 @@ describe('a private channel, from the handle', () => {
     expect(await team.channels()).toEqual([])
   })
 
+  it('takes its grants back, and makes nothing, when someone adds themselves to its own grant before its lock lands', async () => {
+    const team = testBoard()
+    // Ada manages the still-open path, so she can add herself to the creator's grant: once it's
+    // made, before it's listed again, or just before the lock reaches the board.
+    for (const [path, when] of [['vault', 'listing'], ['safe', 'lock']] as const) {
+      let added = false
+      const adding: Fetch = async (request) => {
+        const onGrants = new URL(request.url).pathname.endsWith('/grants')
+        const locking = request.method === 'POST' && onGrants && (await request.clone().text()).includes('"everyone"')
+        const own = (await team.grants()).find((grant) => Object.hasOwn(grant.can, `${path}/`) && grant.principals.some((principal) => principal.kind === 'user'))
+        if (!added && own && (when === 'lock' ? locking : request.method === 'GET' && onGrants)) {
+          added = (await caller(team.fetch, await personToken('u_ada'))('PATCH', `/grants/${own.id}`, { add: [{ kind: 'user', userId: 'u_ada' }] })).status === 200
+        }
+        return team.fetch(request)
+      }
+      await expect(handleAs(adding, () => personToken()).createChannel(path, { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_granted' })
+      expect(added).toBe(true)
+      // The grant she's on and the lock are both gone, and no channel was made.
+      expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
+      expect(await team.channels()).toEqual([])
+    }
+  })
+
   it('never shuts its creator out when a step fails part way', async () => {
     const team = testBoard()
     let grantsPosted = 0

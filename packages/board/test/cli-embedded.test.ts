@@ -653,6 +653,30 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("notes that Vercel's board doesn't sign in GitHub or OIDC callers yet, when a grant names one", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main([...args, '--scope', 'test'], { name: 'board', commands: local }))
+    const note = "Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does"
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const github = await run('grants', 'create', '--github', 'acme/web', '--can', 'ci/=post')
+      expect(github).toMatchObject({ code: 0, stdout: expect.stringMatching(new RegExp(`^created g4  --github acme/web  ci/=post\\nnote  ${note}\\n$`)) })
+      const oidc = JSON.parse((await run('grants', 'create', '--oidc', 'https://issuer.example', '--claim', 'sub=ci', '--can', 'ci/=read', '--json')).stdout)
+      expect(oidc).toMatchObject({ outcome: 'created', warnings: [{ reason: 'callers_not_signed_in', message: note }] })
+      // A person signs in: no note.
+      expect((await run('grants', 'create', '--user', 'ada@acme.com', '--can', 'ci/=read')).stdout).not.toContain('note')
+      expect(JSON.parse((await run('grants', 'create', '--user', 'bob@acme.com', '--can', 'ci/=read', '--json')).stdout).warnings).toBeUndefined()
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')

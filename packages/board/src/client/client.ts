@@ -362,7 +362,8 @@ export function createBoardClient(options: ClientOptions) {
      * keeps no grants fails on the listing, with nothing made. Once its own grant is made it lists
      * them again, and takes its own back when another reaches the path, so of two callers making
      * the same channel at once, at most one keeps a way in; and once the lock is made, it lists them
-     * a last time, and takes both back when a grant made in between still reaches the path.
+     * a last time, and takes both back when a grant made in between still reaches the path, or its
+     * own two aren't as it made them (someone added themselves to its grant, or opened the lock).
      */
     createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
       if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
@@ -390,18 +391,25 @@ export function createBoardClient(options: ClientOptions) {
           { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
         )
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      // What reaches the path besides its own grants as it made them: one someone changed (adding
+      // themselves to it, or opening the lock) lets them in as much as a grant of their own would.
+      const others = (grants: GrantView[], mine: GrantView[]) =>
+        grants.filter((grant) => {
+          const made = mine.find((ours) => ours.id === grant.id)
+          return made === undefined || JSON.stringify([grant.principals, grant.can]) !== JSON.stringify([made.principals, made.can])
+        })
       // Someone making it at the same time: whoever finds the other's grant takes its own back, so at
       // most one of them keeps a way in, and if each finds the other, neither does.
-      const raced = (await reaching()).filter((grant) => grant.id !== own.grant.id)
+      const raced = others(await reaching(), [own.grant])
       if (raced.length > 0) {
         await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
         throw granted(raced)
       }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
       // Once the lock is there, no one it shuts out can grant themselves past it, so this listing is
-      // the last word: a grant made before the lock landed would still let someone in, so it isn't
-      // private, and both of its grants go, the lock first.
-      const late = (await reaching()).filter((grant) => grant.id !== own.grant.id && grant.id !== closed.grant.id)
+      // the last word: a grant made or changed before the lock landed would still let someone in, so
+      // it isn't private, and both of its grants go, the lock first.
+      const late = others(await reaching(), [own.grant, closed.grant])
       if (late.length > 0) {
         for (const id of [closed.grant.id, own.grant.id]) await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(id)}/revoke`, { body: {} })
         throw granted(late)
