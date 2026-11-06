@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { githubActions, oidc, vercelProject, type Known } from '../src/server/auth.ts'
 import { createServer } from 'experimental-a2/server'
 import { ACCESS_SESSION, accessContract } from '../src/contract/contract.ts'
+import { memory } from '../src/store/memory.ts'
 import { caller, deploymentToken, localUserToken, oidcToken, OIDC_ISS, personToken, testBoard, testKeys, workflowToken } from './harness.ts'
 
 /**
@@ -88,41 +89,106 @@ describe('grants', () => {
     expect((await (await as(deploymentToken('web', 'prj_web', 'production')))('GET', '/me')).body.can).toEqual({ '*': ['read'], 'ci/': [] })
   })
 
-  it('changes a grant only with manage wherever it applies, under it too wherever the caller is narrower', async () => {
+  it('lets a member grant on * once a channel is closed to everyone, which the grant then leaves closed', async () => {
     const { owner, as } = await setUp()
-    await owner('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_ops', environments: ['production'] }], can: { '*': 'all' } })
-    const ops = await as(deploymentToken('ops', 'prj_ops', 'production'))
-    const readers = await ops('POST', '/grants', { principals: [everyone], can: { '*': ['read'] } })
-    expect(readers.status).toBe(200)
-    const lock = await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
-    // Once security/ is closed to ops, a grant on * would reach it there for whoever it names: ops changes none.
-    expect((await ops('PATCH', `/grants/${readers.body.grant.id}`, { can: { '*': ['read', 'react'] } })).status).toBe(403)
-    expect((await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })).status).toBe(403)
-    expect((await ops('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })).status).toBe(403)
-    expect((await ops('POST', `/grants/${lock.body.grant.id}/revoke`, {})).status).toBe(403)
-    // Where it manages all of it, it still may.
-    expect((await ops('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'dev/': 'all' } })).status).toBe(200)
-    // The owner always may.
-    expect((await owner('PATCH', `/grants/${readers.body.grant.id}`, { can: { '*': ['read', 'react'] } })).status).toBe(200)
-    expect((await owner('GET', '/grants')).body.grants.find((grant: { id: string }) => grant.id === lock.body.grant.id).can).toEqual({ 'security/': [] })
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    await owner('POST', '/grants', { principals: [user('u_alice')], can: { 'security/': 'all' } })
+    const bob = await as(personToken('u_bob'))
+    const run = { kind: 'github', repository: 'acme/web' }
+    const made = await bob('POST', '/grants', { principals: [run], can: { '*': 'all' } })
+    expect(made.status).toBe(200)
+    expect((await bob('PATCH', `/grants/${made.body.grant.id}`, { can: { '*': ['read', 'post'] } })).status).toBe(200)
+    // The run it lets in gets nothing in security/: everyone's grant there is more specific than *.
+    const me = (await (await as(workflowToken({ repository: 'acme/web', repository_id: '99' })))('GET', '/me')).body
+    expect(me.can).toEqual({ '*': ['read', 'post'], 'security/': [] })
+    // Nothing on security/ or under it, which Bob doesn't manage.
+    for (const can of [{ 'security/': ['read'] }, { 'security/incidents': ['read'] }, { '*': 'all', 'security/': 'all' }])
+      expect([JSON.stringify(can), (await bob('POST', '/grants', { principals: [run], can })).status]).toEqual([JSON.stringify(can), 403])
+  })
+
+  it("lets no one grant past a grant that narrows them, theirs or everyone's", async () => {
+    const { owner, as } = await setUp()
+    const run = { kind: 'github', repository: 'acme/web' }
+    // Bob's own grant closes security/ to him: a grant on * for his run would open it.
+    await owner('POST', '/grants', { principals: [user('u_bob')], can: { 'security/': [] } })
+    const bob = await as(personToken('u_bob'))
+    expect((await bob('POST', '/grants', { principals: [run], can: { '*': 'all' } })).status).toBe(403)
+    // Carol's closes security/incidents to her, where everyone reads: anyone she lets in would read it.
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })
+    await owner('POST', '/grants', { principals: [user('u_carol')], can: { 'security/incidents': [] } })
+    const carol = await as(personToken('u_carol'))
+    expect((await carol('POST', '/grants', { principals: [run], can: { 'dev/': ['post'] } })).status).toBe(403)
+  })
+
+  it('judges a grant on the grants it lands on, so a change that narrows its maker in between counts', async () => {
+    // Just before Bob's grant first lands, the owner closes security/ to him: his write finds the log moved on, and looks again.
+    const base = memory()
+    let between: (() => Promise<unknown>) | null = null
+    const log = new Proxy(base.log, {
+      get(target, key) {
+        if (key !== 'append') {
+          const value = Reflect.get(target, key)
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+        return async (...args: Parameters<typeof base.log.append>) => {
+          const hook = between
+          if (hook && /grant\.created.*u_bob/.test(JSON.stringify(args[1]))) {
+            between = null
+            await hook()
+          }
+          return target.append(...args)
+        }
+      },
+    })
+    const { owner, as } = await setUp({ store: { ...base, log, close: () => base.close() } })
+    const bob = await as(personToken('u_bob'))
+    between = () => owner('POST', '/grants', { principals: [user('u_bob')], can: { 'security/': [] } })
+    const made = await bob('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { '*': 'all' } })
+    expect(between).toBeNull()
+    expect([made.status, made.body.error?.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
+  })
+
+  it('revokes, or removes from, a grant with manage where it applies, however narrow the caller is elsewhere', async () => {
+    const { owner, as } = await setUp()
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': ['read'] } })
+    await owner('POST', '/grants', { principals: [user('u_carol')], can: { 'security/incidents': [] } })
+    const wide = await owner('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }, { kind: 'github', repository: 'acme/api' }], can: { '*': ['read'] } })
+    const carol = await as(personToken('u_carol'))
+    expect((await carol('PATCH', `/grants/${wide.body.grant.id}`, { add: [{ kind: 'github', repository: 'acme/cli' }] })).status).toBe(403)
+    expect((await carol('PATCH', `/grants/${wide.body.grant.id}`, { remove: [{ kind: 'github', repository: 'acme/api' }] })).status).toBe(200)
+    expect((await carol('POST', `/grants/${wide.body.grant.id}/revoke`, {})).body).toEqual({ revoked: true })
   })
 
   it('lets no token reach past its own can by granting someone else', async () => {
-    const { person, as } = await setUp()
+    const { owner, person, as } = await setUp()
     // Manage at *, but nothing in security/: a grant on * for a run it controls would be all of security/ too.
     const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'security/': [] } })
     const scoped = await as(minted.body.secret)
     const run = { kind: 'github', repository: 'acme/web' }
     expect((await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })).status).toBe(403)
     expect((await scoped('POST', '/grants', { principals: [run], can: { 'dev/': 'all' } })).status).toBe(200)
+    // Not even once security/ is closed to everyone: whoever lifts the lock would open it to the run, and not to the token.
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    const locked = await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })
+    expect([locked.status, locked.body.error.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
+  })
+
+  it("lets no token let in a principal it controls where everyone gets more than the token has", async () => {
+    const { owner, person, as } = await setUp()
+    await owner('POST', '/grants', { principals: [everyone], can: { 'secret/': ['read'] } })
+    const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'secret/': [] } })
+    const scoped = await as(minted.body.secret)
+    // Nothing narrower is under dev/, but the run it lets in would read secret/ through everyone's grant.
+    expect((await scoped('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'dev/': ['post'] } })).status).toBe(403)
+    expect((await (await as(workflowToken({ repository: 'acme/web', repository_id: '99' })))('GET', '/me')).status).toBe(403)
   })
 
   it("lets the board's local user, its owner, change any grant, though a closed channel still takes a grant to read", async () => {
     const { owner, person, as } = await setUp()
-    await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
-    // A person on the team is no owner: once security/ is closed to them, they open it to no one, and keep g1.
+    const lock = await person('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    // A person on the team is no owner: once security/ is closed to them, they open it to no one, and can't undo it.
     expect((await person('POST', '/grants', { principals: [user('u_julian')], can: { 'security/': 'all' } })).status).toBe(403)
-    expect((await person('POST', '/grants/g1/revoke', {})).status).toBe(403)
+    expect((await person('POST', `/grants/${lock.body.grant.id}/revoke`, {})).status).toBe(403)
     expect((await owner('POST', '/messages', { channel: 'security', text: 'locked out' })).status).toBe(403)
     // With g1 gone, the local user manages nothing, and is still the owner.
     expect((await owner('POST', '/grants/g1/revoke', {})).body).toEqual({ revoked: true })

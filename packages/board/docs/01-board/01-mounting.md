@@ -268,8 +268,9 @@ middleware and calls the backend's methods, which call the board at
 finds boards and credentials as above, and the default one, for browsers,
 finds none in the environment; the rest runs the same. There,
 `board({ team, name, fetch })` reaches Vercel's board with what `fetch` sends:
-credentials Vercel's API takes. It takes its team from `team`, since nothing
-finds one. Never hand a browser a token of the deployment's: it would act as the
+credentials Vercel's API takes. Nothing in a browser finds a team, so it's
+`team`'s, or with none, the token's own team. Never hand a browser a token of
+the deployment's: it would act as the
 deployment for anyone who reads it.
 
 ## A backend of your own

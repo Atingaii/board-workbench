@@ -498,7 +498,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'messages',
     name: 'conformance',
-    description: 'check that the board speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
+    description: 'check that a board you name speaks the protocol (1 if a check fails): it posts, and deletes what it posted',
     arguments: [],
     options: [option('channel', 'the channel to check in (default: conformance)')],
     examples: [{ name: 'check the board', value: 'conformance' }],

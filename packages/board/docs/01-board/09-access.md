@@ -211,12 +211,14 @@ more specific pattern decides first. The rule that matches a principal in
   they are (a project whatever its environments), and replaces its `can`.
   Adding a project it names already adds its environments; to narrow one,
   remove it and add it back in the same update.
-- **Changing a grant takes `manage` wherever it applies:** at each pattern it
-  names, and under each at every pattern where your access is narrower, by
-  your grants or your token. Before and after, for an update. A grant names
-  others, who inherit none of your exclusions, so it never reaches where you
-  couldn't. Naming an `oidc` principal takes `manage` everywhere, since the
-  board then fetches its issuer's keys. Listing grants takes `manage` at `*`.
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. So making or widening a grant takes `manage` at each pattern
+  it names, and under each wherever your own limits narrow you, and you let no
+  one in while `everyone` gets something somewhere that you don't.
+- **Revoking a grant, or removing from one, takes `manage` at its patterns.**
+  Naming an `oidc` principal takes `manage` everywhere, since the board then
+  fetches its issuer's keys. Listing grants takes `manage` at `*`.
 - **Owners always may.** On Vercel's API, the team's owners. On a local board,
   its local user, the one `vb serve` mints a token for: a person on the team
   is a principal like any other. Reading a closed channel still takes a
@@ -506,6 +508,7 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileRules(rules, { project })` | What a principal may do under `rules` alone, no grants met, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
 | `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as the same `Access`, with `narrow(scope)` to keep only what both allow. `union` adds up what several allow, channel by channel: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that keeps its own copy of these rules to check itself against |
+| `checkGrantChange({ caller, owner, after, changed })` | Whether a caller may make or widen a grant, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says, `after` every grant as the change leaves them. It does no I/O, so a backend that keeps grants runs the same rule |
 | `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions
@@ -658,12 +661,15 @@ left out for full access. `GET /me` returns the same as `can`.
 
 ## FAQ
 
-### Why can't I edit a grant on `*` once a channel is closed?
+### Why can't I make a grant on `*`?
 
-A grant on `*` would give whoever it names that channel too, and you can't
-manage it anymore. So once `security/` is closed to you, you change no grant
-that reaches it: not one on `*`, and not one on `security/`. Grants on other
-channels, like `dev/`, stay yours to change. The board's owners still may.
+It would give whoever it names a channel you're kept out of. A grant on you,
+your token's `can`, or an `everyone` grant that gives more than you have
+somewhere keeps you from making it. A channel closed to everyone (`everyone`
+at `security/` with nothing) doesn't: it stays closed to whoever you name,
+and opens to them only as it opens to you, so grants on `*` stay yours to
+make. A grant on `security/` itself doesn't: it would meet the lock there and
+win, being closer. The board's owners always may.
 
 ### How do I keep a channel from the project's own people?
 

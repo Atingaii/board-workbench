@@ -940,14 +940,31 @@ await team.revokeToken(token.id)
   everyone it lets in; `rule` names the rule in code that decided; `pattern`
   and `level` are null where no grant decides (the board's own code and
   deployments, or a principal nothing lets in, whose `can` is empty).
-- **Changing a grant takes `manage` wherever it applies:** at each pattern it
-  names, and at every more specific pattern under it where the caller's
-  access is narrower, by its grants or its token (an update checks before and
-  after). A grant's principals inherit none of the caller's exclusions, so
-  once `security/` is closed to a member, the member changes no `*` grant.
-  Naming an `oidc` principal takes `manage` everywhere, since the board then
-  fetches its issuer's keys. A refusal names a stored grant's patterns only to
-  a caller that may list the grants. Listing grants takes `manage` at `*`, and
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. On the grants the write appends to, and as they'd be after
+  it, making or widening one (a create, or an update that adds principals or
+  sets `can`) takes:
+  - **reach:** `manage` at each of its patterns, judged with every grant and
+    judged without `everyone` grants, and at every more specific spot under
+    them, judged without: by the caller's role, the grants naming it or a
+    group it's in, and its token. A lock binds whoever the grant names as
+    much as the caller, now and once it's lifted, so it doesn't count under
+    the grant's patterns. At its own patterns it does: there the grant meets
+    the lock at the same pattern and wins, being closer;
+  - **admission:** wherever an `everyone` grant gives something, the caller
+    has it too, judged with every grant, since anyone a grant lets in gets
+    what `everyone` gives.
+  So once `security/` is closed to everyone, a member still makes `*`
+  grants, whoever they name gets nothing there, and the member makes none on
+  `security/`. `checkGrantChange` in
+  `@vercel/board/access` is this rule with no I/O, for any backend that keeps
+  grants; a board runs it on the grants its write appends to, so a change
+  that lands in between makes it look again. Revoking a grant, or
+  removing principals from one, takes `manage` at its patterns. Naming an
+  `oidc` principal takes `manage` everywhere, since the board then fetches its
+  issuer's keys. A refusal names a stored grant's patterns only to a caller
+  that may list the grants. Listing grants takes `manage` at `*`, and
   lists every grant. Owners always may, as far as a token they came with is
   narrowed: the team's owners on Vercel's API, and on a local board its local
   user (`local:user:<name>`, whom only its local issuer mints for). Reading a
@@ -1041,22 +1058,25 @@ can't create them there (403), since they'd act as its project. `vercel()`
 forwards them to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
 `/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
-`operationId`), and adapts nothing: the API looks up the names people type
-and answers views with IDs and names, and what it doesn't keep yet, it
-answers, so a board on `vercel()` fails the conformance kit's `tokens` group
-until it does, and its `grants` group wherever the run names a project or a
-repository the team doesn't have. Only the board's own code does any of these
-there: a caller it serves acts as its project on Vercel's board, which can't
-tell them apart.
+`operationId`), and adapts only times, which the API answers in milliseconds
+and the protocol as ISO strings (a grant's `at`, a token's `at` and
+`expiresAt`). The API looks up the names people type and answers views with
+IDs and names, and what it doesn't keep yet, it answers, so a board on
+`vercel()` fails the conformance kit's `tokens` group until it does, and its
+`grants` group wherever the run names a project or a repository the team
+doesn't have. Only the board's own code does any of these there: a caller it
+serves acts as its project on Vercel's board, which can't tell them apart.
 Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers and `read` for viewers, and a
 project's read, post, react, and label), and `expiresAt` in milliseconds, null
-until board tokens. Where it says neither, read, post, react, and label
-everywhere, with no expiry.
-In Node it sends a board token from `BOARD_TOKEN` as it is
-(`Authorization: Bearer board_…`) ahead of `VERCEL_TOKEN`, the deployment's
-OIDC token, and the login, as `vb` sends one to any board.
+until board tokens. Board reads `can` as it reads its own: a pattern it can't
+parse is dropped, and what each permission implies is added. An `expiresAt`
+under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
+post, react, and label everywhere, with no expiry.
+In Node it sends a board token from `BOARD_TOKEN` as it is, whatever its
+format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
+deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 
@@ -1605,10 +1625,10 @@ status.
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs `manage` wherever `can` applies (see [Grants and tokens](#grants-and-tokens)). Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` wherever it applies, before and after. Answers `{ grant }` |
+| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants and tokens](#grants-and-tokens) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at its patterns, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, rule, capped, can }` |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| POST | `/grants/:id/revoke` | Needs `manage` at its patterns. Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
@@ -1810,7 +1830,9 @@ Codex's, Pi's) is sent with each request and recorded on its writes.
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
 (`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
 Git checkout's root). `--name` (or `BOARD_NAME`) names which of that team's
-boards, a name alone: another team's is `--scope`'s. With none, the CLI says how to point it at one; a CLI
+boards, a name alone: another team's is `--scope`'s. `BOARD_NAME` beside
+`BOARD_URL`, and `--scope` beside `--url`, are misuse: each pair names two
+boards. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
 reads `BOARD_URL`, and with none, uses the team's board in Vercel's API that
 its `name` names (`BOARD_NAME` is the CLI's alone). Nothing in a checkout names a host: a token or a
