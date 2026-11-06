@@ -27,29 +27,32 @@ const deployment = (team: string, teamId: string, project: string, projectId: st
 
 const ours = () => deployment('test', TEAM_ID, 'marketing', 'prj_marketing')
 const theirs = () => deployment('attacker', 'team_attacker', 'marketing', 'prj_attacker')
+/** The board's own team's project, once it's moved to another team: the same ID, another owner. */
+const moved = () => deployment('elsewhere', 'team_elsewhere', 'marketing', 'prj_marketing')
 
-describe("a Vercel grant, across teams' issuers", () => {
-  it("lets in another team's project it names by ID, and no project of the same name", async () => {
+describe("a project grant, across teams' issuers", () => {
+  it("lets in its project on the board's team only: not another team's, by its ID or its name", async () => {
     const board = testBoard({ auth })
+    // Without g2, which lets in every project on the board's team.
+    await board.revokeGrant('g2')
     const call = async (token: string) => caller(board.fetch, token)('GET', '/me')
     expect((await call(await theirs())).body.error).toEqual({
       code: 'forbidden',
       message: "this token can't use this board: no grant lets in project prj_attacker in production",
-      hint: 'Grant it: vb grants create vercel --claim project_id=prj_attacker --claim environment=production',
+      hint: 'Grant it: vb grants create --project prj_attacker --environment production',
     })
-    await board.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_attacker', environment: 'production' }, can: 'all' })
-    const me = await call(await theirs())
-    expect({ status: me.status, actor: me.body?.actor }).toEqual({ status: 200, actor: 'vercel:project:prj_attacker:production' })
-    // The board's own team's project that took the same name isn't the grant's.
-    expect((await call(await ours())).status).toBe(403)
+    const { grant } = await board.createGrant({ principals: [{ kind: 'project', project: 'prj_attacker', environments: ['production'] }, { kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } })
+    // It keeps each project on the board's own team.
+    expect(grant.principals.map((principal) => (principal.kind === 'project' ? principal.teamId : null))).toEqual([TEAM_ID, TEAM_ID])
+    expect((await call(await theirs())).status).toBe(403)
+    expect((await caller(board.fetch, await ours())('POST', '/messages', { channel: 'general', text: 'deploy approved' })).status).toBe(201)
   })
 
-  it('keeps one that names owner_id to that team, whichever projects it lists', async () => {
+  it("keeps no grant for a project moved to another team, whose tokens name that team", async () => {
     const board = testBoard({ auth })
-    await board.createGrant({ issuer: 'vercel', claims: { project_id: ['prj_marketing', 'prj_attacker'], environment: 'production', owner_id: TEAM_ID }, can: 'all' })
-    expect((await caller(board.fetch, await ours())('POST', '/messages', { channel: 'general', text: 'deploy approved' })).status).toBe(201)
-    const call = caller(board.fetch, await theirs())
-    expect((await call('GET', '/me')).status).toBe(403)
-    expect((await call('POST', '/messages', { channel: 'general', text: 'deploy approved' })).status).toBe(403)
+    await board.revokeGrant('g2')
+    await board.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { '*': 'all' } })
+    expect((await caller(board.fetch, await ours())('GET', '/me')).status).toBe(200)
+    expect((await caller(board.fetch, await moved())('GET', '/me')).status).toBe(403)
   })
 })

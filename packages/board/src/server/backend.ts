@@ -7,6 +7,7 @@ import type { Author } from '../contract/schemas.ts'
 import type { Access } from './access.ts'
 import type { Granted, Known, Pinned, StoredGrant } from './auth.ts'
 import type { Board } from './board.ts'
+import type { Decided } from './policy.ts'
 import type { WatcherContext } from './watcher.ts'
 import type { WriteOrigin } from './origin.ts'
 
@@ -129,8 +130,12 @@ export type BoardBinding = {
   /**
    * What a principal the backend stored may do now, under board()'s defaults and the board's grants:
    * a schedule's creator at each send, a registrant at each event and pull. Null once it may do nothing.
+   * With `grants`, under those instead of the board's grants as they are: a grant write's own
+   * snapshot, so what it checks is what it appends to.
    */
-  accessNow(principal: Known): Promise<Access | null>
+  accessNow(principal: Known, grants?: readonly StoredGrant[]): Promise<Access | null>
+  /** Which grants, or which rule, decide `channel` for a principal under board()'s `access`, and what they give: what `explain` answers. */
+  explain(principal: Known, channel: string): Promise<Decided>
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
   /**

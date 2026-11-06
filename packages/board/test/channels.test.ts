@@ -26,7 +26,7 @@ describe('creating a channel', () => {
   it("refuses a caller that posts where it can't read, alike whether the channel is there or not", async () => {
     const board = testBoard()
     const { fetch } = board
-    await board.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'feedback/': ['post'] } })
+    await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { 'feedback/': ['post'] } })
     const julian = caller(fetch, await personToken())
     const widget = caller(fetch, await workflowToken())
     expect((await julian('POST', '/messages', { channel: 'feedback/acme', text: 'from acme' })).status).toBe(201)

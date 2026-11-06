@@ -15,4 +15,20 @@ export {
 export { oidcTokens } from '../server/tokens.ts'
 export { resolveActor } from '../server/actors.ts'
 export { DEFAULT_CAN } from '../server/auth.ts'
-export { compileAccess, union, FULL_ACCESS, type Access, type Permission, type ChannelPattern, type Grant, type Can, type AccessSummary } from '../server/access.ts'
+export {
+  compileAccess,
+  union,
+  checkGrantChange,
+  InvalidCan,
+  FULL_ACCESS,
+  type Access,
+  type Permission,
+  type ChannelPattern,
+  type Grant,
+  type Can,
+  type AccessSummary,
+  type GrantChange,
+  type GrantChangeRefusal,
+  type GrantShape,
+} from '../server/access.ts'
+export { explainGrants, grantAccess, type Caller, type DecidingGrant, type GrantExplanation, type GrantFacts, type GrantSource } from '../server/grants.ts'

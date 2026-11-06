@@ -70,10 +70,9 @@ describe('vercel()', () => {
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'passed',
       // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
-      'grants: grants a project, lists it, takes the same grant again as one, and revokes it': 'failed',
-      "grants: changes a grant's can when it's set again": 'failed',
-      "grants: grants a GitHub repository's workflows, and another team's project": 'failed',
-      'grants: keeps two environments of one project as two grants, and revokes one without the other': 'failed',
+      'grants: grants a project, lists it, and revokes it': 'failed',
+      'grants: makes another grant for the same principals, and changes one by its ID': 'failed',
+      "grants: keeps a grant's can as written, a pattern with no permissions included": 'failed',
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
       "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
@@ -97,7 +96,7 @@ describe('vercel()', () => {
       ['GET', '/messages', undefined],
       ['POST', '/messages', { channel: 'dev', text: 'hi' }],
       ['POST', '/attachments/uploads', { name: 'big.mp4', type: 'video/mp4', size: 10_000_000 }],
-      ['POST', '/grants', { issuer: 'github', claims: { repository: 'acme/web' } }],
+      ['POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/web' }] }],
       ['POST', '/inbox/slack', { events: [] }],
     ] as const) {
       const response = await pong.fetch(
@@ -978,7 +977,7 @@ describe('vercel()', () => {
   it("sends grants and tokens to Vercel's API as the protocol has them, which answers what it doesn't keep yet", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)
-    await expect(jb.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
+    await expect(jb.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
     await expect(jb.createToken({ name: 'widget', can: { 'feedback/': ['post'] } })).rejects.toMatchObject({ status: 404 })
     expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/brd_test/grants', 'POST /boards/brd_test/tokens']))
   })

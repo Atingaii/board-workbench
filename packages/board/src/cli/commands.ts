@@ -99,7 +99,6 @@ export const options = {
   for: { type: 'string', value: 'duration', description: 'repeating for this long, e.g. 24h' },
   times: { type: 'string', value: 'N', description: 'repeating this many times' },
   can: { type: 'string', value: 'scope', description: 'what it may do (default: *=read,post,react,label)' },
-  claim: { type: 'string', multiple: true, value: 'k=v', description: 'a claim its tokens carry; the same name again is any of them' },
   profile: { type: 'string', value: 'name', description: 'the profile every request with it writes as' },
   session: { type: 'string', value: 'id', description: 'the session every request with it writes from' },
   expires: { type: 'string', value: 'duration', description: 'how long it lives (default: 30d, at most 90d)' },
@@ -190,7 +189,7 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
   {
     group: 'the board',
     name: 'grants',
-    description: "who the board lets in beside its code's rules: tokens from an OIDC issuer with these claims",
+    description: "who may do what where: people, projects, and workflows, and what each grant lets them do",
     arguments: [],
     options: [],
     runsWithoutSubcommand: true,
@@ -203,16 +202,6 @@ export const commands: readonly (CliCommand & { readonly group: (typeof groups)[
         arguments: [],
         options: [],
         examples: [{ name: 'list the grants', value: 'grants list' }],
-      },
-      {
-        name: 'create',
-        description: 'let them in, or change what they may do',
-        arguments: [{ name: 'issuer', required: true, description: 'vercel, github, or an https URL' }],
-        options: [option('claim'), option('can')],
-        examples: [
-          { name: 'let a workflow post in ci/', value: 'grants create github --claim repository=acme/web --can ci/=read,post' },
-          { name: "let a project's production post feedback", value: 'grants create vercel --claim project_id=prj_123 --claim environment=production --can feedback/=post' },
-        ],
       },
       {
         name: 'revoke',

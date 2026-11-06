@@ -49,7 +49,7 @@ async function signingBlob(): Promise<BlobStore> {
 async function setup(blob: BlobStore) {
   const team = testBoard({ url: TEAM_URL, blob })
   // The support project's production deployments may do everything there.
-  await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_support', environment: 'production' }, can: 'all' })
+  await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
   const limited = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
     const body = request.method === 'GET' ? null : await request.clone().arrayBuffer()

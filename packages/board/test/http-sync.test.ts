@@ -16,8 +16,15 @@ const SUPPORT = 'vercel:project:prj_support:production'
 const supportToken = () => deploymentToken('support', 'prj_support', 'production')
 
 /** Lets a project's production deployments do what `can` says on the team's board. */
-const grant = (team: ReturnType<typeof testBoard>, projectId: string, can: Can) =>
-  team.createGrant({ issuer: 'vercel', claims: { project_id: projectId, environment: 'production' }, can })
+const grant = async (team: ReturnType<typeof testBoard>, projectId: string, can: Can) => {
+  const written = (typeof can === 'object' && !Array.isArray(can) ? can : { '*': can }) as never
+  const grants = await team.grants()
+  const named = grants.find((one) => one.principals.length === 1 && one.principals[0]!.kind === 'project' && one.principals[0]!.projectId === projectId)
+  if (named) return team.updateGrant(named.id, { can: written })
+  // Without g2's every project on the team, it may do only what its grant says.
+  if (grants.some((one) => one.id === 'g2')) await team.revokeGrant('g2')
+  return team.createGrant({ principals: [{ kind: 'project', project: projectId, environments: ['production'] }], can: written })
+}
 
 type Read = { id: string; text: string; from: string | null; by: { actor: string }; origin: { thread: string; message: string } | null; reactions: Record<string, string[]> }
 
