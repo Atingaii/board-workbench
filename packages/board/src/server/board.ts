@@ -78,7 +78,7 @@ export type Board = BoardClient & {
 /** A board on a backend you pass, which says how it reaches the board itself. */
 type BackendOptions = {
   /**
-   * Where the board lives: `local()` from `@vercel/board/local` keeps it in this process, `http(url)`
+   * Where the board lives: `local()` from `@vercel/board/backend-local` keeps it in this process, `http(url)`
    * from `@vercel/board/backend-http` uses another, or your own. By default, Vercel's board for your
    * team, the one `name` names, or with `BOARD_URL` set (in Node), the board at that URL.
    */

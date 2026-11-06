@@ -9,10 +9,10 @@ export default defineConfig([
       'index.node': 'src/server/index.ts',
       access: 'src/access/index.ts',
       conformance: 'src/conformance/index.ts',
-      // `@vercel/board/local`: a board kept in this process, Node only.
-      local: 'src/local/index.ts',
       'backend-http': 'src/backend-http/index.default.ts',
       'backend-http.node': 'src/backend-http/index.ts',
+      // `@vercel/board/backend-local`: a board kept in this process, Node only.
+      'backend-local': 'src/backend-local/index.ts',
       'backend-vercel': 'src/backend-vercel/index.default.ts',
       'backend-vercel.node': 'src/backend-vercel/index.ts',
       sync: 'src/sync/index.ts',

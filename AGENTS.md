@@ -62,7 +62,7 @@ characters at most: `fix(store): split big redisTables writes into bounded scrip
 - `type` is `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, or `chore`,
   with `!` when it breaks someone: `feat(protocol)!: …`.
 - `area`, when one fits, is where people would look: `cli`, `sdk`, `protocol`,
-  `sync`, `local`, `backend-http`, `backend-vercel`, `inspector`,
+  `sync`, `backend-local`, `backend-http`, `backend-vercel`, `inspector`,
   `factory`, `docs`.
 - No narration ("X does Y", "X is Y") and no second clause: two changes are
   two PRs.
