@@ -791,6 +791,25 @@ describe('vercel()', () => {
     expect([...api.grants.keys()]).toEqual(before)
   })
 
+  it("fails a board whose team role lets a viewer post, in the conformance kit's viewer check", async () => {
+    const api = fakeMessageboard()
+    const real = as(api, 'user:u_jb')
+    // The API, but its explain lets the viewer post.
+    const posting: typeof fetch = async (input, init) => {
+      const request = new Request(input, init)
+      const response = await real(request)
+      if (!new URL(request.url).pathname.endsWith('/grants/explain')) return response
+      const text = (await response.text()).replace('"can":["read","react"]', '"can":["read","post","react"]')
+      return new Response(text, { status: response.status, headers: response.headers })
+    }
+    const handle = board({ backend: vercel({ team: 'team_test', api: API, fetch: posting, files: api.files }) })
+    const report = await conformance(handle, { principals: { project: 'prj_web', repository: 'acme/api', viewer: 'val@acme.com' } })
+    expect(report.checks.find((check) => check.name.startsWith('caps a person by their team role'))).toMatchObject({
+      status: 'failed',
+      detail: 'what a viewer may do with a grant of all: expected read, and neither post nor manage, got ["read","post","react"]',
+    })
+  })
+
   it('keeps an app run in while it checks apps, so it revokes all it made', async () => {
     const api = fakeMessageboard()
     await handleOn(api).createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { '*': 'all' } })
