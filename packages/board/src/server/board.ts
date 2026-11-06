@@ -27,6 +27,12 @@ export type BoardOptions = PolicyOptions & {
    */
   name?: string
   /**
+   * With `name`: makes that board when the team has none of that name, as a deployment's
+   * `board({ name })` always does. A person's `board({ name })` only finds one, unless this says to
+   * make it.
+   */
+  ensure?: boolean
+  /**
    * Whose board this is: another team's, by its ID (`team_…`) or its slug, with `name` or without
    * it for that team's default board. Without one, the team the environment finds: in Node, the
    * deployment's, `VERCEL_ORG_ID`, or the linked project's.
@@ -121,6 +127,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   if (options.name !== undefined && !isBoardName(options.name))
     throw new Error(`board: ${JSON.stringify(options.name)} isn't a board's name: one is 1 to 64 characters with no /, and another team's board takes its team apart, board({ team, name })`)
   if (options.team !== undefined && !TEAM.test(options.team)) throw new Error(`board: ${JSON.stringify(options.team)} isn't a team: pass its ID (team_…) or its slug`)
+  if (options.ensure && options.name === undefined) throw new Error('board: ensure makes the board `name` names: pass name too')
   const backend = options.backend ?? runtime.http()
   const policy = createPolicy(options, backend.keeps, runtime.serving, backend.trust ?? null)
   const watch = options.watch ?? {}
@@ -216,6 +223,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
   const binding: BoardBinding = {
     name: options.name ?? null,
     team: options.team ?? null,
+    ensure: options.ensure ?? false,
     subscriptions,
     run: async (id, event, meta) => (await server()).run(id, event, meta),
     receive: async (key, item, meta) => (await server()).receive(key, item, meta),
