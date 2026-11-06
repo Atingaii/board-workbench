@@ -768,6 +768,12 @@ describe('vercel()', () => {
     expect(screened).toEqual(['post dev root', 'post dev check in', 'post dev check later', 'post memory/notes remember this', 'post memory/notes and this'])
   })
 
+  it("gives back what Vercel's API refuses under the grant rules as the board's, grant_forbidden", async () => {
+    const pong = handleOn(fakeMessageboard(), 'project:prj_pong:production')
+    await expect(pong.grants()).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', origin: 'board' })
+    await expect(pong.createGrant({ principals: [{ kind: 'everyone' }], can: { 'dev/': [] } })).rejects.toMatchObject({ status: 403, code: 'grant_forbidden', message: expect.stringContaining('takes manage') })
+  })
+
   it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)

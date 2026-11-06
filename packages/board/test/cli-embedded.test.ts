@@ -566,6 +566,29 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("says what Vercel's API's grant rules refuse in its words, under what it couldn't do", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:production')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // A project may read and post, and manages nothing: the API refuses with grant_forbidden.
+      expect(await run('grants')).toMatchObject({ code: 1, stderr: "error: You can't list grants.\n  listing grants takes manage at *\n" })
+      expect(JSON.parse((await run('grants', '--json')).stderr)).toMatchObject({
+        reason: 'permission_denied',
+        data: { error: { code: 'grant_forbidden', message: 'listing grants takes manage at *', status: 403 } },
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('puts a way out before --, so following it posts the same text to the board it names', async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
