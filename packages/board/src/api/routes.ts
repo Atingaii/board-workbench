@@ -211,6 +211,30 @@ export const GrantBody = z.object({
   can: GrantCan,
 })
 
+/**
+ * Which grant decides a channel, and what it gives, for the caller or a principal it names: a
+ * `user` (by email, or by ID where the board can't look one up), a `project` in one `environment`
+ * (production by default), a `github` repository's run (with its `workflow`, `branch`, and
+ * `event`), or an `oidc` issuer's token with each `claim` as `name=value`.
+ */
+export const ExplainQuery = z
+  .object({
+    channel: ChannelPath,
+    user: z.string().min(1).max(320).optional(),
+    project: z.string().min(1).max(200).optional(),
+    environment: z.string().min(1).max(100).optional(),
+    github: z.string().min(3).max(200).optional(),
+    workflow: z.string().min(1).max(300).optional(),
+    branch: z.string().min(1).max(255).optional(),
+    event: z.string().min(1).max(64).optional(),
+    oidc: z.string().min(1).max(1000).optional(),
+    claim: repeated.optional(),
+  })
+  .refine((query) => [query.user, query.project, query.github, query.oidc].filter((value) => value !== undefined).length <= 1, 'name one principal: user, project, github, or oidc')
+  .refine((query) => query.environment === undefined || query.project !== undefined, 'environment goes with project')
+  .refine((query) => (query.workflow === undefined && query.branch === undefined && query.event === undefined) || query.github !== undefined, 'workflow, branch, and event go with github')
+  .refine((query) => query.claim === undefined || query.oidc !== undefined, 'claim goes with oidc')
+
 /** A grant's change: principals to add and to remove, and a `can` to replace its own. */
 export const UpdateGrantBody = z
   .object({
@@ -529,6 +553,24 @@ export type ScheduleView = {
   createdAt: string
 }
 
+/**
+ * Which grants decide a channel for a principal: the `pattern` that won there (an exact channel,
+ * then the longest subtree, then `*`), the `level` that won at it, the `grants` at that level, which
+ * add up, or the `rule` in the board's code that decided, and what they give, `can`, after `capped`,
+ * the team role that caps a person's. `pattern` and `level` are null where no grant decides: the
+ * board's own code, its own deployments where it runs, or a principal nothing lets in, whose `can`
+ * is empty.
+ */
+export type Explanation = {
+  channel: string
+  pattern: string | null
+  level: 'principal' | 'group' | 'everyone' | null
+  grants: GrantView[]
+  rule: string | null
+  capped: string | null
+  can: Permission[]
+}
+
 /** A principal as a grant keeps it: IDs, with the names the board knows beside them. */
 export type PrincipalView =
   | { kind: 'user'; userId: string; email: string | null }
@@ -840,6 +882,8 @@ export const routes = {
   grants: { method: 'GET', path: '/grants' },
   createGrant: { method: 'POST', path: '/grants', body: GrantBody },
   updateGrant: { method: 'PATCH', path: '/grants/:id', body: UpdateGrantBody },
+  /** Which grant decides a channel, for the caller or, with `manage` at `*`, a principal it names. */
+  explain: { method: 'GET', path: '/grants/explain', query: ExplainQuery },
   revokeGrant: { method: 'POST', path: '/grants/:id/revoke' },
   /** Your tokens, or every one with manage in every channel. A token acts as whoever minted it. */
   tokens: { method: 'GET', path: '/tokens' },

@@ -917,6 +917,15 @@ await team.revokeToken(token.id)
   state, so every board has them without a write, and a grant's ID comes
   from the fold's counter (g3 next). A rule that names `feedback/` alone
   leaves `*` to g2.
+- **`GET /grants/explain?channel=…`** says which grants decide a channel for
+  the caller, or with `manage` at `*` for the principal its query names
+  (`user`, `project` and `environment`, `github` and `workflow`, `branch`,
+  `event`, or `oidc` and `claim`): `{ channel, pattern, level, grants, rule,
+  capped, can }`. It runs on the board, which knows roles and membership.
+  `grants` is empty for a caller that can't list grants, since a grant names
+  everyone it lets in; `rule` names the rule in code that decided; `pattern`
+  and `level` are null where no grant decides (the board's own code and
+  deployments, or a principal nothing lets in, whose `can` is empty).
 - **Changing a grant takes `manage` at each pattern it names,** resolved at
   that pattern (an update checks the patterns before and after), so a member
   still edits a `*` grant once `security/` is closed, but can't create one on
@@ -1583,6 +1592,7 @@ status.
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
 | POST | `/grants` | `{ principals, can }`: a new grant. Needs `manage` at each pattern in `can`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
 | PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at each pattern it names, before and after. Answers `{ grant }` |
+| GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, level, grants, rule, capped, can }` |
 | POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |

@@ -412,7 +412,7 @@ const environmentsOf = (given: readonly string[]) => {
 }
 
 /** `ci.yml` is `.github/workflows/ci.yml`, as GitHub names a workflow in a token's `workflow_ref`. */
-const workflowPath = (workflow: string) => (workflow.includes('/') ? workflow : `.github/workflows/${workflow}`)
+export const workflowPath = (workflow: string) => (workflow.includes('/') ? workflow : `.github/workflows/${workflow}`)
 
 /**
  * A principal as a board that verifies tokens itself keeps it, or a 400 `invalid_grant` that says

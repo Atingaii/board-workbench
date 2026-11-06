@@ -12,6 +12,8 @@ import type {
   GrantBody,
   GrantView,
   UpdateGrantBody,
+  ExplainQuery,
+  Explanation,
   EventsQuery,
   InboxAckBody,
   InboxEntry,
@@ -92,6 +94,8 @@ export type Protocol = {
   createGrant: { input: Input<typeof GrantBody>; output: { grant: GrantView } }
   /** Adds and removes principals, or replaces its `can`: needs `manage` at each pattern it names, before and after. 404 `grant_not_found`. */
   updateGrant: { input: Id & Input<typeof UpdateGrantBody>; output: { grant: GrantView } }
+  /** Which grant decides `channel` for the caller, or with `manage` at `*` (or a team owner), the principal it names. */
+  explain: { input: Input<typeof ExplainQuery>; output: Explanation }
   /** `revoked` is false when it was already gone. */
   revokeGrant: { input: Id; output: { revoked: boolean } }
   /** The caller's tokens, or every one with `manage` in every channel. 501 `no_tokens` where the board issues none. */

@@ -1,4 +1,4 @@
-import { compileAccess, parseScope, scopeOf, type Access } from './access.ts'
+import { compileAccess, decide, parseScope, PERMISSIONS, scopeOf, type Access, type Level, type Permission } from './access.ts'
 import { resolveActor } from './actors.ts'
 import {
   BOARD_TOKEN_PREFIX,
@@ -22,10 +22,14 @@ import {
   type Pinned,
   type Principal,
   type RuleFunction,
+  type StoredGrant,
 } from './auth.ts'
 import type { Identity, Trust } from './backend.ts'
 import { HttpError, RejectedError, unauthorized } from './errors.ts'
 import type { ProjectIdentity } from './identity.ts'
+
+/** What decides a channel for a principal: the winning pattern and level, the grants there or the rule, and what they give. */
+export type Decided = { pattern: string | null; level: Level | null; grants: StoredGrant[]; rule: string | null; permissions: Permission[] }
 
 /** Who may use a board, and what they may do: `board()`'s options for it. */
 export type PolicyOptions = {
@@ -197,6 +201,34 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
     return fromTokens(result) ? (result as Principal) : hostPrincipal(result as HostPrincipal)
   }
 
+  /**
+   * Which pattern, level, and grants decide `channel` for `principal`, or the rule in code, and what
+   * they give it there, narrowed by its scope: what explain answers. Nothing for a principal
+   * nothing lets in.
+   */
+  async function explain(principal: Known, channel: string): Promise<Decided> {
+    let resolved: Awaited<ReturnType<typeof authority.resolve>>
+    try {
+      resolved = await authority.resolve(principal)
+    } catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 401 || status === 403) return { pattern: null, level: null, grants: [], rule: null, permissions: [] }
+      throw error
+    }
+    const scope = principal.scope === undefined ? null : compileAccess(parseScope(principal.scope))
+    const allowed = (permissions: readonly Permission[]) => (scope ? permissions.filter((permission) => scope.can(permission, channel)) : [...permissions])
+    if ('fixed' in resolved)
+      return { pattern: null, level: null, grants: [], rule: resolved.rule, permissions: allowed(PERMISSIONS.filter((permission) => resolved.fixed.can(permission, channel))) }
+    const decision = decide(resolved.matched, channel)
+    return {
+      pattern: decision.pattern,
+      level: decision.level,
+      grants: decision.sources.flatMap((source) => ('grant' in source ? [source.grant] : [])),
+      rule: decision.sources.flatMap((source) => ('rule' in source ? [source.rule] : []))[0] ?? null,
+      permissions: allowed(decision.permissions),
+    }
+  }
+
   return {
     open,
     project,
@@ -219,6 +251,7 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       const { author, actor } = resolveActor(principal, claims, request.audience)
       return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
     },
+    explain,
     /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing, its board token's revoking included. */
     async accessNow(principal: Known): Promise<Access | null> {
       if (principal.token !== undefined && !(await trust?.live(principal.token))) return null

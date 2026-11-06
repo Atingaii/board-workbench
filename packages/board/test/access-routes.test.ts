@@ -107,6 +107,12 @@ const WALK: Record<RouteName, Walk> = {
     { method: 'POST', path: '/grants', body: { principals: [{ kind: 'everyone' }], can: { open: ['read', 'post'] } }, status: 403 },
   ],
   updateGrant: () => [{ method: 'PATCH', path: '/grants/g1', body: { can: { '*': 'all' } }, status: 403 }],
+  // What it may do itself, anywhere, without the grants that decide it; anyone else's only with manage at *.
+  explain: () => [
+    { method: 'GET', path: '/grants/explain?channel=secret', status: 200, check: (body) => expect(body).toMatchObject({ channel: 'secret', can: [], grants: [] }) },
+    { method: 'GET', path: '/grants/explain?channel=open', status: 200, check: (body) => expect(body).toMatchObject({ can: ['read'], grants: [] }) },
+    { method: 'GET', path: '/grants/explain?channel=open&user=u_julian', status: 403 },
+  ],
   revokeGrant: () => [{ method: 'POST', path: '/grants/g1/revoke', status: 403 }],
   // Anyone mints a token, which acts as them: it can't do more than they can.
   createToken: () => [{ method: 'POST', path: '/tokens', body: { name: 'walker', can: 'all' }, status: 200 }],

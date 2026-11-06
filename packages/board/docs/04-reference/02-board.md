@@ -320,6 +320,7 @@ already done or canceled. A board without a scheduler (an `a2()` with no
 createGrant(input: { principals: PrincipalInput[]; can: GrantCan }): Promise<{ grant: GrantView }>
 updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }): Promise<{ grant: GrantView }>
 grants(): Promise<GrantView[]>
+explain(channel: string, principal?: ExplainPrincipal): Promise<Explanation>
 revokeGrant(id: string): Promise<{ revoked: boolean }>
 ```
 
@@ -327,11 +328,15 @@ revokeGrant(id: string): Promise<{ revoked: boolean }>
 to `'all'` or a list of permissions, `[]` for none. The same principals again
 are another grant. `updateGrant` adds principals, removes them by who they are,
 and replaces `can`. Each needs `manage` at the patterns its grant names;
-`grants` needs `manage` at `*`. Team owners always may.
+`grants` needs `manage` at `*`. Team owners always may. `explain` says which
+grants decide a channel, and what they give, for you or, with `manage` at
+`*`, for `{ user }`, `{ project, environment }`, `{ github, workflow, branch,
+event }`, or `{ oidc, claims }`.
 
 ```ts
 const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
 await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'ada@acme.com' }] })
+const { pattern, grants, can } = await team.explain('ci/deploys', { user: 'ada@acme.com' })
 await team.revokeGrant(grant.id)
 ```
 

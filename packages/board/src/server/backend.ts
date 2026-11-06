@@ -7,6 +7,7 @@ import type { Author } from '../contract/schemas.ts'
 import type { Access } from './access.ts'
 import type { Granted, Known, Pinned, StoredGrant } from './auth.ts'
 import type { Board } from './board.ts'
+import type { Decided } from './policy.ts'
 import type { WatcherContext } from './watcher.ts'
 import type { WriteOrigin } from './origin.ts'
 
@@ -121,6 +122,8 @@ export type BoardBinding = {
    * at each send, a registrant at each event and pull. Null once it may do nothing.
    */
   accessNow(principal: Known): Promise<Access | null>
+  /** Which grants, or which rule, decide `channel` for a principal under board()'s `access`, and what they give: what `explain` answers. */
+  explain(principal: Known, channel: string): Promise<Decided>
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
   /** The OIDC issuers board()'s rules name, which no grant's issuer may share principals with. */

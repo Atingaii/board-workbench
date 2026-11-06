@@ -28,6 +28,7 @@ import type {
   GrantInput,
   GrantView,
   UpdateGrantInput,
+  Explanation,
   TokenInput,
   TokenView,
   ThreadsPage,
@@ -208,6 +209,20 @@ export type Filters = Omit<FiltersInput, 'label'> & {
 
 export type BoardClient = ReturnType<typeof createBoardClient>
 
+/** Whom `explain` asks about: nobody for yourself, or one principal as people name it. */
+export type ExplainPrincipal = {
+  user?: string
+  project?: string
+  /** Where the project's deployment runs: production when left out. */
+  environment?: string
+  github?: string
+  workflow?: string
+  branch?: string
+  event?: string
+  oidc?: string
+  claims?: Record<string, string>
+}
+
 /** What a write returns, with the handles in it that matched nobody and stayed plain text. */
 export type Written<T> = T & { unknownMentions?: string[] }
 
@@ -354,6 +369,18 @@ export function createBoardClient(options: ClientOptions) {
     createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: input }),
     /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs manage at each pattern it names, before and after. */
     updateGrant: (id: string, input: UpdateGrantInput) => call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, { body: input }),
+    /**
+     * Which grants decide `channel`, and what they give: for you, or with manage at `*`, for the
+     * principal `principal` names (`{ user }`, `{ project, environment }`, `{ github, workflow,
+     * branch, event }`, or `{ oidc, claims }`).
+     */
+    explain: (channel: string, principal: ExplainPrincipal = {}) => {
+      const { claims, ...rest } = principal
+      const params = new URLSearchParams({ channel })
+      for (const [name, value] of Object.entries(rest)) if (value !== undefined) params.set(name, value)
+      for (const [name, value] of Object.entries(claims ?? {})) params.append('claim', `${name}=${value}`)
+      return call<Explanation>('GET', `/grants/explain?${params}`)
+    },
     /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */

@@ -212,6 +212,7 @@ export function createBoard(options: BoardOptions, runtime: Runtime): Board {
     },
     typing: async (messages, status) => (await server()).typing(messages, status),
     accessNow: (principal) => policy.accessNow(principal),
+    explain: (principal, channel) => policy.explain(principal, channel),
     project: () => policy.project(),
     issuers: () => policy.issuers,
     handle: (caller) => handleOf(caller, null),

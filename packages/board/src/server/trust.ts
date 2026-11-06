@@ -12,16 +12,20 @@ import {
   checkGrant,
   checkPrincipal,
   DEFAULT_CAN,
+  GITHUB_ISSUER,
   grantIssuers,
+  issuerName,
   principalKey,
   removes,
   tokenHash,
+  workflowPath,
   type GrantPrincipal,
   type Known,
   type Principal,
   type StoredGrant,
 } from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
+import type { Decided } from './policy.ts'
 import { badRequest, forbidden, notFound, unauthorized } from './errors.ts'
 
 /** How long a token lives when its minter doesn't say, and at most: npm caps its write tokens at 90 days. */
@@ -227,6 +231,47 @@ function newSecret(): string {
 }
 
 /**
+ * The principal an explain query names, as a token of its would make it: a person by user ID, a
+ * project's deployment in one environment (production unless it says) on the board's team, a
+ * repository's run with what it says of its workflow, branch, and event, or an issuer's token with
+ * its claims. A board that verifies tokens itself looks no names up, so a name is a 400.
+ */
+function principalNamed(query: Protocol['explain']['input'], team: string | null): Known {
+  if (query.user !== undefined) {
+    if (query.user.includes('@')) throw badRequest(`this board can't look up ${query.user}: it verifies tokens itself, so name the user by ID`)
+    return { id: `vercel:user:${query.user}`, kind: 'person', handle: query.user }
+  }
+  if (query.project !== undefined) {
+    if (!/^prj_[A-Za-z0-9]+$/.test(query.project)) throw badRequest(`this board can't look up the project ${query.project}: it verifies tokens itself, so name it by ID, prj_…`)
+    const environment = query.environment ?? 'production'
+    const claims = { project_id: query.project, environment, ...(team !== null ? { owner_id: team } : {}) }
+    return { id: `vercel:project:${query.project}:${environment}`, kind: 'deployment', handle: query.project, facts: { issuer: 'vercel', iss: '', claims, ...(team !== null ? { team } : {}) } }
+  }
+  if (query.github !== undefined) {
+    const repository = query.github
+    const claims: Record<string, string> = { repository }
+    if (query.workflow !== undefined) claims.workflow_ref = `${repository}/${workflowPath(query.workflow)}@refs/heads/${query.branch ?? 'main'}`
+    if (query.branch !== undefined) claims.ref = `refs/heads/${query.branch}`
+    if (query.event !== undefined) claims.event_name = query.event
+    return { id: `github:repo:${repository}`, kind: 'workflow', handle: repository, facts: { issuer: 'github', iss: GITHUB_ISSUER, claims } }
+  }
+  const iss = query.oidc!
+  const claims: Record<string, string> = {}
+  for (const pair of query.claim ?? []) {
+    const at = pair.indexOf('=')
+    if (at <= 0) throw badRequest(`a claim is name=value, and ${pair} isn't one`)
+    claims[pair.slice(0, at)] = pair.slice(at + 1)
+  }
+  let name: string
+  try {
+    name = issuerName(iss)
+  } catch {
+    throw badRequest(`an oidc issuer is an https URL, got ${iss}`)
+  }
+  return { id: `oidc:${name}:${claims.sub ?? 'explain'}`, kind: 'workflow', handle: claims.sub ?? 'oidc', facts: { issuer: 'oidc', iss, claims } }
+}
+
+/**
  * Whether `identity` may change grants at `pattern`: `manage` there, as its access resolves at that
  * pattern itself, so `*` is what `*` gives whatever a channel locks. The board's people (a local
  * board's local user) are its owners, who always may, as far as a token they came with allows.
@@ -253,6 +298,10 @@ export function createTrust(options: {
   store: Parameters<typeof createServer>[0]['store']
   issuers: () => readonly string[]
   accessNow: (principal: Known) => Promise<Access | null>
+  /** What decides a channel for a principal, under board()'s rules and grants. */
+  explain: (principal: Known, channel: string) => Promise<Decided>
+  /** The board's own Vercel team, when it's known: a project explain names is taken to be on it. */
+  team: () => Promise<string | null>
 }) {
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
   const read = async () => (await session.state(accessReducer)).state
@@ -348,6 +397,30 @@ export function createTrust(options: {
       mayChange(identity, patternsOf(next), `update ${id}`)
       await session.append({ type: 'grant.updated', payload: { id: row.id, principals: principals as never, can: next as never, by: identity.actor.id } })
       return { grant: grantView((await read()).grants[row.id]!) }
+    },
+    async explain(identity: Identity, query: Protocol['explain']['input']): Promise<Protocol['explain']['output']> {
+      const named = query.user !== undefined || query.project !== undefined || query.github !== undefined || query.oidc !== undefined
+      // What anyone else may do shows the grants, which only those who may list them see.
+      if (named) mayChange(identity, ['*'], 'explain what another principal may do')
+      const { id, kind, handle, facts, scope, token } = identity.principal
+      const principal: Known = named ? principalNamed(query, await options.team()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}), ...(token !== undefined ? { token } : {}) }
+      const decided = await options.explain(principal, query.channel)
+      const { grants } = await read()
+      // A grant names whom else it lets in: only those who may list grants see which decided.
+      const shown = managesAt(identity, '*') ? decided.grants : []
+      return {
+        channel: query.channel,
+        pattern: decided.pattern,
+        level: decided.level,
+        grants: shown.flatMap((grant) => {
+          const row = grants[indexOf(grant.id, 'g') ?? 0]
+          return row ? [grantView(row)] : []
+        }),
+        rule: decided.rule,
+        // A board on `a2()` has no team roles.
+        capped: null,
+        can: decided.permissions,
+      }
     },
     async revokeGrant(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeGrant']['output']> {
       const index = indexOf(id, 'g')

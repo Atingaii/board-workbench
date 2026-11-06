@@ -46,7 +46,7 @@ const PROFILE_RULE = 'ids start with a letter and use up to 32 letters, numbers,
  */
 export const PROJECTS_OWN = new Set<Method>([
   'edit', 'delete', 'schedule', 'cancelSchedule', 'upload', 'uploadStart', 'uploadFinish', 'watchers', 'register', 'matches', 'ack',
-  'grants', 'createGrant', 'updateGrant', 'revokeGrant', 'tokens', 'createToken', 'revokeToken',
+  'grants', 'createGrant', 'updateGrant', 'explain', 'revokeGrant', 'tokens', 'createToken', 'revokeToken',
   'syncImport', 'syncReceipt', 'syncThread', 'syncFind', 'syncCopies', 'inboxPush', 'inboxNext', 'inboxAck', 'inbox',
 ])
 
