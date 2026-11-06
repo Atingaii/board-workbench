@@ -141,8 +141,11 @@ itself.
   case: `--name security`, and with `--scope acme`, team acme's. It goes
   with `--scope`, so it's ahead of `BOARD_URL`. With `--url` it's misuse,
   and so is a name with its team in it (`--name acme/security`): the team
-  is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't, for
-  whichever team's board the run uses. A name you use
+  is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't; beside
+  `BOARD_URL`, which names another board, it's misuse, so unset one. A
+  board's URL names its team, so `--scope` beside `--url` is misuse too. A
+  name several boards share says how to use one by its URL, on its team
+  (`…/boards/<ID>?teamId=team_…`). A name you use
   as yourself never makes a board: one the team doesn't have fails with
   `board_not_found`. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 

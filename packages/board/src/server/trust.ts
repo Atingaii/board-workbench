@@ -178,7 +178,7 @@ const needsManage = (identity: Identity, what: string) => {
 }
 
 /**
- * The board's grants and tokens, in session `access` of its log: what `a2()` answers for them, and
+ * The board's grants and tokens, in session `access` of its log: what a local board answers for them, and
  * what board() checks requests against. `issuers`: the OIDC issuers the board's rules name, which no
  * grant's may share principals with. `accessNow`: what a principal may do now, under board()'s
  * rules and grants, which a token's listing shows.
