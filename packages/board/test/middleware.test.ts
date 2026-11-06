@@ -4,7 +4,6 @@ import { slack } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
 import type { Middleware, WriteSource } from '../src/server/index.ts'
 import { BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
-import { vercelProject } from '../src/access/index.ts'
 import { fakeQueue } from './queue.ts'
 import { memory } from '../src/store/memory.ts'
 
@@ -42,7 +41,8 @@ describe('middleware', () => {
       seen.push(write.text)
       await next()
     }
-    const board = testBoard({ middleware: [quarantine], access: [vercelProject({ project: 'prj_marketing', can: { feedback: ['read'] } })] })
+    const board = testBoard({ middleware: [quarantine] })
+    await board.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: { feedback: ['read'] } })
     const julian = await person(board)
     const reader = caller(board.fetch, await deploymentToken())
     const { id } = (await julian('POST', '/messages', { channel: 'feedback', text: 'checkout is slow' })).body.message

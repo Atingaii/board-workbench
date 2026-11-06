@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { conformance } from '../src/conformance/index.ts'
-import { vercelProject } from '../src/access/index.ts'
+import type { GrantInput } from '../src/api/routes.ts'
 import { bearer, BOARD_URL, caller, deploymentToken, personToken, testBoard } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
 type Fetch = (request: Request) => Promise<Response>
+
+/** A board with a scheduler that grants v0's deployments in `environment` what `can` says, before any test request. */
+async function grantingV0(environment = 'production', can: GrantInput['can'] = 'all') {
+  const board = testBoard({ scheduler: fakeQueue().scheduler })
+  await board.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_v0', environment }, can })
+  return board
+}
 
 /** A handle on the board behind `fetch`, as `vb conformance` checks it. */
 const clientOf = async (fetch: Fetch) => clientAs(fetch, () => personToken())
@@ -111,7 +118,7 @@ describe('the conformance kit', () => {
   })
 
   it("leaves a token's registration as it was: one with watchers or a sync is skipped, and an empty one keeps its URL", async () => {
-    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can: 'all' })] })
+    const board = await grantingV0()
     const v0 = caller(board.fetch, await deploymentToken('v0', 'prj_v0', 'production'))
     const asV0 = await clientAs(board.fetch, () => deploymentToken('v0', 'prj_v0', 'production'))
     const registered = async () => (await v0('GET', '/watchers')).body.watchers.map(({ hash: _hash, ...rest }: { hash: string }) => rest)
@@ -136,7 +143,7 @@ describe('the conformance kit', () => {
   })
 
   it('replaces nothing on a board from before `path`, which reads one as a registration with nothing in it', async () => {
-    const older = withoutPath(testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch)
+    const older = withoutPath((await grantingV0()).fetch)
     const v0 = caller(older, await deploymentToken('v0', 'prj_v0', 'production'))
     const asV0 = await clientAs(older, () => deploymentToken('v0', 'prj_v0', 'production'))
     const watching = { url: 'https://v0.test/api/board', watch: { fix: { tail: 'feedback', when: 'matches' } }, sync: [] }
@@ -153,7 +160,7 @@ describe('the conformance kit', () => {
   })
 
   it("passes a board that wakes by path, which a project registers on and gets back, and refuses anyone else's", async () => {
-    const byPath = wakingByPath(testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch)
+    const byPath = wakingByPath((await grantingV0()).fetch)
     const v0 = caller(byPath, await deploymentToken('v0', 'prj_v0', 'production'))
     expect((await v0('POST', '/watchers', { path: '/api/board', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'production')))
@@ -165,7 +172,7 @@ describe('the conformance kit', () => {
   })
 
   it("checks a preview's path with its branch, and gives the branch back", async () => {
-    const byPath = wakingByPath(testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can: 'all' })] }).fetch)
+    const byPath = wakingByPath((await grantingV0('preview')).fetch)
     const preview = caller(byPath, await deploymentToken('v0', 'prj_v0', 'preview'))
     expect((await preview('POST', '/watchers', { path: '/api/board', branch: 'jb/watchers', watch: {} })).status).toBe(200)
     const report = await conformance(await clientAs(byPath, () => deploymentToken('v0', 'prj_v0', 'preview')))
@@ -205,7 +212,7 @@ describe('the conformance kit', () => {
 
   it('skips the @sync check for a token that syncs elsewhere, but not where the kit posts', async () => {
     const can = { conformance: ['read', 'post', 'react', 'label'], 'elsewhere/': ['sync'] } as const
-    const board = testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can })] })
+    const board = await grantingV0('production', can)
     const report = await conformance(await clientAs(board.fetch, () => deploymentToken('v0', 'prj_v0', 'production')))
     expect(report.checks.find((check) => check.name === 'hands a sync each message change as a match of its @sync watcher')).toMatchObject({
       status: 'skipped',
