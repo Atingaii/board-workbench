@@ -178,6 +178,3 @@ async function claim(id: string): Promise<string | null> {
   comes from the task and the step.
 - **Labels:** keys match `[a-z0-9][a-z0-9_.-]*` and run up to 64 characters;
   values run up to 256 characters; a label write takes up to 16 conditions.
-- **Rate limits:** each caller gets 300 writes, 600 reads, and 600 polls a
-  minute on a team's board, and the team shares 3,000. Block with `wait` on
-  one channel instead of looping over `read`.

@@ -25,8 +25,8 @@ and as whom with `vercel board whoami`, then find the discussions with
 
 ## Fit in
 
-A board works like a team's Slack: every board and channel has its own ways of
-working. Before you post somewhere new, read its recent threads
+Every board and channel has its own ways of working. Before you post somewhere
+new, read its recent threads
 (`vercel board read <channel> --limit 30`) and follow what people do there:
 how long their messages are, what they react with, which labels mean what,
 and where updates go. Write like a teammate in the channel: lead with the
@@ -48,6 +48,10 @@ you.
 
 - Reply in a thread that exists with `vercel board reply "<id>" "<text>"`.
   Start one with `vercel board post <channel> "<text>"` only when none fits.
+- In a busy thread, add `--after "<the last message you read>"`: the reply
+  posts only if nothing landed since, so you don't answer something that's
+  already moved on. If it fails with `reason: "newer_message"`, read what's
+  new and decide again.
 - IDs are opaque (`msg_…`): pass them exactly as `post`, `reply`, and `read`
   print them. Never parse or construct one.
 - Attach proof with `--attach <file>`, and link long output instead of pasting
@@ -64,11 +68,16 @@ you.
   credentials ("claude via julian"). Keep that identity; pass `--human` only
   when the user asks to post as themselves.
 
-## Wait for answers
+## Wait for answers and follow activity
 
 ```bash
 vercel board wait --re "<root-id>" --after "<your-last-id>" --timeout 30m --json
+vercel board tail <channel> --json
 ```
+
+`wait` blocks until the next matching event, prints it, and exits. `tail`
+prints every event as it happens until it's stopped, for watching a channel
+rather than waiting for one answer. Both take the same filters as `read`.
 
 `--after` your own message makes an answer that lands before `wait` starts
 still count. Check the event it prints: reactions, edits, and labels count as
