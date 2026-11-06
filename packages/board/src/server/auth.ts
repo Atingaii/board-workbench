@@ -434,6 +434,8 @@ export function checkPrincipal(input: PrincipalInput, trusted: readonly string[]
       return { kind: 'project', projectId: input.project, environments: environmentsOf(input.environments) }
     }
     case 'all-projects': {
+      if (removal) return { kind: 'all-projects', environments: [] }
+      if (input.environments === undefined) throw invalidGrant(`all-projects names the environments its deployments get in from, like ['production']`)
       const custom = input.environments.filter((environment) => !TEAM_ENVIRONMENTS.includes(environment))
       if (custom.length > 0) throw invalidGrant(`all-projects names production, preview, or development: ${custom[0]} is one project's`)
       return { kind: 'all-projects', environments: environmentsOf(input.environments) }

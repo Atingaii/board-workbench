@@ -132,14 +132,22 @@ describe('grants', () => {
     const { person } = await setUp()
     const made = await person('POST', '/grants', { principals: [{ kind: 'project', project: 'prj_front', environments: ['preview'] }], can: { 'dev/': ['post'] } })
     const id = made.body.grant.id
-    const added = await person('PATCH', `/grants/${id}`, { add: [user('u_ada'), { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' }], can: { 'dev/': ['read', 'post'] } })
-    expect(added.body.grant).toMatchObject({
-      id,
-      principals: [{ kind: 'project', projectId: 'prj_front' }, { kind: 'user', userId: 'u_ada' }, { kind: 'github', repository: 'acme/web', workflow: '.github/workflows/ci.yml' }],
+    const added = await person('PATCH', `/grants/${id}`, {
+      add: [user('u_ada'), { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' }, { kind: 'all-projects', environments: ['preview'] }],
       can: { 'dev/': ['read', 'post'] },
     })
-    // A project is removed by its ID, whatever its environments.
-    const removed = await person('PATCH', `/grants/${id}`, { remove: [{ kind: 'project', project: 'prj_front' }, { kind: 'github', repository: 'acme/web' }] })
+    expect(added.body.grant).toMatchObject({
+      id,
+      principals: [
+        { kind: 'project', projectId: 'prj_front' },
+        { kind: 'user', userId: 'u_ada' },
+        { kind: 'github', repository: 'acme/web', workflow: '.github/workflows/ci.yml' },
+        { kind: 'all-projects', environments: ['preview'] },
+      ],
+      can: { 'dev/': ['read', 'post'] },
+    })
+    // A project, and every project, is removed by who it is, whatever its environments.
+    const removed = await person('PATCH', `/grants/${id}`, { remove: [{ kind: 'project', project: 'prj_front' }, { kind: 'github', repository: 'acme/web' }, { kind: 'all-projects' }] })
     expect(removed.body.grant.principals).toEqual([{ kind: 'user', userId: 'u_ada', email: null }])
     const refused = async (path: string, body: unknown) => {
       const { status, body: answer } = await person('PATCH', path, body)
@@ -149,6 +157,7 @@ describe('grants', () => {
     expect(await refused(`/grants/${id}`, { remove: [user('u_ada')] })).toEqual([400, 'grant_empty'])
     expect(await refused('/grants/g99', { can: { '*': ['read'] } })).toEqual([404, 'grant_not_found'])
     expect(await refused(`/grants/${id}`, {})).toEqual([400, 'invalid_request'])
+    expect(await refused(`/grants/${id}`, { add: [{ kind: 'all-projects' }] })).toEqual([400, 'invalid_grant'])
   })
 
   it('matches a GitHub run by its workflow, branch, and event, as githubActions() does', async () => {

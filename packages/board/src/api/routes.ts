@@ -198,7 +198,7 @@ export const PrincipalInput = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('oidc'), issuer: z.string().min(1).max(1000), claims: z.record(z.string().min(1).max(200), z.union([ClaimValue, z.array(ClaimValue).min(1).max(32)])) }),
   z.object({ kind: z.literal('all-users') }),
-  z.object({ kind: z.literal('all-projects'), environments: Environments }),
+  z.object({ kind: z.literal('all-projects'), environments: Environments.optional() }),
   z.object({ kind: z.literal('everyone') }),
 ])
 
