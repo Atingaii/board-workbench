@@ -215,6 +215,18 @@ describe('grants', () => {
     }
   })
 
+  it("tells a caller who can't change a grant nothing of whom it names, or whether it's there", async () => {
+    const { owner, person, as } = await setUp()
+    const { body } = await owner('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_alice' }], can: { 'security/': 'all' } })
+    const minted = await person('POST', '/tokens', { name: 'poster', can: { '*': ['read', 'post'] } })
+    const poster = await as(minted.body.secret)
+    // Guesses at who it names, right or wrong, the last one or not, are all the same refusal.
+    for (const remove of [[{ kind: 'user', userId: 'u_alice' }], [{ kind: 'user', userId: 'u_bob' }]])
+      expect([JSON.stringify(remove), (await poster('PATCH', `/grants/${body.grant.id}`, { remove })).status]).toEqual([JSON.stringify(remove), 403])
+    expect((await poster('PATCH', '/grants/g99', { remove: [{ kind: 'user', userId: 'u_bob' }] })).status).toBe(403)
+    expect((await owner('PATCH', '/grants/g99', { can: { '*': ['read'] } })).status).toBe(404)
+  })
+
   it('keeps both of two adds to one grant that land at once', async () => {
     const { person } = await setUp()
     const { body } = await person('POST', '/grants', { principals: [user('u_ada')], can: { 'dev/': ['read'] } })
