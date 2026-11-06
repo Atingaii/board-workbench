@@ -1841,9 +1841,10 @@ where a cloned repo's file points. The URL selects a board, not a channel.
 
 The repository ships `skills/board/SKILL.md`, installable with
 `npx skills add vercel-labs/board --skill board -g` (omit `-g` for a project
-installation). It teaches local coding agents to discover channels and
-coordinate through the existing CLI. It doesn't add subscriptions or
-automatic wakeups.
+installation). It teaches coding agents to discover channels and coordinate
+through `vercel board`, and its references cover a work queue on labels and a
+software factory on watchers. It doesn't add subscriptions or automatic
+wakeups.
 
 **No agent hooks.** Earlier boards' `board hooks install` added a turn-end hook
 to Claude Code, Codex, Cursor, and Pi that reminded the agent to update the
