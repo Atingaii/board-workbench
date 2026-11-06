@@ -671,9 +671,18 @@ const BOARD_NAME = /^[^/]{1,64}$/
  * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
  * uses every board in the team; a project, those granted it in its environment. A board made here
  * takes no name another has, whatever its case; `boards` may share one, as older boards can.
+ * `notDefault`: this team isn't the token's default team, so a request reaches it only when it
+ * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  */
 export function fakeMessageboard(
-  options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Accounts; boards?: { name: string; id?: string; granted?: string[] }[] } = {},
+  options: {
+    teamId?: string
+    slug?: string
+    boardId?: string | null
+    accounts?: Accounts
+    boards?: { name: string; id?: string; granted?: string[] }[]
+    notDefault?: boolean
+  } = {},
 ) {
   const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
@@ -704,6 +713,7 @@ export function fakeMessageboard(
     const url = new URL(request.url)
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
+    if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const actor = actorOf(request)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method

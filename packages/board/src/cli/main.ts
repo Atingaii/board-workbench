@@ -10,7 +10,7 @@ import { http } from '../backend-http/index.ts'
 import { credentialSource, handTeam, vercel } from '../backend-vercel/index.ts'
 import { board as boardAt, type Board } from '../server/index.ts'
 import { isBoardName } from '../server/board.ts'
-import { isApiMessageId } from '../server/backend-vercel.ts'
+import { idUrlIn, isApiMessageId } from '../server/backend-vercel.ts'
 import { normalizeEmoji } from '../contract/emoji.ts'
 import { DIRECT_UPLOAD_BYTES_MAX, MESSAGE_TEXT_MAX, type Attachment, AttachmentId } from '../contract/schemas.ts'
 import { VERSION } from '../version.ts'
@@ -583,9 +583,12 @@ function failureOf(error: unknown): Failure {
         return own('not_found', 'board_not_found')
       case 'board_not_granted':
         return own('permission', 'board_not_granted')
-      case 'ambiguous_board_name':
-        // The CLI picks one by its URL, which names its ID, in place of the name.
-        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: without(rerun('--url', 'https://api.vercel.com/v1/messageboard/boards/<ID>'), '--name') }])
+      case 'ambiguous_board_name': {
+        // The CLI picks one by its URL, which names its ID and its team, in place of the name and
+        // the team: beside a URL, --scope would pick nothing.
+        const at = (typeof hint === 'string' && idUrlIn(hint)) || 'https://api.vercel.com/v1/messageboard/boards/<ID>'
+        return own('conflict', 'ambiguous_board_name', [{ instruction: 'Use one of them by its ID', argv: [...without(rerun(), '--name', '--scope', '--team'), '--url', at] }])
+      }
       case 'invalid_board_name':
         return own('usage', 'invalid_arguments', [helpRecovery()])
       case 'too_many_redirects':
@@ -702,9 +705,9 @@ function profileFlag(): ProfileOption | undefined {
 function connection(url: string | undefined = flags.url, options: { token?: string; handle?: string | undefined } = {}) {
   const profile = profileFlag()
   const team = flags.scope ?? flags.team
-  const name = boardNameFlag(url)
-  // --name names a team's board as --scope does, so it goes before BOARD_URL too.
-  const configured = url ?? (team === undefined && flags.name === undefined ? configuredUrl() : null)
+  const name = boardNameFlag(url, team)
+  // A name names a team's board as --scope does, so it goes before BOARD_URL too.
+  const configured = url ?? (team === undefined && name === undefined ? configuredUrl() : null)
   if (configured === null) {
     const board = boardAt({ backend: vercel({ ...(team !== undefined ? { team } : {}), ...sending(options.token) }), ...(name !== undefined ? { name } : {}) })
     return { url: null, transport: { source: credentialSource }, board: profile !== undefined ? board.as(profile) : board }
@@ -725,13 +728,20 @@ function connection(url: string | undefined = flags.url, options: { token?: stri
 
 /**
  * The team's board this run names: `--name`, or `BOARD_NAME`, on `--scope`'s team or the one the
- * environment finds. A URL names a board itself.
+ * environment finds. A URL names a board itself, its team included. `BOARD_NAME` is read only
+ * where it picks the board: beside `BOARD_URL`, which names another, nothing says which one.
  */
-function boardNameFlag(url: string | undefined): string | undefined {
+function boardNameFlag(url: string | undefined, team: string | undefined): string | undefined {
   if (flags.name !== undefined && flags.url !== undefined)
     throw usage("--name names a team's board, and --url a board by its URL: pass one of them.", { reason: 'conflicting_options' })
-  const given = flags.name ?? (process.env.BOARD_NAME || undefined)
-  if (given === undefined || url !== undefined) return undefined
+  if (team !== undefined && flags.url !== undefined)
+    throw usage("--url names its board, its team included, and --scope a team's board: pass one of them.", { reason: 'conflicting_options' })
+  if (url !== undefined) return undefined
+  const named = process.env.BOARD_NAME || undefined
+  if (flags.name === undefined && team === undefined && named !== undefined && process.env.BOARD_URL?.trim())
+    throw usage("BOARD_NAME names a team's board, and BOARD_URL a board by its URL: unset one.", { reason: 'conflicting_options' })
+  const given = flags.name ?? named
+  if (given === undefined) return undefined
   const from = flags.name !== undefined ? '--name' : 'BOARD_NAME'
   if (given.includes('/')) {
     // Another team's board is its team, with --scope, and its name.
