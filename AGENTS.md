@@ -19,7 +19,9 @@ Tests run on the local board's engine (`packages/board/test/harness.ts`):
 `memory()` for the store, `memoryBlob()` for files, no scheduler unless a test
 passes one, a local test issuer, and the test project as the board's
 environment. Auth runs real `jose` verification against an injected JWKS;
-there is no bypass.
+there is no bypass. What doesn't depend on board's version (the test project,
+its keys, the tokens they sign, and `caller`) is `test/tokens.ts`, which the
+factory's tests use with the release they pin.
 
 Every test you write, change, or review gets the test-behavior skill
 (`.claude/skills/test-behavior`, and the factory's copy for Eve): break what it
