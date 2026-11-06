@@ -13,3 +13,5 @@ const acme = board({ team: 'acme' })          // team acme's default board
 ```
 
 `board({ fetch })` sends the credentials Vercel's API takes in place of the environment's, so a browser reaches Vercel's board with credentials of its own. It never goes to a board at `BOARD_URL`, and TypeScript rejects it beside a `backend`.
+
+`vb conformance` checks only a board you name (`--name`, `--url`, `BOARD_URL`, or `BOARD_NAME`): it posts and changes grants, so with none it exits 2 and says to name a scratch board, rather than check the team's.
