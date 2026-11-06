@@ -48,7 +48,7 @@ it in: `this token can't use this board: add githubActions({ repository:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { githubActions, oidc, vercelProject } from '@vercel/board/access'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const team = board({
   backend: local(),
@@ -292,7 +292,7 @@ and its customers, and `vb`'s tokens, from people, agents, and deployments:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { vercelProject, oidcTokens, type CallerRequest } from '@vercel/board/access'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const tokens = oidcTokens()
 
@@ -367,7 +367,7 @@ may do:
 
 ```ts lib/boards.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 /** One team's board. Make each once, and cache it. */
 export function teamBoard(teamId: string) {

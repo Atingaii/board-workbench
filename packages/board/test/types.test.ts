@@ -66,7 +66,7 @@ describe('the published types name nothing of A2', () => {
     expect(files.length).toBeGreaterThan(0)
     const named = files.flatMap(([file, text]) => [...text.matchAll(/\b(A2\w*|BoardStore|experimental-a2|backend-a2|a2\(\))/g)].map((match) => `${file}: ${match[1]}`))
     expect(named).toEqual([])
-    if (path === './local') expect(files.map(([file]) => file)).toContain('dist/local.d.mts')
+    if (path === './backend-local') expect(files.map(([file]) => file)).toContain('dist/backend-local.d.mts')
   })
 })
 

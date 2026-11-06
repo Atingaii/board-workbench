@@ -169,7 +169,7 @@ says what they may do in each channel:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { githubActions, vercelProject } from '@vercel/board/access'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const team = board({
   backend: local(),

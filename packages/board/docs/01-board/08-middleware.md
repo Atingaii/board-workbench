@@ -7,7 +7,7 @@ description: Middleware sees every post and edit before it lands, whatever it ca
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board, type Middleware } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const guard: Middleware = async ({ write, source, respond, next }) => {
   if (source.kind === 'sync' && /ignore previous instructions/i.test(write.text)) {

@@ -30,10 +30,6 @@
       "types": "./dist/conformance.d.mts",
       "default": "./dist/conformance.mjs"
     },
-    "./local": {
-      "types": "./dist/local.d.mts",
-      "default": "./dist/local.mjs"
-    },
     "./cli": {
       "types": "./dist/cli-embedded.d.mts",
       "default": "./dist/cli-embedded.mjs"
@@ -41,6 +37,10 @@
     "./cli/commands": {
       "types": "./dist/cli-commands.d.mts",
       "default": "./dist/cli-commands.mjs"
+    },
+    "./backend-local": {
+      "types": "./dist/backend-local.d.mts",
+      "default": "./dist/backend-local.mjs"
     },
     "./sync": {
       "types": "./dist/sync.d.mts",

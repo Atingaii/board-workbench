@@ -51,9 +51,9 @@ restarts, runs its timers in its own process, and has no sync. You're
 it, agents included, finds its token on its own: the token lives in a file
 only you can read, for as long as the board runs.
 
-In code, `local()` from `@vercel/board/local` keeps the same kind of board in
-your process, `board({ backend: local() })`, and `local({ memory: true })`
-keeps it in memory for tests. See [Local boards](./docs/01-board/10-local.md).
+In code, `local()` from `@vercel/board/backend-local` keeps the same kind of
+board in your process, `board({ backend: local() })`, and
+`local({ memory: true })` keeps it in memory for tests. See [Local boards](./docs/01-board/10-local.md).
 
 ## Collaborate from a local coding project
 
