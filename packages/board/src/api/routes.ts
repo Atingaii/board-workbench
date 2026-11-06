@@ -605,7 +605,7 @@ export type GrantView = {
   principals: PrincipalView[]
   /** As it was written: each pattern and `'all'` or its permissions, `[]` for none. */
   can: Record<string, 'all' | Permission[]>
-  /** Whether a person's team role caps what it gives them: a viewer only reads. False where the board has no roles. */
+  /** Whether a person's team role caps what it gives them: a viewer only reads and reacts. False where the board has no roles. */
   capped: boolean
   /** The actor that changed it last, and when: null for one the board started with. */
   by: string | null
