@@ -282,9 +282,11 @@ export type Level = (typeof LEVELS)[number]
 /** A grant that matched a caller: how close its principal is, and what its `can` gives at each pattern. */
 export type Matched<Source = unknown> = { level: Level; can: Can; source: Source }
 
-/** What `decide` found for one channel: the pattern that won, the level that won there, the sources at it, and what they give. */
+/** What `decide` found for one channel: the pattern that won, the others it won over, the level that won there, the sources at it, and what they give. */
 export type Decision<Source = unknown> = {
   pattern: ChannelPattern | null
+  /** The other patterns the matched grants name that cover the channel, most specific first. */
+  over: ChannelPattern[]
   level: Level | null
   sources: Source[]
   permissions: readonly Permission[]
@@ -332,10 +334,11 @@ export function decide<Source>(matched: readonly Matched<Source>[], channel: str
   )
   // An exact channel, then the longest subtree, then `*`.
   const specificity = ({ pattern }: { pattern: Pattern }) => (pattern.kind === 'exact' ? Infinity : pattern.kind === 'subtree' ? pattern.path.length : -1)
-  const winner = covering.sort((a, b) => specificity(b) - specificity(a))[0]
-  if (!winner) return { pattern: null, level: null, sources: [], permissions: [] }
+  const [winner, ...beaten] = covering.sort((a, b) => specificity(b) - specificity(a))
+  if (!winner) return { pattern: null, over: [], level: null, sources: [], permissions: [] }
   return {
     pattern: key(winner.pattern),
+    over: beaten.map(({ pattern }) => key(pattern)),
     level: winner.level,
     sources: winner.sources,
     permissions: [...winner.permissions].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!),

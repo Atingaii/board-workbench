@@ -560,7 +560,8 @@ export type ScheduleView = {
 
 /**
  * Which grants decide a channel for a principal: the `pattern` that won there (an exact channel,
- * then the longest subtree, then `*`), the `level` that won at it, the `grants` at that level, which
+ * then the longest subtree, then `*`), the patterns it won `over` (the others its grants and rules
+ * name that cover the channel, most specific first), the `level` that won at it, the `grants` at that level, which
  * add up, or the `rule` in the board's code that decided, and what they give, `can`, after `capped`,
  * the team role that caps a person's. `pattern` and `level` are null where no grant decides: the
  * board's own code, its own deployments where it runs, or a principal nothing lets in, whose `can`
@@ -569,6 +570,7 @@ export type ScheduleView = {
 export type Explanation = {
   channel: string
   pattern: string | null
+  over: string[]
   level: 'principal' | 'group' | 'everyone' | null
   grants: GrantView[]
   rule: string | null

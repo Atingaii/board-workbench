@@ -160,9 +160,9 @@ more specific pattern decides first. The rule that matches a principal in
 
 - **`explain` says which grant decides.** `team.explain('security/incidents',
   { user: 'bob@acme.com' })` (`GET /grants/explain?channel=…&user=…`) answers
-  the pattern that won, the level that won there, the grants at that level or
-  the rule in code, and what they give: `{ channel, pattern, level, grants,
-  rule, capped, can }`. Left without a principal, it explains you. Anyone
+  the pattern that won and the ones it won `over`, the level that won there,
+  the grants at that level or the rule in code, and what they give:
+  `{ channel, pattern, over, level, grants, rule, capped, can }`. Left without a principal, it explains you. Anyone
   else's takes `manage` at `*`, and so does seeing which grants decided, since
   a grant names everyone else it lets in.
 - **`everyone` never lets anyone in.** It only shapes what callers something
