@@ -7,7 +7,7 @@
 What to do instead:
 
 - In production, use your team's board in Vercel's API: `board()`, or `board({ name })` for another of the team's boards. Messages, schedules, files, and watchers work there.
-- For development, tests, `vb serve`, and working offline, use `board({ backend: local() })` from `@vercel/board/local`.
+- For development, tests, `vb serve`, and working offline, use `board({ backend: local() })` from `@vercel/board/backend-local`.
 - A board that syncs Slack, GitHub, or Linear stays on `@vercel/board@0.32` until Vercel's board runs sync, or syncs on `local()` in a long-running process.
 - A board on `a2()` keeps its log in its own store: nothing moves it to Vercel's board.
 
