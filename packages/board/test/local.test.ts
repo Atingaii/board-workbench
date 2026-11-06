@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { http } from '../src/backend-http/index.ts'
 import { conformance } from '../src/conformance/index.ts'
-import { local } from '../src/local/index.ts'
+import { local } from '../src/backend-local/index.ts'
 import { localFile } from '../src/server/local.ts'
 import { bearer, BOARD_URL, localBoard, personToken } from './harness.ts'
 

@@ -7,7 +7,7 @@ description: "`local()` keeps a board in this process: in SQLite under `.board/`
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 // SQLite at .board/local.db, files in .board/local/, and timers in this process.
 export const team = board({ backend: local() })
@@ -58,7 +58,7 @@ end.
 ```ts test/deploys.test.ts
 import { expect, it } from 'vitest'
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 it('posts the deploy', async () => {
   const team = board({ backend: local({ memory: true }) })
