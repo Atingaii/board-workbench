@@ -13,7 +13,7 @@ const V0 = 'vercel:project:prj_v0:production'
 /** The team's board, granting v0's and marketing's production, and v0's board using it over http(), calling each other in-process. */
 async function team(options: Parameters<typeof http>[1] = {}) {
   const remote = testBoard()
-  for (const project of ['prj_v0', 'prj_marketing']) await remote.createGrant({ issuer: 'vercel', claims: { project_id: project, environment: 'production' }, can: 'all' })
+  for (const project of ['prj_v0', 'prj_marketing']) await remote.createGrant({ principals: [{ kind: 'project', project: project, environments: ['production'] }], can: { '*': 'all' } })
   const seen: Request[] = []
   const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
@@ -215,7 +215,7 @@ describe('a board on http()', () => {
   it("keeps a principal's keyed IDs from one whose ID is a colon-prefix of it", async () => {
     // OIDC subjects carry colons, so one principal's ID can be the start of another's.
     const remote = testBoard()
-    await remote.createGrant({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' })
+    await remote.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
     const acme = caller(remote.fetch, await oidcToken({ sub: 'acme' }))
     expect((await acme('GET', '/me')).body.principal).toBe('oidc:gitlab.test:acme')
     const theirs = 'key:oidc:gitlab.test:acme:ci:0123456789abcdef0123456789abcdef'

@@ -302,19 +302,30 @@ with 501 `no_scheduler`. See
 ### createGrant
 
 ```ts
-createGrant(input: { issuer: string; claims: Record<string, string | string[]>; can?: Can }): Promise<{ grant: GrantView; created: boolean }>
+createGrant(input: { principals: PrincipalInput[]; can: GrantCan }): Promise<{ grant: GrantView }>
+updateGrant(id: string, input: { add?: PrincipalInput[]; remove?: PrincipalInput[]; can?: GrantCan }): Promise<{ grant: GrantView }>
 grants(): Promise<GrantView[]>
+explain(channel: string, principal?: ExplainPrincipal): Promise<Explanation>
 revokeGrant(id: string): Promise<{ revoked: boolean }>
 ```
 
-`createGrant` lets in OIDC tokens from `issuer` (`vercel`, `github`, or an https URL)
-that carry every one of `claims`, to do what `can` says: read, post, react,
-and label everywhere when it's left out. The same issuer and claims are one
-grant, so creating it again changes its `can`, and `created` is false. All
-three need `manage` in every channel.
+`createGrant` lets `principals` do what `can` says: a map from channel pattern
+to `'all'` or a list of permissions, `[]` for none. The same principals again
+are another grant. `updateGrant` adds principals (a project it names already
+gets the new environments), removes them by who they are, and replaces `can`.
+Making or widening one needs what you'd grant: `manage` at its patterns and
+under them wherever your own limits narrow you, and what `everyone` gives, for
+anyone it lets in. Revoking one, or removing from it, needs the same but what
+`everyone` gives; `grants` needs `manage` at `*`. Owners always may.
+`explain` says which grants decide a channel, and what they give, for you or,
+with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
+workflow, branch, event }`, `{ oidc, claims }`, or `{ app }`. A local board has
+no apps, so it explains one as nothing letting it in.
 
 ```ts
-const { grant } = await team.createGrant({ issuer: 'github', claims: { repository: 'acme/web' }, can: { 'ci/': ['read', 'post'] } })
+const { grant } = await team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['read', 'post'] } })
+await team.updateGrant(grant.id, { add: [{ kind: 'user', email: 'ada@acme.com' }] })
+const { pattern, grants, can } = await team.explain('ci/deploys', { user: 'ada@acme.com' })
 await team.revokeGrant(grant.id)
 ```
 
@@ -329,7 +340,7 @@ revokeToken(id: string): Promise<{ revoked: boolean }>
 ```
 
 `createToken` mints a token that acts as the handle's caller, narrowed to `can`
-(read, post, react, and label everywhere when left out, as for a grant), and
+(read, post, react, and label everywhere when left out), and
 answers its `secret`, the only time it shows. `profile`, `avatar`, and
 `session` pin what every request with it writes as. It lives 30 days, or
 `expires`, 90 days at most. On `local()`, the handle's own token is the

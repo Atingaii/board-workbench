@@ -79,8 +79,12 @@ test("trusted Factory sessions discover, post, review and respond with verified 
 });
 
 test("refuses unconfigured projects, wrong teams, environments, audiences and malformed tokens", async () => {
+  // Only the trusted sources decide: g2 would let in every project on the board's team.
   const board = testBoard(options);
-  assert.equal((await caller(testBoard({ url: URL }).fetch, await token())("GET", "/me")).status, 403);
+  await board.revokeGrant("g2");
+  const plain = testBoard({ url: URL });
+  await plain.revokeGrant("g2");
+  assert.equal((await caller(plain.fetch, await token())("GET", "/me")).status, 403);
   for (const candidate of [
     await deploymentToken("other", "prj_other", "production", { audience: URL }),
     await token("production", { teamId: "team_other" }),

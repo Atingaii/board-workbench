@@ -30,7 +30,7 @@ beforeAll(async () => {
   projectUrl = `${projectServer.origin}/api/board`
   team = testBoard({ url: teamUrl })
   // The support project's production deployments may do everything there.
-  await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_support', environment: 'production' }, can: 'all' })
+  await team.createGrant({ principals: [{ kind: 'project', project: 'prj_support', environments: ['production'] }], can: { '*': 'all' } })
   backend = httpBackend(teamUrl, { fetch: bearer(globalThis.fetch, () => deploymentToken('support', 'prj_support', 'production', { audience: teamUrl })) })
   project = board({
     backend,

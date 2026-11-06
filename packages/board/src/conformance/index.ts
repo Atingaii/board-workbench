@@ -112,13 +112,16 @@ const needRoot = (ctx: Context) => {
   return { root: ctx.root, reply: ctx.reply }
 }
 
-/** A grant for a project that doesn't exist, from an environment its deployments would have: it lets nobody in. */
-const grantFor = (ctx: Context) => ({ issuer: 'vercel', claims: { environment: 'preview', project_id: `prj_conformance${ctx.labels.conformance}` } })
+/** A project that doesn't exist, by ID, which every board takes: a grant naming it lets nobody in. */
+const projectFor = (ctx: Context, environments = ['preview']) => ({ kind: 'project' as const, project: `prj_conformance${ctx.labels.conformance}`, environments })
 
-/** Sets the check's grant, or says why it can't: changing who the board trusts takes `manage` in every channel. */
-async function firstGrant(ctx: Context): Promise<Awaited<ReturnType<Board['createGrant']>> | { skip: string }> {
+/** The check's grant: that project may post in the check's channel. */
+const grantFor = (ctx: Context) => ({ principals: [projectFor(ctx)], can: { [ctx.channel]: ['post'] } }) as const
+
+/** Makes the check's grant, or says why it can't: changing grants takes `manage` where they apply. */
+async function firstGrant(ctx: Context, input: Parameters<Board['createGrant']>[0] = grantFor(ctx)): Promise<Awaited<ReturnType<Board['createGrant']>> | { skip: string }> {
   try {
-    return await ctx.board.createGrant(grantFor(ctx))
+    return await ctx.board.createGrant(input)
   } catch (error) {
     if (error instanceof BoardError && error.status === 403) return { skip: "this token can't change the board's grants" }
     throw error
@@ -471,67 +474,48 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
-    name: 'grants a project, lists it, takes the same grant again as one, and revokes it',
-    run: async (ctx) => {
-      const asked = grantFor(ctx)
-      const first = await firstGrant(ctx)
-      if ('skip' in first) return first.skip
-      try {
-        isRef(first.grant.id, "a grant's id")
-        same(first.created, true, 'a new grant: created')
-        same(first.grant.issuer, 'vercel', "the grant's issuer")
-        same(first.grant.claims.project_id, asked.claims.project_id, "the grant's project_id")
-        check(first.grant.can['*']?.includes('post'), `a grant with no can should let them post everywhere, got ${show(first.grant.can)}`)
-        same(first.grant.by, ctx.me.actor, "the grant's by")
-        const again = await ctx.board.createGrant(asked)
-        same(again.created, false, 'the same issuer and claims again: created')
-        same(again.grant.id, first.grant.id, 'the same issuer and claims again: its id')
-        same((await ctx.board.grants()).filter((grant) => grant.id === first.grant.id).length, 1, 'grants listing it')
-      } catch (error) {
-        await ctx.board.revokeGrant(first.grant.id).catch(() => {})
-        throw error
-      }
-      same((await ctx.board.revokeGrant(first.grant.id)).revoked, true, 'revoking it')
-      same((await ctx.board.revokeGrant(first.grant.id)).revoked, false, 'revoking it again')
-      check(!(await ctx.board.grants()).some((grant) => grant.id === first.grant.id), "grants shouldn't list it once it's revoked")
-    },
-  },
-  {
-    group: 'grants',
-    name: "changes a grant's can when it's set again",
+    name: 'grants a project, lists it, and revokes it',
     run: async (ctx) => {
       const first = await firstGrant(ctx)
       if ('skip' in first) return first.skip
       const { grant } = first
       try {
-        const narrowed = await ctx.board.createGrant({ ...grantFor(ctx), can: { [ctx.channel]: ['post'] } })
-        same(narrowed.created, false, 'setting its can: created')
-        same(narrowed.grant.id, grant.id, 'setting its can: its id')
-        same(show(narrowed.grant.can), show({ [ctx.channel]: ['post'] }), "the grant's can")
-      } finally {
+        isRef(grant.id, "a grant's id")
+        same(show(grant.principals.map((principal) => (principal.kind === 'project' ? [principal.kind, principal.projectId, principal.environments] : principal.kind))), show([['project', projectFor(ctx).project, ['preview']]]), "the grant's principals")
+        same(show(grant.can), show({ [ctx.channel]: ['post'] }), "the grant's can")
+        same(grant.by, ctx.me.actor, "the grant's by")
+        same((await ctx.board.grants()).filter((listed) => listed.id === grant.id).length, 1, 'grants listing it')
+      } catch (error) {
         await ctx.board.revokeGrant(grant.id).catch(() => {})
+        throw error
       }
+      same((await ctx.board.revokeGrant(grant.id)).revoked, true, 'revoking it')
+      same((await ctx.board.revokeGrant(grant.id)).revoked, false, 'revoking it again')
+      check(!(await ctx.board.grants()).some((listed) => listed.id === grant.id), "grants shouldn't list it once it's revoked")
     },
   },
   {
     group: 'grants',
-    name: "grants a GitHub repository's workflows, and another team's project",
+    name: 'makes another grant for the same principals, and changes one by its ID',
     run: async (ctx) => {
       const first = await firstGrant(ctx)
       if ('skip' in first) return first.skip
       const made = [first.grant.id]
       try {
-        const github = await ctx.board.createGrant({ issuer: 'github', claims: { repository: `acme/conformance-${ctx.labels.conformance}` }, can: { [ctx.channel]: ['post'] } })
-        made.push(github.grant.id)
-        same(github.grant.issuer, 'github', "the GitHub grant's issuer")
-        const theirs = await ctx.board.createGrant({
-          issuer: 'vercel',
-          claims: { environment: 'production', owner_id: `team_conformance${ctx.labels.conformance}`, project_id: `prj_conformance${ctx.labels.conformance}x` },
-        })
-        made.push(theirs.grant.id)
-        same(theirs.grant.claims.owner_id, `team_conformance${ctx.labels.conformance}`, "another team's grant's owner_id")
-        const listed = new Set((await ctx.board.grants()).map((grant) => grant.id))
-        check(made.every((id) => listed.has(id)), `grants should list ${made.join(', ')}`)
+        const again = await ctx.board.createGrant(grantFor(ctx))
+        made.push(again.grant.id)
+        check(again.grant.id !== first.grant.id, `the same principals again should be another grant, got ${again.grant.id} twice`)
+        const repository = `acme/conformance-${ctx.labels.conformance}`
+        const added = await ctx.board.updateGrant(first.grant.id, { add: [{ kind: 'github', repository }], can: { [ctx.channel]: ['read', 'post'] } })
+        same(added.grant.id, first.grant.id, "the updated grant's id")
+        same(show(added.grant.principals.map((principal) => principal.kind)), show(['project', 'github']), 'principals after adding a repository')
+        same(show(added.grant.can), show({ [ctx.channel]: ['read', 'post'] }), "the updated grant's can")
+        // A project to remove is the project, whatever its environments.
+        const removed = await ctx.board.updateGrant(first.grant.id, { remove: [{ kind: 'project', project: projectFor(ctx).project }] })
+        same(show(removed.grant.principals.map((principal) => principal.kind)), show(['github']), 'principals after removing the project')
+        await rejects(ctx.board.updateGrant(first.grant.id, { remove: [{ kind: 'project', project: projectFor(ctx).project }] }), 400, 'not_in_grant', 'removing a principal the grant no longer names')
+        await rejects(ctx.board.updateGrant(first.grant.id, { remove: [{ kind: 'github', repository }] }), 400, 'grant_empty', 'removing the last principal')
+        await rejects(ctx.board.updateGrant(`${first.grant.id}0`, { can: { [ctx.channel]: ['read'] } }), 404, 'grant_not_found', 'updating a grant that was never made')
       } finally {
         for (const id of made) await ctx.board.revokeGrant(id).catch(() => {})
       }
@@ -539,21 +523,19 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
-    name: "keeps two environments of one project as two grants, and revokes one without the other",
+    name: 'keeps a grant\'s can as written, a pattern with no permissions included',
     run: async (ctx) => {
-      const first = await firstGrant(ctx)
+      const can = { '*': ['read'], [`${ctx.channel}/`]: [] } as const
+      const first = await firstGrant(ctx, { principals: [projectFor(ctx, ['production', 'preview'])], can })
       if ('skip' in first) return first.skip
-      const made = [first.grant.id]
       try {
-        const production = await ctx.board.createGrant({ ...grantFor(ctx), claims: { ...grantFor(ctx).claims, environment: 'production' } })
-        made.push(production.grant.id)
-        same(production.created, true, 'another environment: created')
-        check(production.grant.id !== first.grant.id, 'another environment should be another grant')
-        same((await ctx.board.revokeGrant(first.grant.id)).revoked, true, 'revoking the preview grant')
-        const listed = (await ctx.board.grants()).map((grant) => grant.id)
-        check(listed.includes(production.grant.id) && !listed.includes(first.grant.id), `grants should list ${production.grant.id} and not ${first.grant.id}, got ${show(listed)}`)
+        same(show(first.grant.can), show(can), "the grant's can")
+        const listed = (await ctx.board.grants()).find((grant) => grant.id === first.grant.id)
+        same(show(listed?.can), show(can), "the listed grant's can")
+        const project = listed?.principals[0]
+        same(show(project?.kind === 'project' ? [...project.environments].sort() : null), show(['preview', 'production']), "the project's environments")
       } finally {
-        for (const id of made) await ctx.board.revokeGrant(id).catch(() => {})
+        await ctx.board.revokeGrant(first.grant.id).catch(() => {})
       }
     },
   },

@@ -38,6 +38,13 @@ async function sign(claims: Record<string, unknown>, issuer: string, audience = 
     .sign(privateKey)
 }
 
+/** A local board's own issuer, as `vb serve` keeps one: the tokens it signs are its local user's. */
+export const LOCAL_ISS = 'http://local.board.test'
+export const testLocal = { issuer: LOCAL_ISS, jwks }
+
+/** The board's local user, its owner, as `vb serve` mints a token for it. */
+export const localUserToken = (handle = 'julian', audience?: string) => sign({ sub: handle }, LOCAL_ISS, audience)
+
 /** A person: a development token for the board's own project. */
 export const personToken = (userId = 'u_julian', audience?: string) =>
   sign(

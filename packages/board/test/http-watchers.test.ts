@@ -13,6 +13,7 @@ import { fakePlatform } from './sync-fixtures.ts'
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
 const V0 = 'vercel:project:prj_v0:production'
+// Another team's project, so only the rules let it in: g2 lets in every project on the board's team.
 const v0Token = () => deploymentToken('v0', 'prj_v0', 'production')
 
 // The board's own Vercel OIDC token, as @vercel/oidc mints it on Vercel: only the tests that say
@@ -21,8 +22,15 @@ const mint = vi.hoisted(() => vi.fn(async (_options: { audience: string }): Prom
 vi.mock('@vercel/oidc', async (original) => ({ ...(await original<typeof import('@vercel/oidc')>()), getVercelOidcToken: mint }))
 
 /** Lets a project's production deployments do what `can` says on `on`: again, it changes what they may. */
-const grant = (on: ReturnType<typeof testBoard>, projectId: string, can: Can) =>
-  on.createGrant({ issuer: 'vercel', claims: { project_id: projectId, environment: 'production' }, can })
+const grant = async (on: ReturnType<typeof testBoard>, projectId: string, can: Can) => {
+  const written = (typeof can === 'object' && !Array.isArray(can) ? can : { '*': can }) as never
+  const grants = await on.grants()
+  const named = grants.find((one) => one.principals.length === 1 && one.principals[0]!.kind === 'project' && one.principals[0]!.projectId === projectId)
+  if (named) return on.updateGrant(named.id, { can: written })
+  // Without g2's every project on the team, it may do only what its grant says.
+  if (grants.some((one) => one.id === 'g2')) await on.revokeGrant('g2')
+  return on.createGrant({ principals: [{ kind: 'project', project: projectId, environments: ['production'] }], can: written })
+}
 
 /**
  * The team's board on a2(), and v0's board on http() using it, calling each other in-process:
@@ -377,8 +385,8 @@ describe('a wake-up through Deployment Protection', () => {
       },
     }
     const remote = testBoard({ scheduler: fakeQueue().scheduler, transport })
-    await remote.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: 'all' })
-    await remote.createGrant({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' })
+    await remote.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': 'all' } })
+    await remote.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
     await grant(remote, 'prj_v0', 'all')
     const hosted = testBoard({
       scheduler: fakeQueue().scheduler,

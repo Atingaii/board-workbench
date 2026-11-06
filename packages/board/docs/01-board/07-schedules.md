@@ -81,7 +81,7 @@ post there (or read the thread, for a reply) has the schedule canceled with
 it`. A schedule from before board kept its creator's claims is worked out from
 the principal ID alone, which names a deployment's project ID and environment
 and nothing of a workflow's run. So the board's own deployments in its
-environment, and a project a Vercel grant names, keep sending; a workflow's is
+environment, and a project a grant names, keep sending; a workflow's is
 `revoked` at its next send.
 
 ## In code

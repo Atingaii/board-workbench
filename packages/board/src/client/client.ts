@@ -27,6 +27,8 @@ import type {
   SchedulesQueryInput,
   GrantInput,
   GrantView,
+  UpdateGrantInput,
+  Explanation,
   TokenInput,
   TokenView,
   ThreadsPage,
@@ -207,6 +209,22 @@ export type Filters = Omit<FiltersInput, 'label'> & {
 
 export type BoardClient = ReturnType<typeof createBoardClient>
 
+/** Whom `explain` asks about: nobody for yourself, or one principal as people name it. */
+export type ExplainPrincipal = {
+  user?: string
+  project?: string
+  /** Where the project's deployment runs: production when left out. */
+  environment?: string
+  github?: string
+  workflow?: string
+  branch?: string
+  event?: string
+  oidc?: string
+  claims?: Record<string, string>
+  /** An app on the team, by its slug or client ID. */
+  app?: string
+}
+
 /** What a write returns, with the handles in it that matched nobody and stayed plain text. */
 export type Written<T> = T & { unknownMentions?: string[] }
 
@@ -345,12 +363,27 @@ export function createBoardClient(options: ClientOptions) {
     cancelSchedule: (id: string) =>
       call<{ schedule: ScheduleView; canceled: boolean }>('POST', `/schedules/${path(id)}/cancel`, { body: {} }),
     /**
-     * Lets in callers with an OIDC token from `issuer` that carries every one of `claims`, to do
-     * what `can` says (read, post, react, and label everywhere when left out). Setting the same
-     * issuer and claims again changes its `can`: `created` says which. Needs manage in every channel.
+     * A new grant: `principals` may do what `can` says, a map from channel pattern to permissions
+     * (`[]` for none). The same principals again are another grant. At each channel, the most
+     * specific pattern among the grants that name a caller decides, then the closest principal,
+     * and grants tied there add up. Needs manage at each pattern `can` names.
      */
-    createGrant: (input: GrantInput) => call<{ grant: GrantView; created: boolean }>('POST', '/grants', { body: input }),
-    /** The board's grants. Needs manage in every channel. */
+    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: input }),
+    /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs what `checkGrantChange` says, for the grant as it was and as it'd be. */
+    updateGrant: (id: string, input: UpdateGrantInput) => call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, { body: input }),
+    /**
+     * Which grants decide `channel`, and what they give: for you, or with manage at `*`, for the
+     * principal `principal` names (`{ user }`, `{ project, environment }`, `{ github, workflow,
+     * branch, event }`, or `{ oidc, claims }`).
+     */
+    explain: (channel: string, principal: ExplainPrincipal = {}) => {
+      const { claims, ...rest } = principal
+      const params = new URLSearchParams({ channel })
+      for (const [name, value] of Object.entries(rest)) if (value !== undefined) params.set(name, value)
+      for (const [name, value] of Object.entries(claims ?? {})) params.append('claim', `${name}=${value}`)
+      return call<Explanation>('GET', `/grants/explain?${params}`)
+    },
+    /** The board's grants. Needs manage at `*`, or a team owner. */
     grants: async () => (await call<{ grants: GrantView[] }>('GET', '/grants')).grants,
     /** `revoked` is false when it was already gone. Its principals' next requests are refused. */
     revokeGrant: (id: string) => call<{ revoked: boolean }>('POST', `/grants/${path(id)}/revoke`, { body: {} }),

@@ -10,12 +10,15 @@ import { BOARD_URL, caller, deploymentToken, PROJECT_ID, personToken, testAuth, 
 const PLATFORM: Record<string, { team: string; principal: HostPrincipal }> = {
   pt_ada: { team: 'team_a', principal: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-ada' } },
   pt_bob: { team: 'team_b', principal: { id: 'vercel:user:u_bob', kind: 'person', handle: 'user-bob' } },
+  pt_carol: { team: 'team_a', principal: { id: 'vercel:user:u_carol', kind: 'person', handle: 'user-carol' } },
+  // A host that names its people as a local board does: they're people, never its owner.
+  pt_mallory: { team: 'team_a', principal: { id: 'local:user:mallory', kind: 'person', handle: 'mallory' } },
   pt_deploy: { team: 'team_a', principal: { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } },
   pt_guest: { team: 'team_a', principal: { id: 'support:customer:99', kind: 'external', handle: 'customer-99' } },
 }
 
 /** What a grant names a host's deployment by: the project and environment its ID says. */
-const APP = { issuer: 'vercel', claims: { project_id: 'prj_app', environment: 'production' } } as const
+const APP = { principals: [{ kind: 'project' as const, project: 'prj_app', environments: ['production'] }] }
 
 /** Who a request is, as a host's own credentials say: only on its own team's board. */
 const authenticate = (team: string) => (request: CallerRequest) => {
@@ -37,6 +40,23 @@ function hosted(team: string, options: Partial<MountOptions> = {}) {
 }
 
 describe("a host's authenticate", () => {
+  it("puts a host's people through the grants like anyone: a lock shuts them out, a grant on them lets them in", async () => {
+    const tenant = board({ store: memory(), url: BOARD_URL, authenticate: authenticate('team_a') })
+    const ada = caller(tenant.fetch, 'pt_ada')
+    const carol = caller(tenant.fetch, 'pt_carol')
+    // g1 lets both in, as every person: Ada lets Carol into security/, then closes it to everyone.
+    expect((await ada('POST', '/channels', { path: 'security' })).status).toBe(201)
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'user', userId: 'u_carol' }], can: { 'security/': 'all' } })).status).toBe(200)
+    expect((await ada('POST', '/grants', { principals: [{ kind: 'everyone' }], can: { 'security/': [] } })).status).toBe(200)
+    expect((await carol('POST', '/messages', { channel: 'security', text: 'in' })).status).toBe(201)
+    expect((await ada('POST', '/messages', { channel: 'security', text: 'out' })).status).toBe(403)
+    expect((await ada('GET', '/me')).body.can).toMatchObject({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'security/': [] })
+    // One the host names local:user: is a person like Ada: it can't lift the lock for itself.
+    const mallory = caller(tenant.fetch, 'pt_mallory')
+    expect((await mallory('POST', '/grants', { principals: [{ kind: 'user', userId: 'mallory' }], can: { 'security/': 'all' } })).status).toBe(403)
+    expect((await mallory('POST', '/messages', { channel: 'security', text: 'in?' })).status).toBe(403)
+  })
+
   it("trusts nothing built in: the host project's own person and deployment tokens get no access", async () => {
     const tenant = hosted('team_a')
     for (const token of [await personToken(), await deploymentToken('board', PROJECT_ID)]) {
@@ -174,7 +194,7 @@ describe("a host's authenticate", () => {
     expect((await caller(tenant.fetch, 'pt_deploy')('GET', '/me')).body.error).toEqual({
       code: 'forbidden',
       message: "this token can't use this board: no grant lets in project prj_app in production",
-      hint: 'Grant it: vb grants create vercel --claim project_id=prj_app --claim environment=production',
+      hint: 'Grant it: vb grants create --project prj_app --environment production',
     })
     // `external` gets everything only as a platform user sync writes as: one the host names, nothing.
     expect((await caller(tenant.fetch, 'pt_guest')('GET', '/me')).body).toMatchObject({ error: { code: 'forbidden', message: "this token can't use this board" } })
@@ -229,7 +249,7 @@ const asCookie = (tenant: { fetch(request: Request): Promise<Response> }, cookie
 }
 
 /** What a grant names the sync's deployment by. */
-const SYNC = { issuer: 'vercel', claims: { project_id: 'prj_sync', environment: 'production' }, can: 'all' } as const
+const SYNC = { principals: [{ kind: 'project' as const, project: 'prj_sync', environments: ['production'] }], can: { '*': 'all' as const } }
 
 describe("a host's own ID scheme", () => {
   it("keeps a sync from writing as a host's principal, or as the watchers it registered, whatever platform it names", async () => {
@@ -276,6 +296,8 @@ describe("a host's own ID scheme", () => {
     vi.stubEnv('VERCEL_ENV', 'production')
     try {
       const tenant = supportBoard()
+      // Without g2's every project on the team, its previews included.
+      await tenant.revokeGrant('g2')
       const everything = { '*': ['read', 'post', 'react', 'label', 'sync', 'manage'] }
       expect((await asCookie(tenant, 'session=staff-ada')('GET', '/me')).body).toMatchObject({ principal: 'vercel:user:u_ada', can: everything })
       expect((await caller(tenant.fetch, await personToken())('GET', '/me')).body.can).toEqual(everything)
@@ -284,7 +306,7 @@ describe("a host's own ID scheme", () => {
       expect((await caller(tenant.fetch, await deploymentToken('board', PROJECT_ID, 'preview'))('GET', '/me')).body.error).toEqual({
         code: 'forbidden',
         message: "this token can't use this board: it runs in production, and its preview deployments need a grant",
-        hint: `Grant them: vb grants create vercel --claim project_id=${PROJECT_ID} --claim environment=preview`,
+        hint: `Grant them: vb grants create --project ${PROJECT_ID} --environment preview`,
       })
     } finally {
       vi.unstubAllEnvs()
@@ -347,7 +369,7 @@ describe("schedules from a host's principal", () => {
       scheduler: queue.scheduler,
       authenticate: (request) => (request.headers.get('cookie') === 'session=app' ? { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } : null),
     })
-    const support = { ...APP, can: { 'support/': ['read', 'post'] } } as const
+    const support = { ...APP, can: { 'support/': ['read' as const, 'post' as const] } }
     const { grant } = await tenant.createGrant(support)
     const app = asCookie(tenant, 'session=app')
     const advance = async (ms: number) => {

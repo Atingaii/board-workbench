@@ -12,6 +12,8 @@ const own = (environment: string) => deploymentToken('board', PROJECT_ID, enviro
 /** A board that keeps `grants`, set before any test request. */
 async function granting(...grants: GrantInput[]) {
   const board = testBoard()
+  // Without g2's every project on the team, so only these grants let one in.
+  await board.revokeGrant('g2')
   for (const grant of grants) await board.createGrant(grant)
   return board
 }
@@ -21,24 +23,27 @@ afterEach(() => vi.restoreAllMocks())
 describe("the board's own project", () => {
   afterEach(() => vi.unstubAllEnvs())
   /** A board running in `environment`, as Vercel tells it; none outside Vercel. */
-  const runningIn = (environment: string | null, options: Parameters<typeof testBoard>[0] = {}) => {
+  /** A board in `environment`, without g2: its own deployments get in by the board's defaults alone. */
+  const runningIn = async (environment: string | null, options: Parameters<typeof testBoard>[0] = {}) => {
     vi.stubEnv('VERCEL_TARGET_ENV', '')
     vi.stubEnv('VERCEL_ENV', environment ?? '')
-    return testBoard(options)
+    const board = testBoard(options)
+    await board.revokeGrant('g2')
+    return board
   }
   const refusal = (here: string, environment: string) => ({
     message: `this token can't use this board: it runs in ${here}, and its ${environment} deployments need a grant`,
-    hint: `Grant them: vb grants create vercel --claim project_id=${PROJECT_ID} --claim environment=${environment}`,
+    hint: `Grant them: vb grants create --project ${PROJECT_ID} --environment ${environment}`,
   })
 
   it('gives its people and its production everything on a production board', async () => {
-    const { fetch } = runningIn('production')
+    const { fetch } = await runningIn('production')
     expect((await caller(fetch, await personToken())('GET', '/me')).body.can).toEqual({ '*': ALL })
     expect((await caller(fetch, await own('production'))('GET', '/me')).body.can).toEqual({ '*': ALL })
   })
 
   it('refuses its previews and custom environments on a production board unless a grant lets them in', async () => {
-    const { fetch } = runningIn('production')
+    const { fetch } = await runningIn('production')
     for (const environment of ['preview', 'staging']) {
       const denied = await caller(fetch, await own(environment))('GET', '/me')
       expect(denied).toMatchObject({ status: 403, body: { error: refusal('production', environment) } })
@@ -46,7 +51,7 @@ describe("the board's own project", () => {
   })
 
   it('lets a preview board call itself, and refuses its production', async () => {
-    const { fetch } = runningIn('preview')
+    const { fetch } = await runningIn('preview')
     expect((await caller(fetch, await own('preview'))('GET', '/me')).body.can).toEqual({ '*': ALL })
     const denied = await caller(fetch, await own('production'))('GET', '/me')
     expect(denied).toMatchObject({ status: 403, body: { error: refusal('preview', 'production') } })
@@ -55,22 +60,24 @@ describe("the board's own project", () => {
   it('knows a custom environment by its target, not as a preview', async () => {
     vi.stubEnv('VERCEL_ENV', 'preview')
     vi.stubEnv('VERCEL_TARGET_ENV', 'staging')
-    const { fetch } = testBoard()
+    const board = testBoard()
+    await board.revokeGrant('g2')
+    const { fetch } = board
     expect((await caller(fetch, await own('staging'))('GET', '/me')).body.can).toEqual({ '*': ALL })
     const denied = await caller(fetch, await own('preview'))('GET', '/me')
     expect(denied).toMatchObject({ status: 403, body: { error: refusal('staging', 'preview') } })
   })
 
   it('lets only its people in outside Vercel', async () => {
-    const { fetch } = runningIn(null)
+    const { fetch } = await runningIn(null)
     expect((await caller(fetch, await personToken())('GET', '/me')).body.can).toEqual({ '*': ALL })
     const denied = await caller(fetch, await own('production'))('GET', '/me')
     expect(denied).toMatchObject({ status: 403, body: { error: refusal('no Vercel environment', 'production') } })
   })
 
   it('lets in its other environments by a grant', async () => {
-    const board = runningIn('production')
-    await board.createGrant({ issuer: 'vercel', claims: { project_id: PROJECT_ID, environment: 'preview' }, can: { 'dev/': ['read'] } })
+    const board = await runningIn('production')
+    await board.createGrant({ principals: [{ kind: 'project', project: PROJECT_ID, environments: ['preview'] }], can: { 'dev/': ['read'] } })
     const { fetch } = board
     const preview = caller(fetch, await own('preview'))
     const me = await preview('GET', '/me')
@@ -82,9 +89,9 @@ describe("the board's own project", () => {
   })
 
   it('never narrows its people, or its own deployments where it runs, by a grant', async () => {
-    const board = runningIn('preview')
+    const board = await runningIn('preview')
     // Its claims match the board's previews and its people's development tokens alike.
-    await board.createGrant({ issuer: 'vercel', claims: { project_id: PROJECT_ID, environment: ['preview', 'development'] }, can: { 'dev/': ['read', 'post'] } })
+    await board.createGrant({ principals: [{ kind: 'project', project: PROJECT_ID, environments: ['preview', 'development'] }], can: { 'dev/': ['read', 'post'] } })
     expect((await caller(board.fetch, await own('preview'))('GET', '/me')).body.can).toEqual({ '*': ALL })
     // A person is a person, whatever the grants say.
     expect((await caller(board.fetch, await personToken())('GET', '/me')).body.can).toEqual({ '*': ALL })
@@ -92,7 +99,7 @@ describe("the board's own project", () => {
 })
 
 describe('what a grant lets in', () => {
-  const marketing = { issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: { 'feedback/': ['post'] } } satisfies GrantInput
+  const marketing = { principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { 'feedback/': ['post'] } } satisfies GrantInput
 
   it('lets another project post in its own channels and nowhere else', async () => {
     const { fetch } = await granting(marketing)
@@ -111,19 +118,19 @@ describe('what a grant lets in', () => {
 
   it('says which grant would let in a token none matches', async () => {
     const { fetch } = await granting(
-      { issuer: 'github', claims: { repository: 'other/repo' }, can: 'all' },
-      { issuer: 'vercel', claims: { project_id: 'prj_docs', environment: 'production' }, can: 'all' },
+      { principals: [{ kind: 'github', repository: 'other/repo' }], can: { '*': 'all' } },
+      { principals: [{ kind: 'project', project: 'prj_docs', environments: ['production'] }], can: { '*': 'all' } },
     )
     expect(await caller(fetch, await workflowToken())('GET', '/me')).toMatchObject({
       status: 403,
-      body: { error: { message: "this token can't use this board: no grant lets in basehub-ai/www", hint: 'Grant it: vb grants create github --claim repository=basehub-ai/www' } },
+      body: { error: { message: "this token can't use this board: no grant lets in basehub-ai/www", hint: 'Grant it: vb grants create --github basehub-ai/www' } },
     })
     expect(await caller(fetch, await deploymentToken())('GET', '/me')).toMatchObject({
       status: 403,
       body: {
         error: {
           message: "this token can't use this board: no grant lets in project prj_marketing in production",
-          hint: 'Grant it: vb grants create vercel --claim project_id=prj_marketing --claim environment=production',
+          hint: 'Grant it: vb grants create --project prj_marketing --environment production',
         },
       },
     })
@@ -131,7 +138,7 @@ describe('what a grant lets in', () => {
 
   it('covers both of the CI guide’s samples with its grant', async () => {
     // docs/03-guides/03-ci.md: the repo's grant, its failure report, and its wait.
-    const { fetch } = await granting({ issuer: 'github', claims: { repository: 'acme/www', event_name: 'push' }, can: { 'errors-www': ['post', 'label'], deploys: ['read', 'post'] } })
+    const { fetch } = await granting({ principals: [{ kind: 'github', repository: 'acme/www', event: 'push' }], can: { 'errors-www': ['post', 'label'], deploys: ['read', 'post'] } })
     const ci = caller(fetch, await workflowToken({ repository: 'acme/www' }))
     expect((await ci('POST', '/messages', { channel: 'errors-www', text: 'deploy failed on abc', labels: { source: 'ci' }, id: 'deploy-abc' })).status).toBe(201)
     const id = (await ci('POST', '/messages', { channel: 'deploys', text: 'Ready to promote?' })).body.message.id
@@ -140,7 +147,7 @@ describe('what a grant lets in', () => {
 })
 
 describe('a grant for another OIDC issuer', () => {
-  const gitlab = (can: GrantInput['can'] = { 'ci/': ['read', 'post'] }) => granting({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can })
+  const gitlab = (can: GrantInput['can'] = { 'ci/': ['read', 'post'] }) => granting({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can })
 
   it('trusts a pinned issuer’s tokens whose claims match exactly', async () => {
     const me = await caller((await gitlab()).fetch, await oidcToken())('GET', '/me')
@@ -177,7 +184,7 @@ describe('a grant for another OIDC issuer', () => {
     // Before, both were oidc:gitlab.test:8443:deploy.
     const withPort = `${OIDC_ISS}:8443`
     const board = testBoard({ auth: { ...testAuth, oidc: { ...testAuth.oidc, [withPort]: testAuth.oidc[OIDC_ISS]! } } })
-    for (const issuer of [OIDC_ISS, withPort]) await board.createGrant({ issuer, claims: { project_path: 'acme/api' }, can: 'all' })
+    for (const issuer of [OIDC_ISS, withPort]) await board.createGrant({ principals: [{ kind: 'oidc', issuer, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
     const { fetch } = board
     const principal = async (sub: string, issuer?: string) =>
       (await caller(fetch, await oidcToken({ sub }, issuer))('GET', '/me')).body.principal
@@ -188,8 +195,8 @@ describe('a grant for another OIDC issuer', () => {
   it('keeps each grant to its own issuer', async () => {
     const selfHosted = 'https://ci.selfhosted.test'
     const board = testBoard({ auth: { ...testAuth, oidc: { ...testAuth.oidc, [selfHosted]: testAuth.oidc[OIDC_ISS]! } } })
-    await board.createGrant({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' })
-    await board.createGrant({ issuer: selfHosted, claims: { team: 'x' }, can: { 'ci/': ['post'] } })
+    await board.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
+    await board.createGrant({ principals: [{ kind: 'oidc', issuer: selfHosted, claims: { team: 'x' } }], can: { 'ci/': ['post'] } })
     const { fetch } = board
     // A token from the self-hosted issuer that claims gitlab.com's project gets nothing of its grant.
     const forged = await caller(fetch, await oidcToken({ project_path: 'acme/api' }, selfHosted))('GET', '/me')
@@ -210,7 +217,7 @@ describe('x-board-scope', () => {
   })
 
   it('never widens it', async () => {
-    const { fetch } = await granting({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: ['post'] })
+    const { fetch } = await granting({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { '*': ['post'] } })
     const widened = caller(fetch, await workflowToken(), { 'x-board-scope': '*=all' })
     expect((await widened('GET', '/me')).body.can).toEqual({ '*': ['post'] })
   })

@@ -9,9 +9,9 @@ import { fakeQueue } from './queue.ts'
 type Fetch = (request: Request) => Promise<Response>
 
 /** A board with a scheduler that grants v0's deployments in `environment` what `can` says, before any test request. */
-async function grantingV0(environment = 'production', can: GrantInput['can'] = 'all') {
+async function grantingV0(environment = 'production', can: GrantInput['can'] = { '*': 'all' }) {
   const board = testBoard({ scheduler: fakeQueue().scheduler })
-  await board.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_v0', environment }, can })
+  await board.createGrant({ principals: [{ kind: 'project', project: 'prj_v0', environments: [environment] }], can })
   return board
 }
 

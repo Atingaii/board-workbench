@@ -184,7 +184,7 @@ class Push extends SyncProvider<z.infer<typeof Schema>> {
 describe('a board on another one with no URL of its own, on the internal http() of the default build', () => {
   it('syncs and watches, pulling what it can’t be woken for', async () => {
     const team = testBoard()
-    await team.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_page', environment: 'production' }, can: 'all' })
+    await team.createGrant({ principals: [{ kind: 'project', project: 'prj_page', environments: ['production'] }], can: { '*': 'all' } })
     const backend = http(BOARD_URL, { fetch: bearer((input, init) => team.fetch(new Request(input, init)), pageToken) })
     const push = new Push()
     const seen: string[] = []

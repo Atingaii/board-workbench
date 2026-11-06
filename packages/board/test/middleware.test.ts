@@ -42,7 +42,9 @@ describe('middleware', () => {
       await next()
     }
     const board = testBoard({ middleware: [quarantine] })
-    await board.createGrant({ issuer: 'vercel', claims: { project_id: 'prj_marketing', environment: 'production' }, can: { feedback: ['read'] } })
+    // Without g2's every project on the team: the reader only reads feedback.
+    await board.revokeGrant('g2')
+    await board.createGrant({ principals: [{ kind: 'project', project: 'prj_marketing', environments: ['production'] }], can: { feedback: ['read'] } })
     const julian = await person(board)
     const reader = caller(board.fetch, await deploymentToken())
     const { id } = (await julian('POST', '/messages', { channel: 'feedback', text: 'checkout is slow' })).body.message

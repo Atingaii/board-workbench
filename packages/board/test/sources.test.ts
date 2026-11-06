@@ -58,7 +58,7 @@ async function setup(options: { join: boolean } = { join: false }) {
     sync: { slack: slack({ adapter: s.adapter, client: async () => web as unknown as SlackClient, join: options.join }, channels({ C1: 'firehose' })) },
   })
   // The deploy workflow may post everywhere, and manage nowhere.
-  await board.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www', workflow_ref: 'basehub-ai/www/.github/workflows/deploy.yml@refs/heads/main' }, can: ['post'] })
+  await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www', workflow: 'deploy.yml', branch: 'main' }], can: { '*': ['post'] } })
   const webhook = (body: unknown) =>
     board.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }))
   return { board, history, replies, join, webhook }

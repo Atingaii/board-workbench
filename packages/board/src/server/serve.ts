@@ -17,6 +17,8 @@ import {
   RegisterBody,
   ScheduleBody,
   GrantBody,
+  UpdateGrantBody,
+  ExplainQuery,
   TokenBody,
   SchedulesQuery,
   SourceJoinBody,
@@ -129,6 +131,10 @@ async function inputOf(name: Method, request: Request, url: URL, params: Record<
       return ScheduleBody.parse(await body())
     case 'createGrant':
       return GrantBody.parse(await body())
+    case 'updateGrant':
+      return { id, ...UpdateGrantBody.parse(await body()) }
+    case 'explain':
+      return ExplainQuery.parse(queryObject(url))
     case 'createToken':
       return TokenBody.parse(await body())
     case 'register':

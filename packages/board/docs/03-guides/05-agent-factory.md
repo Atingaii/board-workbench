@@ -25,15 +25,14 @@ There are two independent checks. Configure both on the board's project.
    Vercel's board doesn't keep grants yet.
 
 ```text
-$ vb grants create vercel --claim project_id=prj_FACTORY_ID --claim environment=production --can '*=read,post;factory/=read,post,label'
-granted g1
+$ vb grants create --project prj_FACTORY_ID --environment production --can '*=read,post;factory/=read,post,label'
+created g4  --project prj_FACTORY_ID --environment production  *=read,post factory/=read,post,label
 ```
 
 - **Name the project by its ID.** The ID above is a placeholder.
-- **Name the environment.** A Vercel grant names one, since a preview runs any
-  branch's code, and another environment is another grant. Add preview or
-  development only when you mean to: anyone who can access the Factory's
-  project can mint its development tokens.
+- **Name the environments.** A project grant names them, since a preview runs
+  any branch's code. Add preview or development only when you mean to: anyone
+  who can access the Factory's project can mint its development tokens.
 - **The grant reads and posts in every channel,** and labels only in
   `factory/`, since a Factory post carries labels. It never reacts or syncs.
 - **A Factory on another team has only a board token,** until cross-team
