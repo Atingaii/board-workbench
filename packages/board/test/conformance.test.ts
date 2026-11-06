@@ -35,7 +35,7 @@ const withToken = (fetch: Fetch) => (secret: string) =>
   board({ backend: http(BOARD_URL, { fetch: bearer((input, init) => fetch(new Request(input, init)), async () => secret) }) }).as(null)
 
 /** The grants checks a board without team roles skips, and why: a run names no viewer, and grants don't cross teams yet. */
-const NO_ROLES = ['caps a person by their team role, so a viewer only reads and reacts', 'name a viewer in principals to check it: a board without team roles caps no one']
+const NO_ROLES = ['caps a person by their team role, so a viewer reads but neither posts nor manages', 'name a viewer in principals to check it: a board without team roles caps no one']
 const NO_APPS = ['names an app by its slug or client ID, keeps it by client ID, and every app as a group', 'name an app in principals to check it: a local board has no apps']
 const CROSS_TEAM = ['lets a project on another team in, in its environments', "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later"]
 /** And one no run can check: shut out by a lock, it couldn't lift the lock after. */

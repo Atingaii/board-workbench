@@ -124,7 +124,7 @@ const ROLES: Record<string, Role> = { u_jb: 'owner', u_val: 'viewer' }
 const PROJECTS: Record<string, string> = { prj_board: 'board', prj_pong: 'pong', prj_web: 'web', prj_sec: 'sec' }
 const REPOSITORIES: Record<string, string> = { 'acme/web': '700001', 'acme/api': '700002' }
 /** Apps installed on the team, by client ID, with their slugs. */
-const APPS: Record<string, string> = { oac_1: 'ship' }
+const APPS: Record<string, string> = { oac_1: 'ship', oac_2: 'deploy' }
 
 /** Who a token is, as grants see it. */
 const whoOf = (actor: Actor): Who =>

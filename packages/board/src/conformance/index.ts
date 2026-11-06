@@ -220,8 +220,10 @@ async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void 
           ? { kind: 'user' as const, userId: ctx.me.principal.split(':').slice(2).join(':') }
           : kind === 'project' && id && environment
             ? { kind: 'project' as const, project: id, environments: [environment] }
-            : null
-      if (!self) throw new Skip("closing a pattern to everyone would close it to this run too, which no grant could keep in: it's neither a person nor a project")
+            : kind === 'app' && id
+              ? { kind: 'app' as const, app: id }
+              : null
+      if (!self) throw new Skip("closing a pattern to everyone would close it to this run too, which no grant could keep in: it's neither a person, a project, nor an app")
       await grants.make({ principals: [self], can: { [pattern]: 'all' } })
     },
   }
@@ -734,7 +736,7 @@ const CHECKS: Check[] = [
   },
   {
     group: 'grants',
-    name: 'caps a person by their team role, so a viewer only reads and reacts',
+    name: 'caps a person by their team role, so a viewer reads but neither posts nor manages',
     run: (ctx) => {
       const { viewer } = ctx.principals
       if (viewer === null) return Promise.resolve('name a viewer in principals to check it: a board without team roles caps no one')
@@ -744,7 +746,8 @@ const CHECKS: Check[] = [
         const explained = await explain(ctx, `${subtree}thread`, { user: viewer })
         same(explained.level, 'principal', `the level that decides ${subtree}thread for the viewer`)
         check(explained.capped !== null, `the viewer's role should cap what the grant gives, got capped ${show(explained.capped)}`)
-        alike(explained.can, ['read', 'react'], 'what a viewer may do with a grant of all')
+        // What a viewer may do is the team's to say; reading, and not posting or managing, is what's checked.
+        check(explained.can.includes('read') && !explained.can.includes('post') && !explained.can.includes('manage'), `what a viewer may do with a grant of all: expected read, and neither post nor manage, got ${show(explained.can)}`)
       })
     },
   },
@@ -754,8 +757,11 @@ const CHECKS: Check[] = [
     run: (ctx) => {
       const { app } = ctx.principals
       if (app === null) return Promise.resolve('name an app in principals to check it: a local board has no apps')
-      return withGrants(ctx, async ({ make }) => {
-        const grant = await make({ principals: [{ kind: 'app', app }], can: { [`${subtreeOf(ctx)}apps/`]: ['post'] } })
+      return withGrants(ctx, async ({ make, keep }) => {
+        const apps = `${subtreeOf(ctx)}apps/`
+        // Every app there would be this run too, if it's an app: kept in, so it can revoke the grant after.
+        if (ctx.me.principal.startsWith('vercel:app:')) await keep(apps)
+        const grant = await make({ principals: [{ kind: 'app', app }], can: { [apps]: ['post'] } })
         const [named] = grant.principals
         check(
           grant.principals.length === 1 && named?.kind === 'app' && (named.clientId === app || named.name === app),
@@ -1106,6 +1112,30 @@ function namesCaller(me: Me, principals: ConformanceOptions['principals']): stri
 }
 
 /**
+ * Why `project`, a name the board looks up, can't be the one the grants checks name: it's this run's
+ * own. A name can't be told apart before the board resolves it, so this makes one grant that
+ * changes nothing for the run (the project's deployments in another environment, posting in the
+ * subtree's `ci/`), reads the project it resolved to, and revokes it. Null when it's another's, or
+ * when the board made no such grant, which the grants checks then say why.
+ */
+async function ownProjectByName(board: Board, me: Me, channel: string, project: string | undefined): Promise<string | null> {
+  const [source, kind, id, environment] = me.principal.split(':')
+  if (project === undefined || source !== 'vercel' || kind !== 'project' || project === id) return null
+  let grant: GrantView
+  try {
+    ;({ grant } = await board.createGrant({ principals: [{ kind: 'project', project, environments: [environment === 'preview' ? 'development' : 'preview'] }], can: { [`${channel}/grants/ci/`]: ['post'] } }))
+  } catch {
+    return null
+  }
+  // A revoke that fails throws: the run mustn't go on with it, or leave it unsaid.
+  await board.revokeGrant(grant.id)
+  const [named] = grant.principals
+  return named?.kind === 'project' && named.projectId === id
+    ? `principals.project is this run's own project, ${project} (${id}): the grants checks would change what this run may do. Name another project on the team.`
+    : null
+}
+
+/**
  * Runs the checks against `board`, in order, and reports each. It never throws for what the board
  * answers; it throws before it writes anything when `principals` names the run itself.
  */
@@ -1129,6 +1159,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
   const own = namesCaller(me, options.principals)
   if (own !== null) throw new TypeError(own)
   const channel = options.channel ?? 'conformance'
+  const ownByName = await ownProjectByName(board, me, channel, options.principals?.project)
+  if (ownByName !== null) throw new TypeError(ownByName)
   const label = crypto.randomUUID().slice(0, 8)
   const ctx: Context = {
     board,

@@ -58,7 +58,7 @@ describe('vercel()', () => {
       "grants: keeps a grant's can as written, a pattern with no permissions included": 'passed',
       'grants: lets the most specific pattern decide, then the closest principal there, and adds up ties': 'passed',
       'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'passed',
-      'grants: caps a person by their team role, so a viewer only reads and reacts': 'passed',
+      'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
       'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
       // The API mints no tokens to change grants with yet.
       'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'skipped',
@@ -785,6 +785,26 @@ describe('vercel()', () => {
     await expect(pong.schedule('memory/notes', { text: 'and this', in: '1m' })).rejects.toMatchObject({ status: 422, code: 'dropped' })
     expect(api.schedules.size).toBe(2)
     expect(screened).toEqual(['post dev root', 'post dev check in', 'post dev check later', 'post memory/notes remember this', 'post memory/notes and this'])
+  })
+
+  it("refuses a project it names by name that turns out to be the run's own, after one grant it revokes", async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'project', project: 'web', environments: ['production'] }], can: { '*': 'all' } })
+    const before = [...api.grants.keys()]
+    // web's own deployment names web: only the API knows that's prj_web, so the kit asks it with a grant that changes nothing for the run.
+    await expect(conformance(handleOn(api, 'project:prj_web:production'), { principals: { project: 'web', repository: 'acme/api' } })).rejects.toThrow(
+      "principals.project is this run's own project, web (prj_web)",
+    )
+    expect([...api.grants.keys()]).toEqual(before)
+  })
+
+  it('keeps an app run in while it checks apps, so it revokes all it made', async () => {
+    const api = fakeMessageboard()
+    await handleOn(api).createGrant({ principals: [{ kind: 'app', app: 'deploy' }], can: { '*': 'all' } })
+    const before = [...api.grants.keys()]
+    const report = await conformance(handleOn(api, 'app:oac_2'), { principals: { project: 'prj_board', repository: 'acme/api', app: 'ship' } })
+    expect(report.checks.find((check) => check.name.startsWith('names an app'))).toMatchObject({ status: 'passed' })
+    expect([...api.grants.keys()]).toEqual(before)
   })
 
   it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {
