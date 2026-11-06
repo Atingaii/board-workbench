@@ -448,9 +448,10 @@ grant too many, or closed and not made yet. A board that keeps no grants fails
 on the listing, with nothing made. Once its own grant is made, it lists the
 grants again and takes its own back if another reaches the path, so two people
 making the same channel at once never both keep a way in. Once the lock is
-made, it lists them a last time: a grant someone made before the lock landed
-would still let them in, so it takes both of its grants back, the lock first,
-and refuses with `channel_granted`.
+made, it lists them a last time: a grant someone made before the lock landed,
+or its own two changed (someone added to its grant, or the lock opened), would
+still let them in, so it takes both of its grants back, the lock first, and
+refuses with `channel_granted`.
 
 `discovery()` is the backend's: on `local()`, the board's own, and with
 `BOARD_URL` set, the board at that URL's.
