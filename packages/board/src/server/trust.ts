@@ -235,7 +235,7 @@ function newSecret(): string {
 /**
  * The principal an explain query names, as a token of its would make it: a person by user ID, a
  * project's deployment in one environment (production unless it says) on the board's team, a
- * repository's run with what it says of its workflow, branch, and event, or an issuer's token with
+ * repository's run with what it says of its workflow, branch (main unless it says), and event, or an issuer's token with
  * its claims. A board that verifies tokens itself looks no names up, so a name is a 400.
  */
 function principalNamed(query: Protocol['explain']['input'], team: string | null): Known {
@@ -252,8 +252,10 @@ function principalNamed(query: Protocol['explain']['input'], team: string | null
   if (query.github !== undefined) {
     const repository = query.github
     const claims: Record<string, string> = { repository }
-    if (query.workflow !== undefined) claims.workflow_ref = `${repository}/${workflowPath(query.workflow)}@refs/heads/${query.branch ?? 'main'}`
-    if (query.branch !== undefined) claims.ref = `refs/heads/${query.branch}`
+    // A run on main unless the query says, in its workflow_ref and its ref alike.
+    const branch = query.branch ?? 'main'
+    if (query.workflow !== undefined) claims.workflow_ref = `${repository}/${workflowPath(query.workflow)}@refs/heads/${branch}`
+    claims.ref = `refs/heads/${branch}`
     if (query.event !== undefined) claims.event_name = query.event
     return { id: `github:repo:${repository}`, kind: 'workflow', handle: repository, facts: { issuer: 'github', iss: GITHUB_ISSUER, claims } }
   }

@@ -203,6 +203,8 @@ async function setup() {
   const schedule = (await keeper('POST', '/schedules', { channel: 'secret', text: 'hush later', in: '1d' })).body.schedule.id
   // A channel made before anything posted to it: an event that names no message.
   expect((await keeper('POST', '/channels', { path: 'secret/empty' })).body).toMatchObject({ created: true })
+  // A grant decides open for the walker too, beside its rule: one it may not see when it asks what decides.
+  await keeper('POST', '/grants', { principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { open: ['read'] } })
   const openRoot = (await host('POST', '/messages', { channel: 'open', text: 'hello' })).body.message.id
   const openSchedule = (await host('POST', '/schedules', { re: openRoot, text: 'hello later', in: '1d' })).body.schedule.id
   const fixture: Fixture = { secret: { root, reply, schedule, file }, open: { root: openRoot, schedule: openSchedule } }

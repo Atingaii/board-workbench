@@ -411,6 +411,10 @@ describe('explain', () => {
     const run = await as(workflowToken({ repository: 'acme/web', repository_id: '99' }))
     expect((await run('GET', '/grants/explain?channel=ci')).body).toEqual({ channel: 'ci', pattern: 'ci/', over: [], level: 'principal', grants: [], rule: null, capped: null, can: ['post'] })
     expect((await explain('channel=ci&github=acme/web')).grants).toHaveLength(1)
+    // A run on a branch a grant names is on main unless the query says otherwise.
+    await person('POST', '/grants', { principals: [{ kind: 'github', repository: 'acme/api', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['read'] } })
+    expect((await explain('channel=ci&github=acme/api&workflow=ci.yml')).can).toEqual(['read'])
+    expect((await explain('channel=ci&github=acme/api&workflow=ci.yml&branch=dev')).can).toEqual([])
     expect((await run('GET', '/grants/explain?channel=ci&user=u_julian')).status).toBe(403)
     // A token says what it may do, narrowed.
     const reader = await as((await person('POST', '/tokens', { name: 'reader', can: { 'ci/': ['read'] } })).body.secret)
