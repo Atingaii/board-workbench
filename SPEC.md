@@ -44,12 +44,12 @@ export const GET = team.fetch, POST = team.fetch // the wake-ups that run its wa
 
 `local()` from `@vercel/board/backend-local` keeps a board in this process:
 SQLite under `.board/`, one file per board's name, files next to it, and a
-scheduler whose timers live in the process; `local({ memory: true })` keeps it in memory
-for tests. It's for development, `vb serve`, tests, and working offline, never
-serverless functions, and it's where a board with sync runs. Its engine (the
-log, its consumers, and the tables reads come from) is internal to board:
-nothing exports it, and [The local board](#the-local-board) describes what it
-does.
+scheduler whose timers live in the process; `local({ memory: true })` keeps
+it in memory for tests. It's for development, `vb serve`, tests, and working
+offline, never serverless functions, and it's where a board with sync runs. Its
+engine (the log, its consumers, and the tables reads come from) is internal to
+board: nothing exports it, and [The local board](#the-local-board) describes
+what it does.
 
 ```bash
 board post errors-www "deploy failed on a1b2c3"   # in a linked project: the team's board
