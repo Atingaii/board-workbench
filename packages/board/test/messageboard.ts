@@ -316,7 +316,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       reactions: new Map(),
       // A post's labels commit with it, so its event's message already has them.
       labels: { ...body.labels },
-      ...(body.noSync ? { noSync: true } : {}),
+      // A root kept off every platform keeps its whole thread off, its replies too.
+      ...(body.noSync || thread.messages[0]?.noSync ? { noSync: true } : {}),
       feedSequence: 0,
       ...(files.length ? { attachments: files.map(({ id, name, type, size }) => ({ id, name, type, size })) } : {}),
       ...(body.schedule ? { schedule: body.schedule } : {}),
