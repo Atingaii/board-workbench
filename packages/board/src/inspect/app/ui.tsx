@@ -64,13 +64,21 @@ function onText(x: number, y: number): boolean {
   return [...range.getClientRects()].some((line) => x >= line.left && x <= line.right && y >= line.top && y <= line.bottom)
 }
 
+/** Whether a right-click there keeps the browser's menu: on text, a link, or an image. */
+const keepsBrowserMenu = (event: React.MouseEvent) => !!(event.target as Element).closest('a, img, video') || onText(event.clientX, event.clientY)
+
 /**
  * Stops a right-click on text, a link, or an image from reaching the custom menu: you get copy and
- * look-up. The space around them is the row's, where its menu opens.
+ * look-up. The space around them is the row's, where its menu opens, and where the cursor is the
+ * default one, not text's.
  */
 export const nativeMenu = {
   onContextMenuCapture: (event: React.MouseEvent) => {
-    if ((event.target as Element).closest('a, img, video') || onText(event.clientX, event.clientY)) event.stopPropagation()
+    if (keepsBrowserMenu(event)) event.stopPropagation()
+  },
+  // Not while a button is down: a selection being dragged keeps its cursor.
+  onMouseMove: (event: React.MouseEvent<HTMLElement>) => {
+    if (event.buttons === 0) event.currentTarget.style.cursor = keepsBrowserMenu(event) ? '' : 'default'
   },
 }
 
