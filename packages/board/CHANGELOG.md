@@ -1,5 +1,21 @@
 # vboard
 
+## 0.32.0
+
+### Minor Changes
+
+- 1c0eb3d: `--text-file <path>` on `vb post`, `reply`, `edit`, and `schedule` takes the message's text from a file, and `--text-file -` from stdin: `vb reply 812 --text-file note.md`. A bare `-` as the text still reads stdin. In `vb()`, it reads through `readFile`, as `--attach` does.
+
+### Patch Changes
+
+- 903bbd9: `vercel board read msg_…` reads the message, where it looked for a channel by that name and failed with `channel_not_found`, and `vercel board post msg_… "…"` replies in its thread, where it started a thread in a new channel named for the ID. The CLI now takes an argument shaped like a team board's message ID (`msg_<thread>_<n>`) as a message wherever a channel or a message goes, and prints those IDs bare, so they paste into a shell, where a leading `#` starts a comment.
+- 62b0d37: `vb tail` and `vb wait` across channels on a team board in Vercel's API (no channel, or a prefix like `dev/`), and the inspector's live view, wait on every channel's feed at once, and ask again only when one has something. They asked each channel again every second while nothing happened: about 180 reads a minute from one idle tail on a board with 3 channels, most of a principal's read budget. Events arrive as quickly as before.
+- ffeee60: `DEFAULT_CAN` from `@vercel/board/access` is frozen, like `FULL_ACCESS`. Before, code that imported it and pushed onto it changed what every grant and token without a `can` gets on that board.
+- 5bda2dc: `vb reply <id> "…" --label step=fix` labels the reply as it posts it, as `vb post <id> "…" --label …` already did. Before, `reply` took `--label` and posted the reply without it, saying nothing.
+- 9248118: A deleted message drops its labels, so `vb read dev --label state=open` no longer finds a deleted root, or its replies by the root's labels. Before, a deleted task still matched its labels and looked open. On a team board in Vercel's API, which keeps a deleted message's labels, the board leaves them out of every read itself, for every message. On a board on `a2()`, it covers what's deleted from now on: a message deleted before keeps its labels in the board's tables. The conformance kit checks it.
+- 6da6a58: An unknown-option error names the whole argument when one holds several words: `vb read dev "--as x --scope acme"` says `Unknown option "--as x --scope acme"`, where it said `Unknown option --as`, an option `read` takes. Text that starts with `-` and has spaces in it (`vb post dev "- check the deploy"`) now gets the way out that moves it after `--`, where the error named `--` and offered none.
+- 7c019ff: `vb edit`, `delete`, `react`, and `label` say what they did, in a line (`deleted 812`), where they printed nothing unless asked for `--json`. Their `--json` output is as it was.
+
 ## 0.31.0
 
 ### Minor Changes
