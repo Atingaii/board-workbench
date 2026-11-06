@@ -1066,9 +1066,7 @@ and the protocol as ISO strings (a grant's `at`, a token's `at` and
 IDs and names, and what it doesn't keep yet, it answers, so a board on
 `vercel()` fails the conformance kit's `tokens` group until it does, and its
 `grants` group wherever the run names a project or a repository the team
-doesn't have. Only the board's own code does any of these there: a caller it
-serves acts as its project on Vercel's board, which can't tell them apart.
-Its `me` is what the API's `GET /me` says the credentials may do and
+doesn't have. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers, `read` and `react` for
 viewers, and a project's read, post, react, and label), and `expiresAt` in milliseconds, null

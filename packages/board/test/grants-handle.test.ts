@@ -79,20 +79,37 @@ describe('a private channel, from the handle', () => {
 
   it('leaves at most one way in when two make the same private channel at once', async () => {
     const team = testBoard()
-    // Each one's own grant answers only once both are made, so each then finds the other's.
-    let made = 0
-    let release!: () => void
-    const both = new Promise<void>((resolve) => (release = resolve))
-    const racing: Fetch = async (request) => {
-      const own = request.method === 'POST' && new URL(request.url).pathname.endsWith('/grants')
-      const response = await team.fetch(request)
-      if (own && ++made === 2) release()
-      if (own) await both
-      return response
+    /** What opens once both racers have reached it. */
+    const meeting = () => {
+      let open!: () => void
+      const opened = new Promise<void>((resolve) => (open = resolve))
+      let arrived = 0
+      return { opened, arrive: () => void (++arrived === 2 && open()) }
     }
-    const julian = handleAs(racing, () => personToken())
-    const ada = handleAs(racing, () => personToken('u_ada'))
-    const [first, second] = await Promise.allSettled([julian.createChannel('vault', { private: true }), ada.createChannel('vault', { private: true })])
+    // Each one lists the grants again only once both own grants are made, and hears back only
+    // once both have listed: each finds the other's.
+    const owned = meeting()
+    const listed = meeting()
+    const racer = (token: () => Promise<string>) => {
+      let mine = false
+      return handleAs(async (request) => {
+        const grants = new URL(request.url).pathname.endsWith('/grants')
+        if (request.method === 'GET' && grants && mine) {
+          await owned.opened
+          const response = await team.fetch(request)
+          listed.arrive()
+          await listed.opened
+          return response
+        }
+        const response = await team.fetch(request)
+        if (request.method === 'POST' && grants && !mine) {
+          mine = true
+          owned.arrive()
+        }
+        return response
+      }, token)
+    }
+    const [first, second] = await Promise.allSettled([racer(() => personToken()).createChannel('vault', { private: true }), racer(() => personToken('u_ada')).createChannel('vault', { private: true })])
     expect([first, second].map((settled) => (settled.status === 'rejected' ? (settled.reason as { code: string }).code : 'made'))).toEqual(['channel_granted', 'channel_granted'])
     // Each took its own back: no one has a way in, and nothing is closed or made.
     expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
