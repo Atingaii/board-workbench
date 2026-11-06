@@ -18,6 +18,7 @@ import {
   type AuthenticateContext,
   type CallerRequest,
   type Claims,
+  type StoredGrant,
   type HostPrincipal,
   type Known,
   type Pinned,
@@ -214,9 +215,9 @@ export function createPolicy(options: PolicyOptions, keeps: boolean, serving: ((
       return { principal: { ...principal, access: await authority.grant(principal) }, author, actor }
     },
     /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing, its board token's revoking included. */
-    async accessNow(principal: Known): Promise<Access | null> {
+    async accessNow(principal: Known, grants?: readonly StoredGrant[]): Promise<Access | null> {
       if (principal.token !== undefined && !(await trust?.live(principal.token))) return null
-      return authority.accessNow(principal)
+      return authority.accessNow(principal, grants)
     },
   }
 }

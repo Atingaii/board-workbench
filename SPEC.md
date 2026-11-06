@@ -939,7 +939,10 @@ await team.revokeToken(token.id)
   - **admission:** wherever an `everyone` grant gives something, the caller
     has it too, since anyone a grant lets in gets what `everyone` gives.
   So once `security/` is closed to everyone, a member still makes `*`
-  grants, and whoever they name gets nothing there. Revoking a grant, or
+  grants, and whoever they name gets nothing there. `checkGrantChange` in
+  `@vercel/board/access` is this rule with no I/O, for any backend that keeps
+  grants; a board runs it on the grants its write appends to, so a change
+  that lands in between makes it look again. Revoking a grant, or
   removing principals from one, takes `manage` at its patterns. Naming an
   `oidc` principal takes `manage` everywhere, since the board then fetches its
   issuer's keys. A refusal names a stored grant's patterns only to a caller

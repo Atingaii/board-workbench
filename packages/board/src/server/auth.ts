@@ -643,9 +643,9 @@ export function createAuthority(options: {
   const host = typeof options.access === 'function' ? options.access : null
   const oidcIssuers = trustedIssuers(issuersOf(rules))
 
-  /** The grants that name `principal`, each as close as its closest principal. */
-  async function matching(principal: Known, team: string | null): Promise<{ grants: readonly StoredGrant[]; matched: Matched<Source>[] }> {
-    const grants = options.grants ? await options.grants() : []
+  /** The grants that name `principal`, each as close as its closest principal: of `snapshot`, when given, or as they are now. */
+  async function matching(principal: Known, team: string | null, snapshot?: readonly StoredGrant[]): Promise<{ grants: readonly StoredGrant[]; matched: Matched<Source>[] }> {
+    const grants = snapshot ?? (options.grants ? await options.grants() : [])
     const matched = grants.flatMap((grant) => {
       const level = grantLevel(grant, principal, team)
       return level === null ? [] : [{ level, can: grant.can, source: { grant } }]
@@ -660,7 +660,7 @@ export function createAuthority(options: {
    * function or grant is asked about them. A function that answers null refuses, grants or not.
    * `everyone` lets no one in: a 401 or 403 that says which rule would, when nothing else names it.
    */
-  async function byRules(principal: Known, facts: TokenFacts | null): Promise<Resolved> {
+  async function byRules(principal: Known, facts: TokenFacts | null, snapshot?: readonly StoredGrant[]): Promise<Resolved> {
     if (facts?.issuer === 'host') throw forbidden("this token can't use this board: its board no longer takes a host's principals")
     const claims = (facts?.claims ?? {}) as TokenClaims
     const own = facts?.issuer === 'vercel' ? await options.project() : null
@@ -689,7 +689,7 @@ export function createAuthority(options: {
       }
     }
     if (ownHere) return ruled ? { fixed: compileAccess(ruled.can), rule: (ruled.source as { rule: string }).rule } : { fixed: FULL_ACCESS, rule: null }
-    const { grants, matched } = await matching(principal, context.teamId)
+    const { grants, matched } = await matching(principal, context.teamId, snapshot)
     if (ruled) matched.unshift(ruled)
     if (ruled || matched.some((found) => found.level !== 'everyone')) return { matched }
     if (!facts) throw forbidden("this token can't use this board")
@@ -713,7 +713,7 @@ export function createAuthority(options: {
    * grants); anyone else as `byRules` says. A host's principal is what its kind is, until it
    * expires. A 401 or 403 when it may do nothing.
    */
-  async function resolve(principal: Known): Promise<Resolved> {
+  async function resolve(principal: Known, snapshot?: readonly StoredGrant[]): Promise<Resolved> {
     const hosted = principal.facts?.issuer === 'host'
     // A platform user sync writes as is `external` too, but one a host's verifier returns is the host's to give access.
     if (principal.id.startsWith('board:') || (principal.kind === 'external' && !hosted)) return { fixed: FULL_ACCESS, rule: null }
@@ -730,23 +730,26 @@ export function createAuthority(options: {
     }
     if (principal.kind === 'person') {
       if (!options.grants) return { fixed: FULL_ACCESS, rule: null }
-      return { matched: (await matching(principal, null)).matched }
+      return { matched: (await matching(principal, null, snapshot)).matched }
     }
     // A host's says nothing past its ID, as a principal stored before the board kept claims.
-    return byRules(principal, (hosted ? undefined : principal.facts) ?? factsFromId(principal.id))
+    return byRules(principal, (hosted ? undefined : principal.facts) ?? factsFromId(principal.id), snapshot)
   }
 
-  /** What a principal may do now, narrowed by its scope. A 401 or 403 when it may do nothing. */
-  async function grant(principal: Known): Promise<Access> {
-    const resolved = await resolve(principal)
+  /**
+   * What a principal may do now, narrowed by its scope, or under `snapshot`, grants as a write is
+   * about to change them. A 401 or 403 when it may do nothing.
+   */
+  async function grant(principal: Known, snapshot?: readonly StoredGrant[]): Promise<Access> {
+    const resolved = await resolve(principal, snapshot)
     const access = 'fixed' in resolved ? resolved.fixed : combine(resolved.matched)
     return principal.scope === undefined ? access : access.narrow(parseScope(principal.scope))
   }
 
   /** What a stored principal (a schedule's creator, a watcher's registrant) may do now: null once nothing. */
-  async function accessNow(principal: Known): Promise<Access | null> {
+  async function accessNow(principal: Known, snapshot?: readonly StoredGrant[]): Promise<Access | null> {
     try {
-      return await grant(principal)
+      return await grant(principal, snapshot)
     } catch (error) {
       const status = (error as { status?: number }).status
       if (status === 401 || status === 403) return null

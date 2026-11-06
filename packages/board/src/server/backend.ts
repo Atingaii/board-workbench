@@ -126,9 +126,11 @@ export type BoardBinding = {
   typing(messages: readonly MessageView[], status: string | undefined): Promise<string[]>
   /**
    * What a principal the backend stored may do now, under board()'s `access`: a schedule's creator
-   * at each send, a registrant at each event and pull. Null once it may do nothing.
+   * at each send, a registrant at each event and pull. Null once it may do nothing. With `grants`,
+   * under those instead of the board's grants as they are: a grant write's own snapshot, so what it
+   * checks is what it appends to.
    */
-  accessNow(principal: Known): Promise<Access | null>
+  accessNow(principal: Known, grants?: readonly StoredGrant[]): Promise<Access | null>
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
   /** The OIDC issuers board()'s rules name, which no grant's issuer may share principals with. */

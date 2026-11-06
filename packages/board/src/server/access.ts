@@ -420,3 +420,62 @@ export function authorize<P extends Permission>(
   if (!access.can(permission, channel)) throw forbidden(`this token can't ${PHRASE[permission](channel)}`)
   return Object.freeze({ permission, channel }) as unknown as Proof<P>
 }
+
+/** A grant as `checkGrantChange` reads it: whom it names, by kind, and what it gives where. */
+export type GrantShape = { readonly principals: readonly { readonly kind: string }[]; readonly can: WrittenCan }
+
+/** A change that makes or widens a grant, as `checkGrantChange` judges it. */
+export type GrantChange = {
+  /**
+   * What the caller may do, narrowed by its token, on the grants the change applies to: what
+   * `GET /me` says. For an owner a token narrows, what its token's `can` gives.
+   */
+  caller: Access
+  /** An owner no token narrows, whom nothing here limits. */
+  owner?: boolean
+  /** Every grant as it would be after the change, the changed one included. */
+  after: readonly GrantShape[]
+  /** The grant made or widened, as it would be after the change. */
+  changed: { readonly can: WrittenCan }
+}
+
+/** Why `checkGrantChange` refuses a change, and where: `pattern` is the spot it failed at. */
+export type GrantChangeRefusal = { reason: 'reach'; pattern: ChannelPattern; permission: 'manage' } | { reason: 'admission'; pattern: ChannelPattern; permission: Permission }
+
+/** Whether `other` is a pattern more specific than `pattern`, and under it. */
+const isUnder = (other: string, pattern: string) =>
+  other !== pattern && (pattern === '*' || (pattern.endsWith('/') && (other === pattern.slice(0, -1) || other.startsWith(pattern))))
+
+/**
+ * Whether a caller may make or widen a grant: you can't grant what you don't have, and that
+ * includes what `everyone` gives anyone you let in. Null when it may; otherwise why not, and where.
+ *
+ * - **Reach:** `manage` at each of the changed grant's patterns, and at every more specific spot
+ *   under them where the caller has less. A spot an `everyone` grant's pattern covers, under the
+ *   changed grant's pattern, is no matter: that pattern is more specific, so it decides there for
+ *   every principal. The changed grant's own patterns always count.
+ * - **Admission:** wherever `everyone` gives something, the caller has it too, since any principal
+ *   a grant lets in gets what `everyone` gives.
+ *
+ * It looks only at the spots where access can change: the changed grant's patterns, the `everyone`
+ * grants', and the caller's own, from `summary()`. It does no I/O, so a board and Vercel's API run
+ * the same rule. Revoking a grant, or removing from one, needs only `manage` at its patterns.
+ */
+export function checkGrantChange(change: GrantChange): GrantChangeRefusal | null {
+  if (change.owner) return null
+  const { caller } = change
+  const everyone = change.after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone'))
+  const closed = everyone.flatMap((grant) => Object.keys(grant.can))
+  const own = Object.keys(change.changed.can)
+  const spots = [...new Set([...own, ...closed, ...Object.keys(caller.summary())])]
+  for (const pattern of own) {
+    if (!caller.at('manage', pattern)) return { reason: 'reach', pattern, permission: 'manage' }
+    for (const spot of spots) {
+      if (!isUnder(spot, pattern) || caller.at('manage', spot)) continue
+      if (!closed.some((lock) => isUnder(lock, pattern) && (lock === spot || isUnder(spot, lock)))) return { reason: 'reach', pattern: spot, permission: 'manage' }
+    }
+  }
+  const gives = combine(everyone.map((grant) => ({ level: 'everyone' as const, can: grant.can, source: null })))
+  for (const spot of spots) for (const permission of PERMISSIONS) if (gives.at(permission, spot) && !caller.at(permission, spot)) return { reason: 'admission', pattern: spot, permission }
+  return null
+}
