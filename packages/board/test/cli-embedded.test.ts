@@ -452,6 +452,36 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const writes = () => fetching.mock.calls.filter(([input, init]) => (init?.method ?? (input instanceof Request ? input.method : 'GET')) !== 'GET').length
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      for (const args of [['conformance'], ['conformance', '--scope', 'test']]) {
+        const refused = await run(...args)
+        expect(refused).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: conformance posts and changes grants, so name a scratch board for it\.\n/) })
+        expect(refused.stderr).toContain(`    vb ${args.join(' ')} --name <BOARD>\n`)
+        expect(refused.stderr).toContain(`    vb ${args.join(' ')} --url <URL>\n`)
+      }
+      expect(writes()).toBe(0)
+      // Named, even the team's default board, it runs: the person chose it.
+      const named = await run('conformance', '--name', 'General')
+      expect(named.code).not.toBe(2)
+      expect(named.stdout).toMatch(/\d+ passed/)
+      expect(writes()).toBeGreaterThan(0)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('says how to point it at a board with the commands it has, standalone, where there is no team board', async () => {
     const home = await isolated()
     const cwd = process.cwd()

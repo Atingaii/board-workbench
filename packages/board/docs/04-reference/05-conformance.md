@@ -11,6 +11,10 @@ Point the CLI at the board and run `vb conformance`:
 BOARD_URL=https://board.example.com/api/board vb conformance
 ```
 
+On Vercel's board, name a scratch board on the team: `vb conformance --name
+scratch`. It posts and changes grants, so with no board named, it exits 2
+rather than check the team's.
+
 Or call it from code, with a handle on the board:
 
 ```ts scripts/conformance.ts

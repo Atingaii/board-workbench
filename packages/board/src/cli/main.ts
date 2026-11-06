@@ -893,6 +893,16 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'conformance': {
       if (args.length > 0) throw usage('conformance takes no arguments: pass its channel with --channel.')
+      // It posts and changes grants, so it checks a board someone named, never the team's by default.
+      const named = flags.name !== undefined || flags.url !== undefined || Boolean(process.env.BOARD_URL?.trim()) || Boolean(process.env.BOARD_NAME)
+      if (!io.board && !named)
+        throw usage('conformance posts and changes grants, so name a scratch board for it.', {
+          reason: 'needs_scratch_board',
+          next: [
+            { instruction: 'Check a scratch board on this team, by its name', argv: rerun('--name', '<BOARD>') },
+            { instruction: 'Or a board by its URL', argv: rerun('--url', '<URL>') },
+          ],
+        })
       // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
       const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
       const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken })
