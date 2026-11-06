@@ -559,11 +559,11 @@ describe('the embedded CLI', () => {
     try {
       expect(await run('read', 'dev', '--name', 'security')).toMatchObject({
         code: 1,
-        stderr: "error: board security doesn't let this project in (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+        stderr: "error: board security doesn't let this project in (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'\n",
       })
       expect(await run('read', 'dev')).toMatchObject({
         code: 1,
-        stderr: "error: the team's board doesn't let this project in (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+        stderr: "error: the team's board doesn't let this project in (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'\n",
       })
     } finally {
       fetching.mockRestore()

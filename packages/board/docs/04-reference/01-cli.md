@@ -178,11 +178,11 @@ itself.
   $ vb read dev --name security
   error: board security doesn't let this project in (prj_pong, preview).
 
-    Someone who manages the board can grant it.
+    Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'
   $ vb read dev
   error: the team's board doesn't let this project in (prj_pong, preview).
 
-    Someone who manages the board can grant it.
+    Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'
   ```
 - **A team's board has a URL too:** the one `whoami` prints for it
   (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`), which

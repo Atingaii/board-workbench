@@ -293,7 +293,7 @@ describe('vercel()', () => {
       status: 403,
       code: 'board_not_granted',
       message: "the team's board doesn't let this project in (prj_pong, production).",
-      hint: 'Someone who manages the board can grant it.',
+      hint: "Grant it: vb grants create --project prj_pong --environment production --can '*=read,post,react,label'",
     })
     const api = fakeMessageboard({ boardId: null })
     await handleOn(api).post('dev', { text: 'hello' })
@@ -387,7 +387,7 @@ describe('vercel()', () => {
         code: 'board_not_granted',
         origin: 'handle',
         message: "board security doesn't let this project in (prj_pong, preview).",
-        hint: 'Someone who manages the board can grant it.',
+        hint: "Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'",
       })
     })
 
