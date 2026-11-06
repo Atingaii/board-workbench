@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { board } from '../src/server/index.ts'
 import { githubActions, oidc, vercelProject } from '../src/access/index.ts'
-import { a2 } from '../src/backend-a2/index.ts'
+import { a2 } from '../src/server/a2.ts'
 import { PERMISSIONS } from '../src/server/access.ts'
 import { caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'

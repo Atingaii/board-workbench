@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { connect } from '../src/client/node.ts'
-import { memory } from '../src/store/memory.ts'
 import { board, HttpError, type Backend, type Caller } from '../src/server/index.ts'
 import { oidc, vercelProject, oidcTokens } from '../src/access/index.ts'
-import { a2 } from '../src/backend-a2/index.ts'
+import { local } from '../src/local/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { board as projectBoard, bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
@@ -44,15 +43,13 @@ describe('board() and its backend', () => {
     expect(() => http('board.example.com')).toThrow("http: board.example.com isn't a URL")
   })
 
-  it('keeps the board here with a2()', async () => {
-    const backend = a2({ store: memory() })
+  it('keeps the board in this process with local(), one board to a backend', async () => {
+    const backend = local({ memory: true })
     const here = board({ backend, url: BOARD_URL })
     const discovery = await (await here.fetch(new Request(BOARD_URL))).json()
     expect(discovery).toMatchObject({ url: BOARD_URL })
     expect(discovery.capabilities).toBeUndefined()
-    // a2()'s own extras are on the backend: its A2 servers, for a shared scheduler.
-    expect(backend.servers.length).toBeGreaterThan(0)
-    expect(() => board({ backend, url: BOARD_URL })).toThrow('a2: this backend already serves a board')
+    expect(() => board({ backend, url: BOARD_URL })).toThrow('local: this backend already serves a board')
   })
 
   it('serves the protocol on a backend of your own, calling each method with the caller it verified and its parsed input', async () => {
@@ -72,7 +69,7 @@ describe('board() and its backend', () => {
         return { message: { id: 'm1', channel: input.channel, text: input.text } }
       },
     } as unknown as Backend
-    const { fetch } = board({ backend: mine, project: { id: PROJECT_ID, teamId: TEAM_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL })
+    const { fetch } = projectBoard({ backend: mine, authenticate: oidcTokens(testAuth), url: BOARD_URL })
     const token = await personToken()
     const julian = caller(fetch, token, { 'x-board-handle': 'julian', 'x-board-profile': 'claude', 'x-board-scope': 'dev/=read' })
 
@@ -119,21 +116,32 @@ describe('board() and its backend', () => {
     expect(calls.at(-1)!.caller).toEqual({ self: 'deploys', profile: 'deploys', origin: { via: { kind: 'client', name: 'deploys' } } })
   })
 
+  it("hands a backend of your own the board's team and name once, when it binds, and refuses what isn't one", () => {
+    const bound: { team: string | null; name: string | null }[] = []
+    const mine = () => ({ routes: [], keeps: true, bind: ({ team, name }: { team: string | null; name: string | null }) => void bound.push({ team, name }) }) as unknown as Backend
+    board({ backend: mine(), team: 'acme', name: 'security', url: BOARD_URL })
+    board({ backend: mine(), team: 'team_acme', url: BOARD_URL })
+    board({ backend: mine(), url: BOARD_URL })
+    expect(bound).toEqual([{ team: 'acme', name: 'security' }, { team: 'team_acme', name: null }, { team: null, name: null }])
+    for (const name of ['', 'acme/security', '/security', 'x'.repeat(65)])
+      expect(() => board({ backend: mine(), name, url: BOARD_URL }), name).toThrow("isn't a board's name")
+    for (const team of ['', 'acme/web', 'two words']) expect(() => board({ backend: mine(), team, url: BOARD_URL }), team).toThrow("isn't a team")
+    expect(bound).toHaveLength(3)
+  })
+
   it('takes a backend made from another, with one method changed', async () => {
-    const kept = a2({ store: memory() })
+    const kept = local({ memory: true })
     const backend: Backend = {
       ...kept,
       async delete() {
         throw new HttpError(403, 'forbidden', 'messages on this board stay')
       },
     }
-    const { fetch } = board({ backend, project: { id: PROJECT_ID, teamId: TEAM_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL })
+    const { fetch } = projectBoard({ backend, authenticate: oidcTokens(testAuth), url: BOARD_URL })
     const julian = await julianOn(fetch)
     const id = (await julian('POST', '/messages', { channel: 'dev', text: 'kept' })).body.message.id
     expect(await julian('POST', `/messages/${id}/delete`, {})).toEqual({ status: 403, body: { error: { code: 'forbidden', message: 'messages on this board stay' } } })
     expect((await julian('GET', `/messages/${id}`)).body.message.text).toBe('kept')
-    // What it spread was a2()'s methods, not what a2() builds once it's bound.
-    expect(kept.servers.length).toBeGreaterThan(0)
   })
 })
 
@@ -217,7 +225,7 @@ describe('a board on http()', () => {
     expect((await ci('POST', '/messages', { channel: 'deploys', text: 'mine', id: theirs })).status).toBe(201)
   })
 
-  it('checks its watchers the way a2() does, and their IDs as profiles', () => {
+  it('checks its watchers the way a local board does, and their IDs as profiles', () => {
     expect(() => board({ backend: http(BOARD_URL), url: V0_URL, watch: { review_pi: { tail: 'prs', run: () => {} } } })).toThrow(
       'watch review_pi: ids start with a letter and use up to 32 letters, numbers, and hyphens',
     )

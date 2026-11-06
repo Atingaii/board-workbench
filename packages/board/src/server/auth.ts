@@ -333,8 +333,12 @@ export async function tokenHash(secret: string): Promise<string> {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-/** What a grant or a token left without `can` gives: what Vercel's API gives a project it lets use a board. */
-export const DEFAULT_CAN: Can = { '*': ['read', 'post', 'react', 'label'] }
+/**
+ * What a grant or a token left without `can` gives: what Vercel's API gives a project it lets use a
+ * board. Frozen all the way down: board reads it for every such grant, and @vercel/board/access
+ * exports it, so code that imports it can't widen them.
+ */
+export const DEFAULT_CAN: Can = Object.freeze({ '*': Object.freeze(['read', 'post', 'react', 'label'] as const) })
 const GRANT_CLAIMS_MAX = 32
 const GRANT_VALUES_MAX = 32
 const GRANT_VALUE_MAX = 1000

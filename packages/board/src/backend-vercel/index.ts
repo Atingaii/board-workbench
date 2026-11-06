@@ -1,4 +1,4 @@
-// `@vercel/board/backend-vercel`: your team's board in Vercel's API. In Node, it finds credentials the way
+// Your team's board in Vercel's API, internal: board()'s default backend, and the CLI's. In Node, it finds credentials the way
 // the Vercel CLI and a deployment do: `VERCEL_TOKEN`, the deployment's OIDC token, or `vercel login`.
 import { readFile } from 'node:fs/promises'
 import { getVercelOidcToken, getVercelToken } from '@vercel/oidc'

@@ -141,7 +141,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (!bound) throw new Error('sync used before board() bound it')
     return bound
   }
-  /** Sync's own caller: on a2(), `board:sync`; on http(), this deployment itself. */
+  /** Sync's own caller: on a local board, `board:sync`; on http(), this deployment itself. */
   const me: Caller = { self: 'sync', origin: { via: { kind: 'engine' } } }
 
   /** One protocol method, as sync. */

@@ -377,6 +377,42 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("picks the team's board by its name with --name or BOARD_NAME, ahead of BOARD_URL, and only a name", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard({ boards: [{ name: 'security' }] })
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const app = { name: 'board', commands: local }
+    const run = (...args: string[]) => capture(() => main(args, app))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      expect((await run('post', 'dev', 'rotate the keys', '--scope', 'test', '--name', 'security')).code).toBe(0)
+      expect((await run('read', 'dev', '--scope', 'test')).stdout).not.toContain('rotate the keys')
+      // --name names a team's board as --scope does: BOARD_URL doesn't take its place.
+      vi.stubEnv('BOARD_URL', 'https://elsewhere.example/api/board')
+      expect((await run('read', 'dev', '--name', 'SECURITY')).stdout).toContain('rotate the keys')
+      vi.stubEnv('BOARD_URL', undefined)
+      vi.stubEnv('BOARD_NAME', 'security')
+      expect((await run('read', 'dev', '--scope', 'test')).stdout).toContain('rotate the keys')
+      vi.stubEnv('BOARD_NAME', undefined)
+      // A board no one made yet: a person is told, and nothing makes it.
+      expect(await run('read', 'dev', '--name', 'nope')).toMatchObject({ code: 1, stderr: expect.stringMatching(/^error: There's no board named nope on this team/) })
+      expect(api.requests).not.toContain('POST /boards/ensure')
+      // What isn't a name, or names a board twice, is misuse: another team's board is --scope's.
+      for (const args of [['--name', 'security', '--url', 'https://www.example.com/api/board'], ['--name', 'x'.repeat(65)]])
+        expect(await run('read', 'dev', ...args), args.join(' ')).toMatchObject({ code: 2, stderr: expect.stringMatching(/^error: /) })
+      expect(await run('read', 'dev', '--name', 'acme/security')).toMatchObject({ code: 2, stderr: expect.stringContaining('    vb read dev --scope acme --name security\n') })
+      vi.stubEnv('BOARD_NAME', 'acme/security')
+      expect(await run('read', 'dev')).toMatchObject({ code: 2, stderr: expect.stringContaining('pass its team with --scope') })
+      vi.stubEnv('BOARD_NAME', undefined)
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('says how to point it at a board with the commands it has, standalone, where there is no team board', async () => {
     const home = await isolated()
     const cwd = process.cwd()
