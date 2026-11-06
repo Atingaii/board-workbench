@@ -11,6 +11,8 @@ const PLATFORM: Record<string, { team: string; principal: HostPrincipal }> = {
   pt_ada: { team: 'team_a', principal: { id: 'vercel:user:u_ada', kind: 'person', handle: 'user-ada' } },
   pt_bob: { team: 'team_b', principal: { id: 'vercel:user:u_bob', kind: 'person', handle: 'user-bob' } },
   pt_carol: { team: 'team_a', principal: { id: 'vercel:user:u_carol', kind: 'person', handle: 'user-carol' } },
+  // A host that names its people as a local board does: they're people, never its owner.
+  pt_mallory: { team: 'team_a', principal: { id: 'local:user:mallory', kind: 'person', handle: 'mallory' } },
   pt_deploy: { team: 'team_a', principal: { id: 'vercel:project:prj_app:production', kind: 'deployment', handle: 'app' } },
   pt_guest: { team: 'team_a', principal: { id: 'support:customer:99', kind: 'external', handle: 'customer-99' } },
 }
@@ -49,6 +51,10 @@ describe("a host's authenticate", () => {
     expect((await carol('POST', '/messages', { channel: 'security', text: 'in' })).status).toBe(201)
     expect((await ada('POST', '/messages', { channel: 'security', text: 'out' })).status).toBe(403)
     expect((await ada('GET', '/me')).body.can).toMatchObject({ '*': ['read', 'post', 'react', 'label', 'sync', 'manage'], 'security/': [] })
+    // One the host names local:user: is a person like Ada: it can't lift the lock for itself.
+    const mallory = caller(tenant.fetch, 'pt_mallory')
+    expect((await mallory('POST', '/grants', { principals: [{ kind: 'user', userId: 'mallory' }], can: { 'security/': 'all' } })).status).toBe(403)
+    expect((await mallory('POST', '/messages', { channel: 'security', text: 'in?' })).status).toBe(403)
   })
 
   it("trusts nothing built in: the host project's own person and deployment tokens get no access", async () => {

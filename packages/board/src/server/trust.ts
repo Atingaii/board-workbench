@@ -235,10 +235,11 @@ function newSecret(): string {
 
 /**
  * Whether `principal` is the board's owner: its local user, the one a local issuer (`vb serve`'s)
- * mints a token for. Everyone else, a person on the team included, changes grants as `manage` lets
- * them, so a grant on people holds against people.
+ * mints a token for. A host's verifier can return any ID, `local:user:` ones included, so what it
+ * made is never the owner. Everyone else, a person on the team included, changes grants as
+ * `manage` lets them, so a grant on people holds against people.
  */
-const isOwner = (principal: Identity['principal']) => principal.id.startsWith('local:user:')
+const isOwner = (principal: Identity['principal']) => principal.kind === 'person' && principal.id.startsWith('local:user:') && principal.facts?.issuer !== 'host'
 
 /** Whether `identity` may list the grants: `manage` at `*`, or the owner, as far as its token's scope allows. */
 function lists({ principal }: Identity): boolean {
@@ -312,8 +313,14 @@ const namesIssuer = (principals: readonly GrantPrincipal[]) => principals.some((
 async function updated(identity: Identity, state: AccessState, { id, add, remove, can }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn, team: string | null) {
   const index = indexOf(id, 'g')
   const row = index === null ? undefined : state.grants[index]
-  if (!row) throw notFound(`grant not found: ${id}`, 'grant_not_found')
+  if (!row) {
+    // One that isn't there is only news to whoever may list them.
+    mayList(identity, 'update grants')
+    throw notFound(`grant not found: ${id}`, 'grant_not_found')
+  }
   const before = Object.values(state.grants).map(storedGrant)
+  // Whom it names is only news to someone who may change it: reach first, before any removal is checked.
+  await mayGrant(identity, { revoked: row }, before, before.filter((other) => other.id !== storedGrant(row).id), accessIn, `update ${id}`)
   const others = grantIssuers(Object.values(state.grants).filter((other) => other.id !== row.id).map(storedGrant))
   let principals = [...row.principals]
   for (const input of remove ?? []) {

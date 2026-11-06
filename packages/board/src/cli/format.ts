@@ -207,6 +207,8 @@ export function principalFlags(principal: PrincipalView): string {
       return [`--oidc ${principal.issuer}`, ...Object.entries(principal.claims).flatMap(([name, value]) => [value].flat().map((one) => `--claim ${name}=${one}`))].join(' ')
     case 'all-projects':
       return `--all-projects --environment ${principal.environments.join(',')}`
+    case 'app':
+      return `--app ${principal.name ?? principal.clientId}`
     default:
       return `--${principal.kind}`
   }
