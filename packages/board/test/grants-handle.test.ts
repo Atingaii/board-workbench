@@ -77,6 +77,28 @@ describe('a private channel, from the handle', () => {
     expect(await team.channels()).toEqual([])
   })
 
+  it('leaves at most one way in when two make the same private channel at once', async () => {
+    const team = testBoard()
+    // Each one's own grant answers only once both are made, so each then finds the other's.
+    let made = 0
+    let release!: () => void
+    const both = new Promise<void>((resolve) => (release = resolve))
+    const racing: Fetch = async (request) => {
+      const own = request.method === 'POST' && new URL(request.url).pathname.endsWith('/grants')
+      const response = await team.fetch(request)
+      if (own && ++made === 2) release()
+      if (own) await both
+      return response
+    }
+    const julian = handleAs(racing, () => personToken())
+    const ada = handleAs(racing, () => personToken('u_ada'))
+    const [first, second] = await Promise.allSettled([julian.createChannel('vault', { private: true }), ada.createChannel('vault', { private: true })])
+    expect([first, second].map((settled) => (settled.status === 'rejected' ? (settled.reason as { code: string }).code : 'made'))).toEqual(['channel_granted', 'channel_granted'])
+    // Each took its own back: no one has a way in, and nothing is closed or made.
+    expect(await ids(team)).toEqual(['g1', 'g2', 'g3'])
+    expect(await team.channels()).toEqual([])
+  })
+
   it('never shuts its creator out when a step fails part way', async () => {
     const team = testBoard()
     let grantsPosted = 0

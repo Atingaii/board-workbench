@@ -445,7 +445,9 @@ let in whom it names, and a path where it or a channel under it is there (409
 `channel_exists`), since closing `security/` closes `security/incidents` too.
 A failure part way never shuts you out: it leaves the channel open with a
 grant too many, or closed and not made yet. A board that keeps no grants fails
-on the listing, with nothing made.
+on the listing, with nothing made. Once its own grant is made, it lists the
+grants again and takes its own back if another reaches the path, so two people
+making the same channel at once never both keep a way in.
 
 `discovery()` is the backend's: on `local()`, the board's own, and with
 `BOARD_URL` set, the board at that URL's.

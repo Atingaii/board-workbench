@@ -359,22 +359,26 @@ export function createBoardClient(options: ClientOptions) {
      * `channel_granted`: the channel, `<path>/`, or a pattern under it, whose grants would still let
      * in whoever they name), and a path where it or a channel under it is there already (409
      * `channel_exists`), since closing `security/` closes `security/incidents` too. A board that
-     * keeps no grants fails on the listing, with nothing made.
+     * keeps no grants fails on the listing, with nothing made. Once its own grant is made it lists
+     * them again, and takes its own back when another reaches the path, so of two callers making
+     * the same channel at once, at most one keeps a way in.
      */
     createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
       if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       const creator = creatorOf(await call<Me>('GET', '/me'), path)
       const pattern = `${path}/`
       // A grant that already reaches it would still let in whoever it names, past the lock.
-      const { grants } = await call<{ grants: GrantView[] }>('GET', '/grants')
-      const reaching = grants.filter((grant) => Object.keys(grant.can).some((at) => at === path || at.startsWith(pattern)))
-      if (reaching.length > 0) {
-        const named = reaching.map((grant) => grant.id)
+      const reaching = async () =>
+        (await call<{ grants: GrantView[] }>('GET', '/grants')).grants.filter((grant) => Object.keys(grant.can).some((at) => at === path || at.startsWith(pattern)))
+      const granted = (grants: GrantView[]) => {
+        const named = grants.map((grant) => grant.id)
         const list = named.length === 1 ? named[0]! : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`
-        throw new BoardError('channel_granted', `${list} already ${named.length === 1 ? 'grants' : 'grant'} in ${path}, so a private ${path} wouldn't be yours alone: nothing was made.`, 409, {
+        return new BoardError('channel_granted', `${list} already ${named.length === 1 ? 'grants' : 'grant'} in ${path}, so a private ${path} wouldn't be yours alone: nothing was made.`, 409, {
           hint: `Revoke ${named.length === 1 ? 'it' : 'each'} first: vb grants revoke ${named[0]}`,
         })
       }
+      const before = await reaching()
+      if (before.length > 0) throw granted(before)
       const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
       if (there)
         throw new BoardError(
@@ -384,6 +388,13 @@ export function createBoardClient(options: ClientOptions) {
           { hint: `Close it with a grant: everyone at ${pattern} with 'none'.` },
         )
       const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      // Someone making it at the same time: whoever finds the other's grant takes its own back, so at
+      // most one of them keeps a way in, and if each finds the other, neither does.
+      const raced = (await reaching()).filter((grant) => grant.id !== own.grant.id)
+      if (raced.length > 0) {
+        await call<{ revoked: boolean }>('POST', `/grants/${encodeURIComponent(own.grant.id)}/revoke`, { body: {} })
+        throw granted(raced)
+      }
       const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
       const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
       return { ...made, grants: [own.grant, closed.grant] }
