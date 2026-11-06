@@ -36,25 +36,39 @@ export const getState = () => state
 // --- who you post as: the CLI's identity, or a profile picked here ----------------------
 
 const PROFILE_KEY = 'board.profile'
+const AVATARS_KEY = 'board.avatars'
 
-/** `undefined`: as `vb inspect` started. `null`: yourself. A string: that profile. */
-let profile: string | null | undefined = (() => {
+/** A profile you post as: its name, and the avatar you gave it (an https URL), if any. */
+export type Profile = { name: string; avatar?: string }
+
+const stored = <T>(key: string): T | undefined => {
   try {
-    const stored = localStorage.getItem(PROFILE_KEY)
-    return stored === null ? undefined : (JSON.parse(stored) as string | null)
+    const value = localStorage.getItem(key)
+    return value === null ? undefined : (JSON.parse(value) as T)
   } catch {
     return undefined
   }
+}
+
+/** `undefined`: as inspect started. `null`: yourself. Else that profile (stored by its name alone, before avatars). */
+let profile: Profile | null | undefined = (() => {
+  const value = stored<string | Profile | null>(PROFILE_KEY)
+  return typeof value === 'string' ? { name: value } : value
 })()
 
+/** The avatar you last gave each profile, so picking it again brings it back. */
+const avatars: Record<string, string> = stored<Record<string, string>>(AVATARS_KEY) ?? {}
+
 export const getProfile = () => profile
+export const avatarOf = (name: string): string | undefined => avatars[name]
 
 const client = board({
   backend: http(`${location.origin}/board`, {
     fetch: async (input, init) => {
       const headers = new Headers(init?.headers)
       headers.set('x-inspect-token', token)
-      if (profile !== undefined) headers.set('x-inspect-profile', profile ?? '')
+      if (profile !== undefined) headers.set('x-inspect-profile', profile?.name ?? '')
+      if (profile?.avatar) headers.set('x-inspect-avatar', profile.avatar)
       // The feed is a long-poll: it's live while one is out, and each answers when there's news.
       const live = String(input).includes('/board/events')
       if (live) set((s) => (s.live === 'reconnecting' ? s : { ...s, live: 'live' }))
@@ -70,21 +84,27 @@ const client = board({
   }),
 })
 
-/** Switches who you post as, then learns the identity that is. */
-export async function setProfile(next: string | null | undefined) {
+/** Switches who you post as, then learns the identity that is, and remembers it once the board takes it. */
+export async function setProfile(next: Profile | null | undefined) {
   const previous = profile
   profile = next
-  try {
-    if (next === undefined) localStorage.removeItem(PROFILE_KEY)
-    else localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
-  } catch {}
   try {
     const me = await client.me()
     set((s) => ({ ...s, me }))
   } catch (error) {
     profile = previous
     toast(`couldn't switch: ${message(error)}`)
+    return
   }
+  if (next) {
+    if (next.avatar) avatars[next.name] = next.avatar
+    else delete avatars[next.name]
+  }
+  try {
+    if (next === undefined) localStorage.removeItem(PROFILE_KEY)
+    else localStorage.setItem(PROFILE_KEY, JSON.stringify(next))
+    localStorage.setItem(AVATARS_KEY, JSON.stringify(avatars))
+  } catch {}
 }
 
 // --- which message you're editing ---------------------------------------------------
