@@ -119,8 +119,8 @@ export function fakeGrants(options: {
       case 'everyone':
         return { kind: input.kind }
       case 'all-projects':
-        if (!Array.isArray(input.environments)) throw invalid('all-projects names its environments')
-        return { kind: 'all-projects', environments: input.environments }
+        if (!removal && !Array.isArray(input.environments)) throw invalid('all-projects names its environments')
+        return { kind: 'all-projects', environments: input.environments ?? [] }
       default:
         throw invalid(`no principal kind ${input.kind}`)
     }
