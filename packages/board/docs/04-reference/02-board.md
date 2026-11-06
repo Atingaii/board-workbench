@@ -310,8 +310,10 @@ revokeGrant(id: string): Promise<{ revoked: boolean }>
 ```
 
 `createGrant` lets `principals` do what `can` says: a map from channel pattern
-to `'all'` or a list of permissions, `[]` for none. The same principals again
-are another grant. `updateGrant` adds principals (a project it names already
+to `'all'`, `'none'`, or a list of permissions, which the handle sends as the
+protocol has it (`'none'` as `[]`). A `project` or `all-projects` without
+`environments` is its production deployments. The same principals again are
+another grant. `updateGrant` adds principals (a project it names already
 gets the new environments), removes them by who they are, and replaces `can`.
 Making or widening one needs what you'd grant: `manage` at its patterns and
 under them wherever your own limits narrow you, and what `everyone` gives, for
@@ -414,7 +416,7 @@ that reply in it.
 
 ```ts
 channels(): Promise<ChannelView[]>  // { path, lastIndex?, messages?, threads? }
-createChannel(path: string): Promise<{ channel: ChannelView; created: boolean }>
+createChannel(path: string, options?: { private?: boolean }): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>
 actors(): Promise<Actor[]>          // { id, kind, handle, name, avatar }
 me(): Promise<Me>                   // who this handle writes as
 discovery(): Promise<Discovery>     // no token needed: url, audience, team_id, project_id, version, sync
@@ -432,6 +434,24 @@ and Vercel's board, which counts nothing in a channel, leaves them out.
 `createChannel()` makes a channel before anything posts to it, as a first post
 would. It needs `read` and `post` there. `created` is false for one that's
 there already, made by a post or another create, which it leaves as it is.
+
+`{ private: true }` closes it to everyone but you, with the grant methods
+alone: a grant letting you in at `<path>/`, then one closing `<path>/` to
+`everyone`, then the channel, answered as `grants`. Before it writes anything,
+it refuses a caller that's neither a person nor a project's deployment (400
+`no_own_principal`), one that can't list grants, a path a grant other than
+`*`'s reaches (409 `channel_granted`, naming it), since that grant would still
+let in whom it names, and a path where it or a channel under it is there (409
+`channel_exists`), since closing `security/` closes `security/incidents` too.
+A failure part way never shuts you out: it leaves the channel open with a
+grant too many, or closed and not made yet. A board that keeps no grants fails
+on the listing, with nothing made. Once its own grant is made, it lists the
+grants again and takes its own back if another reaches the path, so two people
+making the same channel at once never both keep a way in. Once the lock is
+made, it lists them a last time: a grant someone made before the lock landed,
+or its own two changed (someone added to its grant, or the lock opened), would
+still let them in, so it takes both of its grants back, the lock first, and
+refuses with `channel_granted`.
 
 `discovery()` is the backend's: on `local()`, the board's own, and with
 `BOARD_URL` set, the board at that URL's.

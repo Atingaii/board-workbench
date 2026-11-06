@@ -1,14 +1,41 @@
 // An in-memory `/v1/messageboard`, as Vercel's API behaves: what
 // `vercel()` from `@vercel/board/backend-vercel` is tested against. A bearer token names its principal:
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
   | { type: 'app'; clientId: string }
   | { type: 'project'; projectId: string; environment: string }
   | { type: 'external'; id: string; syncKey: string }
-type Actor = { id: string; principal: Principal; profile?: { name: string; avatar?: string }; session?: string }
+type Actor = {
+  id: string
+  principal: Principal
+  profile?: { name: string; avatar?: string }
+  session?: string
+  /** The board token the request came with: it acts as `principal`, narrowed, on its own board. */
+  token?: Minted
+  /** A development token that carries a person: it's them, but it can't mint board tokens. */
+  development?: true
+}
+/** A board token, as Vercel's API keeps it: one board's, minted by a person, a deployment, or another token. */
+type Minted = {
+  id: string
+  boardId: string
+  name: string
+  can: Record<string, 'all' | string[]>
+  profile: string | null
+  session: string | null
+  /** The actor that minted it. */
+  by: string
+  /** Who it acts as: whoever minted the first token in its line. */
+  principal: Principal
+  parent: string | null
+  at: number
+  expiresAt: number
+  revoked: boolean
+}
 type Message = {
   id: string
   threadId: string
@@ -91,16 +118,27 @@ const principalId = (p: Principal) =>
   p.type === 'external' ? p.id : p.type === 'user' ? `vercel:user:${p.userId}` : p.type === 'app' ? `vercel:app:${p.clientId}` : `vercel:project:${p.projectId}:${p.environment}`
 const samePrincipal = (a: Principal, b: Principal) => principalId(a) === principalId(b)
 
-/** Who a request is: its bearer names a principal, or is a board token (`tokens`) that acts as one. */
-function actorOf(request: Request, tokens: Record<string, string> = {}): Actor {
+/**
+ * Who a request is: its bearer names a principal (`user:u_jb:development` a development token that
+ * carries one), is a credential `tokens` maps to one, or is the secret of a board token `minted`,
+ * which acts as whoever minted its line.
+ */
+function actorOf(request: Request, tokens: Record<string, string> = {}, minted: Minted | null = null): Actor {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-  // A board token acts as whoever it was minted for.
   const token = tokens[bearer] ?? bearer
   const [type, id, environment] = token.split(':')
-  const principal: Principal | null =
-    type === 'user' && id ? { type, userId: id } : type === 'app' && id ? { type, clientId: id } : type === 'project' && id && environment ? { type, projectId: id, environment } : null
-  if (!principal) throw new Refused(401, 'unauthorized')
-  const name = request.headers.get('x-board-profile') ?? undefined
+  const principal: Principal | null = minted
+    ? minted.principal
+    : type === 'user' && id
+      ? { type, userId: id }
+      : type === 'app' && id
+        ? { type, clientId: id }
+        : type === 'project' && id && environment
+          ? { type, projectId: id, environment }
+          : null
+  if (!principal) throw new Refused(401, 'invalid_token', 'This token is invalid, expired, or revoked.')
+  const development = !minted && type === 'user' && environment === 'development'
+  const name = request.headers.get('x-board-profile') ?? minted?.profile ?? undefined
   const avatar = request.headers.get('x-board-avatar') ?? undefined
   const session = request.headers.get('x-board-session') ?? undefined
   const base = principalId(principal)
@@ -108,8 +146,124 @@ function actorOf(request: Request, tokens: Record<string, string> = {}): Actor {
     id: name ? `${base}+${name.toLowerCase()}` : base,
     principal,
     ...(name ? { profile: { name, ...(avatar ? { avatar } : {}) } } : {}),
-    ...(session ? { session } : {}),
+    ...(session ?? minted?.session ? { session: (session ?? minted?.session)! } : {}),
+    ...(minted ? { token: minted } : {}),
+    ...(development ? { development: true as const } : {}),
   }
+}
+
+const TOKEN_PERMISSIONS = ['read', 'post', 'react', 'label', 'sync', 'manage']
+const TOKEN_PATTERN = /^(\*|[a-z0-9_-]+(\/[a-z0-9_-]+)*\/?)$/
+const DAY = 86_400_000
+
+/**
+ * Board tokens, as Vercel's API keeps them: each one board's, its secret shown once, a retried mint
+ * 409. People, deployments, and tokens mint; apps and development tokens that carry a person don't.
+ * A token lists and revokes only itself and the tokens made from it; anyone else, the tokens that act
+ * as them. One that's revoked, expired, or whose person left the team is 401 `invalid_token`.
+ */
+function fakeTokens(shared: { member: (userId: string) => boolean; now: () => number }) {
+  const minted = new Map<string, Minted>()
+  const secrets = new Map<string, string>()
+  const replays = new Map<string, string>()
+  let next = 1
+
+  /** The token `bearer` is the secret of, if any: one that's no longer good is 401. */
+  function authenticate(bearer: string): Minted | null {
+    const id = secrets.get(bearer)
+    if (id === undefined) return null
+    const token = minted.get(id)!
+    const left = token.principal.type === 'user' && !shared.member(token.principal.userId)
+    if (token.revoked || token.expiresAt <= shared.now() || left) throw new Refused(401, 'invalid_token', 'This token is invalid, expired, or revoked.')
+    return token
+  }
+
+  const summary = (can: Minted['can']) => Object.fromEntries(Object.entries(can).map(([pattern, grant]) => [pattern, grant === 'all' ? [...TOKEN_PERMISSIONS] : [...grant]]))
+  const view = (token: Minted) => ({
+    id: token.id,
+    name: token.name,
+    can: summary(token.can),
+    profile: token.profile,
+    session: token.session,
+    by: token.by,
+    at: token.at,
+    expiresAt: token.expiresAt,
+    parent: token.parent,
+  })
+
+  function canOf(can: unknown): Minted['can'] {
+    if (can === undefined) return { '*': 'all' }
+    const valid =
+      typeof can === 'object' && can !== null && !Array.isArray(can) && Object.keys(can).length > 0 &&
+      Object.entries(can).every(([pattern, grant]) => TOKEN_PATTERN.test(pattern) && (grant === 'all' || (Array.isArray(grant) && grant.every((permission) => TOKEN_PERMISSIONS.includes(permission)))))
+    if (!valid) throw new Refused(400, 'invalid_scope', 'A scope maps channel patterns to permissions.')
+    return can as Minted['can']
+  }
+
+  function lifetime(expires: unknown): number {
+    if (expires === undefined) return 30 * DAY
+    const found = typeof expires === 'string' ? /^(\d+)(m|h|d)$/.exec(expires) : null
+    const ms = found ? Number(found[1]) * { m: 60_000, h: 3_600_000, d: DAY }[found[2] as 'm' | 'h' | 'd'] : NaN
+    if (!(ms > 0 && ms <= 90 * DAY)) throw new Refused(400, 'invalid_request', 'A token lives up to 90 days.')
+    return ms
+  }
+
+  /** Whether `actor` may see and revoke `token`: one that acts as it, or, as a token, itself and what was made from it. */
+  function mine(actor: Actor, token: Minted): boolean {
+    if (!actor.token) return principalId(token.principal) === principalId(actor.principal)
+    for (let at: Minted | undefined = token; at; at = at.parent ? minted.get(at.parent) : undefined) if (at.id === actor.token.id) return true
+    return false
+  }
+
+  function revoke(token: Minted) {
+    token.revoked = true
+    for (const other of minted.values()) if (other.parent === token.id && !other.revoked) revoke(other)
+  }
+
+  /** What `/boards/:id/tokens…` answers, or undefined for another route. */
+  function route(method: string, rest: string, body: Record<string, any>, actor: Actor, boardId: string): unknown {
+    if (rest === '/tokens' && method === 'POST') {
+      if (actor.principal.type === 'app' || actor.development) throw new Refused(403, 'unsupported_principal', "This principal can't mint board tokens.")
+      const key = `${actor.token?.id ?? principalId(actor.principal)}|${body.operationId}`
+      if (replays.has(key)) throw new Refused(409, 'token_already_minted', 'That token was minted already, and its secret is shown only once.')
+      const now = shared.now()
+      const token: Minted = {
+        id: `tok_${next++}`,
+        boardId,
+        name: String(body.name),
+        can: canOf(body.can),
+        profile: body.profile ?? null,
+        session: body.session ?? null,
+        by: actor.id,
+        principal: actor.principal,
+        parent: actor.token?.id ?? null,
+        at: now,
+        expiresAt: now + lifetime(body.expires),
+        revoked: false,
+      }
+      // Opaque: the API's has a prefix of its own, and no one should rely on it.
+      const secret = randomBytes(24).toString('base64url')
+      minted.set(token.id, token)
+      secrets.set(secret, token.id)
+      replays.set(key, token.id)
+      return { token: view(token), secret }
+    }
+    if (rest === '/tokens' && method === 'GET') {
+      const live = [...minted.values()].filter((token) => token.boardId === boardId && !token.revoked && token.expiresAt > shared.now() && mine(actor, token))
+      return { tokens: live.map(view) }
+    }
+    const revoking = /^\/tokens\/([^/]+)\/revoke$/.exec(rest)
+    if (revoking && method === 'POST') {
+      const token = minted.get(decodeURIComponent(revoking[1]!))
+      if (!token || token.boardId !== boardId || !mine(actor, token)) throw new Refused(404, 'token_not_found')
+      if (token.revoked) return { revoked: false }
+      revoke(token)
+      return { revoked: true }
+    }
+    return undefined
+  }
+
+  return { authenticate, route, summary, minted }
 }
 
 type Accounts = Record<string, { username: string; name: string }>
@@ -125,14 +279,37 @@ function viewOf(accounts: Accounts, actor: Actor): Omit<ActorView, 'lastSeenAt'>
   return { id: actor.id, kind: p.type === 'app' ? 'app' : 'deployment', handle: base }
 }
 
-/** What every board in one fake API shares: its team, its accounts, its clock, and its bucket. */
-type Shared = { teamId: string; accounts: Accounts; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
+/** The team's people, by user ID, with their emails, and its projects and the repositories GitHub knows: what grants name. */
+type Directory = { members: Record<string, string>; roles: Record<string, Role>; projects: Record<string, string>; repositories: Record<string, string>; apps: Record<string, string> }
+const MEMBERS: Record<string, string> = { u_jb: 'julian@acme.com', u_ada: 'ada@acme.com', u_bob: 'bob@acme.com', u_val: 'val@acme.com' }
+const ROLES: Record<string, Role> = { u_jb: 'owner', u_val: 'viewer' }
+const PROJECTS: Record<string, string> = { prj_board: 'board', prj_pong: 'pong', prj_web: 'web', prj_sec: 'sec' }
+const REPOSITORIES: Record<string, string> = { 'acme/web': '700001', 'acme/api': '700002' }
+/** Apps installed on the team, by client ID, with their slugs. */
+const APPS: Record<string, string> = { oac_1: 'ship', oac_2: 'deploy' }
+
+/** Who a token is, as grants see it: a board token, as its minter, held to its can. */
+const whoOf = (actor: Actor): Who => {
+  // A platform user a sync imported makes no requests of their own.
+  if (actor.principal.type === 'external') throw new Refused(403, 'forbidden')
+  const limit = actor.token ? { limit: actor.token.can as NonNullable<Who['limit']> } : {}
+  return actor.principal.type === 'user'
+    ? { kind: 'user', userId: actor.principal.userId, ...limit }
+    : actor.principal.type === 'project'
+      ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment, ...limit }
+      : { kind: 'app', clientId: actor.principal.clientId, ...limit }
+}
+
+/** What every board in one fake API shares: its team, its accounts and directory, its clock, and its bucket. */
+type Shared = { teamId: string; accounts: Accounts; directory: Directory; now: () => number; stored: Map<string, Uint8Array<ArrayBuffer>> }
 
 const STORAGE = 'http://storage.test/'
 
 /** One board in the fake API, with its own channels, threads, files, watchers, and schedules. */
 function fakeBoard(shared: Shared, boardId: string) {
   const { teamId, accounts, now, stored } = shared
+  /** Its grants, g1 and g2 to start, as each board on the API has its own. */
+  const access = fakeGrants({ teamId, ...shared.directory })
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
   const threads = new Map<string, Thread>()
   const posts = new Map<string, string>()
@@ -287,7 +464,19 @@ function fakeBoard(shared: Shared, boardId: string) {
     return channel
   }
 
+  /** A board token does only what its scope gives at the channel's closest pattern: the channel, then its parents (`dev/`), then `*`. */
+  function tokenMay(actor: Actor, permission: string, channelId: string) {
+    if (!actor.token) return
+    const name = channels.find((channel) => channel.id === channelId)?.name ?? ''
+    const parts = name.split('/')
+    const candidates = [name, ...parts.map((_, i) => `${parts.slice(0, parts.length - i).join('/')}/`), '*']
+    const pattern = candidates.find((candidate) => Object.hasOwn(actor.token!.can, candidate))
+    const grant = pattern === undefined ? [] : actor.token.can[pattern]!
+    if (!(grant === 'all' || grant.includes(permission))) throw new Refused(403, 'forbidden', `This token may not ${permission} in ${name}.`)
+  }
+
   function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }) {
+    tokenMay(actor, 'post', thread.channelId)
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
@@ -800,6 +989,8 @@ function fakeBoard(shared: Shared, boardId: string) {
       channels.push(channel)
       return { channel }
     }
+    const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
+    if (granted !== undefined) return granted
     if (method === 'GET' && rest === '/threads') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
@@ -817,6 +1008,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const again = repeat(actor, body.clientId)
       if (again) return again
       const channel = channelAt(body.channelId)
+      tokenMay(actor, 'post', channel.id)
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }
       threads.set(thread.id, thread)
@@ -918,6 +1110,7 @@ function fakeBoard(shared: Shared, boardId: string) {
       const message = messageAt(thread.id, Number(found[2]))
       const ref = { threadId: thread.id, message: message.sequence, messageId: message.id }
       const action = found[3] ?? ''
+      if (method !== 'GET') tokenMay(actor, action === '/reactions' ? 'react' : action === '/labels' ? 'label' : 'post', thread.channelId)
       if (method === 'PATCH' && action === '') {
         if (!samePrincipal(message.createdBy.principal, actor.principal)) throw new Refused(403, 'message_not_owned')
         if (body.revision !== undefined && body.revision !== message.revision) throw new Refused(409, 'revision_conflict', `The message changed since revision ${body.revision}; it is at revision ${message.revision}.`)
@@ -986,7 +1179,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     throw new Refused(404, 'not_found', `${method} ${rest}`)
   }
 
-  return { route, registrations, schedules, send }
+  return { route, registrations, schedules, send, grants: access.grants }
 }
 
 /** A board the fake API keeps: who may use it, and what's on it. */
@@ -1006,8 +1199,6 @@ const BOARD_NAME = /^[^/]{1,64}$/
 /** What `GET /me` says a principal may do, and until when, in milliseconds: the API's `can` and `expiresAt`. */
 type MeSays = { can: Record<string, string[]>; expiresAt: number | null }
 
-/** A person's role on the team. */
-type Role = 'owner' | 'member' | 'developer' | 'viewer'
 
 /** Everything, in the protocol's order: what `GET /me` says an owner, member, or developer may do. */
 const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
@@ -1022,7 +1213,7 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  *
  * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
- * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
+ * (`roles`, by user ID: everything, or `['read', 'react']` for a viewer; a member by default), and a project
  * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
  * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
  * of board tokens.
@@ -1035,7 +1226,14 @@ export function fakeMessageboard(
     boardId?: string | null
     accounts?: Accounts
     boards?: { name: string; id?: string; granted?: string[]; members?: string[] }[]
+    /** By user ID: u_jb is an owner and u_val a viewer unless it says, and anyone else a member. */
     roles?: Record<string, Role>
+    /** The team's people, by user ID, with their emails: whom a grant's `email` finds. */
+    members?: Record<string, string>
+    /** The team's projects, by ID, with their names. */
+    projects?: Record<string, string>
+    /** GitHub repositories, by `owner/repo`, with their IDs. */
+    repositories?: Record<string, string>
     me?: Record<string, MeSays> | false
     notDefault?: boolean
     /** Board tokens the API takes, by their secret, whatever it looks like: the principal each acts as, as `as()` names it. */
@@ -1050,7 +1248,12 @@ export function fakeMessageboard(
   const stored = new Map<string, Uint8Array<ArrayBuffer>>()
   let clock = 0
   const now = () => (clock = Math.max(Date.now(), clock + 1))
-  const shared: Shared = { teamId, accounts, now, stored }
+  const roles = options.roles ?? ROLES
+  // Its own copy: someone leaving one fake's team leaves no other's.
+  const directory = { members: { ...(options.members ?? MEMBERS) }, roles, projects: options.projects ?? PROJECTS, repositories: options.repositories ?? REPOSITORIES, apps: APPS }
+  const shared: Shared = { teamId, accounts, directory, now, stored }
+
+  const tokens = fakeTokens({ member: (userId) => userId in directory.members, now })
 
   const kept = (id: string, name: string, granted: Kept['granted'], members: Kept['members'] = null): Kept => ({ id, name, granted, members, data: fakeBoard(shared, id) })
   // The default board is kept from the start, so what a test reads of it holds once a person makes it.
@@ -1078,10 +1281,14 @@ export function fakeMessageboard(
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
     if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
-    const actor = actorOf(request, options.tokens)
+    const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+    const actor = actorOf(request, options.tokens, tokens.authenticate(bearer))
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method
     requests.push(`${method} ${path}`)
+    // A board token is its board's: the team's routes aren't.
+    if (actor.token && (path === '/boards' || path.startsWith('/boards/default') || path.startsWith('/boards/ensure')))
+      throw new Refused(403, 'board_token_scope', "A board token can't use the team's routes.")
     // Completing an upload takes no body.
     const body = method === 'GET' || /\/attachments\/[^/]+\/complete$/.test(path) ? {} : ((await request.json()) as Record<string, any>)
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
@@ -1089,10 +1296,10 @@ export function fakeMessageboard(
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
     if (method === 'GET' && path === '/me') {
       if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
-      const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
-      const role = actor.principal.type === 'user' ? (options.roles?.[actor.principal.userId] ?? 'member') : null
-      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read'] : ALL
-      const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
+      const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
+      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read', 'react'] : ALL
+      // A board token may do what its scope says, until it expires, in milliseconds as the API sends times.
+      const says = options.me?.[bearer] ?? (actor.token ? { can: tokens.summary(actor.token.can), expiresAt: actor.token.expiresAt } : { can: { '*': can }, expiresAt: null })
       return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
     }
     if (method === 'GET' && path === '/boards') {
@@ -1130,9 +1337,13 @@ export function fakeMessageboard(
     }
     const onBoard = /^\/boards\/([^/]+)(\/.*)?$/.exec(path)
     const board = onBoard ? boards().find((candidate) => candidate.id === decodeURIComponent(onBoard[1]!)) : undefined
-    if (!onBoard || !board || !mayUse(actor, board)) throw new Refused(404, 'board_not_found')
+    // A board token is one board's: any other is none to it.
+    if (!onBoard || !board || !mayUse(actor, board) || (actor.token && actor.token.boardId !== board.id)) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''
     if (method === 'GET' && rest === '') return { board: show(board) }
+    const minting = tokens.route(method, rest, body, actor, board.id)
+    if (minting !== undefined) return minting
+    if (actor.token && method === 'PUT' && rest === '/watchers') throw new Refused(403, 'board_token_unsupported', "A board token can't register watchers yet.")
     return board.data.route(method, rest, url, body, actor)
   }
 
@@ -1140,6 +1351,12 @@ export function fakeMessageboard(
   return {
     /** Every request it answered, as `METHOD /path`. */
     requests,
+    /** The default board's grants, by ID, as the API keeps them. */
+    grants: general.data.grants,
+    /** Every board token, by ID, as the API keeps them. */
+    tokens: tokens.minted,
+    /** Takes a person off the team: the board tokens in their line stop. */
+    leave: (userId: string) => void delete directory.members[userId],
     /** The watchers each principal registered on the default board, as the API keeps them. */
     registrations,
     /** Every schedule on the default board, by ID, as the API keeps them. */
@@ -1168,7 +1385,7 @@ export function fakeMessageboard(
       try {
         return Response.json(await route(request))
       } catch (error) {
-        if (error instanceof Refused) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status })
+        if (error instanceof Refused || error instanceof GrantRefused) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status })
         throw error
       }
     }) as typeof fetch,

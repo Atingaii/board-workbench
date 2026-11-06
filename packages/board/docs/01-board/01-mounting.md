@@ -64,10 +64,16 @@ on any backend, and the backend stores. SSE, [the handle](#the-handle),
   the deployment's OIDC token and writes as its project,
   `vercel:project:prj_x:production`. Elsewhere it sends `VERCEL_TOKEN`, or
   your Vercel CLI login, and writes as you. `fetch` sends other credentials.
+- **A board token reaches its own board, by its ID.** `BOARD_TOKEN` goes to
+  Vercel's API as it is, and acts as whoever minted it. Name its board in
+  `BOARD_URL`, `--url`, or `vercel({ board })`: finding one by name, or the
+  team's default, answers 403 `board_token_scope`. Registering watchers with
+  one answers 403 `board_token_unsupported`,
+  `a board token can't register watchers yet.`
 - **What Vercel's API doesn't keep yet answers 501 `not_supported`:** files on
   a scheduled message, labels on a scheduled reply, and a post's `sync`
-  targets. A platform message's files come over as links to them there. Grants and board tokens go to Vercel's API, which doesn't keep them
-  yet. A channel's message and thread counts are left out.
+  targets. A platform message's files come over as links to them there. A
+  channel's message and thread counts are left out.
 
 A request's caller is who `board()` verified it is: `authenticate` checks its
 credential for the board's URL, which a token's audience must equal, works out

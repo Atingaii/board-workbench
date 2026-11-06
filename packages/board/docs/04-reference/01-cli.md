@@ -179,12 +179,12 @@ itself.
   $ vb read dev --name security --ensure
   error: this project has no access to board security (prj_pong, preview).
 
-    Someone who manages the board can grant it.
+    Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'
 
   $ vb read dev
   error: this project has no access to the team's board (prj_pong, preview).
 
-    Someone who manages the board can grant it.
+    Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'
   ```
 - **A team's board has a URL too:** the one `whoami` prints for it
   (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`), which
@@ -299,6 +299,7 @@ error document:
 - **`reason` is what a program branches on:** `missing_scope`,
   `login_required`, `permission_denied`, `deployment_protected`,
   `board_not_found`, `board_not_granted`, `board_name_taken`,
+  `board_token_scope`, `board_token_unsupported`,
   `message_not_found`, `channel_not_found`,
   `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
   the board's own codes, such as `already_synced` or `no_scheduler`.
@@ -485,22 +486,91 @@ t1  feedback-widget  feedback/=post  expires in 30d
 
 ```text
 vb grants [list]
+vb grants create <principal>... --can <pattern=permissions>...
+vb grants update <grant> [--add-<kind> <name>]... [--remove-<kind> <name>]... [--can <pattern=permissions>]...
+vb grants explain [<principal>] <channel>
 vb grants revoke <grant>
 ```
 
 `vb grants` lists each grant's ID, the principals it names as the flags that
 name them, and what it lets them do: `*` alone in words, any other pattern as
-`pattern=permissions`, `none` for a closed one. It needs `manage` at `*`.
-`grants revoke g3` stops one and prints `revoked g3`, and needs `manage` at
-each pattern it names. See [Grants](../01-board/09-access.md#grants).
+`pattern=permissions`, `none` for a closed one. It needs `manage` at `*`. See
+[Grants](../01-board/09-access.md#grants).
+
+A principal is a flag, and repeating flags names several:
+
+| Flag | Names | Its modifiers |
+| --- | --- | --- |
+| `--user <email>` | a person on the team | |
+| `--project <name\|id>` | a project's deployments | `--environment` |
+| `--github <owner/repo>` | GitHub Actions runs in a repository | `--workflow`, `--branch`, `--event` |
+| `--oidc <issuer>` | an issuer's tokens | `--claim name=value` |
+| `--app <slug\|id>` | an app installed on the team | |
+| `--all-users` | every person on the team | |
+| `--all-projects` | every project's deployments on the team | `--environment` |
+| `--all-apps` | every app installed on the team | |
+| `--everyone` | everyone something else lets in | |
+
+A modifier goes after the principal it's for, so one grant mixes them:
+`--github acme/web --workflow ci.yml --github acme/api --workflow deploy.yml`.
+`--environment` takes a comma-separated list and is `production` when left
+out. `--workflow` matches the run's workflow file (`ci.yml` is
+`.github/workflows/ci.yml`), `--branch` its `refs/heads/` branch, and
+`--event` its event. `--can pattern=permissions` repeats; permissions are a
+comma-separated list, `all`, or `none`. A board that verifies tokens itself,
+as `vb serve` does, takes IDs: `--user u_123`, `--project prj_123`, and an
+app's client ID.
+
+`create` prints the grant it made as its row. `update` takes `--add-<kind>` and
+`--remove-<kind>` for each kind (`--add-user`, `--remove-project`,
+`--add-github … --workflow …`), and `--can`, which replaces the grant's.
+Adding a project it names already adds the environments; to narrow one,
+remove it and add it back in the same update. Each needs `manage` at the
+patterns the grant names, before and after. `revoke` stops one.
 
 ```text
-$ vb grants
-g1  --all-users                                                  everything
-g2  --all-projects --environment production,preview,development  read post react label
-$ vb grants revoke g2
-revoked g2
+$ vb grants create --everyone --can 'security/=none'
+created g4  --everyone  security/=none
+$ vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
+created g5  --user alice@acme.com --user bob@acme.com  security/=all
+$ vb grants create --project sec --environment production,preview --can 'security/=read,post'
+created g6  --project sec --environment production,preview  security/=read,post
+$ vb grants update g5 --add-user carol@acme.com
+updated g5  --user alice@acme.com --user bob@acme.com --user carol@acme.com  security/=all
+$ vb grants update g6 --remove-project sec --add-project sec --environment production --can 'security/=read'
+updated g6  --project sec --environment production  security/=read
+$ vb grants revoke g4
+revoked g4
 ```
+
+Vercel's board keeps a grant for `--github` or `--oidc`, but doesn't sign in
+GitHub or OIDC callers yet, so `create` says so under it, and with `--json` in
+`warnings` (`callers_not_signed_in`):
+
+```text
+$ vb grants create --github acme/web --can 'ci/=post' --scope acme
+created g4  --github acme/web  ci/=post
+note  Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does
+```
+
+`explain` says which grant decides a channel: the pattern that won and those
+it won over, the closest grants there, and what they give. It explains you, or
+with `manage` at `*`, the one `--user`, `--project` (in one `--environment`),
+`--github`, `--oidc`, or `--app` it names. A local board has no apps, so
+nothing lets one in there. A caller that can't list grants sees that
+one decides, not which:
+
+```text
+$ vb grants explain --user bob@acme.com security/incidents
+security/ wins over *. Closest grant for bob@acme.com: g4 (--user): all.
+$ vb grants explain --user dan@acme.com security/incidents
+security/ wins over *. Closest grant for dan@acme.com: g3 (--everyone): none.
+$ vb grants explain dev
+* wins. Closest grant for you: g1 (--all-users): all.
+```
+
+With `--json`, `create` and `update` print `{ grant, outcome }` and `explain`
+prints `{ explanation }`.
 
 ## Reading
 
@@ -508,7 +578,7 @@ revoked g2
 
 ```text
 vb channels
-vb channels create <channel>
+vb channels create <channel> [--private]
 ```
 
 Channels, grouped by path prefix, each with its thread and message counts and
@@ -527,8 +597,22 @@ $ vb channels create dev/alerts
 dev/alerts already exists
 ```
 
+`--private` closes it to everyone but you, as `createChannel(path, { private:
+true })` does: a grant letting you in, one closing it to everyone else, then
+the channel. It needs `manage` at `*`, since it lists the grants first, and
+makes nothing where the channel, or one under it, is there already, or where a
+grant other than `*`'s reaches it already, which it names, since that grant
+would still let in whom it names:
+
+```text
+$ vb channels create security --private
+created channel security
+created g7  --user alice@acme.com  security/=all
+created g8  --everyone  security/=none
+```
+
 With `--json`, it prints `{ channel, outcome }`, where `outcome` is `created`
-or `unchanged`.
+or `unchanged`, and with `--private`, the `grants` it made.
 
 ### actors
 

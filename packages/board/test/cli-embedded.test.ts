@@ -319,7 +319,7 @@ describe('the embedded CLI', () => {
       expect(whoami.code).toBe(0)
       expect(whoami.stdout).toMatch(/^token +expires in 1h 30m$/m)
       expect(whoami.stdout).toMatch(/^can +ci\/ +read\n +dev\/  read post$/m)
-      // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads.
+      // The team's owner may do everything, which whoami doesn't spell out, with no expiry; a viewer reads and reacts.
       const roles = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
       fetching.mockImplementation(async (input, init) => roles.fetch(input, init))
       const owner = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
@@ -327,7 +327,7 @@ describe('the embedded CLI', () => {
       expect(owner.stdout).not.toMatch(/^(can|token) /m)
       vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_ada')
       const viewer = await capture(() => main(['whoami', '--scope', 'test'], { name: 'board', commands: local }))
-      expect(viewer.stdout).toMatch(/^can +\*  read$/m)
+      expect(viewer.stdout).toMatch(/^can +\*  read react$/m)
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -360,6 +360,35 @@ describe('the embedded CLI', () => {
       expect((await capture(() => app.run(['read', 'general']))).code).toBe(0)
       expect([asked, signed.mock.calls.length]).toEqual([0, 0])
       expect(new Set(sent)).toEqual(new Set(['Bearer p9Lr4vTzQ2wc']))
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("shows what a board token Vercel's API minted may do and until when, and says it reaches only its own board", async () => {
+    const home = await isolated()
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    // Ada mints it on the team's board: its secret is all the CLI gets.
+    const minting = await api.fetch('https://api.vercel.com/v1/messageboard/boards/brd_test/tokens?teamId=team_test', {
+      method: 'POST',
+      headers: { authorization: 'Bearer user:u_ada', 'content-type': 'application/json' },
+      body: JSON.stringify({ operationId: 'op_1', name: 'ci', can: { 'dev/': ['read'] }, expires: '2h' }),
+    })
+    vi.stubEnv('BOARD_TOKEN', ((await minting.json()) as { secret: string }).secret)
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const whoami = await capture(() => main(['whoami', '--url', 'https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test'], { name: 'board', commands: local }))
+      expect(whoami.code).toBe(0)
+      expect(whoami.stdout).toMatch(/^Ada Lovelace \(vercel:user:u_ada\)\n(.*\n)*token +expires in (1h 59m|2h 0m)\n(.*\n)*can +dev\/  read\n$/)
+      // Naming no board, the CLI asks for the team's, which a board token can't.
+      expect(await capture(() => main(['read', 'dev', '--scope', 'test'], { name: 'board', commands: local }))).toMatchObject({
+        code: 1,
+        stderr: 'error: a board token reaches only its own board, by its ID.\n\n  Name its board by URL or ID: BOARD_URL, --url, or vercel({ board }).\n',
+      })
     } finally {
       fetching.mockRestore()
       process.chdir(cwd)
@@ -558,11 +587,34 @@ describe('the embedded CLI', () => {
       })
       expect(await run('read', 'dev', '--name', 'security', '--ensure')).toMatchObject({
         code: 1,
-        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+        stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --name security --can '*=read,post,react,label'\n",
       })
       expect(await run('read', 'dev')).toMatchObject({
         code: 1,
-        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
+        stderr: "error: this project has no access to the team's board (prj_pong, preview).\n\n  Grant it: vb grants create --project prj_pong --environment preview --can '*=read,post,react,label'\n",
+      })
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it("says what Vercel's API's grant rules refuse in its words, under what it couldn't do", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'project:prj_pong:production')
+    vi.stubEnv('VERCEL_ORG_ID', 'team_test')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main(args, { name: 'board', commands: local }))
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      // A project may read and post, and manages nothing: the API refuses with grant_forbidden.
+      expect(await run('grants')).toMatchObject({ code: 1, stderr: "error: You can't list grants.\n  listing grants takes manage at *\n" })
+      expect(JSON.parse((await run('grants', '--json')).stderr)).toMatchObject({
+        reason: 'permission_denied',
+        data: { error: { code: 'grant_forbidden', message: 'listing grants takes manage at *', status: 403 } },
       })
     } finally {
       fetching.mockRestore()
@@ -601,6 +653,30 @@ describe('the embedded CLI', () => {
     }
   })
 
+  it("notes that Vercel's board doesn't sign in GitHub or OIDC callers yet, when a grant names one", async () => {
+    const home = await isolated()
+    vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
+    const api = fakeMessageboard()
+    const fetching = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => api.fetch(input, init))
+    const run = (...args: string[]) => capture(() => main([...args, '--scope', 'test'], { name: 'board', commands: local }))
+    const note = "Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does"
+    const cwd = process.cwd()
+    process.chdir(home)
+    try {
+      const github = await run('grants', 'create', '--github', 'acme/web', '--can', 'ci/=post')
+      expect(github).toMatchObject({ code: 0, stdout: expect.stringMatching(new RegExp(`^created g4  --github acme/web  ci/=post\\nnote  ${note}\\n$`)) })
+      const oidc = JSON.parse((await run('grants', 'create', '--oidc', 'https://issuer.example', '--claim', 'sub=ci', '--can', 'ci/=read', '--json')).stdout)
+      expect(oidc).toMatchObject({ outcome: 'created', warnings: [{ reason: 'callers_not_signed_in', message: note }] })
+      // A person signs in: no note.
+      expect((await run('grants', 'create', '--user', 'ada@acme.com', '--can', 'ci/=read')).stdout).not.toContain('note')
+      expect(JSON.parse((await run('grants', 'create', '--user', 'bob@acme.com', '--can', 'ci/=read', '--json')).stdout).warnings).toBeUndefined()
+    } finally {
+      fetching.mockRestore()
+      process.chdir(cwd)
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it("checks only a board someone named, never the team's by default, since it posts and changes grants", async () => {
     const home = await isolated()
     vi.stubEnv('VERCEL_AUTH_TOKEN', 'user:u_jb')
@@ -623,6 +699,8 @@ describe('the embedded CLI', () => {
       const named = await run('conformance', '--name', 'General')
       expect(named.code).not.toBe(2)
       expect(named.stdout).toMatch(/\d+ passed/)
+      // The tokens it mints reach that board by its ID, as a board token must: the team's lookup refuses them.
+      expect(named.stdout).toMatch(/\ntokens\n  passed   mints a token[^\n]*\n  passed   lets a token/)
       expect(writes()).toBeGreaterThan(0)
     } finally {
       fetching.mockRestore()
