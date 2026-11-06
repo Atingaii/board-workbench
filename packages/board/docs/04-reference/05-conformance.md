@@ -51,11 +51,19 @@ that secret as the credential, as `BOARD_TOKEN` sends it. `vb conformance`
 passes it. From code, pass your own, which a backend of your own can make with
 `board({ backend })`, or that check is skipped.
 
+Every grant it makes is in `conformance/grants/`, the same subtree and the same
+channels each run, so a run leaves no channel behind and no grant reaches
+outside it. It revokes them all when a check ends, and a revoke that fails
+fails the check. Two runs on one board at once see each other's grants there,
+so run one at a time, on a scratch board.
+
 The grants checks name a project, a GitHub repository, and a person who's a
 viewer. A board that verifies tokens itself, as `vb serve` does, takes the
 made-up IDs they use by default. One that looks names up, as a board on
 Vercel's API does, needs real ones on its team, or skips the checks that name
-them: pass `principals`, with a repository no grant names:
+them: pass `principals`, with a repository no grant names. Neither may be the
+run's own project or repository, since the checks would change what the run
+itself may do: it throws before it writes anything.
 
 ```ts scripts/conformance.ts
 import { board } from '@vercel/board'
@@ -102,7 +110,7 @@ Then the rest, a group each in the report:
 | Group | Check |
 | --- | --- |
 | `schedules` | schedules a reply a day out, lists it, and cancels it; and keeps a schedule's `noSync`, so its sends stay off every platform |
-| `grants` | grants a project, lists it, and revokes it twice. Makes a second grant for the same principals, adds a repository and the project again (joining its environments) by the grant's ID, removes the project whatever its environments, and refuses to remove one it doesn't name (`not_in_grant`) or the last (`grant_empty`). Keeps `can` as written, a pattern with `[]` included. Through `explain`, in a subtree of its own: the most specific pattern decides, then the closest principal there, ties add up, `everyone` lets no one in and loses to `all-projects`, and a viewer only reads. A token without `manage` changes no grant, and one with it at `conformance/` only there. A private channel comes with its two grants. Skipped when the token can't change the board's grants, for a caller no grant could keep in a pattern closed to everyone, without a viewer to check, and across teams, which isn't specified yet |
+| `grants` | grants a project, lists it, and revokes it twice. Makes a second grant for the same principals, adds a repository and the project again (joining its environments) by the grant's ID, removes the project whatever its environments, and refuses to remove one it doesn't name (`not_in_grant`) or the last (`grant_empty`). Keeps `can` as written, a pattern with `[]` included. Through `explain`, in `conformance/grants/`: the most specific pattern decides, then the closest principal there, ties add up, `everyone` lets no one in and loses to `all-projects`, and a viewer only reads. A token without `manage` changes no grant, and one with it only under `conformance/grants/inner/` only there. A token kept out of a pattern grants no one past it, even once `everyone` is kept out too, and lets no one in while `everyone` gets more than it has somewhere. Skipped when the token can't change the board's grants, when the board mints no tokens (501, 404, or 403), for a caller no grant could keep in a pattern closed to everyone, without a viewer to check, for a name the board can't look up, for a member shut out under a lock (a run couldn't lift the lock after), and across teams, which isn't specified yet |
 | `tokens` | mints a token for an hour that reads the channel, checks its `can` and its expiry, lists it without its secret, and revokes it twice. Then, with another one's secret: `/me` names its minter and only what it may read, it reads the channel and can't post there, and once it's revoked, it's refused with a 401 |
 | `attachments` | uploads a file, posts it, and downloads it |
 | `watchers` | registers a tail, pulls the match for a post, and acks it. Skipped when the token already has watchers or a sync registered there, since registering replaces them |
@@ -117,8 +125,9 @@ otherwise, and fails: Vercel's boards fail the tokens group until Vercel's API
 keeps tokens. A board whose `access` is one function answers 501
 `no_grants`, and a [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own)
 that keeps no schedules or files answers 501 `no_scheduler` or `no_files`.
-`vb serve` keeps everything, so it passes every check but two: it has no team
-roles to cap anyone with, and grants across teams aren't specified yet.
+`vb serve` keeps everything, so it passes every check but three: it has no
+team roles to cap anyone with, no run can check a member shut out under a
+lock, and grants across teams aren't specified yet.
 
 ## The report
 

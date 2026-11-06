@@ -724,8 +724,8 @@ describe('cli', () => {
       expect(run.stdout).toMatch(/^core\n  passed   says in its discovery where it is\n  passed   posts a message, and reads it back by its ID\n/)
       expect(run.stdout).toContain('\n\nschedules\n  passed   schedules a reply')
       expect(run.stdout).toContain('\n\nwatchers\n  passed   matches a registered tail')
-      // A board without team roles caps no one, and grants across teams aren't specified yet.
-      expect(run.stdout).toMatch(/\n\n\d+ passed, 2 skipped\n$/)
+      // A board without team roles caps no one, no run can check a member shut out under a lock, and grants across teams aren't specified yet.
+      expect(run.stdout).toMatch(/\n\n\d+ passed, 3 skipped\n$/)
       expect(JSON.parse((await vb(['conformance', '--json', '--channel', 'conformance/json'], as)).stdout)).toMatchObject({ ok: true })
     } finally {
       await scheduled.close()
@@ -739,8 +739,8 @@ describe('cli', () => {
       expect(partial.stdout).toContain(
         '\n\nschedules\n  skipped  schedules a reply, lists it, and cancels it\n           not kept here: this board has no scheduler, so it can\'t send later\n',
       )
-      // Schedules, and the two grants checks a board without team roles skips.
-      expect(partial.stdout).toMatch(/\n\n\d+ passed, 4 skipped\n$/)
+      // Schedules, and the three grants checks a board without team roles skips.
+      expect(partial.stdout).toMatch(/\n\n\d+ passed, 5 skipped\n$/)
     } finally {
       await unscheduled.close()
     }

@@ -97,7 +97,9 @@ describe('vercel()', () => {
       'grants: caps a person by their team role, so a viewer only reads': 'passed',
       // The API mints no tokens to change grants with yet.
       'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'skipped',
-      'grants: makes a private channel with the two grants that close it to everyone but its creator': 'passed',
+      "grants: lets no token grant past its own can, even where everyone's grant closes it": 'skipped',
+      'grants: lets no token let anyone in where everyone gets more than the token has': 'skipped',
+      'grants: lets a member grant on a pattern after a lock under it': 'skipped',
       'grants: lets a project on another team in, in its environments': 'skipped',
       // Vercel's API keeps no tokens in the protocol's shapes yet.
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',

@@ -31,6 +31,7 @@ describe('local()', () => {
       // All but the two grants checks a board without team roles skips: a viewer's cap, and grants across teams.
       expect(report.checks.filter((check) => check.status !== 'passed').map((check) => [check.status, check.name])).toEqual([
         ['skipped', 'caps a person by their team role, so a viewer only reads'],
+        ['skipped', 'lets a member grant on a pattern after a lock under it'],
         ['skipped', 'lets a project on another team in, in its environments'],
       ])
       expect([...new Set(report.checks.map((check) => check.group))]).toEqual(['core', 'schedules', 'grants', 'tokens', 'attachments', 'watchers', 'sync'])

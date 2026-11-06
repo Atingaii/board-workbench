@@ -22,6 +22,8 @@ const withToken = (fetch: Fetch) => (secret: string) =>
 /** The grants checks a board without team roles skips, and why: a run names no viewer, and grants don't cross teams yet. */
 const NO_ROLES = ['caps a person by their team role, so a viewer only reads', 'name a viewer in principals to check it: a board without team roles caps no one']
 const CROSS_TEAM = ['lets a project on another team in, in its environments', "grants across teams aren't specified yet: what a project on another team needs, and what all-projects means for one, comes later"]
+/** And one no run can check: shut out by a lock, it couldn't lift the lock after. */
+const LOCKED_OUT = ['lets a member grant on a pattern after a lock under it', "a run can't be shut out by a lock and lift it afterwards: the board's own tests check it"]
 const skipped = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.filter((check) => check.status !== 'passed').map((check) => [check.name, check.detail])
 
 /** The tokens check that calls the board with a token's secret. */
@@ -86,7 +88,7 @@ describe('the conformance kit', () => {
     const client = await clientOf(board.fetch)
     const report = await conformance(client, { withToken: withToken(board.fetch) })
     expect(report.checks.filter((check) => check.status === 'failed')).toEqual([])
-    expect(skipped(report)).toEqual([NO_ROLES, CROSS_TEAM])
+    expect(skipped(report)).toEqual([NO_ROLES, LOCKED_OUT, CROSS_TEAM])
     expect(tokenUse(report)?.status).toBe('passed')
     expect(report).toMatchObject({ ok: true, url: BOARD_URL })
     // Every grant it made is gone, the ones that closed a pattern to everyone included.
@@ -99,15 +101,8 @@ describe('the conformance kit', () => {
   it("passes through a board's own handle, in-process", async () => {
     const team = testBoard({ scheduler: fakeQueue().scheduler })
     const report = await conformance(team, { withToken: withToken(team.fetch) })
-    // The board's own code is no principal a grant names.
-    expect(skipped(report)).toEqual([
-      NO_ROLES,
-      [
-        'makes a private channel with the two grants that close it to everyone but its creator',
-        "this caller has no principal a grant could let in: a private channel lets its creator in, as a person or a deployment's project, and this caller is neither",
-      ],
-      CROSS_TEAM,
-    ])
+    // The board's own code needs no grant to keep it in what it closes.
+    expect(skipped(report)).toEqual([NO_ROLES, LOCKED_OUT, CROSS_TEAM])
     expect((await team.me()).actor).toBe('board:client')
   })
 
@@ -198,6 +193,7 @@ describe('the conformance kit', () => {
       ['schedules', 'skipped', "not kept here: this board has no scheduler, so it can't send later"],
       ['schedules', 'skipped', "not kept here: this board has no scheduler, so it can't send later"],
       ['grants', 'skipped', NO_ROLES[1]],
+      ['grants', 'skipped', LOCKED_OUT[1]],
       ['grants', 'skipped', CROSS_TEAM[1]],
       ['attachments', 'skipped', 'not kept here: this board keeps no files'],
     ])
@@ -217,34 +213,81 @@ describe('the conformance kit', () => {
     expect(await grantIds()).toEqual(['g1', 'g2'])
   })
 
+  it('makes every grant inside conformance/grants/, and no channel but the one it posts in', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const patterns: string[] = []
+    // Every grant write it sends, by itself or by a token it minted, refused or not.
+    const recording = (fetch: Fetch): Fetch => async (request) => {
+      if (/\/grants(\/[^/]+)?$/.test(new URL(request.url).pathname) && ['POST', 'PATCH'].includes(request.method)) patterns.push(...Object.keys((await request.clone().json()).can ?? {}))
+      return fetch(request)
+    }
+    const report = await conformance(await clientOf(recording(board.fetch)), { withToken: withToken(recording(board.fetch)) })
+    expect(report.ok).toBe(true)
+    expect(patterns.length).toBeGreaterThan(20)
+    expect(patterns.filter((pattern) => !pattern.startsWith('conformance/grants/'))).toEqual([])
+    expect((await board.channels()).map((channel) => channel.path)).toEqual(['conformance'])
+  })
+
+  it('refuses principals that are its own before it writes anything, which the checks would change under it', async () => {
+    const team = testBoard({ scheduler: fakeQueue().scheduler, access: [vercelProject({ project: 'prj_v0', can: 'all' }), githubActions({ repository: 'basehub-ai/www', can: 'all' })] })
+    const asProject = await clientAs(team.fetch, () => deploymentToken('v0', 'prj_v0', 'production'))
+    await expect(conformance(asProject, { principals: { project: 'prj_v0' } })).rejects.toThrow("principals.project is this run's own project, prj_v0")
+    expect((await team.messages({ channel: 'conformance', limit: 10 })).messages).toEqual([])
+    expect((await team.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2'])
+    const asRun = await clientAs(team.fetch, () => workflowToken())
+    await expect(conformance(asRun, { principals: { repository: 'basehub-ai/www' } })).rejects.toThrow("principals.repository is this run's own repository, basehub-ai/www")
+  })
+
+  it("fails a board that lets a token grant past its can, and still revokes what that board made", async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    // A board that takes a token for whoever minted it, unnarrowed.
+    const person = await personToken()
+    const unnarrowed: Fetch = (request) => {
+      if (!request.headers.get('authorization')?.startsWith('Bearer board_')) return board.fetch(request)
+      const headers = new Headers(request.headers)
+      headers.set('authorization', `Bearer ${person}`)
+      return board.fetch(new Request(request, { headers }))
+    }
+    const report = await conformance(await clientOf(board.fetch), { withToken: withToken(unnarrowed) })
+    const find = (start: string) => report.checks.find((check) => check.name.startsWith(start))
+    expect(find('lets no token grant past its own can')).toMatchObject({ status: 'failed', detail: 'a grant on conformance/grants/ from a token kept out of conformance/grants/secret/: expected 403, and it made the grant' })
+    expect(find('lets no token let anyone in')).toMatchObject({ status: 'failed', detail: 'a grant from a token kept out of conformance/grants/open/, which everyone reads: expected 403, and it made the grant' })
+    expect((await board.grants()).map((grant) => grant.id)).toEqual(['g1', 'g2'])
+  })
+
+  it("fails a check whose grants it can't revoke, and one whose token the board answers otherwise than minting none", async () => {
+    const stuck = testBoard({ scheduler: fakeQueue().scheduler })
+    const revokes = (status: number): Fetch => async (request) =>
+      request.method === 'POST' && /\/grants\/[^/]+\/revoke$/.test(new URL(request.url).pathname) ? Response.json({ error: { code: 'error', message: 'down' } }, { status }) : stuck.fetch(request)
+    const report = await conformance(await clientOf(revokes(500)), { withToken: withToken(stuck.fetch) })
+    expect(report.checks.find((check) => check.name === 'grants a principal, lists it, and revokes it')).toMatchObject({ status: 'failed', detail: expect.stringMatching(/couldn't revoke what it made: g\d+ \(/) })
+    const plain = testBoard({ scheduler: fakeQueue().scheduler })
+    const mints = (status: number): Fetch => async (request) =>
+      request.method === 'POST' && new URL(request.url).pathname.endsWith('/tokens') ? Response.json({ error: { code: 'error', message: 'down' } }, { status }) : plain.fetch(request)
+    const manage = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('takes manage at each pattern'))
+    expect(manage(await conformance(await clientOf(mints(500)), { withToken: withToken(plain.fetch) }))).toMatchObject({ status: 'failed' })
+    for (const status of [403, 404, 501])
+      expect([status, manage(await conformance(await clientOf(mints(status)), { withToken: withToken(plain.fetch) }))]).toMatchObject([status, { status: 'skipped', detail: 'this board mints no tokens to check with: down' }])
+  }, 30_000)
+
   it('fails a board that lets a grant on * decide a subtree everyone is closed out of, or adds up grants across levels', async () => {
     const decides = (report: Awaited<ReturnType<typeof conformance>>) => report.checks.find((check) => check.name.startsWith('lets the most specific pattern decide'))
     // A board whose explain says the least specific pattern decided.
     const loose = testBoard({ scheduler: fakeQueue().scheduler })
-    const star = broken(loose.fetch, { body: (text) => (text.includes('"pattern":"conformance/grants-') ? text.replace(/"pattern":"conformance\/grants-[^"]+"/, '"pattern":"*"') : text) })
-    expect(decides(await conformance(await clientOf(star)))).toMatchObject({ status: 'failed', detail: expect.stringMatching(/^the pattern that decides conformance\/grants-[0-9a-f]{8}\/thread: expected "conformance\/grants-[0-9a-f]{8}\/", got "\*"$/) })
+    const star = broken(loose.fetch, { body: (text) => text.replace('"pattern":"conformance/grants/closed/"', '"pattern":"*"') })
+    expect(decides(await conformance(await clientOf(star)))).toMatchObject({ status: 'failed', detail: 'the pattern that decides conformance/grants/closed/thread: expected "conformance/grants/closed/", got "*"' })
     // One that says what everyone gives where a closer grant decides.
     const flat = testBoard({ scheduler: fakeQueue().scheduler })
     const everyone = broken(flat.fetch, { body: (text) => text.replace('"level":"principal"', '"level":"everyone"') })
-    expect(decides(await conformance(await clientOf(everyone)))).toMatchObject({ status: 'failed', detail: expect.stringContaining('the level that decides conformance/grants-') })
+    expect(decides(await conformance(await clientOf(everyone)))).toMatchObject({ status: 'failed', detail: expect.stringContaining('the level that decides conformance/grants/') })
   })
 
-  it('fails a board that lets everyone in on its own, or makes a private channel without the grants that close it', async () => {
+  it('fails a board that lets everyone in on its own', async () => {
     const find = (report: Awaited<ReturnType<typeof conformance>>, start: string) => report.checks.find((check) => check.name.startsWith(start))
     // A board whose explain gives what everyone's grant says to a principal nothing else lets in.
     const open = testBoard({ scheduler: fakeQueue().scheduler })
     const admits = broken(open.fetch, { body: (text) => (text.includes('"pattern":null') ? text.replace('"can":[]', '"can":["read"]') : text) })
     expect(find(await conformance(await clientOf(admits)), 'lets everyone narrow')).toMatchObject({ status: 'failed', detail: `what everyone's grant gives them: expected [], got ["read"]` })
-    // One that answers a private channel without its grants.
-    const plain = testBoard({ scheduler: fakeQueue().scheduler })
-    const bare = broken(plain.fetch, {
-      body: (text) => {
-        const body = JSON.parse(text)
-        if (body?.created === true && Array.isArray(body.grants)) delete body.grants
-        return JSON.stringify(body)
-      },
-    })
-    expect(find(await conformance(await clientOf(bare)), 'makes a private channel')).toMatchObject({ status: 'failed', detail: 'the grants a private channel makes: expected 2, got 0' })
   })
 
   it("fails a board whose inbox acks nothing, or queues a platform's retry as a new event", async () => {
