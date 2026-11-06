@@ -1010,10 +1010,15 @@ fold's counter (`g3`). `http()`
 forwards them to the board it uses: they're that board's, and its callers
 can't create them there (403), since they'd act as its project. `vercel()`
 forwards them to Vercel's API as the protocol has them
-(`/boards/:id/grants`, `/boards/:id/tokens`, each with an `operationId`), and
-adapts nothing: what the API doesn't keep yet, it answers, so a board on
-`vercel()` fails the conformance kit's `grants` and `tokens` groups until it
-does.
+(`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
+`/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
+`operationId`), and adapts nothing: the API looks up the names people type
+and answers views with IDs and names, and what it doesn't keep yet, it
+answers, so a board on `vercel()` fails the conformance kit's `tokens` group
+until it does. A private channel is `POST /boards/:id/channels { name,
+private: true }`, which answers its two grants with it. Only the board's own
+code does any of these there: a caller it serves acts as its project on
+Vercel's board, which can't tell them apart.
 
 ### One person, several actors
 

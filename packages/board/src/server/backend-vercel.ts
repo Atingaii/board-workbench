@@ -1,5 +1,5 @@
 import type { Method, Protocol } from '../api/protocol.ts'
-import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
+import { RegisterBody, type ActorView, type BoardEventView, type ChannelView, type Discovery, type GrantView, type Me, type MessageView, type RegistrationView, type ScheduleView, type ThreadSummaryView } from '../api/routes.ts'
 import { duration, type ProfileOption } from '../client/client.ts'
 import { derivedId, sha256 } from '../client/ids.ts'
 import { IMPORT_BYTES_MAX, RemoteWatcherId, type Attachment, type Author, type Labels } from '../contract/schemas.ts'
@@ -1143,14 +1143,28 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         .sort((a, b) => a.path.localeCompare(b.path))
       return { channels: listed, cursor: cursorOf({ t: Date.now(), feeds: {} }) }
     },
-    async createChannel(caller, { path }) {
+    async createChannel(caller, { path, private: closed }) {
       checkCaller('createChannel', caller)
       // As on any board: the answer says whether it was there, so it needs both, whether it was or not.
       const access = accessOf(caller)
       need(access, 'read', path)
       need(access, 'post', path)
-      const { created } = await ensureChannel(whoOf(caller), path)
-      return { channel: { path }, created }
+      if (!closed) {
+        const { created } = await ensureChannel(whoOf(caller), path)
+        return { channel: { path }, created }
+      }
+      // The API would let the project in, not the caller, since it can't tell them apart.
+      if ('identity' in caller) throw forbidden(`this board's callers act as its project on Vercel's board, which can't tell them apart: a private channel is the project's own to make there`)
+      const who = whoOf(caller)
+      try {
+        const { channel, grants } = await api<{ channel: ApiChannel; grants: GrantView[] }>(who, 'POST', await onBoard(who, '/channels'), { body: { operationId: operationId(), name: path, private: true } })
+        channels = null
+        named.set(path, channel)
+        return { channel: { path }, created: true, grants }
+      } catch (error) {
+        if (error instanceof HttpError && error.code === 'channel_name_taken') throw new HttpError(409, 'channel_exists', `${path} is a channel already: close it with a grant, everyone at ${path}/ with []`)
+        throw error
+      }
     },
     async actors(caller, _input, signal) {
       const who = whoOf(caller)
@@ -1418,6 +1432,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       checkCaller('createGrant', caller)
       const who = whoOf(caller)
       return api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+    },
+    async updateGrant(caller, { id, ...change }, signal) {
+      checkCaller('updateGrant', caller)
+      const who = whoOf(caller)
+      return api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) })
+    },
+    async explain(caller, { claim, ...query }, signal) {
+      checkCaller('explain', caller)
+      const who = whoOf(caller)
+      const params = new URLSearchParams()
+      for (const [name, value] of Object.entries(query)) if (value !== undefined) params.set(name, value)
+      for (const pair of claim ?? []) params.append('claim', pair)
+      return api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {})
     },
     async revokeGrant(caller, { id }, signal) {
       checkCaller('revokeGrant', caller)

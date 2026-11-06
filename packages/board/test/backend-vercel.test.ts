@@ -87,10 +87,11 @@ describe('vercel()', () => {
       'core: answers 400 for a request that does not validate': 'passed',
       'schedules: schedules a reply, lists it, and cancels it': 'passed',
       'schedules: keeps noSync on a schedule, so its sends stay off every platform': 'failed',
-      // Vercel's API keeps neither grants nor tokens in the protocol's shapes yet.
+      // The grants checks name a project and a repository made up for the run, which the API's team doesn't have.
       'grants: grants a project, lists it, and revokes it': 'failed',
       'grants: makes another grant for the same principals, and changes one by its ID': 'failed',
       "grants: keeps a grant's can as written, a pattern with no permissions included": 'failed',
+      // Vercel's API keeps no tokens in the protocol's shapes yet.
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'failed',
       "tokens: lets a token do what its can says, as whoever minted it, and nothing once it's revoked": 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
@@ -742,12 +743,70 @@ describe('vercel()', () => {
     await expect(backend.matches(verified('all'), {}, signal)).rejects.toMatchObject({ status: 403 })
   })
 
-  it("sends grants and tokens to Vercel's API as the protocol has them, which answers what it doesn't keep yet", async () => {
+  it("sends grants to Vercel's API as people name their principals, and gives back what it answers, IDs and names", async () => {
     const api = fakeMessageboard()
     const jb = handleOn(api)
-    await expect(jb.createGrant({ principals: [{ kind: 'github', repository: 'acme/web' }], can: { 'ci/': ['post'] } })).rejects.toMatchObject({ status: 404 })
-    await expect(jb.createToken({ name: 'widget', can: { 'feedback/': ['post'] } })).rejects.toMatchObject({ status: 404 })
-    expect(api.requests).toEqual(expect.arrayContaining(['POST /boards/brd_test/grants', 'POST /boards/brd_test/tokens']))
+    expect(await jb.grants()).toEqual([
+      { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: true, by: null, at: null },
+      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+    ])
+    const { grant } = await jb.createGrant({
+      principals: [
+        { kind: 'user', email: 'ada@acme.com' },
+        { kind: 'project', project: 'web', environments: ['production'] },
+        { kind: 'github', repository: 'acme/web', workflow: 'ci.yml' },
+      ],
+      can: { 'security/': 'all' },
+    })
+    expect(grant.principals).toEqual([
+      { kind: 'user', userId: 'u_ada', email: 'ada@acme.com' },
+      { kind: 'project', projectId: 'prj_web', name: 'web', environments: ['production'] },
+      { kind: 'github', repositoryId: '700001', repository: 'acme/web', workflow: 'ci.yml' },
+    ])
+    const updated = await jb.updateGrant(grant.id, { add: [{ kind: 'user', email: 'bob@acme.com' }], remove: [{ kind: 'project', project: 'web' }] })
+    expect(updated.grant.principals.map((principal) => ('userId' in principal ? principal.userId : principal.kind))).toEqual(['u_ada', 'github', 'u_bob'])
+    expect(await jb.explain('security/incidents', { user: 'bob@acme.com' })).toEqual({
+      channel: 'security/incidents',
+      pattern: 'security/',
+      level: 'principal',
+      grants: [updated.grant],
+      rule: null,
+      capped: null,
+      can: ['read', 'post', 'react', 'label', 'sync', 'manage'],
+    })
+    // A viewer's role caps what g1 gives them.
+    expect(await jb.explain('dev', { user: 'val@acme.com' })).toMatchObject({ pattern: '*', level: 'group', grants: [{ id: 'g1' }], capped: 'viewer', can: ['read'] })
+    // Its grant lets the run in, and says nothing of ci.
+    expect(await jb.explain('ci', { github: 'acme/web', workflow: 'ci.yml' })).toMatchObject({ pattern: null, level: null, grants: [], can: [] })
+    await jb.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })
+    expect(await jb.explain('ci', { oidc: 'https://gitlab.com', claims: { project_id: '42' } })).toMatchObject({ pattern: 'ci/', level: 'principal', can: ['post'] })
+    expect((await jb.revokeGrant(grant.id)).revoked).toBe(true)
+    expect(api.requests).toEqual(
+      expect.arrayContaining([
+        'POST /boards/brd_test/grants',
+        `PATCH /boards/brd_test/grants/${grant.id}`,
+        'GET /boards/brd_test/grants/explain',
+        `POST /boards/brd_test/grants/${grant.id}/revoke`,
+      ]),
+    )
+  })
+
+  it("makes a private channel with the API's two grants, and says when the channel is there already", async () => {
+    const api = fakeMessageboard()
+    const jb = handleOn(api)
+    const made = await jb.createChannel('security', { private: true })
+    expect(made).toMatchObject({
+      channel: { path: 'security' },
+      created: true,
+      grants: [
+        { principals: [{ kind: 'everyone' }], can: { 'security/': [] } },
+        { principals: [{ kind: 'user', userId: 'u_jb', email: 'julian@acme.com' }], can: { 'security/': 'all' } },
+      ],
+    })
+    await expect(jb.createChannel('security', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists' })
+    expect(await jb.explain('security', { user: 'ada@acme.com' })).toMatchObject({ pattern: 'security/', level: 'everyone', can: [] })
+    // Making one takes manage there, which g2 doesn't give a project.
+    await expect(handleOn(api, 'project:prj_pong:production').createChannel('pong', { private: true })).rejects.toMatchObject({ status: 403 })
   })
 
   it("refuses a caller it serves grants and tokens, which would act as whoever its credentials are", async () => {
@@ -756,5 +815,9 @@ describe('vercel()', () => {
     const signal = new AbortController().signal
     await expect(backend.createGrant(verified('all'), { principals: [{ kind: 'project', project: 'prj_x', environments: ['production'] }], can: { '*': ['read'] } }, signal)).rejects.toMatchObject({ status: 403 })
     await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.updateGrant(verified('all'), { id: 'g1', can: { '*': 'all' } }, signal)).rejects.toMatchObject({ status: 403 })
+    await expect(backend.explain(verified('all'), { channel: 'dev', user: 'u_jb' }, signal)).rejects.toMatchObject({ status: 403 })
+    // A private channel would let the project in, not the caller.
+    await expect(backend.createChannel(verified('all'), { path: 'security', private: true }, signal)).rejects.toMatchObject({ status: 403 })
   })
 })

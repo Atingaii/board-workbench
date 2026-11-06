@@ -2,6 +2,7 @@
 // `vercel()` from `@vercel/board/backend-vercel` is tested against. A bearer token names its principal:
 // `user:u_jb`, `app:oac_1`, or `project:prj_pong:production`.
 import { randomUUID } from 'node:crypto'
+import { fakeGrants, GrantRefused, type Role, type Who } from './messageboard-grants.ts'
 
 type Principal =
   | { type: 'user'; userId: string }
@@ -80,9 +81,40 @@ const ACCOUNTS: Record<string, { username: string; name: string }> = {
   u_ada: { username: 'ada', name: 'Ada Lovelace' },
 }
 
-export function fakeMessageboard(options: { teamId?: string; slug?: string; boardId?: string | null; accounts?: Record<string, { username: string; name: string }> } = {}) {
+/** The team's people, by user ID, with their emails and roles, and its projects and the repositories GitHub knows: what grants name. */
+const MEMBERS: Record<string, string> = { u_jb: 'julian@acme.com', u_ada: 'ada@acme.com', u_bob: 'bob@acme.com', u_val: 'val@acme.com' }
+const ROLES: Record<string, Role> = { u_jb: 'OWNER', u_ada: 'MEMBER', u_bob: 'MEMBER', u_val: 'VIEWER' }
+const PROJECTS: Record<string, string> = { prj_board: 'board', prj_pong: 'pong', prj_web: 'web', prj_sec: 'sec' }
+const REPOSITORIES: Record<string, string> = { 'acme/web': '700001', 'acme/api': '700002' }
+
+export function fakeMessageboard(
+  options: {
+    teamId?: string
+    slug?: string
+    boardId?: string | null
+    accounts?: Record<string, { username: string; name: string }>
+    members?: Record<string, string>
+    roles?: Record<string, Role>
+    projects?: Record<string, string>
+    repositories?: Record<string, string>
+  } = {},
+) {
   const accounts = options.accounts ?? ACCOUNTS
   const teamId = options.teamId ?? 'team_test'
+  const access = fakeGrants({
+    teamId,
+    members: options.members ?? MEMBERS,
+    roles: options.roles ?? ROLES,
+    projects: options.projects ?? PROJECTS,
+    repositories: options.repositories ?? REPOSITORIES,
+  })
+  /** Who a token is, as grants see it. */
+  const whoOf = (actor: Actor): Who =>
+    actor.principal.type === 'user'
+      ? { kind: 'user', userId: actor.principal.userId }
+      : actor.principal.type === 'project'
+        ? { kind: 'project', projectId: actor.principal.projectId, environment: actor.principal.environment }
+        : { kind: 'app' }
   const slug = options.slug ?? 'test'
   let boardId = options.boardId === undefined ? 'brd_test' : options.boardId
   const channels: { id: string; name: string }[] = [{ id: 'general', name: 'general' }]
@@ -488,10 +520,14 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
     if (method === 'POST' && rest === '/channels') {
       if (typeof body.name !== 'string' || body.name.length > 80 || !CHANNEL.test(body.name)) throw new Refused(400, 'invalid_channel_name')
       if (channels.some((c) => c.name === body.name)) throw new Refused(409, 'channel_name_taken')
+      // A private channel's two grants, made with it, or a refusal before either is.
+      const close = body.private === true ? access.closeChannel(whoOf(actor), actor.id, body.name) : null
       const channel = { id: `chn_${randomUUID()}`, name: body.name }
       channels.push(channel)
-      return { channel }
+      return close ? { channel, grants: close() } : { channel }
     }
+    const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
+    if (granted !== undefined) return granted
     if (method === 'GET' && rest === '/threads') {
       const channelId = url.searchParams.get('channelId') ?? ''
       channelAt(channelId)
@@ -677,6 +713,8 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
   return {
     /** Every request it answered, as `METHOD /path`. */
     requests,
+    /** The board's grants, by ID, as the API keeps them. */
+    grants: access.grants,
     /** The watchers each principal registered, as the API keeps them. */
     registrations,
     /** Every schedule, by ID, as the API keeps them. */
@@ -705,7 +743,7 @@ export function fakeMessageboard(options: { teamId?: string; slug?: string; boar
       try {
         return Response.json(await route(request))
       } catch (error) {
-        if (error instanceof Refused) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status })
+        if (error instanceof Refused || error instanceof GrantRefused) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status })
         throw error
       }
     }) as typeof fetch,
