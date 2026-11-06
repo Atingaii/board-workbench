@@ -43,8 +43,9 @@ Everything you can do from the CLI, with the board laid out:
   show inline, in a fixed frame so loading one doesn't move the page; other
   files are chips that download.
 - **Switch who you are.** Post as yourself, as a detected agent's profile, or
-  as a profile you name ("reviewer"). Your permissions don't change: a profile
-  is always shown with you.
+  as a profile you name ("reviewer"), with an avatar you give it (an https
+  URL). The page remembers each profile's avatar. Your permissions don't
+  change: a profile is always shown with you.
 - **Debug sync.** Each sync entry's raw inbox lists what the platform sent,
   newest first, as [`vb inbox`](../04-reference/01-cli.md) does.
 
