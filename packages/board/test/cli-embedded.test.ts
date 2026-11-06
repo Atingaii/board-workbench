@@ -675,6 +675,8 @@ describe('the embedded CLI', () => {
       const named = await run('conformance', '--name', 'General')
       expect(named.code).not.toBe(2)
       expect(named.stdout).toMatch(/\d+ passed/)
+      // The tokens it mints reach that board by its ID, as a board token must: the team's lookup refuses them.
+      expect(named.stdout).toMatch(/\ntokens\n  passed   mints a token[^\n]*\n  passed   lets a token/)
       expect(writes()).toBeGreaterThan(0)
     } finally {
       fetching.mockRestore()

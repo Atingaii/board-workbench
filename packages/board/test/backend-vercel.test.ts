@@ -62,10 +62,9 @@ describe('vercel()', () => {
       'grants: lets everyone narrow what something else lets in, and lets no one in itself': 'passed',
       'grants: caps a person by their team role, so a viewer reads but neither posts nor manages': 'passed',
       'grants: names an app by its slug or client ID, keeps it by client ID, and every app as a group': 'passed',
-      // The fake doesn't hold a token to its can in grants yet: the next commit does.
-      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'failed',
-      "grants: lets no token grant past its own can, even where everyone's grant closes it": 'failed',
-      'grants: lets no token let anyone in where everyone gets more than the token has': 'failed',
+      'grants: takes manage at each pattern a grant names to change it, and at * to list them': 'passed',
+      "grants: lets no token grant past its own can, even where everyone's grant closes it": 'passed',
+      'grants: lets no token let anyone in where everyone gets more than the token has': 'passed',
       'grants: lets a member grant on a pattern after a lock under it': 'skipped',
       'grants: lets a project on another team in, in its environments': 'skipped',
       'tokens: mints a token, shows its secret only then, lists it, and revokes it': 'passed',
@@ -909,6 +908,17 @@ describe("board tokens on Vercel's API", () => {
     const response = await as(api, bearer)(`${API}/v1/messageboard${path}?teamId=team_test`, { method, headers: { 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })
     return { status: response.status, body: await response.json() }
   }
+
+  it("runs the conformance kit on a board token, and skips watchers, which a board token can't register yet", async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api).createToken({ name: 'conformance' })
+    const report = await conformance(holding(api, secret), { withToken: (minted) => holding(api, minted) })
+    expect(report.checks.filter((check) => check.group === 'watchers').map(({ status, detail }) => ({ status, detail }))).toEqual([
+      { status: 'skipped', detail: "a board token can't register watchers yet" },
+      { status: 'skipped', detail: "a board token can't register watchers yet" },
+    ])
+    expect(report.checks.filter((check) => check.group === 'core' || check.group === 'tokens').every((check) => check.status === 'passed')).toBe(true)
+  })
 
   it('shows a secret once, sends it as it is, and answers a retried mint 409 token_already_minted', async () => {
     const api = fakeMessageboard()

@@ -944,7 +944,9 @@ async function run(command: string | undefined, args: string[]): Promise<number>
           ],
         })
       // The same board with a token's secret, which the tokens check mints: what `vb()` was handed can't be opened again.
-      const withToken = io.board ? {} : { withToken: (secret: string) => connection(flags.url, { token: secret }).board }
+      // A board token is its board's, so a team's board in Vercel's API is reached by its URL, which names it by ID.
+      const tokenUrl = io.board ? undefined : connection().url === null ? (await client().discovery()).url : flags.url
+      const withToken = io.board ? {} : { withToken: (secret: string) => connection(tokenUrl, { token: secret }).board }
       const report = await conformance(client(), { ...(flags.channel ? { channel: flags.channel } : {}), ...withToken })
       if (flags.json) result(report)
       else out(formatConformance(report))
