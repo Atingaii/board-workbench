@@ -272,10 +272,9 @@ function build(options: A2Options, binding: BoardBinding) {
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     consumers: [inbound],
   })
-  // Who the board trusts beside its code's rules: grants, and the tokens it issued.
+  // Who the board trusts beside its defaults: grants, and the tokens it issued.
   const access = createTrust({
     store: log,
-    issuers: () => binding.issuers(),
     accessNow: (principal, grants) => binding.accessNow(principal, grants),
     explain: (principal, channel) => binding.explain(principal, channel),
     team: async () => (await binding.project()).teamId,

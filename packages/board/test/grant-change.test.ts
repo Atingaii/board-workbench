@@ -60,6 +60,20 @@ describe('checkGrantChange', () => {
     expect(checkGrantChange({ ...bob, after: [g1, everyone({ 'secret/': [] }), changed], changed })).toBeNull()
   })
 
+  it('judges a revoke or a removal by reach alone, since it widens whoever the grant named and lets no one in', () => {
+    // A token kept out of secret/ lifts nothing that held anyone back there.
+    const shut: GrantShape = { principals: [{ kind: 'project' }], can: { '*': [] } }
+    expect(checkGrantChange({ ...as({ '*': 'all', 'secret/': [] }), after: [g1], revoked: shut })).toEqual({ reason: 'reach', pattern: 'secret/', permission: 'manage' })
+    // A member shut out of security/ by everyone's lock alone lifts a grant on *, but not the lock.
+    const lock = everyone({ 'security/': [] })
+    const bob = as({ '*': 'all', 'security/': [] }, { '*': 'all' })
+    expect(checkGrantChange({ ...bob, after: [g1, lock], revoked: grant({ '*': ['read'] }) })).toBeNull()
+    expect(checkGrantChange({ ...bob, after: [g1], revoked: lock })).toEqual({ reason: 'reach', pattern: 'security/', permission: 'manage' })
+    // Narrower than everyone somewhere, a caller still revokes where it reaches: no one new gets in.
+    const carol = as({ '*': 'all', 'security/': ['read'], 'security/incidents': [] }, { '*': 'all', 'security/incidents': [] })
+    expect(checkGrantChange({ ...carol, after: [g1, everyone({ 'security/': ['read'] })], revoked: grant({ 'dev/': ['post'] }) })).toBeNull()
+  })
+
   it('lets an owner no token narrows make any grant', () => {
     const changed = grant({ '*': 'all' })
     expect(checkGrantChange({ ...as({}), owner: true, after: [g1, everyone({ 'secret/': ['read'] }), changed], changed })).toBeNull()

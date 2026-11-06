@@ -1,18 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { connect } from '../src/client/node.ts'
 import { board, HttpError, type Backend, type Caller } from '../src/server/index.ts'
-import { oidc, vercelProject, oidcTokens } from '../src/access/index.ts'
+import { oidcTokens } from '../src/access/index.ts'
 import { local } from '../src/local/index.ts'
 import { http } from '../src/backend-http/index.ts'
-import { board as projectBoard, bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, PROJECT_ID, signedInHome, TEAM_ID, testAuth, testBoard } from './harness.ts'
+import { board as projectBoard, bearer, BOARD_URL, caller, deploymentToken, OIDC_ISS, oidcToken, personToken, signedInHome, testAuth, testBoard } from './harness.ts'
 
 /** Where v0's board is mounted: a board on the team's board, over http(). */
 const V0_URL = 'https://v0.test/api/board'
 const V0 = 'vercel:project:prj_v0:production'
 
-/** The team's board, and v0's board using it over http(), calling each other in-process. */
-function team(options: Parameters<typeof http>[1] = {}) {
-  const remote = testBoard({ access: [vercelProject({ project: 'prj_v0', can: 'all' }), vercelProject({ project: 'prj_marketing', can: 'all' })] })
+/** The team's board, granting v0's and marketing's production, and v0's board using it over http(), calling each other in-process. */
+async function team(options: Parameters<typeof http>[1] = {}) {
+  const remote = testBoard()
+  for (const project of ['prj_v0', 'prj_marketing']) await remote.createGrant({ principals: [{ kind: 'project', project: project, environments: ['production'] }], can: { '*': 'all' } })
   const seen: Request[] = []
   const route = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
@@ -79,7 +80,7 @@ describe('board() and its backend', () => {
       ['messages', { channel: 'dev', label: [['state', ['open', 'draft']]], limit: 5 }],
       ['post', { channel: 'dev', text: 'hello' }],
     ])
-    // Who the request is, as board() verified it: its principal, with what access lets it do, narrowed by its scope.
+    // Who the request is, as board() verified it: its principal, with what it may do, narrowed by its scope.
     expect(calls[0]!.caller).toMatchObject({
       identity: {
         principal: { id: 'vercel:user:u_julian', kind: 'person', scope: 'dev/=read' },
@@ -147,7 +148,7 @@ describe('board() and its backend', () => {
 
 describe('a board on http()', () => {
   it('answers only wake-ups and webhooks, and its handle reads the board it uses', async () => {
-    const { project } = team()
+    const { project } = await team()
     const nothing = { error: { code: 'not_found', message: `${V0_URL} answers only wake-ups and webhooks` } }
     // No discovery to send anyone elsewhere: a repo links the team's board itself.
     const discovery = await project.fetch(new Request(V0_URL))
@@ -158,7 +159,7 @@ describe('a board on http()', () => {
   })
 
   it('reaches the board it uses with the credentials `vb` finds, minting one for that board', async () => {
-    const { remote } = team()
+    const { remote } = await team()
     await signedIn([BOARD_URL])
     const seen: string[] = []
     const route = (input: RequestInfo | URL, init?: RequestInit) => {
@@ -175,7 +176,7 @@ describe('a board on http()', () => {
   })
 
   it("writes from your own code as its deployment, idempotent by the post's id", async () => {
-    const { remote, project } = team()
+    const { remote, project } = await team()
     const deploys = project.as('deploys')
     await deploys.post('deploys', { text: 'a1b2c3 is live', id: 'd1' })
     await deploys.post('deploys', { text: 'a1b2c3 is live', id: 'd1' })
@@ -191,7 +192,7 @@ describe('a board on http()', () => {
   })
 
   it("keeps a handle's post IDs its own, so no one can take one first", async () => {
-    const { remote, project } = team()
+    const { remote, project } = await team()
     const marketing = caller(remote.fetch, await deploymentToken('marketing', 'prj_marketing', 'production'))
     const taken = await marketing('POST', '/messages', { channel: 'deploys', text: 'mine now', id: `key:${V0}:0123456789abcdef0123456789abcdef` })
     expect(taken).toEqual({
@@ -213,7 +214,8 @@ describe('a board on http()', () => {
 
   it("keeps a principal's keyed IDs from one whose ID is a colon-prefix of it", async () => {
     // OIDC subjects carry colons, so one principal's ID can be the start of another's.
-    const remote = testBoard({ access: [oidc({ issuer: OIDC_ISS, claims: { project_path: 'acme/api' }, can: 'all' })] })
+    const remote = testBoard()
+    await remote.createGrant({ principals: [{ kind: 'oidc', issuer: OIDC_ISS, claims: { project_path: 'acme/api' } }], can: { '*': 'all' } })
     const acme = caller(remote.fetch, await oidcToken({ sub: 'acme' }))
     expect((await acme('GET', '/me')).body.principal).toBe('oidc:gitlab.test:acme')
     const theirs = 'key:oidc:gitlab.test:acme:ci:0123456789abcdef0123456789abcdef'

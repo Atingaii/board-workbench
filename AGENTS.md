@@ -454,10 +454,12 @@ through a handle from `board()`, and `board()` only ever calls the backend's
 methods, and nothing reaches around them. The policy is `board()`'s, in one
 place on every backend: it routes and validates each request, verifies its
 caller (`authenticate`, `oidcTokens()` from `@vercel/board/access` by default),
-applies `access`, runs the `middleware`, and calls the backend with the caller
-it verified (`{ identity, origin }`), which the backend trusts because only
-`board()` makes one. Nothing with side effects runs for a request before
-`access` allows it. With no backend, `board()` is the team's board in Vercel's
+works out what it may do (its people and its own deployments everything,
+anyone else what the board's grants and board tokens give), runs the
+`middleware`, and calls the backend with the caller it verified
+(`{ identity, origin }`), which the backend trusts because only `board()`
+makes one. Nothing with side effects runs for a request before its access
+allows it. With no backend, `board()` is the team's board in Vercel's
 API (`vercel()`), or with `BOARD_URL` set, `http()` to that board: both
 internal, and neither exported.
 `local()` keeps a board in this process on an internal engine, A2's log
@@ -469,10 +471,9 @@ blob store, it keeps no files (501 `no_files`). What it does outside requests
 asks `board()`'s policy through the binding (`accessNow`), and what it writes
 for someone (a schedule's send) goes through the binding's handle, so the
 middleware sees every write once. A board
-on another one (Vercel's, or `BOARD_URL`'s) with no `access` answers only
-wake-ups and webhooks, so a repo links the team's board itself; with one, it's
-a gateway, whose callers act on the team's board as its project, labeled with
-their handle and narrowed to their access. Request
+on another one, Vercel's (`vercel()`) or the one at `BOARD_URL` (`http()`),
+answers only wake-ups and webhooks, so a repo links the team's board itself.
+Request
 schemas live in `src/api/routes.ts` and are shared by the server and the
 handle. Nothing on the way to a handle on Vercel's board imports Node:
 credentials go in `board({ fetch })`, whose Node default (`vb`'s) lives in the

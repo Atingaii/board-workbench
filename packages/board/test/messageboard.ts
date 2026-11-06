@@ -705,7 +705,7 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  *
  * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
- * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
+ * (`roles`, by user ID: everything, or `['read', 'react']` for a viewer; a member by default), and a project
  * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
  * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
  * of board tokens.
@@ -776,7 +776,7 @@ export function fakeMessageboard(
       if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
       const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
-      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read'] : ALL
+      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read', 'react'] : ALL
       const says = options.me?.[bearer] ?? { can: { '*': can }, expiresAt: null }
       return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
     }

@@ -205,9 +205,10 @@ export function fakeGrants(options: {
     for (const { grant } of deciding) for (const permission of expand(grant.can[pattern]!)) given.add(permission)
     let can = PERMISSIONS.filter((permission) => given.has(permission))
     let capped: string | null = null
-    // A viewer only reads, whatever a grant says.
-    if (who.kind === 'user' && options.roles[who.userId] === 'viewer' && can.some((permission) => permission !== 'read')) {
-      can = can.filter((permission) => permission === 'read')
+    // A viewer only reads and reacts, whatever a grant says.
+    const VIEWER: readonly Permission[] = ['read', 'react']
+    if (who.kind === 'user' && options.roles[who.userId] === 'viewer' && can.some((permission) => !VIEWER.includes(permission))) {
+      can = can.filter((permission) => VIEWER.includes(permission))
       capped = 'viewer'
     }
     return { pattern, over, level, grants: deciding.map((candidate) => candidate.grant), capped, can }

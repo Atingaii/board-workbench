@@ -36,12 +36,13 @@ describe('cli tokens and grants', () => {
       [
         'g1  --all-users                                                  everything',
         'g2  --all-projects --environment production,preview,development  read post react label',
+        'g3  --all-apps                                                   read post react label',
         '',
       ].join('\n'),
     )
     expect((await vb(['grants', 'revoke', 'g2'])).stdout).toBe('revoked g2\n')
     expect((await vb(['grants', 'revoke', 'g2'])).stdout).toBe('g2 is already gone\n')
-    expect((await vb(['grants', 'list'])).stdout).toBe('g1  --all-users  everything\n')
+    expect((await vb(['grants', 'list'])).stdout).toBe('g1  --all-users  everything\ng3  --all-apps   read post react label\n')
   }, 30_000)
 
   it('lists with tokens alone, and names a subcommand it lacks', async () => {

@@ -315,8 +315,8 @@ are another grant. `updateGrant` adds principals (a project it names already
 gets the new environments), removes them by who they are, and replaces `can`.
 Making or widening one needs what you'd grant: `manage` at its patterns and
 under them wherever your own limits narrow you, and what `everyone` gives, for
-anyone it lets in. Revoking needs `manage` at its patterns; `grants` needs `manage` at
-`*`. Owners always may.
+anyone it lets in. Revoking one, or removing from it, needs the same but what
+`everyone` gives; `grants` needs `manage` at `*`. Owners always may.
 `explain` says which grants decide a channel, and what they give, for you or,
 with `manage` at `*`, for `{ user }`, `{ project, environment }`, `{ github,
 workflow, branch, event }`, or `{ oidc, claims }`.

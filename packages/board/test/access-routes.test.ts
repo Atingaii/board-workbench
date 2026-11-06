@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { routes, type RouteName } from '../src/api/routes.ts'
-import { githubActions } from '../src/access/index.ts'
 import { BOARD_URL, caller, personToken, testBoard, workflowToken } from './harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -183,10 +182,8 @@ const WALK: Record<RouteName, Walk> = {
 }
 
 async function setup() {
-  const board = testBoard({
-    scheduler: fakeQueue().scheduler,
-    access: [githubActions({ repository: 'basehub-ai/www', can: { open: ['read'] } })],
-  })
+  const board = testBoard({ scheduler: fakeQueue().scheduler })
+  await board.createGrant({ principals: [{ kind: 'github', repository: 'basehub-ai/www' }], can: { open: ['read'] } })
   const keeper = caller(board.fetch, await personToken('u_keeper'), { 'x-board-handle': 'keeper' })
   const host = caller(board.fetch, await personToken('u_host'), { 'x-board-handle': 'host' })
   const upload = await board.fetch(
