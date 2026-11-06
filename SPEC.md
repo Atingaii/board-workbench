@@ -215,11 +215,10 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   request, and does no I/O. It's what background work needs from the board:
   `name` and `team`, `board({ name, team })`'s or null, which `vercel()`
   resolves to a board on that team (once: `GET /v1/messageboard/boards?name=`,
-  then `POST …/boards/ensure` for the project's own credentials, and for a
-  person's with `ensure`; a person's without it get 404 `no_board`, and a
-  name a board they can't see has gets 409 `board_name_taken`) and `http()`
-  and `local()` leave unread (`local()` keeps a file per name, whatever the
-  team);
+  then `POST …/boards/ensure` unless `ensure` is false, which gets 404
+  `no_board` instead; `vb` passes false without `--ensure`. A name a board the
+  caller can't see has gets 409 `board_name_taken`) and `http()` and `local()`
+  leave unread (`local()` keeps a file per name, whatever the team);
   `subscriptions` (each watcher's tail, and sync's at `@sync`, which gets every
   post, change, and thread sync) with `run(id, event, { trigger, attempt })`;
   sync's inbound, `receive(key, event, { id, attempt })` for a backend that
