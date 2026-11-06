@@ -425,6 +425,8 @@ describe('vercel()', () => {
           code: 'ambiguous_board_name',
           origin: 'handle',
           message: expect.stringMatching(/brd_test, brd_old|brd_old, brd_test/),
+          // Its way out is on this team: a URL that named none would reach the login's default team.
+          hint: expect.stringContaining('https://api.vercel.com/v1/messageboard/boards/<ID>?teamId=team_test'),
         })
       expect(lookups(api, 'POST /boards/ensure')).toBe(0)
     })
