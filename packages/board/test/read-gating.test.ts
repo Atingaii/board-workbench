@@ -5,10 +5,10 @@ import { readableLinks } from '../src/server/feed.ts'
 import { foldSchedules } from '../src/server/schedules.ts'
 import { board as mount, type Middleware } from '../src/server/index.ts'
 import { githubActions, vercelProject, oidcTokens } from '../src/access/index.ts'
-import { a2 } from '../src/backend-a2/index.ts'
+import { a2 } from '../src/server/a2.ts'
 import { slack } from '../src/sync/slack.ts'
 import { channels } from '../src/sync/fn.ts'
-import { BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
+import { board as projectBoard, BOARD_URL, caller, deploymentToken, personToken, PROJECT_ID, testAuth, testBoard, workflowToken } from './harness.ts'
 import { fakePlatform } from './sync-fixtures.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -543,9 +543,9 @@ describe('schedules', () => {
       const store = memory()
       const queue = fakeQueue()
       const access = [vercelProject({ project: 'marketing', environments: ['production'], can: { deploys: ['post'] } })]
-      const options = { access, project: { id: PROJECT_ID }, authenticate: oidcTokens(testAuth), url: BOARD_URL }
-      const route = mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
-      mount({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
+      const options = { access, authenticate: oidcTokens(testAuth), url: BOARD_URL }
+      const route = projectBoard({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
+      projectBoard({ backend: a2({ store, scheduler: queue.scheduler }), ...options })
       const platform = await deploymentToken('board', PROJECT_ID)
       const marketing = caller(route.fetch, await deploymentToken(), { 'x-vercel-oidc-token': platform })
       expect((await marketing('POST', '/schedules', { channel: 'deploys', text: 'nightly deploy check', in: '1h' })).status).toBe(201)

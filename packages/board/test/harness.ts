@@ -5,8 +5,11 @@ import { join } from 'node:path'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { vi, expect } from 'vitest'
 import { memory } from '../src/store/memory.ts'
-import { board, type BoardOptions } from '../src/server/index.ts'
-import { a2, memoryBlob, type A2Options } from '../src/backend-a2/index.ts'
+import { createBoard, type Board, type BoardOptions } from '../src/server/board.ts'
+import type { Serving } from '../src/server/policy.ts'
+import { a2, type A2Options } from '../src/server/a2.ts'
+import { memoryBlob } from '../src/server/blob.ts'
+import { local } from '../src/local/index.ts'
 import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
 
 export const BOARD_URL = 'http://board.test/api/board'
@@ -45,15 +48,37 @@ export function testClock() {
 }
 
 /**
- * board()'s options and a2()'s, side by side, as tests write them. `auth` is `oidcTokens()`'s
- * options, for board()'s `authenticate`.
+ * Where these tests' boards run: in the test project (`PROJECT_ID`, on `TEAM_ID`), as a board
+ * deployed in it finds itself in its environment, with nothing read from disk.
  */
-export type MountOptions = A2Options & Omit<BoardOptions, 'backend'> & { auth?: OidcTokensOptions }
+const environment = async (): Promise<Serving> => ({
+  oidcTokens: (await import('../src/server/serving.ts')).oidcTokens,
+  ownProjectId: async () => PROJECT_ID,
+  ownTeamId: async () => TEAM_ID,
+  discoveryIdentity: async () => ({ projectId: PROJECT_ID, teamId: TEAM_ID }),
+})
 
-/** A board on a2(): each option to the one that takes it. It has a2()'s extras, for tests to look inside. */
+/** `board()`, as a deployment of the test project runs it. Tests pass the backend. */
+export function board(options: BoardOptions): Board {
+  return createBoard(options, {
+    backend: () => {
+      throw new Error('a test passes board() its backend')
+    },
+    sync: () => import('../src/sync/engine.ts'),
+    serving: environment,
+  })
+}
+
+/**
+ * board()'s options and the local board engine's, side by side, as tests write them. `auth` is
+ * `oidcTokens()`'s options, for board()'s `authenticate`. Without a store, it's one in memory.
+ */
+export type MountOptions = Partial<A2Options> & Omit<BoardOptions, 'backend' | 'fetch'> & { auth?: OidcTokensOptions }
+
+/** A board on the local board's engine: each option to the one that takes it. It has the engine's extras, for tests to look inside. */
 export function mount(options: MountOptions) {
   const { store, scheduler, blob, transport, auth, ...rest } = options
-  const backend = a2({ ...(store ? { store } : {}), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
+  const backend = a2({ store: store ?? memory(), ...(scheduler ? { scheduler } : {}), ...(blob ? { blob } : {}), ...(transport ? { transport } : {}) })
   const { url, ...given } = rest
   const created = board({
     ...given,
@@ -80,7 +105,6 @@ export function testBoard(options: MountOptions = {}) {
   const created = mount({
     store,
     blob: memoryBlob(),
-    project: { id: PROJECT_ID, teamId: TEAM_ID },
     auth: testAuth,
     ...options,
     // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
@@ -104,6 +128,23 @@ export function testBoard(options: MountOptions = {}) {
     clock.skip()
   }
   return Object.assign(created, { clock, skipHold })
+}
+
+/**
+ * A board as `local({ memory: true })` keeps one, with its scheduler in this process, whose tokens
+ * come from a local test issuer: what a test that needs only a board, end to end, runs against.
+ */
+export function localBoard(options: Omit<BoardOptions, 'backend' | 'fetch'> & { auth?: OidcTokensOptions } = {}) {
+  const { auth, url, ...rest } = options
+  const backend = local({ memory: true })
+  const created = board({
+    ...rest,
+    backend,
+    authenticate: rest.authenticate ?? oidcTokens(auth ?? testAuth),
+    // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
+    ...('url' in options ? (url !== undefined ? { url } : {}) : { url: BOARD_URL }),
+  })
+  return Object.assign(created, { close: () => backend.close() })
 }
 
 async function sign(claims: Record<string, unknown>, issuer: string, audience = BOARD_URL) {

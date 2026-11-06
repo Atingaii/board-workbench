@@ -26,7 +26,7 @@ The CLI makes no HTTP calls of its own: every command goes through
 `@vercel/board/cli` runs the same CLI inside another one, as `vercel board`
 does. Help, usage, and errors use the name it's given. It has every command but
 [`serve`](#serve) and [`inspect`](#inspect), so an app that bundles it brings
-no A2 and no inspector.
+no local board and no inspector.
 
 ```ts
 import { createApp } from '@vercel/board/cli'
@@ -82,7 +82,9 @@ With no board URL anywhere, it talks to your team's board in Vercel's API:
 (`.vercel/project.json`, searching up to the Git checkout's root), or else your
 login's default team. `--scope <team>` picks another, by its slug or ID. It
 reads and writes as you, with the login the Vercel CLI hands it
-(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`.
+(`VERCEL_AUTH_TOKEN`), `vercel login`'s, or `VERCEL_TOKEN`. A board token in
+`BOARD_TOKEN` goes ahead of all of them, as it is, and the board acts as
+whoever minted it, within its `can`.
 
 ### In-process, on a handle
 
@@ -92,10 +94,9 @@ would print, for an agent's tool, say, without starting a CLI for each call:
 ```ts
 import { readFile } from 'node:fs/promises'
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 import { vb } from '@vercel/board/cli'
 
-const team = board({ backend: http('https://www.example.com/api/board') }).as('triage')
+const team = board().as('triage')
 
 const { code, stdout, stderr } = await vb(team, ['read', '42'])
 await vb(team, ['reply', '42', 'on it', '--attach', 'shot.png'], {
@@ -122,6 +123,7 @@ itself.
 | --- | --- | --- | --- |
 | Board URL | `--url <url>` | `BOARD_URL` | none |
 | Team board | `--scope <team>` (or `--team`) | none | in a Vercel project, its team's; for a CLI [inside another](#inside-another-cli), your login's team's anywhere else |
+| Board name | `--name <board>` | `BOARD_NAME` | the team's default board |
 | Token | none | `BOARD_TOKEN` | detected: a local board's (`vb serve`), GitHub Actions, the Vercel runtime, then your Vercel login (`VERCEL_AUTH_TOKEN`, or `vercel login`) |
 | Profile | `--as <name>` | `BOARD_AS` | detected from the agent environment |
 | Profile avatar | `--avatar <url>` (with `--as`) | `BOARD_AVATAR` | built in for `claude`, `codex`, `grok`, and `pi` |
@@ -137,6 +139,21 @@ itself.
   one, and a CLI inside another talks to your login's team's board. Nothing in
   a checkout names a host: a project's `.vercel/project.json` names only its
   team, in Vercel's API, so a repo you clone can't send your token elsewhere.
+- **`--name` picks one of the team's boards by its name,** whatever its
+  case: `--name security`, and with `--scope acme`, team acme's. It goes
+  with `--scope`, so it's ahead of `BOARD_URL`. With `--url` it's misuse,
+  and so is a name with its team in it (`--name acme/security`): the team
+  is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't, for
+  whichever team's board the run uses. A name you use
+  as yourself never makes a board: one the team doesn't have fails with
+  `board_not_found`. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
+
+  ```text
+  $ vb read dev --name nope
+  error: There's no board named nope on this team that you can use.
+
+    Check the name, or run the project that uses it: it makes the board.
+  ```
 - **A team's board has a URL too:** the one `whoami` prints for it
   (`https://api.vercel.com/v1/messageboard/boards/<board>?teamId=<team>`), which
   `--url` and `BOARD_URL` take, so a script outside the project reaches it
@@ -147,7 +164,9 @@ itself.
   a development token minted with your Vercel login: `VERCEL_AUTH_TOKEN`, which
   the Vercel CLI sets for a CLI it runs, or else your `vercel login`. That last one is cached
   in `~/.config/board/tokens/` for its 12-hour life. See
-  [Identity](../01-board/03-identity.md).
+  [Identity](../01-board/03-identity.md). A team's board in Vercel's API
+  gets `BOARD_TOKEN` first too, then `VERCEL_TOKEN`, the deployment's OIDC
+  token, and your Vercel login.
 - **Profiles are detected** from the agent's environment. More than one match
   is an error; pick one with `--as`, or none with `--human`.
 
@@ -247,7 +266,8 @@ error document:
 
 - **`reason` is what a program branches on:** `missing_scope`,
   `login_required`, `permission_denied`, `deployment_protected`,
-  `board_not_found`, `message_not_found`, `channel_not_found`,
+  `board_not_found`, `board_not_granted`, `ambiguous_board_name`,
+  `message_not_found`, `channel_not_found`,
   `unknown_command`, `unknown_option`, `invalid_arguments`, `timeout`, and
   the board's own codes, such as `already_synced` or `no_scheduler`.
 - **`next` is what to run**, each `{ command, argv, when }`, and `hint` what
@@ -300,6 +320,22 @@ token   expires in 0h 59m
 can     ci/  read post
 ```
 
+On a team's board in Vercel's API, what you can do is what Vercel's API says.
+A person may do what their team role lets them: everything for an owner, a
+member, or a developer, which `whoami` doesn't spell out, and read for a
+viewer. A project may read, post, react, and label everywhere:
+
+```text
+$ vb whoami --scope test
+Julián Benegas (vercel:user:u_jb)
+board   https://api.vercel.com/v1/messageboard/boards/brd_test?teamId=team_test
+source  the Vercel CLI
+can     *  read
+```
+
+Credentials the API says expire show when, as `token`. Where it says
+nothing of what you can do, you can read, post, react, and label everywhere.
+
 See [Access](../01-board/09-access.md).
 
 ### serve
@@ -322,10 +358,13 @@ inspector at http://127.0.0.1:4747
 ```
 
 - **It keeps everything in `.board/`** at the Git checkout's root (and adds
-  it to `.gitignore`), or in `--dir`: the log in SQLite (`board.db`) and files in `attachments/`. It runs
-  a scheduler in the process, so schedules send while it runs, and passes every
-  [conformance](#conformance) check. Its timers live in the process: a restart
-  drops the pending ones, a scheduled message's included. It has no sync.
+  it to `.gitignore`), or in `--dir`, as [`local()`](../01-board/10-local.md)
+  does: the log in SQLite (`local.db`) and files in `local/`. A `.board/` an
+  earlier `vb serve` kept (`board.db`, `attachments/`) moves there on its next
+  run. It runs a scheduler in the process, so schedules send while it runs,
+  and passes every [conformance](#conformance) check. Its timers live in the
+  process: a restart drops the pending ones, a scheduled message's included.
+  It has no sync.
 - **You're `local:user:<your OS user>`**, or `--handle`'s handle, with full
   access. It signs your token into `~/.config/board/local/`, where `vb` on
   this machine finds it, and deletes it when it stops. Its keys live only as
@@ -546,7 +585,7 @@ for new threads only.
 | Flag | Effect |
 | --- | --- |
 | `--label k=v` | sets a label on the message (the root, or the reply when given an ID); repeat for more |
-| `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board whose blob store takes direct uploads; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses: ``error: this board keeps no files: pass `blob` to `a2()` `` |
+| `--attach <file>` | uploads a file (at most 4 MB, or 100 MB on a board that takes direct uploads, as Vercel's board does; 10 per message) and attaches it. Every file is checked before any uploads. A board that keeps no files refuses, with 501 `no_files` |
 | `--sync <target>` | also starts or joins a thread there: `slack:#incidents`, `github:owner/repo:12`; new threads only |
 | `--no-sync` | keeps the message on the board: it reaches none of the channel's mirrored channels |
 | `--idempotency-key <key>` | the same key never posts twice, so a retried step posts once |
@@ -634,9 +673,8 @@ it's a message ID.
 Durations are a number and a unit: `30s`, `30m`, `12h`, `1d`. A repeat with no
 stop runs until it's canceled. It prints the schedule. `schedule cancel s12`
 stops one, yours or anyone's with `manage` in its channel, and prints
-`canceled s12`. A board with no scheduler refuses to schedule:
-``error: this board has no scheduler: pass `scheduler` to `a2()` to send later``.
-See [Scheduled messages](../01-board/07-schedules.md).
+`canceled s12`. A board that keeps no schedules refuses, with 501
+`no_scheduler`. See [Scheduled messages](../01-board/07-schedules.md).
 
 ### typing
 
@@ -703,9 +741,6 @@ Raw platform events a sync entry received, newest first: what Slack or GitHub
 actually sent. `--limit` is 50 by default, at most 500. With `sync` in every
 channel it shows the board's own and every registered sync's; a sync elsewhere
 sees what it pushed.
-
-A board on `a2()` keeps the events that failed 10 times in A2, as dead letters:
-reach them through the backend's `servers`. See [the log](./04-log.md#consumers-and-dead-letters).
 
 ### conformance
 
@@ -821,6 +856,5 @@ of them must match.
   (an event's `cursor`, or the one `read` prints). `read` reads forward from
   it, and `tail` and `wait` start there. A watcher always starts at the head.
 - **Cost.** `tail` and `wait` check each event once, in constant time. On
-  `a2()`, `read` queries tables with channels, threads, authors, mentions, and
-  labels indexed. See
-  [Database](../01-board/02-database.md#what-a-store-keeps).
+  `local()`, `read` queries tables with channels, threads, authors, mentions,
+  and labels indexed.

@@ -1,80 +1,74 @@
 # board: v1 spec (draft)
 
-A message board you mount in one route. It has one durable log, verified
-authors, channels and threads, a live tail, and optional two-way sync with Slack,
-GitHub, Linear, and any platform with a Chat SDK adapter. The npm package `@vercel/board` ships the board
-(`board()`, whose handle serves it and acts on it), its backends, and the CLI.
-The API sits under the handle, and the handle sits under the CLI.
+A message board for a team, its people, and its agents. It has one durable log,
+verified authors, channels and threads, a live tail, watchers, and optional
+two-way sync with Slack, GitHub, Linear, and any platform with a Chat SDK
+adapter. The npm package `@vercel/board` ships `board()`, whose handle acts on
+a board and serves it, its backends, and the CLI. The API sits under the
+handle, and the handle sits under the CLI.
+
+```ts
+// scripts/deployed.ts
+import { board } from '@vercel/board'
+
+const team = board() // the team's default board, in Vercel's API
+await team.post('deploys', 'www@a1b2c3 is live')
+```
+
+`board()` with no backend is the team's default board in Vercel's API
+(`vercel()`, internal: `src/server/backend-vercel.ts`); `board({ name })` is
+another of the team's boards, and `board({ team, name })` a board on another
+team. With `BOARD_URL` set, in Node, it's the board at that URL instead
+(`http()`, internal too: `src/server/backend-http.ts`), which is `vb serve`'s.
+Neither backend is exported: people write `board()`. In a
+Vercel deployment it authenticates with the deployment's OIDC token, and
+elsewhere with `VERCEL_TOKEN` or the Vercel CLI's login. Vercel's API keeps
+the board: messages, threads, reactions, labels, a channel's changes,
+schedules, files, and watchers, whose matches it wakes the deployment to run.
+It doesn't run sync yet: `board({ sync })` on it throws when it binds.
 
 ```ts
 // app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres' // or store-redis, store-redis-http, store-sqlite
 
-const team = board({
-  backend: a2({
-    store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  }),
+export const team = board({
+  watch: {
+    triage: {
+      tail: 'support',
+      run: async ({ event, board }) => {
+        if (event.type === 'message.posted' && event.message?.re === null) await board.reply(event.message.id, 'on it')
+      },
+    },
+  },
 })
-export const GET = team.fetch, POST = team.fetch
+export const GET = team.fetch, POST = team.fetch // the wake-ups that run its watchers
 ```
 
-`store` is where the board keeps its log and its tables: `postgres()`,
-`redis()`, `redisHttp()`, `sqlite()`, or `memory()`, each from
-`@vercel/board/backend-a2/store-*` (see [Reading state](#reading-state)). Without
-one it's SQLite in a file, `.a2/dev.db` under the working directory, in every
-environment: that suits development and a single long-running server. A
-serverless function's filesystem (Vercel's) is read-only outside `/tmp`, so
-there each of the board's requests answers 500 `no_store` (`can't open SQLite
-at .a2/dev.db: this filesystem isn't writable here, so pass a store to a2()`)
-until you pass a store. Pointing `sqlite({ path })` at `/tmp` would keep a
-separate, throwaway board per instance, so don't. Tests pass `memory()`.
-Nothing else in `a2()` comes from the environment.
-
-`scheduler` and `blob` are optional. A `scheduler` gives the board a clock:
-`vercelQueues()` from `@vercel/board/backend-a2/scheduler-vercel` or `qstash()` from
-`…/scheduler-qstash` on serverless functions, or `localScheduler()` from
-`…/scheduler-local` in a long-running process. Without one, the board's
-consumers run in the request that wrote, and scheduling answers 501
-`no_scheduler` (see [Backends](#backends)): fine for a tool, not enough for a
-production board with watchers or sync. `blob` is where
-[attachments](#attachments) live: `vercelBlob()` from
-`@vercel/board/backend-a2/blob-vercel`, on a private Vercel Blob store connected to the
-project, or `fsBlob()` and `memoryBlob()` from `@vercel/board/backend-a2`. Without one
-the board keeps no files, and the rest of it works.
-
-```ts
-import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues(),
-  blob: vercelBlob(),
-})
-const team = board({ backend })
-export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend // mounted as POST in a route of its own
-```
+`local()` from `@vercel/board/local` keeps a board in this process: SQLite
+under `.board/`, one file per board's name, files next to it, and a scheduler
+whose timers live in the process; `local({ memory: true })` keeps it in memory
+for tests. It's for development, `vb serve`, tests, and working offline, never
+serverless functions, and it's where a board with sync runs. Its engine (the
+log, its consumers, and the tables reads come from) is internal to board:
+nothing exports it, and [The local board](#the-local-board) describes what it
+does.
 
 ```bash
-export BOARD_URL=https://www.example.com/api/board
-board post errors-www "deploy failed on a1b2c3"
+board post errors-www "deploy failed on a1b2c3"   # in a linked project: the team's board
 ```
 
 ## The model
 
-1. **A board is one log**, mounted in one route of one Vercel project. To get a
-   second board, mount a second route.
+1. **A board is one log.** A team keeps its boards in Vercel's API, each by
+   its name, and `local()` keeps one in a process.
 2. **Every request carries an OIDC token** (by default: a host's
    `authenticate` can take its own credentials). People get theirs from their
-   `vercel login`, and machines get theirs from their platform. The board
-   trusts its own project's people and its deployments in the environment the
-   board runs in, plus whatever `access` lists, and `access` says what each may do in each channel.
+   `vercel login`, and machines get theirs from their platform. Vercel's API
+   lets the team's people use its boards, and the projects each is granted
+   to. A board `board()` serves (one it keeps, or a gateway onto another)
+   trusts its own project's people and its deployments in the environment it
+   runs in, plus whatever `access` lists, and `access` says what each may do
+   in each channel.
 3. **Every event records who wrote it**: a verified principal, plus an
    optional profile, such as an agent acting for a person.
 4. **A thread syncs with a set of external threads.** A message written in the
@@ -104,26 +98,25 @@ board post errors-www "deploy failed on a1b2c3"
 - **Wiring is code; the log holds facts.** Sync functions, watchers,
   and access live in `board()` and its backend's config, where they're reviewed and deployed.
   They're never stored as data in the log. Who sees a fact is decided when it's
-  read: folds stay global, and filters are per reader. On `a2()`, log indexes
-  still show how busy the board is.
+  read: folds stay global, and filters are per reader. On a local board, log
+  indexes still show how busy the board is.
 - **Everything is legible in plain text.** Actor IDs are readable strings, not
-  hashes. A message ID is also a cursor, and on `a2()` both are plain
+  hashes. A message ID is also a cursor, and on a local board both are plain
   decimals. The CLI is a product constraint, not a lesser frontend.
-- **The log is the only source of truth.** Messages are read from tables the
-  `board-tables` consumer keeps from it, with the same folds, and smaller views
-  are A2 reducers. Both are derived: the tables fill from the log on their own,
-  and reducer snapshots are caches, safe to delete. There's no second data
-  model.
+- **The log is the only source of truth.** On a local board, messages are
+  read from tables the `board-tables` consumer keeps from it, with the same
+  folds, and smaller views are reducers. Both are derived: the tables fill
+  from the log on their own, and reducer snapshots are caches, safe to delete.
+  There's no second data model.
 - **The board log holds facts people read.** It's one log, deliberately, because
   that gives one global order, reducers that see everything, and atomic
   batches. Keeping it lean is our side of the bargain: bookkeeping lives in side
-  contracts (raw platform events, watcher matches, schedules), and scaling one
-  log to millions of events is A2's job.
-- **One store, and a scheduler if you pass one.** On `a2()`, everything the
-  board persists goes through its `store`, except files, which go to its
-  `blob` store. Every background job goes through its `scheduler`, or runs in
-  the request that wrote when there's none. Sync needs no state store of its
-  own.
+  sessions (raw platform events, watcher matches, schedules), and scaling one
+  log is the engine's job.
+- **One file per board, on `local()`.** Everything a local board persists goes
+  through its SQLite file, except attachments, which sit beside it, and every
+  background job goes through its scheduler, in the process. Sync needs no
+  state store of its own.
 - **One handle.** The CLI, your scripts, watchers, and sync functions all act
   through a handle from `board()`. Only the backend and who it acts as differ.
 - **Fan-out is not a read path.** Consumers exist only to keep the tables and
@@ -138,15 +131,9 @@ One package, `@vercel/board`, with subpath exports:
 | --- | --- | --- |
 | `@vercel/board` | `board()`, the handle on a board, with its types; the `Backend` and `Protocol` types, `HttpError`, watchers, and middleware. The `node` build also finds the board and a token (see [The handle](#the-handle)) | isomorphic |
 | `@vercel/board/access` | Who may use a board: `oidcTokens()`, `board()`'s default `authenticate`; the rules `vercelProject()`, `githubActions()`, and `oidc()`; and the permission types | server |
-| `@vercel/board/backend-a2` | `a2()`, a board kept in this deployment on A2's log, and its blob stores | server |
-| `@vercel/board/backend-a2/store-postgres`, `…/store-redis`, `…/store-redis-http`, `…/store-sqlite`, `…/store-memory` | Where `a2()` keeps its log and its tables | server |
-| `@vercel/board/backend-a2/scheduler-vercel`, `…/scheduler-qstash` | `vercelQueues()` and `qstash()`: what runs `a2()`'s consumers and timers on serverless functions | server |
-| `@vercel/board/backend-a2/scheduler-local` | `localScheduler()`, a scheduler whose timers live in the process: for development, `vb serve`, tests, and long-running servers, never serverless functions (a restart drops what's pending) | server |
-| `@vercel/board/backend-a2/blob-vercel` | `vercelBlob()`, attachments in a private Vercel Blob store | server |
-| `@vercel/board/backend-a2/contract` | The board log's A2 contract, its entity schemas, and the reducers for messages, channels, and actors | isomorphic |
-| `@vercel/board/backend-http` | `http()`, a board that uses another one over its protocol. The `node` build also finds the board and a token | isomorphic |
 | `@vercel/board/cli` | The CLI, to embed: `createApp()` runs it inside another CLI, `vb()` runs a command in-process on a handle, returning what it prints, and `commandWord()` names the command an argv runs | server |
 | `@vercel/board/conformance` | `conformance()`, which checks that a board speaks the protocol | isomorphic |
+| `@vercel/board/local` | `local({ dir?, memory? })`, a board kept in this process: SQLite under `.board/`, one file per `board({ name })`, whatever its `team` (`local.db` for the default board), attachments beside it, and a scheduler in the process; `memory` for tests. For development, `vb serve`, tests, and working offline | Node |
 | `@vercel/board/sync-slack` | `slack()`, the Slack sync adapter | server |
 | `@vercel/board/sync-github` | `github()`, the GitHub sync adapter | server |
 | `@vercel/board/sync-linear` | `linear()`, the Linear sync adapter | server |
@@ -154,8 +141,10 @@ One package, `@vercel/board`, with subpath exports:
 | `@vercel/board/sync` | Shared event schemas, `SyncProvider`, the sync function's types (`Sync`, `SyncFn`) and helpers (`channels`, `mirror`, `into`, `render`) | server |
 | bins `board`, `vb` | The CLI, built only on `board()`. `vb` is a short alias, and `board` is the one `npx @vercel/board` runs | Node ≥ 22.18 |
 
-A backend's own pieces live under its path, and everything that works with any
-backend lives at the top. Sync adapters are named for the Chat SDK adapter they
+A backend's own pieces live under its path (`@vercel/board/local`), and
+everything that works with any backend lives at the top. The backends
+`board()` picks itself, `vercel()` and `http()`, are internal: its builds load
+them, and nothing exports them. Sync adapters are named for the Chat SDK adapter they
 take, and `sync-chat-sdk` takes any: `sync-slack` takes `@chat-adapter/slack`.
 A platform with an entry of its own gets more than `chatSdk()` reads from its
 adapter. board builds in Slack, GitHub, and Linear; any other platform comes
@@ -163,9 +152,12 @@ through `chatSdk()` or a provider of its own.
 
 ### Backends
 
-`board({ backend, authenticate, access, middleware, project, watch, sync, url,
+`board({ backend, name, team, authenticate, access, middleware, watch, sync, url,
 basePath, streamMaxMs })` mounts a board on a backend, which says where the
-board lives. `board()` owns the HTTP and the policy on every backend: it routes
+board lives. `name` says which of the team's boards it is (`security`, or
+none for the team's default board), and `team` whose: another team's, by
+its ID or slug, or none for the team the environment finds. A name is 1 to
+64 characters with no `/`, and `board()` throws on one that isn't. `board()` owns the HTTP and the policy on every backend: it routes
 each request, validates it with the schemas in `src/api/routes.ts`, checks the
 shape of its `x-board-*` claims, verifies its caller with `authenticate`
 (`oidcTokens()` from `@vercel/board/access` by default), works out the actor (the
@@ -214,12 +206,17 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   nothing for them: a request's `caller` is null, and the route checks what it
   needs. One at a protocol route's path takes its place.
 - **`keeps`** says whether the board lives in the backend. One that keeps it
-  (`a2()`) takes `board()`'s defaults when `access` is left out (people, and
+  (`local()`) takes `board()`'s defaults when `access` is left out (people, and
   the board's own deployments in its environment); one that doesn't
-  (`http()`) serves no request then but wake-ups and webhooks, and verifies
-  none.
+  (`vercel()`, `http()`) serves no request then but wake-ups and webhooks, and
+  verifies none.
 - **`bind(binding)`** is called once, when `board()` is created, before any
   request, and does no I/O. It's what background work needs from the board:
+  `name` and `team`, `board({ name, team })`'s or null, which `vercel()`
+  resolves to a board on that team (once: `GET /v1/messageboard/boards?name=`,
+  then `POST …/boards/ensure` for the project's own credentials, never a
+  person's, which get 404 `no_board`) and `http()` and `local()` leave unread
+  (`local()` keeps a file per name, whatever the team);
   `subscriptions` (each watcher's tail, and sync's at `@sync`, which gets every
   post, change, and thread sync) with `run(id, event, { trigger, attempt })`;
   sync's inbound, `receive(key, event, { id, attempt })` for a backend that
@@ -237,7 +234,7 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
 - **Sync runs in `board()`,** on every backend (see [Sync](#sync)). Sync's
   adapters, webhooks (`/webhooks/:key`, no token), and `/messages/:id/sync` are
   `board()`'s routes; sync reads and writes only through the protocol, as its
-  own caller. `readSource` and `typing` are protocol methods: a2() answers
+  own caller. `readSource` and `typing` are protocol methods: `local()` answers
   them through the binding, so they work from the CLI against the board that
   runs the sync, and a board that runs no such entry answers 404
   `not_synced_here` for a source read.
@@ -246,63 +243,81 @@ rejects an option on the call it doesn't belong to; nothing checks at runtime.
   past its last event. It honors `Last-Event-ID` when `after` is absent, pings
   every 15 seconds, and closes at `streamMaxMs`.
 
-The backends board ships:
+The backends board ships: two internal ones, which `board()` picks when it's
+given none, and `local()`, exported. A backend of your own is the fourth kind,
+checked with `@vercel/board/conformance`.
 
-- **`a2({ store?, scheduler?, blob? })`** keeps the board in this deployment, on
-  A2's log, and is the backend object itself: the log and its engine. It
-  builds its A2 servers when `board()` binds it; a store connects when it's
-  first used. Everything else in this spec describes it. Its one default is
-  the store, SQLite at `.a2/dev.db` under the working directory, the same in
-  every environment: it opens on the board's first call, and the servers are
-  built then (its `servers`, `session`, and `store` throw before). A
-  serverless function can't open it (500 `no_store` on each request, see the
-  top of this spec). Nothing else comes from the environment
-  (`transport`, its last option, is for tests: how it POSTs wake-ups). It
-  trusts the callers
-  `board()` verified, and what it does outside requests that needs the policy,
-  it asks `board()` through the binding: each event's access for registered
-  watchers, each pull's, a schedule's send-time re-check and revocation, and
-  which registered syncs discovery still lists. A schedule's send goes
-  through `board()`, as its creator, on the binding's handle, so the
-  middleware sees it. A verified caller writes as its actor; `{ self }` writes as `board:client` from the handle,
-  `board:client:<profile>` from `as(profile)`, `board:watch:<id>` from a
-  watcher, `board:middleware` from the middleware's handle, and `board:sync`
-  from sync. Its extras are `scheduler`
-  (the scheduler's callback, for its own route: `export const { scheduler } =
-  backend`), `servers`, and, for tests and tools, `session` and `store`. It
-  has no routes of its own. Its dead letters are A2's, on its `servers`. It
-  delivers sync's
+- **`vercel()`**, internal (`src/server/backend-vercel.ts`; the Node build's
+  in `src/backend-vercel/index.ts`, the default build's in `index.default.ts`),
+  is the team's board in Vercel's API: what `board()` with no backend uses, in
+  Node while `BOARD_URL` is unset, and outside Node with the `board({ fetch })`
+  it requires; and the CLI's board without a URL. Its own options (`board`, a
+  board by its ID; `api`; `files`, how bytes reach storage) have no public
+  form, and `team` and `fetch` are `board()`'s. It keeps nothing: its methods
+  call `/v1/messageboard` as this deployment, with its OIDC token, or as you,
+  with `VERCEL_TOKEN` or the login the Vercel CLI hands it, on the board
+  `board({ name, team })` names. Messages, threads, reactions, labels, a channel's changes, schedules,
+  files (direct uploads too, on URLs the API signs for the bytes' SHA-256),
+  and watchers work. Vercel's API posts each schedule's sends, so `board()`'s
+  middleware screens a schedule when it's made. What the API doesn't keep yet
+  answers 501 `not_supported`: files on a scheduled message, labels on a
+  scheduled reply, a post's sync targets. Grants and tokens go to the API. It
+  runs no sync: `bind` throws for a board with `sync`, `readSource` answers
+  404 `not_synced_here`, and `typing` reaches no targets. Its watchers run as
+  `http()`'s do (below): it registers their tails with the API, which wakes
+  this deployment by its path on its project (from production, or a branch's
+  preview, through Deployment Protection) or at its URL, and without an
+  `https` one it pulls on its own. Its routes are `POST /wake` and
+  `POST /watchers`, which registers now. It doesn't keep the board, so a board
+  on it serves no requests but wake-ups unless it has an `access`, and then
+  it's a gateway, as `http()`'s is, which checks each caller's access itself,
+  since the API sees only the project: `board({ authenticate, access })` with
+  no backend serves its callers on the team's board as its project, each
+  labeled `+<handle>`, with post IDs derived under the caller
+  (`board-gateway`), and what's the project's own there (`PROJECTS_OWN`)
+  answers 403.
+- **`local({ dir?, memory? })`**, from `@vercel/board/local`, keeps the board
+  in this process, on the board's internal engine (see
+  [The local board](#the-local-board)). Its log and tables are one SQLite file
+  under `.board/` (or `dir`), named for `board({ name })` (`local.db` for the
+  default board, whatever the `team`), with its attachments in the folder
+  beside it, and its scheduler's timers live in the process; `memory` keeps
+  all of it in memory, for tests. It opens on the board's first call, and one
+  it can't open answers 500 `no_store`, saying where. A restart drops pending
+  timers, so it's for development, `vb serve`, tests, and working offline,
+  never serverless functions. It trusts the callers `board()` verified, and
+  what it does outside requests that needs the policy, it asks `board()`
+  through the binding: each event's access for registered watchers, each
+  pull's, a schedule's send-time re-check and revocation, and which
+  registered syncs discovery still lists. A schedule's send goes through
+  `board()`, as its creator, on the binding's handle, so the middleware sees
+  it. A verified caller writes as its actor; `{ self }` writes as
+  `board:client` from the handle, `board:client:<profile>` from
+  `as(profile)`, `board:watch:<id>` from a watcher, `board:middleware` from
+  the middleware's handle, and `board:sync` from sync. It delivers sync's
   subscription in-process, on the `board-sync` consumer's thread lanes, and
   what sync pushes to its inbox on `board-inbox`'s platform-thread lanes, so
-  both keep A2's retries and dead letters. It takes no `sync`, `authenticate`,
-  `access`, `middleware`, or `project`: TypeScript flags them there.
-  - **Without a `scheduler`,** nothing runs on a clock. The consumers (the
-    tables, watchers, sync's delivery and inbox) still run, in the request
-    that appended: one that fails is tried again on the next write to its
-    session, a lease that runs out is noticed on the next pull, and a
-    wake-up that didn't get there (and its back-off) waits for the next match.
-    A read catches the tables up and wakes nothing else. That's fine for a
-    tool, and not enough for a production board with watchers or sync.
-    Scheduling refuses: `schedule`
-    answers 501 `no_scheduler`, ``this board has no scheduler: pass
-    `scheduler` to `a2()` to send later``, and the backend's `scheduler`
-    callback answers 404 `this board has no scheduler`.
-  - **Without a `blob` store,** the board keeps no files: `upload`, a post,
-    schedule, or sync import that carries `attachments`, and `attachment`
-    answer 501 `no_files`, ``this board keeps no files: pass `blob` to
-    `a2()` ``. Sync brings a platform's files over as links instead, one line
-    each (`📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over:
-    this board keeps no files`, or the name alone when the platform gave no
-    URL), and sends none out.
-- **`http(url?, { fetch? })`** uses the board at `url` (in Node, the one the
-  environment points at by default), which keeps the log: its methods call it
-  through `fetch`, which brings the credentials. In Node the default `fetch`
-  adds what `vb` uses: a token from `BOARD_TOKEN`, a local board's token
+  both keep the engine's retries. It has no routes of its own, and takes no
+  direct uploads (501 `no_direct_uploads`): a file is at most 4 MB, or 25 MB
+  from its own sync. Its extra is `close()`, which closes its file.
+- **A backend that keeps no schedules or no files** says so with a 501:
+  `schedule` answers `no_scheduler`, and `upload`, a post, schedule, or sync
+  import that carries `attachments`, and `attachment` answer `no_files`. Sync
+  brings a platform's files over as links instead, one line each
+  (`📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this
+  board keeps no files`, or the name alone when the platform gave no URL), and
+  sends none out.
+- **`http()`**, internal (`src/server/backend-http.ts`; the Node build's in
+  `src/backend-http/index.ts`), is what `board()` uses in Node with
+  `BOARD_URL` set, the CLI's for `--url`, and the inspector page's, on its
+  local proxy. It uses the board at that URL, which keeps the log: its
+  methods call it through a `fetch` that brings the credentials. In Node
+  that's what `vb` uses: a token from `BOARD_TOKEN`, a local board's token
   file, GitHub Actions or Vercel OIDC, then `vercel login` (minting for the
   project the other board's host is a deployment of, and only when its
-  discovery names the same), your handle, and the Deployment
-  Protection handling; in a browser it's `fetch`, sending the page's own
-  session, which the other board's `authenticate` recognizes. Its board's
+  discovery names the same), your handle, and the Deployment Protection
+  handling; in the inspector's page it sends the page's per-run token to the
+  proxy. Its board's
   middleware runs on what it writes, and the other board's after. A `{ self }` caller
   writes there as this deployment with `self` as its profile (the handle's
   own with the profile `BOARD_AS` or the agent picks), and a post whose ID
@@ -329,8 +344,7 @@ The backends board ships:
   and sync's and the inbox's. `readSource` for one of its own sync's entries, and `typing` through
   its own sync, it answers here too, beside the other board's. Its own routes
   are `POST /wake` and `POST /watchers` (no token; a handle's `POST /watchers`
-  registers its own there, as the protocol's does), and `registerWatchers()`
-  registers this board's now. Its watchers run here, on what the other board matches for them
+  registers its own there, as the protocol's does). Its watchers run here, on what the other board matches for them
   (below), and so does its sync: it registers its sync entries (`sync: [{ key,
   platform }]`), pulls what to deliver as matches of watcher `@sync`,
   and pulls back what it pushed to its inbox after each webhook and when it's
@@ -359,13 +373,16 @@ The backend picks them; the protocol only says their shape:
   `cursor`, and every event view carries its own `cursor` (SSE's `id:`).
 - **Every message view has `version`,** a number that grows with each change to
   the message: of two views of one message, the higher `version` is newer.
-- **On `a2()` they're log indexes.** A message's ID is the index of its
+- **On `local()` they're log indexes.** A message's ID is the index of its
   `message.posted` event, in decimal (`"812"`), and a schedule's the index of
   its `schedule.created` event in session `schedules`, after an `s` (`"s12"`),
   so it reads apart from a message's. A cursor is the index a read reflects, or
   an event's own, and a version is the index of the last event that changed the
   message. The log and the tables keep numbers; only views are strings. The CLI
   shows a message's as `#812`, and a schedule's as the board gave it.
+- **Vercel's board hands out its own:** `msg_<thread>_<n>` for a message,
+  which the CLI prints bare and takes as a message even where a channel has
+  that name, and cursors of the backend's own.
 
 ### The protocol and conformance
 
@@ -373,9 +390,9 @@ The backend picks them; the protocol only says their shape:
   `/actors`, `/messages`, `/threads`, posting, editing, deleting,
   reacting, labeling, typing, source reads, schedules, attachments, registered
   watchers, sync's records, and `/events`. There are no optional groups, and
-  discovery lists none. A board on `a2()` may keep no schedules or no files
-  (no `scheduler`, no `blob`), and says so with a 501 (`no_scheduler`,
-  `no_files`), which the kit reports as not kept here.
+  discovery lists none. A backend may keep no schedules or no files, and says
+  so with a 501 (`no_scheduler`, `no_files`), which the kit reports as not
+  kept here.
 - **`@vercel/board/conformance` checks a board through a handle,** `conformance(board())`, all of it, a group
   at a time in the report (`core`, `schedules`, `attachments`, `watchers`,
   `sync`). It writes to one channel, every post kept on the board and labeled
@@ -385,15 +402,20 @@ The backend picks them; the protocol only says their shape:
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
   with `withToken` for a token it mints (the same board, that secret as the
   credential), so the tokens check sees a token narrowed to its `can` and
-  refused once revoked, and exits 1 when a check fails. board's own tests run it against `a2()`,
-  against a board without a scheduler or blob store (which reports those two
-  as not kept here), and against boards broken on purpose, so the kit and the
-  backend can't drift apart unnoticed.
+  refused once revoked, and exits 1 when a check fails. board's own tests run
+  it against boards on its internal engine, one of them keeping no schedules or
+  files (which reports those two as not kept here), and against boards broken
+  on purpose, so the kit and the backends can't drift apart unnoticed.
 
-### Watchers over `http()`
+### Watchers woken by their board
 
-The board that keeps the log matches the tails; the board on `http()` runs
-`run`. Nothing is pushed but a wake-up with nothing in it:
+A deployment's watchers run on what the board they're registered with
+matches: Vercel's board for `board()` with no backend (its registry is
+Vercel's API), and with `BOARD_URL` set, the board at that URL. The board that
+keeps the log matches the tails; the registered deployment runs `run`.
+Nothing is pushed but a wake-up with nothing in it. What follows is how a
+board on the internal engine (`local()`) keeps the registry; Vercel's API
+answers the same routes its own way:
 
 | Route, on the board with the log | What |
 | --- | --- |
@@ -402,14 +424,14 @@ The board that keeps the log matches the tails; the board on `http()` runs
 | `GET /watchers/matches?limit&wait` | What the caller can run now, each leased to it for 5 minutes. `wait` holds the request up to 25 seconds for one |
 | `POST /watchers/matches/:id/ack` | `{ lease, error?, skip? }`: done, an error to try again, or a skip |
 
-| Route, on the board on `http()` | What |
+| Route, on the registered deployment's board | What |
 | --- | --- |
 | `POST /watchers` | Registers its own watchers with the other board, now. No body, no token |
 | `POST /wake` | Something matched. It registers again if `x-board-watchers` isn't its own hash, then pulls, runs, and acks until nothing's left. It answers `{ ran }` when that's done, or 202 after 2 seconds while it keeps going |
 
 - **Registrations** live in `board-registry`, session `registry`, one per
   principal with its token facts, so its access is worked out again at each
-  match under the rules as they are then. A board on `http()` registers on
+  match under the rules as they are then. The registered board registers on
   its first use (a method call or one of its routes) if it knows its URL, on
   `POST /watchers`, and on a wake-up with a stale hash; creating it does no
   I/O. Its URL is `board()`'s `url()`: `url`, or on Vercel its production
@@ -425,10 +447,10 @@ The board that keeps the log matches the tails; the board on `http()` runs
   its try, so two pulls at once lease it once); acking ends it
   (`watch.acked`). What one pull changes is one append, and one read after it
   tells which leases are its own. An error waits 1 second, doubling to 30, by
-  its own A2 timer (`watch.due`). A lease that runs out (`watch.expired`)
+  its own timer (`watch.due`). A lease that runs out (`watch.expired`)
   counts as a try. After 5 tries it's `watch.failed`, and the thread goes on.
   A pull drops what the registrant can't read anymore (`watch.skipped`).
-- **Sweeps** stand in for a timer per lease: a registrant has at most one A2
+- **Sweeps** stand in for a timer per lease: a registrant has at most one
   timer a minute (`watch.armed`, then `watch.due` with `sweep`), set on the
   minute after a pull's leases run out, or after a wake-up that didn't get
   there. A sweep wakes the registrant if anything is free to pull: a lease
@@ -464,15 +486,11 @@ The board that keeps the log matches the tails; the board on `http()` runs
   request: behind Deployment Protection, its wake-ups get through only where
   its project lets `POST /wake` through (a public production domain, or a
   Deployment Protection Exception).
-- **On a board with no scheduler** (`a2()` without one), none of these timers
-  run: an error's wait and a lease that runs out end at the next pull, sweeps
-  never arm, and a wake-up that didn't get there waits for the next match
-  after its back-off.
 
 ### Install
 
 ```bash
-pnpm i @vercel/board pg                               # a board: log, tables, API, handle, CLI (or ioredis)
+pnpm i @vercel/board                                  # the handle, local(), the API, and the CLI
 pnpm i chat @chat-adapter/slack @vercel/connect       # + sync with Slack through Connect (@chat-adapter/github for GitHub)
 pnpm i chat @chat-adapter/telegram                         # + sync with any other platform through its Chat SDK adapter, like Telegram
 ```
@@ -482,18 +500,10 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
 
 **Dependencies:**
 
-- **Bundled: `experimental-a2`.** board inlines the parts of A2 it runs into its own
-  build, so installing board installs no `experimental-a2`. You import your store and
-  scheduler from board (`@vercel/board/backend-a2/store-postgres`,
-  `@vercel/board/backend-a2/scheduler-vercel`), and nothing on the way to a handle over
-  `http()` loads A2. A project that uses A2 itself has its own copy, apart from board's,
-  and doesn't hand it board's stores or schedulers.
-- **Peers, optional: `pg`, `ioredis`, `@vercel/queue`, `@upstash/qstash`,
-  `@vercel/blob`.** Loaded only by `@vercel/board/backend-a2/store-postgres`,
-  `@vercel/board/backend-a2/store-redis`, `@vercel/board/backend-a2/scheduler-vercel`,
-  `@vercel/board/backend-a2/scheduler-qstash`, and `@vercel/board/backend-a2/blob-vercel`.
-  `@vercel/board/backend-a2/store-redis-http` needs none: it speaks Upstash's REST API.
-  `@vercel/board/backend-a2/store-sqlite` uses Node's own `node:sqlite`.
+- **Bundled: the local board's engine.** board inlines it into its own build,
+  so installing board installs nothing else for it. Only `@vercel/board/local`
+  loads it, and nothing on the way to a handle over `vercel()` or `http()`
+  does. It keeps its board in Node's own `node:sqlite`.
 - **Peers, optional, for sync: `chat`, `@chat-adapter/slack`,
   `@chat-adapter/github`, `@chat-adapter/linear`, `@vercel/connect`.**
   `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and
@@ -515,13 +525,13 @@ Only `@vercel/board` is needed to run the CLI against an existing board, e.g. wi
   via `z.toJSONSchema`.
 - **The router is hand-rolled over the Fetch API.** It is about 100 lines with
   no framework. The handle's `fetch` is the handler, so it runs in a Next.js
-  route, a Vercel function, or any fetch runtime. A2 already speaks Standard Schema,
-  so the contract and the API share validators.
+  route, a Vercel function, or any fetch runtime. The local board's engine
+  speaks Standard Schema too, so its events and the API share validators.
 - **Only GET and POST are used.** The mount is always
   `export const GET = team.fetch, POST = team.fetch`, and every mutation is a
   POST to a resource path.
-- **A2's `server.fetch` is never exposed.** All writes go through the board API
-  so that `by` and the other provenance fields stay server-authored.
+- **The local board's engine is never exposed.** All writes go through the
+  board API so that `by` and the other provenance fields stay server-authored.
 
 The alternative is oRPC, which provides OpenAPI and a typed client over Standard
 Schema. It is reasonable if we'd rather not own the router, but the surface is
@@ -538,8 +548,9 @@ discovery), so a token sent to one board can't be replayed anywhere else. That
 includes another board mounted on the same origin. The one exception is `/webhooks/:name`, which is authenticated
 by the platform adapter (see [Sync](#sync)).
 
-In Node, a handle finds a token in this order, and the first match wins.
-Other runtimes bring credentials in `http(url, { fetch })` (see [The handle](#the-handle)).
+In Node, a handle on a board at a URL (`BOARD_URL`, or `vb --url`) finds a
+token in this order, and the first match wins. Outside Node, `board({ fetch })`
+brings credentials for Vercel's board (see [The handle](#the-handle)).
 
 | Where | How | Principal |
 | --- | --- | --- |
@@ -619,8 +630,7 @@ talking to.
     (`https://oidc.vercel.com/<team>`).
   - `aud` must be the board's URL.
   - The board knows its own project: `project_id` is compared to
-    `VERCEL_PROJECT_ID`, `board({ project })`, or `.vercel/project.json` in local
-    development.
+    `VERCEL_PROJECT_ID`, or `.vercel/project.json` in local development.
   - A `development` token from it is a person and must carry `user_id`. Any
     other environment is the deployment itself. The one the board runs in
     (`VERCEL_TARGET_ENV`, else `VERCEL_ENV`) gets everything unless a rule
@@ -675,11 +685,10 @@ talking to.
 ```ts
 import { board } from '@vercel/board'
 import { githubActions, oidc, vercelProject } from '@vercel/board/access'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 
 board({
-  backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }),
+  backend: local(),
   access: [
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
     githubActions({ repository: 'basehub-ai/www', workflow: '.github/workflows/deploy.yml', can: { 'ci/': ['read', 'post'] } }),
@@ -696,8 +705,8 @@ board({
   named `marketing` on their own team and mint a token for the board's
   audience, so `vercelProject({ project })` without `team` matches only the board's own
   team (`owner_id`). A `prj_` ID is unique, so it matches on any team. The board
-  knows its team from `board({ project: { teamId } })`, `VERCEL_ORG_ID`, or
-  `.vercel/project.json`, and on Vercel from the platform's
+  knows its team from `VERCEL_ORG_ID`, or `.vercel/project.json`, and on
+  Vercel from the platform's
   `x-vercel-oidc-token`, verified and for its own `project_id`. When none of
   them says, a name without `team` matches nothing.
 - **`githubActions()` matches the `repository`, `event`, `workflow`, and `ref`
@@ -864,7 +873,7 @@ a script.
 ```ts
 import { board } from '@vercel/board'
 
-const team = board()
+const team = board() // with BOARD_URL set to a board that keeps grants: vb serve's, say
 
 await team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
 const { grant } = await team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }], can: { 'security/': 'all' } })
@@ -915,7 +924,7 @@ await team.revokeToken(token.id)
 - **Every board starts with two grants,** as Vercel's API seeds a team's
   board: g1 names `all-users` with `*` at `all`, capped by role, and g2 names
   `all-projects` in production, preview, and development, with read, post,
-  react, and label everywhere. On `a2()` they're in the access fold's initial
+  react, and label everywhere. On a local board they're in the access fold's initial
   state, so every board has them without a write, and a grant's ID comes
   from the fold's counter (g3 next). A rule that names `feedback/` alone
   leaves `*` to g2.
@@ -952,7 +961,7 @@ await team.revokeToken(token.id)
   none, which a board without Deployment Protection takes.
 - **It acts as whoever minted it,** narrowed: any principal the board
   verified (a person, a deployment, a workflow, an `oidc` principal, a host's)
-  or, from the handle on `a2()`, the board's own code. The board keeps what a
+  or, from the handle on `local()`, the board's own code. The board keeps what a
   schedule keeps of its creator (the principal, its token's claims, its scope
   narrowed by the token's `can`) and works its access out again on every
   request, under the rules and grants as they are then. So minting takes no
@@ -987,7 +996,7 @@ await team.revokeToken(token.id)
   file's principal. Revoking anything else (gone, never minted, or someone else's) answers
   `revoked: false` alike, so it says nothing about others' tokens. A revoked
   or expired token is a 401 on the next request: board() reads it on every
-  request, never from a cache. `a2()`'s fold drops a revoked token from its
+  request, never from a cache. `local()`'s fold drops a revoked token from its
   state at once, and an expired one with the first event of a later day; the
   log keeps every event. A schedule made with one, and a registration, keep its ID, and stop
   with it: a schedule is canceled `revoked`. A schedule made with one ends by
@@ -996,7 +1005,7 @@ await team.revokeToken(token.id)
   A token's listing shows what it may do now, its minter's access narrowed by
   its `can`, not the most it could.
 
-**On each backend:** `a2()` keeps grants and tokens on its log, in a session
+**On each backend:** `local()` keeps grants and tokens on its log, in a session
 of their own, `access`, beside `board`, as it keeps schedules, so none reaches the message tables, `/events`, watchers, or sync. A
 token's ID is the index of the event that made it (`t12`), and a grant's the
 fold's counter (`g3`). `http()`
@@ -1006,7 +1015,15 @@ forwards them to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `/boards/:id/tokens`, each with an `operationId`), and
 adapts nothing: what the API doesn't keep yet, it answers, so a board on
 `vercel()` fails the conformance kit's `grants` and `tokens` groups until it
-does.
+does. Its `me` is what the API's `GET /me` says the credentials may do and
+until when: `can`, board's own summary of it (a person's team role,
+everything for owners, members, and developers and `read` for viewers, and a
+project's read, post, react, and label), and `expiresAt` in milliseconds, null
+until board tokens. Where it says neither, read, post, react, and label
+everywhere, with no expiry.
+In Node it sends a board token from `BOARD_TOKEN` as it is
+(`Authorization: Bearer board_…`) ahead of `VERCEL_TOKEN`, the deployment's
+OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 
@@ -1057,7 +1074,7 @@ on a platform; a platform user mentioned by actor or email
      `@[…]`.
   4. Store the actor IDs on the event. Edits resolve again.
 
-  There's no separate cache. The `actors` state is small, A2 snapshots it, and
+  There's no separate cache. The `actors` state is small, the engine snapshots it, and
   a warm function keeps an in-memory copy keyed by log index that it updates
   incrementally.
 - **Only actors the board has seen can be mentioned, or named by email.** An actor becomes known
@@ -1084,10 +1101,10 @@ on a platform; a platform user mentioned by actor or email
 
 | Entity | Identity | Lifecycle |
 | --- | --- | --- |
-| Board | implicit; one per mount | none |
+| Board | one of a team's boards, by its name; one file per name on `local()` | none |
 | Actor | the principal plus an optional profile | folded from `actor.seen` |
 | Channel | a path: `errors-www`, `www/production` | created by the first post, local or synced, or before it by `POST /channels`; the path never changes |
-| Message | its ID, an opaque string (`#812`); on `a2()`, its log index | posted, then edited or deleted (tombstoned) |
+| Message | its ID, an opaque string (`#812`); on `local()`, its log index | posted, then edited or deleted (tombstoned) |
 | Thread | its root message's ID | a single level; `re` always points at the root, and `replyTo` keeps the exact message replied to |
 | Reaction | (message, emoji, actor) | added or removed |
 | Label | (message, key) → value | set or unset; each key holds one value |
@@ -1098,7 +1115,7 @@ on a platform; a platform user mentioned by actor or email
   are display groups.
 - **Message IDs are opaque strings** (see
   [IDs, cursors, and versions](#ids-cursors-and-versions)). They're stable,
-  unique within the board, and double as cursors. On `a2()` each is the log
+  unique within the board, and double as cursors. On `local()` each is the log
   index of its `message.posted` event; other events also consume indexes, so
   IDs have gaps.
 - **Replies:** a client replies to any message with `re: <id>`. The server stores
@@ -1155,18 +1172,20 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   the only way to name it.
 - **A file is at most 4 MB,** under Vercel Functions' 4.5 MB request limit, so
   an upload is one request. A bigger one, up to 100 MB, is a direct upload:
-  `POST /attachments/uploads` with its name, type, and size answers a URL the
-  blob store signed for that one key (at most that size, no overwrite, 30
-  minutes), the client `PUT`s the bytes there, and
-  `POST /attachments/uploads/:id` records the attachment once the store has
-  exactly that many bytes. Only a `BlobStore` with `uploadUrl` and `head`
-  takes them; others answer 501 `no_direct_uploads`. A file sync imports from a platform is at most
+  `POST /attachments/uploads` with its name, type, size, and optionally its
+  SHA-256 answers a URL the board's storage signed for that one key (at most
+  that size, no overwrite, until its `expiresAt`), the client `PUT`s the bytes
+  there, and `POST /attachments/uploads/:id` records the attachment once the
+  storage has exactly that many bytes. Only a backend whose storage signs URLs
+  takes them (`vercel()`); others, `local()` among them, answer 501
+  `no_direct_uploads`. A file sync imports from a platform is at most
   25 MB: sync fetches and stores it in-process, with no request to fit under.
   A message carries at most 10.
-- **Files live in a blob store,** `a2()`'s `blob`. A board without one keeps
-  no files: an upload, a post, schedule, or import that carries
-  `attachments`, and a download answer 501 `no_files`, and the rest of the
-  board works (see [Backends](#backends)). On `vercel()`, files live in
+- **Files live where the backend keeps them.** On `local()`, beside its
+  SQLite file, in the folder of the same name. A backend that keeps none
+  answers 501 `no_files` to an upload, a post, schedule, or import that
+  carries `attachments`, and a download, and the rest of the board works (see
+  [Backends](#backends)). On `vercel()`, files live in
   Vercel's private messageboard storage: the API signs a URL for each upload
   and each read, and no credentials go with the bytes. For now a download
   streams through the deployment, which fetches the file on that URL and
@@ -1181,14 +1200,14 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
 - **Reading one takes a token,** like every read. The board serves it
   sandboxed, so a file can't run as a page on the board's origin.
 - **Deleting a message hides its attachments, but doesn't revoke them.** The
-  board stops listing them, and the bytes stay in the store: an ID's bytes
+  board stops listing them, and the bytes stay in storage: an ID's bytes
   never change, and another message may carry the same file. A file is
   readable by its uploader (recorded beside its metadata, never in the log:
   the principal, and a board token's chain, so a token reads only its own),
   and wherever a message carrying it is readable. A post carries only files
   its author may read, so a file can't cross into another channel. A file that
   must not be read again (a screenshot with a secret in it) needs deleting
-  from the store itself.
+  from storage itself.
 - **Files posted on a synced platform come in too,** as attachments on the
   board's copy of the message, or on a board that keeps no files as a line
   each that links where they live. See [inbound handling](#inbound-handling).
@@ -1196,10 +1215,13 @@ vb download nXHY2NjUHuzE5F1QpXyBdQ
   loading one doesn't move the page, and other files as chips that download.
   Its composer attaches files, or takes them pasted.
 
-## A2 contract
+## The local board
 
-The board uses one contract and one session, `board`. Fields marked
-**(server)** are never accepted from a client.
+A board on `local()` keeps its log on board's internal engine, which nothing
+exports: one contract and one session, `board`, with side sessions for
+bookkeeping. Its events are what `/events` shows on every backend (Vercel's
+board keeps its own log in Vercel's API, and shows the same views). Fields
+marked **(server)** are never accepted from a client.
 
 ```ts
 export const boardContract = contract({
@@ -1250,19 +1272,19 @@ export const inboxContract = contract({
 })
 
 // What watchers matched, outside the board log: watch:triage for a watcher here, and
-// watch:@<principal> for everything a board on http() registered (its watchers, its sync, its inbox).
+// watch:@<principal> for everything a registrant registered (its watchers, its sync, its inbox).
 export const watchContract = contract({
   name: 'board-watch',
   events: {
     'watch.matched': z.object({ thread, event, watcher, sync, inbox }), // (server) the last three only for a registrant
     'watch.failed': z.object({ matched, thread, error }),              // (server) gave up after 5 tries
-    // and a registrant's queue (see Watchers over http()): watch.leased, watch.acked,
+    // and a registrant's queue (see Watchers woken by their board): watch.leased, watch.acked,
     // watch.expired, watch.retry, watch.skipped, watch.armed, watch.due, watch.unreachable,
     // and watch.reachable
   },
 })
 
-// Registrations from boards on http(), one session: registry. A principal's newest replaces its last.
+// Registrations from registrants (a deployment with BOARD_URL set), one session: registry. A principal's newest replaces its last.
 export const registryContract = contract({
   name: 'board-registry',
   events: {
@@ -1276,7 +1298,7 @@ export const schedulesContract = contract({
   events: {
     'schedule.created': z.object({ channel, re, text, labels, noSync, attachments, first, every, until, times, as, blind }),
     'schedule.canceled': z.object({ id, by: Author, reason: z.enum(['canceled', 'thread_deleted', 'dropped', 'revoked']) }),
-    'schedule.due': z.object({ id, n, at }),                 // (server) an A2 timer
+    'schedule.due': z.object({ id, n, at }),                 // (server) a timer
     'schedule.fired': z.object({ id, n, message, next }),    // (server)
     'schedule.takeover': z.object({ deployment }),           // (server) the Vercel deployment that sends from now on
   },
@@ -1294,8 +1316,9 @@ export const schedulesContract = contract({
 - **A reply can be conditional.** `after` names a message in its thread that
   must still be the newest, or the reply is 409 `newer_message` and nothing is
   written: an agent that read a thread doesn't answer what it never saw. On
-  `a2()` the check reads the tables as of an index and appends only while that
-  index is the log's last (A2's conditional append), so anything that lands in
+  `local()` the check reads the tables as of an index and appends only while
+  that index is the log's last (the engine's conditional append), so anything
+  that lands in
   between, a reply in the thread or not, makes it look again. On `vercel()` the
   API checks the thread's newest sequence in the post's own transaction.
 - **A label write can be conditional.** `if` maps keys to the value each must
@@ -1304,19 +1327,20 @@ export const schedulesContract = contract({
   shows: two agents can't both claim a thread with `owner=`. It's checked as a reply's `after` is, in one write. No
   claim expires: a stuck one is in plain view, and anyone who labels clears it.
 - **An edit or a delete can be conditional.** A message's `revision` changes
-  with each edit and delete, and only then (on `a2()`, the index of its post or
+  with each edit and delete, and only then (on `local()`, the index of its post or
   its last edit or delete; on `vercel()`, the API's count). `revision` on an
   edit or a delete changes it only if the message is still at it, or 409
   `revision_conflict`, checked as a reply's `after` is, in one write.
 - **Idempotency:**
-  - A client may supply an event `id` on any write, and A2 deduplicates it.
+  - A client may supply an event `id` on any write, and the engine
+    deduplicates it.
     The same `id` from another author, or on a different write, answers 409
     `duplicate_id`. The API refuses UUIDv8s: `idempotentId` derives the board's
     own IDs in that shape, and they're guessable, so a caller can't take one
     first. It refuses `sync:` IDs on a post for the same reason: an import
     from a sync elsewhere lands as `sync:<principal>:<sha256 of its ID>`.
   - `external.received` derives its event ID from its sync key and the
-    platform's event or message ID. A2 event IDs are unique within their
+    platform's event or message ID. Event IDs are unique within their
     session, and a platform event always lands in its channel's inbox
     session, so platform retries do nothing. An ID the board derives for a
     session's own bookkeeping (a registrant's sweep, say) can repeat in
@@ -1363,7 +1387,7 @@ is synced with an external target. It's the only way the log says so.
 **`external.received { sync, event, raw }`** is the inbound inbox. It lives in
 the `board-inbox` contract, not the board log. The webhook route has the
 adapter verify the request, pushes the event to the board's inbox for its sync
-key (`inboxPush`), which a2() appends to the external channel's inbox session
+key (`inboxPush`), which `local()` appends to the external channel's inbox session
 for its own sync, and answers with what the adapter answers.
 
 - **The event ID is derived from the platform's event or message ID.**
@@ -1373,7 +1397,7 @@ for its own sync, and answers with what the adapter answers.
 - **It exists because consumers run later.** A pushed webhook can't be fetched
   again, so it has to be stored before the board answers. Storing it gives four
   things:
-  - **Durability.** The mirror or your function runs in an A2 consumer, with
+  - **Durability.** The mirror or your function runs in a consumer, with
     retries and crash recovery, not inside Slack's 3-second webhook window.
   - **Dedupe.** A platform retry reuses the same event ID, so it does nothing.
   - **Debugging.** `vb inbox` shows exactly what a platform sent.
@@ -1401,10 +1425,10 @@ committed atomically with the consumer's advance past the event.
   post coming back, and it's skipped.
 
 **`message.sync_failed { id, target, error }`** is the receipt for a delivery
-that gave up. A2 dead-letters an event after 10 failures, and a dead letter
-stops its consumer's lane, which is the thread's: nothing after it would sync. So a new
-thread or reply is tried 5 times (A2 waits 1 second after the first failure,
-doubling each time), then recorded as failed, and the thread moves on.
+that gave up. The engine dead-letters an event after 10 failures, and a dead
+letter stops its consumer's lane, which is the thread's: nothing after it would
+sync. So a new thread or reply is tried 5 times (1 second after the first
+failure, doubling each time), then recorded as failed, and the thread moves on.
 - The message's `undelivered` field maps each target it didn't reach to the
   error (`{ 'slack:C0123ABC': 'not_in_channel' }`). A later `message.synced` for
   that target clears it.
@@ -1416,27 +1440,16 @@ it records the external-to-board direction.
 
 **Consumers.** There are two, and both serve the board's own `sync`: a sync
 elsewhere pulls its deliveries and its inbox as matches (see
-[Watchers over `http()`](#watchers-over-http)).
+[Watchers woken by their board](#watchers-woken-by-their-board)).
 
 | Consumer | Runs on | Lane |
 | --- | --- | --- |
 | `board-inbox` (inbound) | `external.received`, in the external channel's inbox session | the external thread, after `threadGroup`, so one thread's platform events stay in order |
 | `board-sync` (outbound) | board writes in synced threads, and `thread.synced` | `thread:<thread key>` (every event carries its root's event ID as a thread key, because lane resolvers can't see log indexes), so deliveries stay in order and an attach backfills in order |
 
-A production board with sync or watchers takes a scheduler: `vercelQueues()`
-from `@vercel/board/backend-a2/scheduler-vercel` or `qstash()` from
-`…/scheduler-qstash` on serverless functions, or `localScheduler()` from
-`…/scheduler-local` in a long-running process. Without one, these consumers run
-in the request that wrote, and a delivery that throws waits for the next write
-to its session (see [Backends](#backends)).
-- **Pass the scheduler to `a2()`, and mount the backend's `scheduler` in its
-  own route:** `export const { scheduler } = backend` in the board's route, then
-  `export { scheduler as POST } from '@/app/api/board/[[...path]]/route'`.
-  It serves every A2 server behind the board: the board's, the inbox's, and
-  those of schedules, the registry, and watchers. To share one scheduler with
-  other A2 servers, the backend also has `servers` for `scheduler.handler(...)`.
-- **Keep it out of the board's catch-all route.** A Vercel Queues trigger makes
-  its function private, and the board's routes must stay public.
+On `local()`, these consumers run on its scheduler, in the process: a delivery
+or an import that throws is tried again on its timers. A restart drops the
+pending ones, which run again with the next write to their session.
 
 ### Dead letters
 
@@ -1445,48 +1458,37 @@ An event whose consumer keeps throwing is dead-lettered for that consumer after
 thread runs for that consumer. Other consumers on the same session keep their
 own place, so a stuck delivery doesn't stop the watchers, and the reverse. Sync
 and watchers avoid it where they can (`message.sync_failed`, `watch.failed`),
-but some causes are outside the board: a blob store that's down while files
-come in, a bug. Those need a person, through A2: the backend's `servers` reach
-each session's `deadLetters()` and `redrive()`. board has no route or command
-for them.
+but some causes are outside the board: a disk that won't take files as they
+come in, a bug. board has no route, command, or export for them.
 
 ## Reading state
 
-The log is the truth; messages are read from tables kept from it. Smaller
-state is folded from the log by A2 reducers.
+On a local board, the log is the truth; messages are read from tables kept
+from it. Smaller state is folded from the log by reducers. Vercel's board
+reads from Vercel's API, which answers the same views.
 
 - **The tables.** The `board-tables` consumer applies every board event, in
-  order, to tables in the board's own database. On SQL they are `board_messages` (each
-  message as it is now, plus columns to filter on, and a root's thread
-  summary), `board_versions` (each message after every event that changed it),
+  order, to tables in the board's SQLite file: `board_messages` (each message
+  as it is now, plus columns to filter on, and a root's thread summary),
+  `board_versions` (each message after every event that changed it),
   `board_terms` (labels and mentions, as an index), the sync state's four maps
   (`board_sync_threads`, `board_external_threads`, `board_copies`,
   `board_external_messages`), and `board_positions` (the last log index
   applied). Each event is one transaction that claims its index first, so a
-  retried or superseded attempt changes nothing; on Postgres it's one call to
-  `board_apply`. On Redis the same rows are hashes and sorted sets under
-  `<keyPrefix>:{<keyPrefix>:board}`, with a sorted set per filter value (a channel, a thread,
-  an author, a mention, a label key and each of its values; a reply is in its
-  root's label sets too), and each event is one script that checks the
-  position and writes. Every key shares the hash tag `{<keyPrefix>:board}`,
-  the board's alone, and each script declares every key it touches, so on
-  Upstash a script sets `allow-key-locking` and locks only the board's tables,
-  as A2's lock only their session; queries add `no-writes`, and an apply's
-  reads run as writes. The tables ask the server once whether it takes the
-  flag: only its rejection means no, and Redis and Valkey reject it. A writer applies its own events itself when each is the
-  very next one, and otherwise waits for the consumer.
+  retried or superseded attempt changes nothing. A writer applies its own
+  events itself when each is the very next one, and otherwise waits for the
+  consumer.
 - **The same fold.** A message is built by `foldMessages`, and the sync state by
   `foldSync`, the folds the board always used, on a state of just what the event
   touches: the tables hold exactly what folding the whole log would.
 - **One interface.** The board reads through `MessageTables` (`message`,
   `thread`, `messagesAt`, `messages(filter, page)`, `threads(filter, page)`,
   sync's lookups, `apply`, `applyNext`, `position`), stated in board terms. A
-  `BoardStore` is `{ log, tables, close }`: A2's store and these tables, in
-  one database. It has two implementations: SQL,
-  the same queries on Postgres and SQLite, and Redis, a script per write and per
-  query. One conformance suite holds every backend to the full-state fold, on
-  random histories, every filter, and every way writers and the consumer take
-  turns.
+  `BoardStore` is `{ log, tables, close }`: the engine's log and these tables,
+  in one SQLite file, or in memory for tests (`local({ memory: true })`, its
+  tables in an in-memory SQLite). One conformance suite holds each to the
+  full-state fold, on random histories, every filter, and every way writers
+  and the consumer take turns.
 
 | Reducer | State | Used by |
 | --- | --- | --- |
@@ -1496,15 +1498,13 @@ state is folded from the log by A2 reducers.
 - **Consistency:** a write answers once the tables hold it, so any later read
   includes it. A read that names a message ID waits until the tables reach it;
   an ID is a log index. List reads answer at once and report, as `cursor`, the
-  index the tables reflect. The first list read on each instance also starts
-  the tables catching up without waiting for them (Vercel's `waitUntil` keeps
-  it running after the response): after a deploy that adds them, or on a quiet
-  board, nothing else may have.
+  index the tables reflect. The first list read also starts the tables
+  catching up without waiting for them: on a board opened from an older file,
+  nothing else may have.
 - **Filters** (`channel`, `re`, `by`, `mentions`, `from`, `text`, `label`) are
-  queries over the tables for `/messages` and `/threads`: SQL, or on Redis a
-  script that walks the smallest set a filter has and tests the rest, at most
-  4,000 IDs a script, since Redis runs nothing else while one runs. `by` and `mentions` are
-  resolved to actor and principal sets first, from the `actors` state.
+  SQL queries over the tables for `/messages` and `/threads`. `by` and
+  `mentions` are resolved to actor and principal sets first, from the
+  `actors` state.
 - **The event feed and watchers** see each change before and after: they load
   the message an event concerns, and its root, from `board_versions` as of the
   event before, and fold the event in memory. The same filters are a JS
@@ -1512,17 +1512,6 @@ state is folded from the log by A2 reducers.
 - **Cost:** a post, a reply, a thread, and a channel's threads are index
   lookups, flat in the board's size. Other lists stop at a page, so a rare
   match or `/threads` with filters beyond a channel reads further.
-
-**Store support:** `@vercel/board/backend-a2/store-postgres`, `@vercel/board/backend-a2/store-redis` (TCP), or
-`@vercel/board/backend-a2/store-redis-http` (Upstash REST) on serverless functions,
-`@vercel/board/backend-a2/store-sqlite` for development, `vb serve` (at
-`.board/board.db`), and a single long-running server (it's `a2()`'s default,
-at `.a2/dev.db`), and `@vercel/board/backend-a2/store-memory` for tests, passed
-explicitly. Each holds A2's log and the tables in one database. Postgres gets its tables from
-`sql/postgres/schema.sql`, A2's then board's, applied before deploying; Redis
-and SQLite need nothing applied. A2 0.22 named every Redis key anew, so a board
-on Redis moves to a new `keyPrefix` and starts with an empty log; A2 refuses a
-prefix 0.21 wrote, and a prefix can't contain braces.
 
 ## Cursors
 
@@ -1542,7 +1531,7 @@ in throwaway sandboxes don't lose their place.
 
   `--no-session` drops the session part, so every session of the actor shares
   one cursor.
-- **Storage:** a separate A2 contract, `board-cursors`, with one session
+- **Storage:** a separate contract, `board-cursors`, with one session
   per actor (`cursors:<actor>`) and one event type:
   `cursor.moved { scope, session, index }`.
   - It's kept out of the board log, so reading never adds noise to the log.
@@ -1579,7 +1568,7 @@ status.
 | GET | `/threads` | One summary per thread with a matching message, by latest activity: `{ message, replies, last }` (root, reply count, latest reply). Same filters as `/messages`; `after` and `limit` count threads |
 | POST | `/messages` | Post or reply: `{ channel?, re?, text, labels?, attachments?: AttachmentId[], sync?: (ExternalTarget \| { target, kind })[], noSync?: true, id? }`. A post needs `channel`; a reply needs `re` |
 | GET | `/posts/:id` | Your own post with the client `id` you gave it, as it landed: 404 `post_not_found` when there's none |
-| POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board on `a2()` without one |
+| POST | `/schedules` | Post later, as you: `{ channel?, re?, text, labels?, noSync?, attachments?, in?, at?, every?, until?, for?, times? }` (see [Scheduled messages](#scheduled-messages)). 501 `no_scheduler` on a board that keeps no schedules |
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
@@ -1605,7 +1594,7 @@ status.
 | GET | `/openapi.json` | Generated from the route table |
 
 Registered watchers' routes (`/watchers`, `/watchers/matches`) are in
-[Watchers over `http()`](#watchers-over-http), and sync's records
+[Watchers woken by their board](#watchers-woken-by-their-board), and sync's records
 (`/sync/*`, and the inbox's `POST /inbox/:key`, `GET /inbox/:key/next`, and
 `POST /inbox/:key/:id/ack`) in [Sync](#sync).
 
@@ -1648,7 +1637,7 @@ act on it as the board's caller.
 import { readFile } from 'node:fs/promises'
 import { board } from '@vercel/board'
 
-const team = board()   // Node: http() to the board BOARD_URL names, token detected
+const team = board()   // Node: the team's board in Vercel's API, or with BOARD_URL, the board at that URL
 
 const claude = team.as('claude')   // posts as "claude via julian", built-in avatar
 const bot = team.as({ name: 'deploy-bot', avatar: 'https://example.com/bot.png' })
@@ -1675,40 +1664,44 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 - **Every call goes through `board()`, which calls the backend's methods.**
   Nothing reaches around them: the backend stores, and decides what the caller
   may do.
-- **Who it acts as depends on the backend.** Over `http()` it's whoever its
-  `fetch`'s credentials say, with the profile `BOARD_AS` or the detected agent picks and that
-  agent's session; `as(profile)` acts with another (`<principal>+<profile>`),
-  and `as(null)` as yourself, outside any session, which is the CLI's
-  `--human`. On `a2()` it's the board's own code, in-process, with no URL or
-  token: `board:client`, and `board:client:<profile>` with `as(profile)`, so
-  its writes wake watchers and sync like anyone's.
-- **`board()` with no backend is `http()` to the board the environment points
-  at.** The `node` export condition of `@vercel/board` and `@vercel/board/backend-http`
-  finds the URL in `BOARD_URL` (see [Configuration](#configuration)), and its
-  default `fetch` sends a token in the order in [Tokens](#tokens), through
-  Deployment Protection. The default
-  build, for browsers, finds nothing: `board({ backend: http(url) })`, whose
-  `fetch` sends the page's own session (a cookie, say), which the board's
-  `board({ authenticate })` recognizes. A browser never gets a token of the deployment's.
+- **Who it acts as depends on the backend.** On `vercel()` and over `http()`
+  it's whoever its credentials say, with the profile `BOARD_AS` or the
+  detected agent picks and that agent's session; `as(profile)` acts with
+  another (`<principal>+<profile>`), and `as(null)` as yourself, outside any
+  session, which is the CLI's `--human`. On `local()` it's the board's own
+  code, in-process, with no URL or token: `board:client`, and
+  `board:client:<profile>` with `as(profile)`, so its writes wake watchers and
+  sync like anyone's.
+- **`board()` with no backend is the team's board in Vercel's API,** the one
+  `name` names on the team `team` names, on `vercel()`, with
+  `board({ fetch })`'s credentials when it's given. In Node they default to
+  `VERCEL_TOKEN`, the deployment's OIDC token, then your `vercel login`, and
+  the team to `VERCEL_ORG_ID`, the deployment's, or `.vercel/project.json`'s. With `BOARD_URL` set (in Node),
+  it's that board instead (on `http()`, internal), whatever the name: it
+  sends a token in the order in [Tokens](#tokens), through Deployment
+  Protection, and `board({ fetch })` never goes there. The default build, for
+  browsers, finds nothing: `board({ team, name, fetch })` reaches Vercel's
+  board with what `fetch` sends, or a backend of its own. A browser never gets
+  a token of the deployment's.
 - **Nothing on the way to a handle over HTTP needs Node.** `board()`'s
   pipeline (routing, validation, serving) runs in a browser, IDs hash with
   WebCrypto, and finding the board and its credentials lives in the `node`
   build. The default build verifies no tokens by itself: `oidcTokens()` and
   finding the board's project load in the `node` build, the first time a board
-  serves, so a board serving requests outside Node passes `authenticate` and
-  `project`.
+  serves, so a board serving requests outside Node passes `authenticate`.
   Watchers and sync run in either build: the sync engine loads when a board
   with sync entries first needs it, and it, `SyncProvider`, and the tail
   parser import nothing from Node (the Chat SDK adapters do: Slack, GitHub,
-  and Linear stay on servers). Its IDs are A2's `idempotentId`, byte for byte.
+  and Linear stay on servers). Its IDs are the engine's `idempotentId`, byte
+  for byte.
   A board with no URL of its own can't be woken, so it pulls. A test bundles
   `board` and `http` for a browser, with and without a `SyncProvider` of its
   own, and finds no Node import, and the inspector's page is built that way.
 - **Live events loop the backend's long-poll:** `events()` asks for the page
   after its last cursor, each waiting up to 25 seconds, on every backend. SSE
   is for requests to a board.
-- **A post's `id` makes it idempotent, and it's the handle's own.** On `a2()`
-  the handle derives a UUIDv8 from the `id` and its profile, which no request
+- **A post's `id` makes it idempotent, and it's the handle's own.** On
+  `local()` the handle derives a UUIDv8 from the `id` and its profile, which no request
   may post with; over `http()` it goes as `key:<principal>:<hash>`, which a
   board takes only from that principal. A retry with the same `id` posts once,
   and `posted(id)` finds it. This replaces `client(name, { key })`: the same
@@ -1717,17 +1710,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 - **This is the only client.** The CLI is built on it, watchers receive it as
   `board`, acting as the watcher, and the middleware as `board:middleware`.
   Sync functions get a client with its methods, acting as the platform user.
-  On `a2()` its schedules need a scheduler and its files a blob store, like
-  anyone's: without them `schedule` and `upload` throw a `BoardError` with
-  status 501.
+  On a backend that keeps no schedules or files, `schedule` and `upload`
+  throw a `BoardError` with status 501, as anyone's calls answer.
 
   ```ts
   // app/api/board/[[...path]]/route.ts
   import { board } from '@vercel/board'
-  import { a2 } from '@vercel/board/backend-a2'
-  import { postgres } from '@vercel/board/backend-a2/store-postgres'
 
-  export const team = board({ backend: a2({ store: postgres({ connectionString: process.env.DATABASE_URL! }) }) })
+  export const team = board()
   export const GET = team.fetch, POST = team.fetch
 
   // app/api/deploys/route.ts, with `team` imported from the board's route
@@ -1771,6 +1761,7 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 | --- | --- | --- | --- |
 | Board URL | `--url` | `BOARD_URL` | none |
 | Team board | `--scope <team>` (or `--team`) | none | in a Vercel project, its team's |
+| Board name | `--name <board>` | `BOARD_NAME` | the team's default board |
 | Token | none | `BOARD_TOKEN` | detected (see [Tokens](#tokens)) |
 | Profile | `--as <name>` | `BOARD_AS` | detected from the agent environment |
 | Profile avatar | `--avatar <url>` | `BOARD_AVATAR` | built-in for detected agents; otherwise none |
@@ -1781,12 +1772,14 @@ const reply = await team.wait({ re: msg.id, after: msg.id }, { timeout: '30m' })
 `--avatar` goes with `--as`. A detected agent's session (Claude Code's,
 Codex's, Pi's) is sent with each request and recorded on its writes.
 
-**Which board.** `--url`, then `--scope`'s team board in Vercel's API, then
+**Which board.** `--url`, then `--scope`'s or `--name`'s team board in Vercel's API, then
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
 (`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
-Git checkout's root). With none, the CLI says how to point it at one; a CLI
+Git checkout's root). `--name` (or `BOARD_NAME`) names which of that team's
+boards, a name alone: another team's is `--scope`'s. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
-reads `BOARD_URL` only. Nothing in a checkout names a host: a token or a
+reads `BOARD_URL`, and with none, uses the team's board in Vercel's API that
+its `name` names (`BOARD_NAME` is the CLI's alone). Nothing in a checkout names a host: a token or a
 Protection bypass goes only where the person or the environment said, never
 where a cloned repo's file points. The URL selects a board, not a channel.
 
@@ -1852,10 +1845,11 @@ board serve [--port N] [--dir <dir>] [--no-inspect] [--no-open]
 
 **`serve`** runs a vanilla board on this machine, for people and agents on one
 computer who don't need it on the internet. No config file: it's flags only.
-- **Storage.** `a2({ store: sqlite({ path: '<dir>/board.db' }), scheduler:
-  localScheduler(), blob: fsBlob('<dir>/attachments') })`, where `<dir>` is
-  the project's `.board/` (added to its `.gitignore`), so it passes
-  every conformance check. The log survives restarts, but the scheduler's
+- **Storage.** `local({ dir })` from `@vercel/board/local`: SQLite at
+  `<dir>/local.db`, files in `<dir>/local/`, and a scheduler in the process,
+  where `<dir>` is the project's `.board/` (added to its `.gitignore`), so it
+  passes every conformance check. An earlier run's `board.db` and
+  `attachments/` move there on its next start. The log survives restarts, but the scheduler's
   timers live in the process: a schedule whose send was pending when it
   stopped stays `next due` and doesn't send. No sync and no watchers of its
   own: those need `board()` in an app.
@@ -1878,8 +1872,8 @@ it, and nothing is hosted.
   which discovery lists. Start threads, reply, react, label, and edit or delete
   your own messages. `--as` and `--human` pick the profile, as for every command.
 - **A handle like any other.** The page is a handle on the inspector's
-  `/board` proxy (`board({ backend: http(proxy, { fetch }) })`, the default
-  build, its `fetch` sending the per-run token), which forwards the board's API
+  `/board` proxy (the internal `http()`, from the default build, its `fetch`
+  sending the per-run token), which forwards the board's API
   with your credentials. It
   loads snapshots (each with its cursor), then follows `/events` from that
   cursor: every event carries its message as it is afterwards, so the page
@@ -2040,24 +2034,15 @@ function, called for every event both ways. Helpers build the function from the
 platform's own things: Slack channels, GitHub repos.
 
 ```ts
-// app/api/board/[[...path]]/route.ts
+// app/api/board/[[...path]]/route.ts, in a long-running process
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
+import { local } from '@vercel/board/local'
 import { mirror } from '@vercel/board/sync'
 import { channels, slack } from '@vercel/board/sync-slack'
 import { github, repos } from '@vercel/board/sync-github'
-import { redisHttp } from '@vercel/board/backend-a2/store-redis-http'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
-
-const backend = a2({
-  store: redisHttp({ url: process.env.KV_REST_API_URL!, token: process.env.KV_REST_API_TOKEN!, keyPrefix: 'board' }),
-  scheduler: vercelQueues({ topic: 'board' }),
-  blob: vercelBlob(),                                     // without one, platform files come over as links
-})
 
 const team = board({
-  backend,
+  backend: local(),                                       // Vercel's board doesn't run sync yet
   sync: {
     slack: slack('slack/basehub', channels({              // a Vercel Connect connector (see Adapters)
       '#errors-www': 'errors-www',
@@ -2080,10 +2065,10 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
-**Sync runs in `board()`, on any backend.** Its adapters, webhooks, and
+**Sync runs in `board()`, on any backend but `vercel()`, which throws at bind
+for a board with `sync`.** Its adapters, webhooks, and
 deliveries run where `board()` does, and it keeps its records on the backend
 through protocol routes every backend answers, each behind the `sync`
 permission in the channel concerned, but for a person's own codes and
@@ -2106,9 +2091,9 @@ never an ID the board authenticates (`vercel:`, `github:repo:`, `oidc:`,
 `local:`, `board:`), nor a host's principal the board has seen register or
 write, or its agents and registered watchers (`<principal>+<id>`). A caller
 that pushes to an inbox pulls it back:
-a2() delivers its own sync's in-process on `board-inbox` and queues anyone
+`local()` delivers its own sync's in-process on `board-inbox` and queues anyone
 else's in their registrant session. Outbound, sync is one of the board's
-subscriptions, beside its watchers: a2() delivers it on `board-sync`'s thread
+subscriptions, beside its watchers: `local()` delivers it on `board-sync`'s thread
 lanes, and a board on `http()` registers it (its sync entries) and pulls it as
 matches of watcher `@sync`. A new root, however it reached the board, goes to
 each sync function as sync sees it, and the function starts its threads. Two
@@ -2335,11 +2320,11 @@ state. The default renderer reads no labels, so labels alone never edit a copy.
    which authenticates the request and emits normalized events. The built-in
    providers use Chat SDK.
 2. Sync pushes each event to the backend's inbox (`inboxPush`), with the
-   platform's ID for it, which dedupes it. On a2(), its own sync's land as
+   platform's ID for it, which dedupes it. On `local()`, its own sync's land as
    `external.received` in the inbox session for that external channel
    (`inbox:<key>:<channel>`). It answers 200 right away. That's well inside
    Slack's 3-second retry window, and platform retries do nothing.
-3. On a2(), the inbound consumer, `board-inbox`, hands each event back to
+3. On `local()`, the inbound consumer, `board-inbox`, hands each event back to
    `board()`'s sync on the external thread's lane, and sync runs the entry's
    function. On a board on `http()`, the deployment that pushed them pulls
    them back right after (`inboxNext`, then `inboxAck`), one platform thread at
@@ -2360,15 +2345,14 @@ reaches the board and its defaults differ:
   message written on the board, and work the same on every backend. Its reads,
   and anything else it does, are sync's own caller's.
 - **Write IDs are derived from the triggering event and the call order,** the
-  same way A2 names a consumer's own appends. A retried function doesn't post
+  same way the engine names a consumer's own appends. A retried function doesn't post
   twice as long as it makes its writes in the same order. Writes made in
   parallel, e.g. with `Promise.all`, need explicit `id`s.
 
-**Failure:** on `a2()`, a function that keeps throwing dead-letters after 10
-tries. That blocks only its thread's lane in that channel's inbox. Other
-threads, other channels, and the board log itself keep flowing. Without a
-scheduler, a retry waits for the next event in that inbox session. On a board
-on `http()`, sync gives an event up after 5 tries, and its thread moves on.
+**Failure:** on `local()`, a function that keeps throwing dead-letters after
+10 tries. That blocks only its thread's lane in that channel's inbox. Other
+threads, other channels, and the board log itself keep flowing. On a board on
+`http()`, sync gives an event up after 5 tries, and its thread moves on.
 
 A retried function can produce a different write under the same derived ID,
 for example if mentions resolved differently the second time. The board finds
@@ -2387,7 +2371,7 @@ over gets a line in the text instead, and the message still lands:
 25 MB, empty files, files past a message's 10, and an adapter that can't
 fetch. On `http()`, a file over 4 MB goes to the board it uses as a direct
 upload, and becomes an `over 4 MB` line where that board's store takes none. A fetch that fails is tried 3 times first, so one bad file can't stop
-its thread. On a board that keeps no files (no blob store), each file comes
+its thread. On a board that keeps no files (one that answers `no_files`), each file comes
 over as a link to where it lives, one line each:
 `📎 [shot.png](https://files.slack.com/…) (7 B) didn't come over: this board keeps no files`,
 or its name alone when the platform gave no URL.
@@ -2401,9 +2385,9 @@ Some limits of the import. When a platform doesn't report a file's size
 (Slack always does), the 25 MB check happens after the download. Each attempt
 uploads its files under fresh random IDs. So a retry, whether a later file's
 fetch failed or the post itself did, leaves the earlier attempt's uploads as
-orphans in the blob store. That's harmless, since nothing names them, but it
-isn't cleaned up. A failing blob store isn't a file's fault, so it isn't
-capped at 3 tries: the message retries until the store recovers, or until it
+orphans in the board's storage. That's harmless, since nothing names them, but
+it isn't cleaned up. Failing storage isn't a file's fault, so it isn't capped
+at 3 tries: the message retries until the storage recovers, or until it
 dead-letters and holds up its thread's lane.
 
 ### Outbound handling
@@ -2414,7 +2398,7 @@ dead-letters and holds up its thread's lane.
   post, react, edit, or delete. A throw, the function's or the delivery's, is a
   failed delivery. It then records `message.synced` as a receipt
   (`syncReceipt`), so later edits and reactions can find the platform's copy.
-  On a2() the subscription runs on the `board-sync` consumer, and a receipt
+  On `local()` the subscription runs on the `board-sync` consumer, and a receipt
   is that consumer's own append. A post or an edit renders the message as it
   is when it goes out, read again then: one that goes late (a backlog, a
   retry) sends what its author has since edited, and nothing they deleted.
@@ -2435,8 +2419,7 @@ dead-letters and holds up its thread's lane.
   name goes to Slack with `.txt` appended (`deepsec.log.txt`), which Slack
   previews; the board keeps the file's own name.
   GitHub has no upload API, so it always gets those lines. A board that keeps
-  no files (one whose blob store was taken away) sends none: the text gets
-  those lines instead.
+  no files sends none: the text gets those lines instead.
 - **Echoes are skipped.** The bot's own messages are skipped on the way in, so
   nothing echoes back. On GitHub, the adapter needs the app's bot user ID to
   recognize its own comments, or it replies to itself in a loop; with a
@@ -2446,8 +2429,8 @@ dead-letters and holds up its thread's lane.
 
 `POST /messages/:id/typing`, `board.typing(id)`, or `vb typing <id>` shows
 typing in the platform threads the answering board's sync delivers the
-message's thread to, through the adapter's `startTyping`: on `a2()`, the sync
-that runs beside it. On a board on `http()`, its own code's call also shows it
+message's thread to, through the adapter's `startTyping`: on `local()`, the
+sync that runs beside it. On a board on `http()`, its own code's call also shows it
 where its own sync does. It's ephemeral: nothing is written to the log, and it
 isn't synced or replayed.
 
@@ -2679,7 +2662,7 @@ board configures every Chat instance itself:
 
   | What Chat SDK uses state for | What replaces it |
   | --- | --- |
-  | Dedupe of webhook retries | the inbox's deduplication by platform ID (on `a2()`, deterministic `external.received` event IDs) |
+  | Dedupe of webhook retries | the inbox's deduplication by platform ID (on `local()`, deterministic `external.received` event IDs) |
   | Thread subscriptions | Never called. A match-all `onNewMessage` sees messages in unsubscribed threads, and the entry's mappings and the board's sync records (`GET /sync/find`) decide what's synced |
   | Locks and queues | Unused under `concurrent` |
   | Caches | Kept in memory, best-effort |
@@ -2921,17 +2904,10 @@ with nothing kept open.
 
 ```ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
+import { local } from '@vercel/board/local'
 
 const team = board({
-  backend,
+  backend: local(),                                     // or none: Vercel's board, which wakes this route to run them
   // sync: { slack: slack('slack/acme', channels({ … })) },
   watch: {
     triage: {
@@ -2951,7 +2927,6 @@ const team = board({
   },
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 - **Try it in a terminal first.** `vb tail firehose --source slack --json` prints
@@ -2968,9 +2943,9 @@ export const { scheduler } = backend
   thread (`vb label 812 wake=$CLAUDE_CODE_SESSION_ID`) and unset the label when
   done; `vb read --label wake` lists every pending one. Only code you deployed
   runs: the one URL the board is given at runtime is a registered board's own,
-  which it wakes with nothing in it ([Watchers over `http()`](#watchers-over-http)).
+  which it wakes with nothing in it ([Watchers woken by their board](#watchers-woken-by-their-board)).
 - **`board` is the handle, acting as the watcher.** Its writes are authored
-  by the watcher, `board:watch:<id>` (on a board on `http()`,
+  by the watcher, `board:watch:<id>` (on `vercel()` and a board on `http()`,
   `<principal>+<id>`: the deployment, with the watcher's ID as the profile),
   with IDs derived from the match, so a retried `run` doesn't post twice if it
   writes in the same order. They sync like any other write.
@@ -3002,35 +2977,30 @@ its own. A `run` that keeps throwing on one event gets 5 tries; then the watcher
 gives up on that event, records `watch.failed` (the match, the thread, and the
 error) in its session, logs it, and goes on to the thread's next event. A `run`
 that keeps getting killed (a timeout, out of memory) never throws, so it's
-counted by attempts instead: A2 counts each kill as a failure when the next
-attempt takes over and dead-letters at 10, so on the 10th attempt the watcher
-gives up the same way without running it again. It never dead-letters: in A2 a
-dead letter stops its consumer's lane until a person redrives it, and a
+counted by attempts instead: the engine counts each kill as a failure when the
+next attempt takes over and dead-letters at 10, so on the 10th attempt the
+watcher gives up the same way without running it again. It never
+dead-letters: a dead letter stops its consumer's lane for good, and a
 watcher's lane is the thread's, so one bad event would silence the watcher on
 that thread until then. A watcher removed from config skips the matches it
 left behind.
 
-**Over `http()`,** the board that keeps the log matches the tails and wakes
-the board that runs them, which pulls, runs, and acks: a pulled match is leased
-for 5 minutes, an error waits and is tried again, and after 5 tries it's
-`watch.failed`. A wake-up carries no credential, and one that doesn't get there
-backs off from a minute to an hour. The routes and the queue are in
-[Watchers over `http()`](#watchers-over-http).
-
-**Without a scheduler** (`a2()`'s), matching and `run` still happen, in the
-request that wrote. What waits for a clock waits for activity instead: a `run`
-that threw is tried again on the next write to its session, a lease that ran
-out is noticed on the next pull, and a wake-up that didn't arrive, with its
-back-off, waits for the next match. Reads never wake anything. That's fine for
-a tool, and not enough for a production board with watchers, as for sync.
+**On Vercel's board** (and, with `BOARD_URL` set, on the board at that URL),
+the board that keeps the log matches the tails and wakes the deployment that
+runs them, which pulls, runs, and acks. A wake-up carries no credential. On a
+board on the internal engine, a pulled match is leased for 5 minutes, an error
+waits and is tried again, after 5 tries it's `watch.failed`, and a wake-up
+that doesn't get there backs off from a minute to an hour; Vercel's API keeps
+its own timing. The routes and the queue are in
+[Watchers woken by their board](#watchers-woken-by-their-board).
 
 ## Middleware
 
 `board({ middleware: [...] })` runs on every post and edit before it reaches
 the backend, from every source: the HTTP API (a board on `http()` using this
 one included), sync (default imports and sync functions' writes, as imports),
-watchers, the handle, and scheduled sends, which a2() sends through `board()`
-as their creator. It's `board()`'s, beside `access`, so it sees every write
+watchers, the handle, and scheduled sends, which `local()` sends through
+`board()` as their creator. It's `board()`'s, beside `access`, so it sees every write
 once on any backend, its backend's own writes for someone included. A board on
 `http()` runs its own on what it writes there, and the board it uses runs its
 own on what arrives. It is the one place to filter what reaches the board,
@@ -3092,8 +3062,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   and needs `post` there (and `read`, for a reply; `label`, with labels). A
   creator that no longer has it has the schedule canceled with `revoked`. The
   claims keep the board's own team as the board knew it then (`team`), so a
-  rule naming a project without its team still matches in the scheduler's own
-  function, which never sees a request to learn it from.
+  rule naming a project without its team still matches at the send, which
+  never sees a request to learn it from.
 - **Mentions** are checked when you schedule: a handle that matches no one is
   reported then (`unknownMentions`, to a creator that reads the channel), and
   an ambiguous one fails then. At send
@@ -3104,8 +3074,10 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   `x-board-scope`), so the creator check also takes `post`, and `read` unless
   the schedule was created without it (`blind`).
   A reply schedule ends by itself when its thread is deleted.
-- **How it runs:** the `board-schedules` consumer arms each
-  `schedule.created`'s first send as an A2 timer (`session.schedule`) carrying
+- **How it runs:** on `vercel()`, Vercel's API keeps the schedule and posts
+  each send as its creator, so `board()`'s middleware screens a schedule when
+  it's made. On `local()`, the `board-schedules` consumer arms each
+  `schedule.created`'s first send as a timer (`session.schedule`) carrying
   `schedule.due { id, n, at }`. The `board-schedule-sends` consumer, on lane
   `schedule:<id>`, posts send `n`, appends `schedule.fired` with the next
   due time, and arms it. Timers can't be revoked: a canceled schedule's timer,
@@ -3113,25 +3085,11 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
   event ID derived from the schedule and `n`, so a retry after a crash gets
   back the message it already posted rather than posting twice.
   The next send is the next slot after now, so after downtime it sends once
-  rather than replaying every missed slot. Vercel Queues delays at most 6 days,
-  so a send further out goes in hops of up to 5.
-- **The newest deployment sends.** Vercel Queues delivers a timer only to the
-  deployment that armed it, and each deployment checks access under its own
-  rules. So each instance's first request that isn't a queue's delivery appends
-  `schedule.takeover` with its `VERCEL_DEPLOYMENT_ID` (unless its deployment is
-  already the one that sends) and arms every pending schedule's next send
-  itself. A deployment's timers land in a session of its own,
-  `schedules:<deployment>`, so with Vercel Queues no deployment drains another's
-  timers; with a scheduler that delivers to one URL, the one that sends runs them all. A send due on
-  any deployment but the one that took over last is a no-op, so an earlier
-  deployment's code and rules never post one, even when its own timer wakes it.
-- **It runs on the scheduler,** `a2()`'s `scheduler`: `vercelQueues()` or
-  `qstash()` on serverless, or `localScheduler()` for a long-running process
-  (a dev server, `vb serve`, tests). `localScheduler()`'s timers live in the
-  process, so a schedule whose send was pending at a restart stays `next due`
-  and doesn't send. On a board without one, `POST /schedules` (the handle's
-  `schedule()`, `vb schedule`) answers 501 `no_scheduler`:
-  ``this board has no scheduler: pass `scheduler` to `a2()` to send later``.
+  rather than replaying every missed slot.
+- **`local()`'s timers live in the process,** so a schedule whose send was
+  pending at a restart stays `next due` and doesn't send. A backend that keeps
+  no schedules answers 501 `no_scheduler` to `POST /schedules` (the handle's
+  `schedule()`, `vb schedule`).
 
 ## Non-goals for v1
 
@@ -3139,8 +3097,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 - Accounts, login, sessions, roles, and moderating others' messages
 - Restricting the board's own people, minted or stored tokens and grants, and
   per-thread access rules
-- Hiding volume: on `a2()`, message IDs and cursors still show how busy the
-  board is
+- Hiding volume: on a local board, message IDs and cursors still show how busy
+  the board is
 - A hosted web UI: the CLI, `tail`, and `vb inspect` (a page on your own
   machine) are the UI
 - Custom views or reducers supplied by whoever mounts the board
@@ -3168,8 +3126,8 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
     label in a group (`Type › Bug`, one per group) becomes `tag.type=Bug`.
   - Chat SDK's Linear adapter handles only comments, so the module reads issue
     events from the raw webhook, the same way `github()` does.
-- **Full-text search,** on the tables (Postgres `pg_trgm` or `tsvector`, SQLite
-  FTS5), for `text` filters that don't read through the board.
+- **Full-text search,** on the tables (SQLite FTS5 on a local board), for
+  `text` filters that don't read through the board.
 
 ## Decisions log
 
@@ -3180,18 +3138,18 @@ vb schedule cancel s12              # ada answered: nothing automatic, whoever r
 | Does Connect forward GitHub's non-`pull_request` events? | **Assumed yes, eventually.** Until then, set up the GitHub App yourself. |
 | Where do review comments go by default? | **Everywhere**, by rule 1, with no exceptions. Repo functions and `--no-sync` give anyone who wants quieter Slack full control. |
 | Where do person handles come from? | **Self-declared** (the Vercel username by default), bound to a verified `user_id`. Mentions must resolve to exactly one actor, so a collision is an error, never a misroute. Nothing stronger is needed for v1. |
-| Where do read cursors live? | **On the server**, per actor, session, and scope, in a side A2 contract (see [Cursors](#cursors)). Not built yet. |
+| Where do read cursors live? | **On the server**, per actor, session, and scope, in a side contract (see [Cursors](#cursors)). Not built yet. |
 | What's the bin called? | **`board` and `vb`.** `vb` can collide with other tools that install a `vb` binary, and `vb` on npm is an unrelated package. `board` always works, and it's the one `npx @vercel/board` runs. |
 | Does the CLI generate platform app config for DIY setup? | **No: docs only** (see [Setting up webhooks](#setting-up-webhooks)). |
 | Can the board create external channels, repos, issues, or PRs? | **No.** It maps onto existing containers and only starts threads where a platform has threads in a channel. |
-| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/backend-a2` (with `/store-*`, `/scheduler-*`, `/blob-vercel`, `/contract`) and `@vercel/board/backend-http`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
+| What does each import hold? | **Imports follow the backend.** `@vercel/board` is `board()`, the handle on every board, and what works with any backend. Each backend's own pieces live under its path: `@vercel/board/local`. The backends `board()` picks itself, `vercel()` and `http()`, are internal, so a project writes `board()`, `board({ name })`, `board({ fetch })`, or `BOARD_URL`, never a backend of board's but `local()`. Beside them, `@vercel/board/access` for access rules, `@vercel/board/sync-slack`, `@vercel/board/sync-github`, and `@vercel/board/sync-linear`, named for the platform they sync, `@vercel/board/sync-chat-sdk` for any other platform's Chat SDK adapter, `@vercel/board/sync` for a provider of your own, and `@vercel/board/conformance`. |
 | Is there one filter for every write, or one per source? | **One: `middleware` on `board()`**, on any backend (board thread #4100). It sees every write once, before it reaches the backend; a board on `http()` runs its own on what it writes, and the board it uses runs its own on what arrives. Sync functions only see synced events, and API writes never pass them, so a filter there misses the CLI, CI, and agents. |
 | Does the board link a person's Slack and GitHub accounts to them? | **No.** It linked them by a one-time code or the platform's own sign-in, and posted as the person with their token, and nobody linked an account, so both are gone. Each account is an actor of its own; an older log's links still read, and the folds ignore them. |
-| Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a board on `http()` registers the tails of the watchers it deployed, and its own `https` URL, which the board wakes with no event and no credential (see [Watchers over `http()`](#watchers-over-http)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
+| Can watchers be added at runtime? | **No: the dynamic part is data.** A registration carries no code: a deployment registers the tails of the watchers it deployed, and its own `https` URL or path, which the board wakes with no event and no credential (see [Watchers woken by their board](#watchers-woken-by-their-board)). A watcher reads labels and mentions instead (see [Watchers](#watchers)). |
 
 ## Benchmarks before release
 
-The MVP folded every message into one `messages` reducer, which A2 copies on
+The MVP folded every message into one `messages` reducer, which the engine copies on
 every read and snapshots whole. Measured on synthetic boards of real factory
 messages (about 1 KB each), on an in-process store:
 
@@ -3200,13 +3158,7 @@ messages (about 1 KB each), on an in-process store:
 | 10,000 | 125 ms | 54 ms | 0.4 ms | 0.3 ms | 0.5 ms |
 | 50,000 | 665 ms | 294 ms | 0.2 ms | 0.3 ms | 0.5 ms |
 
-On a local Redis, the tables at 50,000 messages: a post 0.2 ms, a thread 0.2
-ms, a channel's threads 0.6 ms, about 4 KB of memory a message (three versions
-each). A text search that matches nothing reads every message, 127 ms in
-scripts of 4,000 IDs.
-
-Almost all of the reducer's cost was copying its state. Its snapshot would
-also have outgrown Upstash's 10 MB request limit at about 10,000 messages. That
-set the trigger: the tables replaced it. Still to measure, on Postgres over
-the network: append throughput through one session, and subscriber cost with
-1, 10, and 50 concurrent `tail` subscribers.
+Almost all of the reducer's cost was copying its state. That set the trigger:
+the tables replaced it. Still to measure: append throughput through one
+session, and subscriber cost with 1, 10, and 50 concurrent `tail`
+subscribers.

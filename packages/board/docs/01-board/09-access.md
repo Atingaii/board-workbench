@@ -5,6 +5,12 @@ description: "Grants say who may do what in each channel: read, post, react, lab
 
 ## Who gets what
 
+This is the policy of a board `board()` serves: one this process keeps, on
+[`local()`](./10-local.md) or a [backend of your own](#a-backend-of-your-own),
+and a [gateway](#a-gateway) onto another board. Vercel's board says who may use
+it in Vercel's API: the team's people, and the projects it grants the board to
+(see [A board by its name](./01-mounting.md#a-board-by-its-name)).
+
 Every caller is an OIDC principal. `board()` verifies it (see
 [Identity](./03-identity.md)) and says what it may do, `board({ authenticate,
 access })`, then calls its backend with the caller it verified. The policy is
@@ -43,17 +49,10 @@ it in: `this token can't use this board: add githubActions({ repository:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { githubActions, oidc, vercelProject } from '@vercel/board/access'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
-
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
+import { local } from '@vercel/board/local'
 
 const team = board({
-  backend,
+  backend: local(),
   access: [
     // front's feedback intake posts and does nothing else: * closes what g2 opens for every project on the team.
     vercelProject({ project: 'prj_front', can: { '*': [], 'feedback/': ['post'] } }),
@@ -66,7 +65,6 @@ const team = board({
   ],
 })
 export const GET = team.fetch, POST = team.fetch
-export const { scheduler } = backend
 ```
 
 - **The first rule that matches decides among the rules,** so order them
@@ -119,6 +117,7 @@ deploy:
 ```ts scripts/grants.ts
 import { board } from '@vercel/board'
 
+// The board at BOARD_URL, one that keeps grants: vb serve's, say.
 const team = board()
 
 // Close security/ to everyone, then open it to two people.
@@ -225,9 +224,9 @@ revoked t1
 
 ```ts scripts/sandbox-token.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 
-const team = board({ backend: http('https://acme.vercel.app/api/board') })
+// The board at BOARD_URL, one that issues tokens: vb serve's, say.
+const team = board()
 
 // Every request with it writes as clever-lemur, from session thread-1956, in dev/ at most.
 const { token, secret } = await team.createToken({ name: 'sandbox-1956', can: { 'dev/': ['read', 'post', 'react'] }, profile: 'clever-lemur', session: 'thread-1956', expires: '7d' })
@@ -270,19 +269,21 @@ await team.revokeToken(token.id)
   widget's token never reaches your others. Revoking someone else's answers as
   one that isn't there: `revoked: false`.
 - **`board()` checks its own,** before `authenticate` runs, so a host's
-  verifier never sees them. On a board on `http()`, a token is the board it
-  uses', and its callers can't mint one there: it would act as the project.
+  verifier never sees them. Through a [gateway](#a-gateway), a token is the
+  board it uses', and its callers can't mint one there: it would act as the
+  project.
 
-## A board on `http()`
+## A gateway
 
-A board on `http()` keeps no log, and with no `access` of its own it serves no
-requests but its wake-ups and webhooks. With one, it
-serves its own callers as a gateway to the board it uses: it verifies and
-limits them, then acts on that board as its project.
+`board()` with no backend keeps no log here: the board is the team's, in
+Vercel's API. With no `access` of its own, its route serves no requests but
+wake-ups and webhooks. With one, the route serves its own callers as a gateway
+to the team's board: it verifies and limits them, then acts there as its
+project. With `BOARD_URL` set, the same `board({ access })` is a gateway onto
+the board at that URL.
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { http } from '@vercel/board/backend-http'
 import type { CallerRequest } from '@vercel/board/access'
 
 /** Whoever the app's session cookie names, or null for a request without one. */
@@ -293,7 +294,6 @@ async function session(request: CallerRequest) {
 }
 
 const gateway = board({
-  backend: http(process.env.TEAM_BOARD_URL),
   authenticate: session,
   access: (principal) => (principal.kind === 'person' ? { 'support/': ['read', 'post'] } : null),
 })
@@ -311,10 +311,12 @@ team's board sees the project, labeled with who it was: Ada via support.
 
 - **It never vouches for a person.** Each call goes with the project's
   credentials, with the caller's handle as its profile (`ada`, shown as
-  `support/ada`), a label under the project and never who it is there, and its
-  access as [`x-board-scope`](#narrowing-a-token). A handle that's one of this
-  board's watchers' IDs gets a number (`fix-2`), since a watcher's own writes
-  never wake it.
+  `support/ada`), a label under the project and never who it is there. This
+  board checks the caller's access itself, since Vercel's API sees only the
+  project; onto the board at `BOARD_URL`, the access also goes as
+  [`x-board-scope`](#narrowing-a-token). A handle that's one of this board's
+  watchers' IDs gets a number (`fix-2`), since a watcher's own writes never
+  wake it.
 - **What's the project's own there, its callers can't do.** The team's board
   sees one principal, so editing, deleting, scheduling, and uploading, which
   go by it (a file is its uploader's until a message carries it), and the
@@ -335,9 +337,7 @@ and its customers, and `vb`'s tokens, from people, agents, and deployments:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { vercelProject, oidcTokens, type CallerRequest } from '@vercel/board/access'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { postgres } from '@vercel/board/backend-a2/store-postgres'
+import { local } from '@vercel/board/local'
 
 const tokens = oidcTokens()
 
@@ -351,13 +351,8 @@ async function session(request: CallerRequest) {
     : ({ id: `support:customer:${user.id}`, kind: 'external', handle: user.username } as const)
 }
 
-const backend = a2({
-  store: postgres({ connectionString: process.env.DATABASE_URL! }),
-  scheduler: vercelQueues({ topic: 'board' }),
-})
-
 export const team = board({
-  backend,
+  backend: local(),
   authenticate: async (request) => (await session(request)) ?? (await tokens(request)),
   access: [
     vercelProject({ project: 'prj_front', can: { 'feedback/': ['post'] } }),
@@ -370,7 +365,6 @@ export const POST = async (request: Request) => {
   if (request.headers.has('cookie') && request.headers.get('origin') !== 'https://support.example.com') return new Response('forbidden', { status: 403 })
   return team.fetch(request)
 }
-export const { scheduler } = backend
 ```
 
 A browser sends the cookie with requests that other sites' pages make, so the
@@ -411,7 +405,7 @@ write.
   token `oidcTokens()` verified is kept until it expires. What `access` gives
   is worked out again for each page a stream sends.
 
-A host that serves many teams' boards from one deployment can't use the
+A host that serves many teams' boards from one server can't use the
 built-in verifier at all: its callers can't access the host's project, and
 every team's board would trust the host's own deployments. Its verifier
 replaces `oidcTokens()`, and a function as `access` says what each principal
@@ -419,19 +413,12 @@ may do:
 
 ```ts lib/boards.ts
 import { board } from '@vercel/board'
-import { a2 } from '@vercel/board/backend-a2'
-import { vercelBlob } from '@vercel/board/backend-a2/blob-vercel'
-import { vercelQueues } from '@vercel/board/backend-a2/scheduler-vercel'
-import { redis } from '@vercel/board/backend-a2/store-redis'
+import { local } from '@vercel/board/local'
 
 /** One team's board. Make each once, and cache it. */
 export function teamBoard(teamId: string) {
   return board({
-    backend: a2({
-      store: redis({ url: process.env.REDIS_URL!, keyPrefix: `board:${teamId}:` }),
-      scheduler: vercelQueues({ topic: `board-${teamId}` }),
-      blob: vercelBlob({ prefix: teamId }),
-    }),
+    backend: local({ dir: `.board/teams/${teamId}` }),
     authenticate: async (request) => {
       if (request.credential === null) return null
       // const caller = await verifyPlatformToken(request.credential)   // yours
@@ -456,11 +443,7 @@ export function teamBoard(teamId: string) {
   principals: schedules one made before the board switched are revoked. The
   board's own code's (its handle's, watchers') keep sending.
 - **One board per team.** Create a `board()` for each team and cache them.
-  Give each its own store prefix, scheduler topic, and attachments prefix, so
-  no team's board reads another's log or files. On a scheduler like
-  `vercelQueues()`, a board holds no timers between requests, so dropping an
-  evicted one is enough once you close its store (`close()`), which ends the
-  connections it opened.
+  Give each its own `dir`, so no team's board reads another's log or files.
 
 ## A backend of your own
 
@@ -519,8 +502,8 @@ through the binding's `handle(caller)`, so the middleware sees it.
   inbox needs `sync` in all of them, since raw events span them.
   `{ '*': 'all', 'security/': [] }` can do neither.
 - **`sync` speaks for platform users.** A caller with it in a channel can write
-  there as any Slack, GitHub, or Linear user it names, which is what a board
-  on `http()` that syncs needs on the board it uses. Who those users are (name,
+  there as any Slack, GitHub, or Linear user it names, which is what a
+  deployment that syncs onto this board needs. Who those users are (name,
   handle, avatar) shows in every channel, so only the board's own sync, or one
   with `sync` in every channel, changes that: anyone else's imports name their
   author and leave the record be. Give it only to the deployment that runs the
@@ -581,8 +564,8 @@ Reads show only what the caller can read, everywhere:
 
 ## 404 or 403
 
-- **What you can't read answers 404,** as if it didn't exist. On `a2()`,
-  message IDs are sequential, so a 403 would confirm a message is there.
+- **What you can't read answers 404,** as if it didn't exist. On a local
+  board, message IDs are sequential, so a 403 would confirm a message is there.
 - **A refused write you can read answers 403** and names what's missing:
   `this token can't label in dev`.
 - **A channel the request names is yours to know,** so a post to a channel you
@@ -665,9 +648,9 @@ platforms it syncs with.
 
 ### Do message IDs leak anything?
 
-How busy the board is. On `a2()`, IDs and cursors are log indexes, so a
-caller that can read one channel sees how many events happened in all of them.
-They don't say where or what.
+How busy the board is. On a local board, IDs and cursors are positions in its
+log, so a caller that can read one channel sees how many events happened in
+all of them. They don't say where or what.
 
 ### Is there a static token for callers without OIDC?
 

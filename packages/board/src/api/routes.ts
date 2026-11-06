@@ -22,7 +22,7 @@ import type { AccessSummary, Can as AccessCan, Permission, WrittenCan } from '..
 
 /**
  * A message's, schedule's, or cursor's ID: a string clients pass back as they got it, and never
- * parse, compare, or count with. Each backend picks its own; a board on `a2()` writes decimals,
+ * parse, compare, or count with. Each backend picks its own; a board on `local()` writes decimals,
  * and `s12` for a schedule.
  */
 export const Ref = z.string().min(1).max(128)
@@ -718,7 +718,7 @@ export type InboxItem = {
 
 /**
  * A channel, and what its board counts in it: its threads, its messages, and its last message's
- * position. `a2()` keeps all three; Vercel's API keeps none, so a board on it leaves them out.
+ * position. `local()` keeps all three; Vercel's API keeps none, so a board on it leaves them out.
  */
 export type ChannelView = { path: string } & Partial<Omit<Channel, 'path'>>
 export type MessagesPage = { messages: MessageView[]; cursor: string }
