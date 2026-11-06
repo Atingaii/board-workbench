@@ -490,7 +490,12 @@ describe('the embedded CLI', () => {
     const cwd = process.cwd()
     process.chdir(home)
     try {
+      // vb only finds a board without --ensure: one the project can't see is none to it.
       expect(await run('read', 'dev', '--name', 'security')).toMatchObject({
+        code: 1,
+        stderr: expect.stringMatching(/^error: no board named security on this team, or none you can see\.\n/),
+      })
+      expect(await run('read', 'dev', '--name', 'security', '--ensure')).toMatchObject({
         code: 1,
         stderr: "error: this project has no access to board security (prj_pong, preview).\n\n  Someone who manages the board can grant it.\n",
       })
