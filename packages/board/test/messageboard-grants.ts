@@ -35,7 +35,8 @@ export type Who =
   | { kind: 'oidc'; issuer: string; claims: Record<string, string> }
   | { kind: 'app' }
 
-export type Role = 'OWNER' | 'MEMBER' | 'DEVELOPER' | 'VIEWER'
+/** A person's role on the team. */
+export type Role = 'owner' | 'member' | 'developer' | 'viewer'
 
 export class GrantRefused extends Error {
   readonly status: number
@@ -205,14 +206,14 @@ export function fakeGrants(options: {
     let can = PERMISSIONS.filter((permission) => given.has(permission))
     let capped: string | null = null
     // A viewer only reads, whatever a grant says.
-    if (who.kind === 'user' && options.roles[who.userId] === 'VIEWER' && can.some((permission) => permission !== 'read')) {
+    if (who.kind === 'user' && options.roles[who.userId] === 'viewer' && can.some((permission) => permission !== 'read')) {
       can = can.filter((permission) => permission === 'read')
       capped = 'viewer'
     }
     return { pattern, over, level, grants: deciding.map((candidate) => candidate.grant), capped, can }
   }
 
-  const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'OWNER'
+  const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'owner'
   const manages = (who: Who, pattern: string) => isOwner(who) || decide(who, pattern).can.includes('manage')
   function mayChange(who: Who, patterns: Iterable<string>, what: string) {
     for (const pattern of patterns) if (!manages(who, pattern)) throw new GrantRefused(403, 'forbidden', `${what} takes manage at ${pattern}`)
