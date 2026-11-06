@@ -167,6 +167,41 @@ describe('board() with no backend', () => {
     expect(meant).not.toHaveBeenCalled()
   })
 
+  it("in a deployment, acts as a server's own user through its fetch: on the team it names, with none of the deployment's credentials or profile", async () => {
+    // The deployment's OIDC token, a JWT that names its own team, as Vercel's does.
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    const oidc = `${part({ alg: 'none' })}.${part({ owner_id: 'team_deploy', exp: Math.floor(Date.now() / 1000) + 3600 })}.`
+    for (const extra of [{}, { VERCEL_TOKEN: 'vercel-token-from-env', BOARD_TOKEN: 'board-token-from-env' }]) {
+      clean()
+      for (const [key, value] of Object.entries({ VERCEL: '1', VERCEL_OIDC_TOKEN: oidc, VERCEL_ORG_ID: 'team_deploy', BOARD_AS: 'deploy-bot', ...extra })) vi.stubEnv(key, value)
+      // Team acme, which a request reaches only by naming it.
+      const api = fakeMessageboard({ teamId: 'team_acme', slug: 'acme', notDefault: true, boards: [{ name: 'security' }] })
+      vi.stubGlobal('fetch', () => {
+        throw new Error('reached the network with the deployment\'s credentials')
+      })
+      // What board hands the server's fetch, before that fetch adds its user's own credentials.
+      const seen: { url: string; headers: [string, string][]; body: string }[] = []
+      const asUser: typeof fetch = async (input, init = {}) => {
+        seen.push({ url: String(input), headers: [...new Headers(init.headers)], body: typeof init.body === 'string' ? init.body : '' })
+        return as(api, 'user:u_jb')(input, init)
+      }
+      for (const handle of [board({ team: 'acme', fetch: asUser }), board({ team: 'acme', name: 'security', fetch: asUser })]) {
+        const posted = await handle.as(null).post('dev', 'on behalf of jb')
+        expect(posted.by).toMatchObject({ principal: 'vercel:user:u_jb', actor: 'vercel:user:u_jb' })
+      }
+      expect(api.requests).toContain('GET /boards')
+      expect(seen.length).toBeGreaterThan(0)
+      for (const request of seen) {
+        expect(new URL(request.url).searchParams.get('slug')).toBe('acme')
+        expect(request.headers.map(([name]) => name)).not.toContain('authorization')
+        const sent = JSON.stringify(request)
+        for (const secret of [oidc, 'vercel-token-from-env', 'board-token-from-env', 'team_deploy', 'deploy-bot']) expect(sent).not.toContain(secret)
+      }
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('types fetch as the credentials of the backend board() picks, never beside one you pass', () => {
     // Never called: the calls only have to typecheck, or not.
     const typed = () => {
