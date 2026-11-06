@@ -17,6 +17,7 @@ import type {
   SourceRead,
   SyncedView,
   Me,
+  PrincipalInput,
   MatchView,
   MessagesPage,
   MessagesQueryInput,
@@ -209,6 +210,30 @@ export type Filters = Omit<FiltersInput, 'label'> & {
 
 export type BoardClient = ReturnType<typeof createBoardClient>
 
+/** A `can` as the wire takes it: `'none'` at a pattern is `[]`. */
+function wireCan<T>(can: T): T {
+  if (can === null || typeof can !== 'object' || Array.isArray(can)) return can
+  return Object.fromEntries(Object.entries(can).map(([pattern, grant]) => [pattern, grant === 'none' ? [] : grant])) as T
+}
+
+/** A principal to grant as the wire takes it: a project's environments, and every project's, are production when left out. */
+const withEnvironments = (principal: PrincipalInput): PrincipalInput =>
+  (principal.kind === 'project' || principal.kind === 'all-projects') && principal.environments === undefined ? { ...principal, environments: ['production'] } : principal
+
+/**
+ * The principal a private channel lets its creator in as, from what `/me` says it is: a person's
+ * user, or a deployment's project in the environment it runs in. Anyone else is refused before
+ * anything is written.
+ */
+function creatorOf(me: Me, path: string): PrincipalInput {
+  const [source, kind, id, environment] = me.principal.split(':')
+  if ((source === 'vercel' || source === 'local') && kind === 'user' && id) return { kind: 'user', userId: me.principal.split(':').slice(2).join(':') }
+  if (source === 'vercel' && kind === 'project' && id && environment) return { kind: 'project', project: id, environments: [environment] }
+  throw new BoardError('no_own_principal', `A private channel lets its creator in, as a person or a project's deployment, and ${me.principal} is neither, so ${path} wasn't made.`, 400, {
+    hint: 'Make it as a person or a deployment, or make it and its grants yourself.',
+  })
+}
+
 /** Whom `explain` asks about: nobody for yourself, or one principal as people name it. */
 export type ExplainPrincipal = {
   user?: string
@@ -321,12 +346,31 @@ export function createBoardClient(options: ClientOptions) {
     channels: async () => (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels,
     /**
      * Makes a channel before anything posts to it, as a first post would. Needs `read` and `post`
-     * there. `created` is false when it was there already; it's left as it is. `private` closes it
-     * to everyone and opens it to you, in the same write, and answers the two `grants` it made:
-     * it needs `manage` at `<path>/`, and a channel that's there already is 409 `channel_exists`.
+     * there. `created` is false when it was there already; it's left as it is.
+     *
+     * `private` makes it closed to everyone but you, from the protocol's own methods: a grant
+     * letting you in at `<path>/`, then one closing `<path>/` to everyone else, then the channel,
+     * answering the two grants as `grants`. A failure part way leaves the channel open with a grant
+     * too many, or closed and not made yet, and never shuts you out. Before it writes anything, it
+     * refuses a caller that's neither a person nor a project's deployment (400 `no_own_principal`),
+     * and a path where it or a channel under it is there already (409 `channel_exists`), since
+     * closing `security/` closes `security/incidents` too. A board that keeps no grants fails on the
+     * first, with nothing made.
      */
-    createChannel: (path: string, options: { private?: boolean } = {}) =>
-      call<{ channel: ChannelView; created: boolean; grants?: GrantView[] }>('POST', '/channels', { body: { path, ...(options.private ? { private: true } : {}) } }),
+    createChannel: async (path: string, options: { private?: boolean } = {}): Promise<{ channel: ChannelView; created: boolean; grants?: GrantView[] }> => {
+      if (!options.private) return call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
+      const creator = creatorOf(await call<Me>('GET', '/me'), path)
+      const pattern = `${path}/`
+      const there = (await call<{ channels: ChannelView[] }>('GET', '/channels')).channels.find((channel) => channel.path === path || channel.path.startsWith(pattern))
+      if (there)
+        throw new BoardError('channel_exists', `${there.path} is a channel already, and a private ${path} would close it too, so nothing was made.`, 409, {
+          hint: `Close it with a grant: everyone at ${pattern} with 'none'.`,
+        })
+      const own = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [creator], can: { [pattern]: 'all' } } })
+      const closed = await call<{ grant: GrantView }>('POST', '/grants', { body: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] } } })
+      const made = await call<{ channel: ChannelView; created: boolean }>('POST', '/channels', { body: { path } })
+      return { ...made, grants: [own.grant, closed.grant] }
+    },
     actors: async () => (await call<{ actors: Actor[] }>('GET', '/actors')).actors,
 
     messages: (query: Filters & Omit<MessagesQueryInput, keyof FiltersInput> = {}) =>
@@ -369,9 +413,12 @@ export function createBoardClient(options: ClientOptions) {
      * specific pattern among the grants that name a caller decides, then the closest principal,
      * and grants tied there add up. Needs manage at each pattern `can` names.
      */
-    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: input }),
+    createGrant: (input: GrantInput) => call<{ grant: GrantView }>('POST', '/grants', { body: { principals: input.principals.map(withEnvironments), can: wireCan(input.can) } }),
     /** Adds and removes principals (by who they are, environments aside), or replaces its `can`. Needs manage at each pattern it names, before and after. */
-    updateGrant: (id: string, input: UpdateGrantInput) => call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, { body: input }),
+    updateGrant: (id: string, { add, remove, can }: UpdateGrantInput) =>
+      call<{ grant: GrantView }>('PATCH', `/grants/${path(id)}`, {
+        body: { ...(add ? { add: add.map(withEnvironments) } : {}), ...(remove ? { remove } : {}), ...(can ? { can: wireCan(can) } : {}) },
+      }),
     /**
      * Which grants decide `channel`, and what they give: for you, or with manage at `*`, for the
      * principal `principal` names (`{ user }`, `{ project, environment }`, `{ github, workflow,
@@ -393,7 +440,7 @@ export function createBoardClient(options: ClientOptions) {
      * given: for a widget, a sandbox, a script. `secret` shows only here. It lives 30 days, or
      * `expires`, at most 90.
      */
-    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input }),
+    createToken: (input: TokenInput) => call<{ token: TokenView; secret: string }>('POST', '/tokens', { body: input.can === undefined ? input : { ...input, can: wireCan(input.can) } }),
     /** Your live tokens, or everyone's with manage in every channel. Never their secrets. */
     tokens: async () => (await call<{ tokens: TokenView[] }>('GET', '/tokens')).tokens,
     /** It and every token minted with it stop. `revoked` is false when it was already revoked. */

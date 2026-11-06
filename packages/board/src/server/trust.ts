@@ -5,7 +5,7 @@ import type { GrantView, PrincipalView, TokenView } from '../api/routes.ts'
 import { duration } from '../client/client.ts'
 import { ACCESS_SESSION, accessContract, type AccessEvent } from '../contract/contract.ts'
 import { SCOPE_MAX } from '../contract/schemas.ts'
-import { compileAccess, FULL_ACCESS, parseScope, patternsOf, scopeOf, type Access, type Can, type WrittenCan } from './access.ts'
+import { checkGrantChange, compileAccess, FULL_ACCESS, parseScope, patternsOf, scopeOf, type Access, type Can, type GrantShape, type WrittenCan } from './access.ts'
 import {
   BOARD_TOKEN_PREFIX,
   checkCan,
@@ -19,7 +19,6 @@ import {
   principalKey,
   removes,
   tokenHash,
-  userIdOf,
   workflowPath,
   type GrantPrincipal,
   type Known,
@@ -28,6 +27,7 @@ import {
 } from './auth.ts'
 import type { Identity, StoredToken, Trust } from './backend.ts'
 import type { Decided } from './policy.ts'
+import { whileHeadMoves } from './writes.ts'
 import { badRequest, forbidden, notFound, unauthorized } from './errors.ts'
 
 /** How long a token lives when its minter doesn't say, and at most: npm caps its write tokens at 90 days. */
@@ -233,21 +233,9 @@ function newSecret(): string {
 }
 
 /**
- * The principal a private channel lets its creator in as: a person's user, or a deployment's project
- * in the environment it runs in. Anyone else has none a grant could name, so it's a 400.
- */
-function ownPrincipal(principal: Known): GrantPrincipal {
-  if (principal.kind === 'person' && !principal.id.startsWith('board:')) return { kind: 'user', userId: userIdOf(principal.id) }
-  const claims = principal.facts?.issuer === 'vercel' ? principal.facts.claims : null
-  if (principal.kind === 'deployment' && typeof claims?.project_id === 'string' && typeof claims.environment === 'string')
-    return { kind: 'project', projectId: claims.project_id, environments: [claims.environment] }
-  throw badRequest("a private channel lets its creator in, as a person or a deployment's project, and this caller is neither", 'no_own_principal')
-}
-
-/**
  * The principal an explain query names, as a token of its would make it: a person by user ID, a
  * project's deployment in one environment (production unless it says) on the board's team, a
- * repository's run with what it says of its workflow, branch, and event, or an issuer's token with
+ * repository's run with what it says of its workflow, branch (main unless it says), and event, or an issuer's token with
  * its claims. A board that verifies tokens itself looks no names up, so a name is a 400.
  */
 function principalNamed(query: Protocol['explain']['input'], team: string | null): Known {
@@ -264,8 +252,10 @@ function principalNamed(query: Protocol['explain']['input'], team: string | null
   if (query.github !== undefined) {
     const repository = query.github
     const claims: Record<string, string> = { repository }
-    if (query.workflow !== undefined) claims.workflow_ref = `${repository}/${workflowPath(query.workflow)}@refs/heads/${query.branch ?? 'main'}`
-    if (query.branch !== undefined) claims.ref = `refs/heads/${query.branch}`
+    // A run on main unless the query says, in its workflow_ref and its ref alike.
+    const branch = query.branch ?? 'main'
+    if (query.workflow !== undefined) claims.workflow_ref = `${repository}/${workflowPath(query.workflow)}@refs/heads/${branch}`
+    claims.ref = `refs/heads/${branch}`
     if (query.event !== undefined) claims.event_name = query.event
     return { id: `github:repo:${repository}`, kind: 'workflow', handle: repository, facts: { issuer: 'github', iss: GITHUB_ISSUER, claims } }
   }
@@ -286,20 +276,108 @@ function principalNamed(query: Protocol['explain']['input'], team: string | null
 }
 
 /**
- * Whether `identity` may change grants at `pattern`: `manage` there, as its access resolves at that
- * pattern itself, so `*` is what `*` gives whatever a channel locks. The board's people (a local
- * board's local user) are its owners, who always may, as far as a token they came with allows.
+ * Whether `principal` is the board's owner: its local user, the one a local issuer (`vb serve`'s)
+ * mints a token for. Everyone else, a person on the team included, changes grants as `manage` lets
+ * them, so a grant on people holds against people.
  */
-function managesAt({ principal }: Identity, pattern: string): boolean {
-  if (principal.access.at('manage', pattern)) return true
-  if (principal.kind !== 'person') return false
-  return principal.scope === undefined || compileAccess(parseScope(principal.scope)).at('manage', pattern)
+const isOwner = (principal: Identity['principal']) => principal.id.startsWith('local:user:')
+
+/** Whether `identity` may list the grants: `manage` at `*`, or the owner, as far as its token's scope allows. */
+function lists({ principal }: Identity): boolean {
+  if (principal.access.at('manage', '*')) return true
+  return isOwner(principal) && (principal.scope === undefined || compileAccess(parseScope(principal.scope)).at('manage', '*'))
 }
 
-/** Every pattern in `patterns` that `identity` may change grants at, or a 403 naming the first it can't. */
-function mayChange(identity: Identity, patterns: Iterable<string>, what: string) {
+/** A 403 unless `identity` may list the grants. */
+function mayList(identity: Identity, what: string) {
+  if (!lists(identity)) throw forbidden(`this token can't ${what}: it needs manage at *`)
+}
+
+/** A principal's access under `grants`, narrowed by its token: what a grant write judges by, on the snapshot it appends to. */
+type AccessIn = (principal: Known, grants: readonly StoredGrant[]) => Promise<Access | null>
+
+/** `grants` with no `everyone` in them: what a caller's own limits are, its role, its grants and its groups', and its token. */
+const withoutEveryone = (grants: readonly StoredGrant[]): StoredGrant[] =>
+  grants.flatMap((grant) => {
+    const principals = grant.principals.filter((principal) => principal.kind !== 'everyone')
+    return principals.length === 0 ? [] : [{ ...grant, principals }]
+  })
+
+/**
+ * What the caller may do on `grants`, the snapshot its write appends to (`caller`), and by its own
+ * limits alone (`own`): null for an owner no token narrows. A 403 when it may do nothing.
+ */
+async function changerAccess({ principal }: Identity, grants: readonly StoredGrant[], accessIn: AccessIn): Promise<{ caller: Access; own: Access } | null> {
+  if (isOwner(principal)) {
+    if (principal.scope === undefined) return null
+    const scoped = compileAccess(parseScope(principal.scope))
+    return { caller: scoped, own: scoped }
+  }
+  const [caller, own] = await Promise.all([accessIn(principal, grants), accessIn(principal, withoutEveryone(grants))])
+  if (caller === null || own === null) throw forbidden("this token can't change grants: it may do nothing on this board")
+  return { caller, own }
+}
+
+/**
+ * A 403 unless `identity` may make or widen a grant to `can`, on `before`, the grants the write
+ * appends to, and `after`, as they'd be: `checkGrantChange`'s rule, which Vercel's API runs too.
+ */
+async function mayGrant(identity: Identity, can: WrittenCan, before: readonly StoredGrant[], after: readonly GrantShape[], accessIn: AccessIn, what = 'this grant') {
+  const access = await changerAccess(identity, before, accessIn)
+  if (access === null) return
+  const refused = checkGrantChange({ ...access, after, changed: { can } })
+  if (refused?.reason === 'reach') throw forbidden(`${what} reaches ${refused.pattern}, where you can't manage grants`)
+  if (refused) throw forbidden(`you can't let anyone in: everyone gets ${refused.permission} in ${refused.pattern}, which you can't`)
+}
+
+/** A 403 unless `identity` manages each of a stored grant's `patterns`, on `grants`: what revoking it, or removing from it, takes. */
+async function mayManage(identity: Identity, patterns: Iterable<string>, grants: readonly StoredGrant[], accessIn: AccessIn, what: string) {
+  const access = await changerAccess(identity, grants, accessIn)
+  if (access === null) return
   for (const pattern of patterns)
-    if (!managesAt(identity, pattern)) throw forbidden(`this token can't ${what}: it needs manage at ${pattern}`)
+    if (!access.caller.at('manage', pattern)) throw forbidden(lists(identity) ? `this token can't ${what}: it needs manage at ${pattern}` : `this token can't ${what}: it needs manage wherever that grant applies`)
+}
+
+/** An oidc principal: naming one makes the board fetch its issuer's keys, so it takes manage everywhere. */
+const namesIssuer = (principals: readonly GrantPrincipal[]) => principals.some((principal) => principal.kind === 'oidc')
+
+/**
+ * The event that makes `input`'s change to a grant in `state`, or why it can't: manage at its
+ * patterns, and to add principals or set `can`, what making it would take, and manage everywhere to
+ * name an oidc issuer. A removal goes by who a principal is; an add joins one the grant names
+ * already. `issuers` are the ones the board's rules trust.
+ */
+async function updated(identity: Identity, state: AccessState, { id, add, remove, can }: Protocol['updateGrant']['input'], issuers: readonly string[], accessIn: AccessIn) {
+  const index = indexOf(id, 'g')
+  const row = index === null ? undefined : state.grants[index]
+  if (!row) throw notFound(`grant not found: ${id}`, 'grant_not_found')
+  const before = Object.values(state.grants).map(storedGrant)
+  await mayManage(identity, patternsOf(row.can), before, accessIn, `update ${id}`)
+  const others = grantIssuers(Object.values(state.grants).filter((other) => other.id !== row.id).map(storedGrant))
+  let principals = [...row.principals]
+  for (const input of remove ?? []) {
+    const removal = checkPrincipal(input, [...issuers, ...others], true)
+    const kept = principals.filter((principal) => !removes(removal, principal))
+    if (kept.length === principals.length) throw badRequest(`${id} doesn't name that ${removal.kind} principal`, 'not_in_grant')
+    principals = kept
+  }
+  for (const input of add ?? []) {
+    // Checked against every issuer it would sit beside: its own grant's, and those it adds before it.
+    const added = checkPrincipal(input, [...issuers, ...others, ...grantIssuers([{ principals }])])
+    const at = principals.findIndex((principal) => joined(added, principal) !== null)
+    if (at === -1) principals.push(added)
+    else principals[at] = joined(added, principals[at]!)!
+  }
+  if (principals.length === 0) throw badRequest(`that leaves ${id} naming no one: revoke it instead`, 'grant_empty')
+  if (principals.length > 32) throw badRequest('a grant names at most 32 principals', 'invalid_grant')
+  const next = can === undefined ? row.can : checkCan(can)
+  // Adding principals or changing what it gives widens it: removing only narrows, which manage there allows.
+  if (add !== undefined || can !== undefined) {
+    const after = [...Object.values(state.grants).filter((other) => other.id !== row.id), { principals, can: next }]
+    await mayGrant(identity, next, before, after, accessIn)
+    if (namesIssuer(principals.filter((principal) => !row.principals.includes(principal)))) await mayGrant(identity, { '*': 'all' }, before, after, accessIn, 'naming an oidc issuer')
+  }
+  return { type: 'grant.updated' as const, payload: { id: row.id, principals: principals as never, can: next as never, by: identity.actor.id } }
 }
 
 /**
@@ -311,14 +389,18 @@ function mayChange(identity: Identity, patterns: Iterable<string>, what: string)
 export function createTrust(options: {
   store: Parameters<typeof createServer>[0]['store']
   issuers: () => readonly string[]
-  accessNow: (principal: Known) => Promise<Access | null>
+  /** What a principal may do now, or under `grants`, the snapshot a grant write appends to. */
+  accessNow: (principal: Known, grants?: readonly StoredGrant[]) => Promise<Access | null>
   /** What decides a channel for a principal, under board()'s rules and grants. */
   explain: (principal: Known, channel: string) => Promise<Decided>
   /** The board's own Vercel team, when it's known: a project explain names is taken to be on it. */
   team: () => Promise<string | null>
 }) {
+  const accessIn: AccessIn = (principal, grants) => options.accessNow(principal, grants)
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
   const read = async () => (await session.state(accessReducer)).state
+  /** The grants and tokens as they are now, and the index a conditional write holds them at. */
+  const latest = () => session.state(accessReducer, { through: 'latest' })
 
   /**
    * What each of `rows` may do now: its minter's access, narrowed by its scope. A minter's is worked
@@ -375,55 +457,44 @@ export function createTrust(options: {
   return {
     trust,
     async grants(identity: Identity): Promise<Protocol['grants']['output']> {
-      mayChange(identity, ['*'], 'list grants')
+      mayList(identity, 'list grants')
       return { grants: Object.values((await read()).grants).sort((a, b) => a.id - b.id).map(grantView) }
     },
     async createGrant(identity: Identity, body: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
-      const before = await read()
-      const checked = checkGrant(body, [...options.issuers(), ...grantIssuers(Object.values(before.grants).map(storedGrant))])
-      mayChange(identity, patternsOf(checked.can), 'create this grant')
-      const [row] = await session.append({ type: 'grant.created', payload: { principals: checked.principals as never, can: checked.can as never, by: identity.actor.id } })
+      // Checked against the grants as they are when it lands: another write in between makes it look again.
+      const [row] = await whileHeadMoves(async () => {
+        const { state, index } = await latest()
+        const checked = checkGrant(body, [...options.issuers(), ...grantIssuers(Object.values(state.grants).map(storedGrant))])
+        const before = Object.values(state.grants).map(storedGrant)
+        const after = [...before, checked]
+        await mayGrant(identity, checked.can, before, after, accessIn)
+        if (namesIssuer(checked.principals)) await mayGrant(identity, { '*': 'all' }, before, after, accessIn, 'naming an oidc issuer')
+        return session.append.ifLastIndex(index, { type: 'grant.created', payload: { principals: checked.principals as never, can: checked.can as never, by: identity.actor.id } })
+      })
       const made = row && Object.values((await read()).grants).find((grant) => grant.event === row.index)
       if (!made) throw new Error('a grant was made but its log has no record of it')
       return { grant: grantView(made) }
     },
-    async updateGrant(identity: Identity, { id, add, remove, can }: Protocol['updateGrant']['input']): Promise<Protocol['updateGrant']['output']> {
-      const state = await read()
-      const index = indexOf(id, 'g')
-      const row = index === null ? undefined : state.grants[index]
-      if (!row) throw notFound(`grant not found: ${id}`, 'grant_not_found')
-      mayChange(identity, patternsOf(row.can), `update ${id}`)
-      const trusted = [...options.issuers(), ...grantIssuers(Object.values(state.grants).filter((other) => other.id !== row.id).map(storedGrant))]
-      let principals = [...row.principals]
-      for (const input of remove ?? []) {
-        const removal = checkPrincipal(input, trusted, true)
-        const kept = principals.filter((principal) => !removes(removal, principal))
-        if (kept.length === principals.length) throw badRequest(`${id} doesn't name that ${removal.kind} principal`, 'not_in_grant')
-        principals = kept
-      }
-      for (const input of add ?? []) {
-        const added = checkPrincipal(input, trusted)
-        const at = principals.findIndex((principal) => joined(added, principal) !== null)
-        if (at === -1) principals.push(added)
-        else principals[at] = joined(added, principals[at]!)!
-      }
-      if (principals.length === 0) throw badRequest(`that leaves ${id} naming no one: revoke it instead`, 'grant_empty')
-      if (principals.length > 32) throw badRequest('a grant names at most 32 principals', 'invalid_grant')
-      const next = can === undefined ? row.can : checkCan(can)
-      mayChange(identity, patternsOf(next), `update ${id}`)
-      await session.append({ type: 'grant.updated', payload: { id: row.id, principals: principals as never, can: next as never, by: identity.actor.id } })
-      return { grant: grantView((await read()).grants[row.id]!) }
+    async updateGrant(identity: Identity, input: Protocol['updateGrant']['input']): Promise<Protocol['updateGrant']['output']> {
+      // On the grant as it is when it lands: an add or a remove in between makes it look again, so none is lost.
+      const id = await whileHeadMoves(async () => {
+        const { state, index } = await latest()
+        const event = await updated(identity, state, input, options.issuers(), accessIn)
+        await session.append.ifLastIndex(index, event)
+        return event.payload.id
+      })
+      return { grant: grantView((await read()).grants[id]!) }
     },
     async explain(identity: Identity, query: Protocol['explain']['input']): Promise<Protocol['explain']['output']> {
       const named = query.user !== undefined || query.project !== undefined || query.github !== undefined || query.oidc !== undefined
       // What anyone else may do shows the grants, which only those who may list them see.
-      if (named) mayChange(identity, ['*'], 'explain what another principal may do')
+      if (named) mayList(identity, 'explain what another principal may do')
       const { id, kind, handle, facts, scope, token } = identity.principal
       const principal: Known = named ? principalNamed(query, await options.team()) : { id, kind, handle, ...(facts ? { facts } : {}), ...(scope !== undefined ? { scope } : {}), ...(token !== undefined ? { token } : {}) }
       const decided = await options.explain(principal, query.channel)
       const { grants } = await read()
       // A grant names whom else it lets in: only those who may list grants see which decided.
-      const shown = managesAt(identity, '*') ? decided.grants : []
+      const shown = lists(identity) ? decided.grants : []
       return {
         channel: query.channel,
         pattern: decided.pattern,
@@ -439,33 +510,20 @@ export function createTrust(options: {
         can: decided.permissions,
       }
     },
-    /**
-     * The two grants that close `path` for a private channel: `everyone` with nothing at `<path>/`,
-     * and the caller's own principal with all of it, in one write. Needs `manage` at `<path>/`.
-     */
-    async closeChannel(identity: Identity, path: string): Promise<GrantView[]> {
-      const pattern = `${path}/`
-      mayChange(identity, [pattern], `make ${path} private`)
-      const self = ownPrincipal(identity.principal)
-      const by = identity.actor.id
-      const rows = await session.append(
-        { type: 'grant.created', payload: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] }, by } },
-        { type: 'grant.created', payload: { principals: [self] as never, can: { [pattern]: 'all' }, by } },
-      )
-      const { grants } = await read()
-      return rows.map((row) => grantView(Object.values(grants).find((grant) => grant.event === row.index)!))
-    },
     async revokeGrant(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeGrant']['output']> {
-      const index = indexOf(id, 'g')
-      const row = index === null ? undefined : (await read()).grants[index]
-      if (!row) {
-        // One that isn't there is only news to whoever may list them.
-        mayChange(identity, ['*'], 'revoke grants')
-        return { revoked: false }
-      }
-      mayChange(identity, patternsOf(row.can), `revoke ${id}`)
-      await session.append({ type: 'grant.deleted', payload: { id: row.id, by: identity.actor.id } })
-      return { revoked: true }
+      return whileHeadMoves(async () => {
+        const { state, index } = await latest()
+        const at = indexOf(id, 'g')
+        const row = at === null ? undefined : state.grants[at]
+        if (!row) {
+          // One that isn't there is only news to whoever may list them.
+          mayList(identity, 'revoke grants')
+          return { revoked: false }
+        }
+        await mayManage(identity, patternsOf(row.can), Object.values(state.grants).map(storedGrant), accessIn, `revoke ${id}`)
+        await session.append.ifLastIndex(index, { type: 'grant.deleted', payload: { id: row.id, by: identity.actor.id } })
+        return { revoked: true }
+      })
     },
 
     async tokens(identity: Identity): Promise<Protocol['tokens']['output']> {

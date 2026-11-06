@@ -24,7 +24,7 @@ type Stored =
   | { kind: 'all-users' }
   | { kind: 'all-projects'; environments: string[] }
   | { kind: 'everyone' }
-type Grant = { id: string; principals: Stored[]; can: Can; by: string | null; at: string | null }
+type Grant = { id: string; principals: Stored[]; can: Can; by: string | null; at: number | null }
 type Level = 'principal' | 'group' | 'everyone'
 
 /** Who asks, or whom explain asks about, as the API knows them from a token. */
@@ -83,7 +83,7 @@ export function fakeGrants(options: {
   const grants = new Map<string, Grant>()
   let next = 1
   const add = (principals: Stored[], can: Can, by: string | null) => {
-    const grant: Grant = { id: `g${next++}`, principals, can, by, at: by === null ? null : new Date().toISOString() }
+    const grant: Grant = { id: `g${next++}`, principals, can, by, at: by === null ? null : Date.now() }
     grants.set(grant.id, grant)
     return grant
   }
@@ -183,15 +183,15 @@ export function fakeGrants(options: {
     }
   }
 
-  /** What decides `target` (a channel, or a pattern) for `who`, and what it gives. */
-  function decide(who: Who, target: string) {
+  /** What decides `target` (a channel, or a pattern) for `who`, and what it gives: by `who`'s own limits alone, without everyone's grants, when `own`. */
+  function decide(who: Who, target: string, own = false) {
     // Something other than everyone has to let it in: a person's place on the team, or a grant that names it.
     const admitted = (who.kind === 'user' && isMember(who.userId)) || [...grants.values()].some((grant) => grant.principals.some((principal) => principal.kind !== 'everyone' && names(principal, who, false)))
     const nothing = { pattern: null, over: [] as string[], level: null, grants: [] as Grant[], capped: null as string | null, can: [] as Permission[] }
     if (!admitted) return nothing
     const candidates: { grant: Grant; level: Level; pattern: string }[] = []
     for (const grant of grants.values()) {
-      const levels = grant.principals.filter((principal) => names(principal, who, true)).map(levelOf)
+      const levels = grant.principals.filter((principal) => !(own && principal.kind === 'everyone') && names(principal, who, true)).map(levelOf)
       if (levels.length === 0) continue
       const level = levels.sort((a, b) => LEVEL[a] - LEVEL[b])[0]!
       for (const pattern of Object.keys(grant.can)) if (covers(pattern, target)) candidates.push({ grant, level, pattern })
@@ -214,10 +214,47 @@ export function fakeGrants(options: {
   }
 
   const isOwner = (who: Who) => who.kind === 'user' && options.roles[who.userId] === 'owner'
-  const manages = (who: Who, pattern: string) => isOwner(who) || decide(who, pattern).can.includes('manage')
-  function mayChange(who: Who, patterns: Iterable<string>, what: string) {
-    for (const pattern of patterns) if (!manages(who, pattern)) throw new GrantRefused(403, 'forbidden', `${what} takes manage at ${pattern}`)
+  /** Whether `who` may list the grants, or explain anyone: manage at `*`, or a team owner. */
+  const lists = (who: Who) => isOwner(who) || decide(who, '*').can.includes('manage')
+  /** What `everyone` gives at `spot`, by the grants in `after` that name it: what anyone a grant lets in gets there, where nothing closer decides. */
+  function everyoneAt(after: readonly Grant[], spot: string): Set<Permission> {
+    const covering = after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone')).flatMap((grant) => Object.keys(grant.can).filter((pattern) => covers(pattern, spot)).map((pattern) => ({ grant, pattern })))
+    const best = Math.max(...covering.map(({ pattern }) => specificity(pattern)))
+    const given = new Set<Permission>()
+    for (const { grant, pattern } of covering) if (specificity(pattern) === best) for (const permission of expand(grant.can[pattern]!)) given.add(permission)
+    return given
   }
+  /**
+   * A 403 unless `who` may make or widen a grant to `patterns`, judged by the grants as they'd be
+   * after it (`after`), as the board's `checkGrantChange` does. Reach: manage at each pattern, with
+   * everyone's grants and without, and at every spot under it by `who`'s own limits, without them.
+   * Admission: whatever `everyone` gives anywhere, `who` has too, since anyone a grant lets in gets
+   * it. A team owner always may.
+   */
+  function mayGrant(who: Who, patterns: Iterable<string>, after: readonly Grant[], what: string) {
+    if (isOwner(who)) return
+    const spots = [...grants.values()].filter((grant) => grant.principals.some((principal) => names(principal, who, true))).flatMap((grant) => Object.keys(grant.can))
+    const everyone = after.filter((grant) => grant.principals.some((principal) => principal.kind === 'everyone')).flatMap((grant) => Object.keys(grant.can))
+    const manages = (spot: string, own = false) => decide(who, spot, own).can.includes('manage')
+    for (const pattern of patterns) {
+      if (!manages(pattern) || !manages(pattern, true) || [...spots, ...everyone].some((spot) => spot !== pattern && covers(pattern, spot) && !manages(spot, true)))
+        throw new GrantRefused(403, 'forbidden', `${what} takes manage wherever the grant reaches`)
+    }
+    for (const spot of new Set([...everyone, ...spots])) {
+      const has = new Set(decide(who, spot).can)
+      if ([...everyoneAt(after, spot)].some((permission) => !has.has(permission))) throw new GrantRefused(403, 'forbidden', `${what} would let someone in where everyone gets more than you have`)
+    }
+  }
+  /** A 403 unless `who` manages each of `patterns`: what revoking a grant, or removing from one, takes. */
+  function mayManage(who: Who, patterns: Iterable<string>, what: string) {
+    if (isOwner(who)) return
+    for (const pattern of patterns) if (!decide(who, pattern).can.includes('manage')) throw new GrantRefused(403, 'forbidden', `${what} takes manage wherever the grant applies`)
+  }
+  function mayList(who: Who, what: string) {
+    if (!lists(who)) throw new GrantRefused(403, 'forbidden', `${what} takes manage at *`)
+  }
+  /** Naming an issuer makes the API fetch its keys: it takes manage everywhere. */
+  const namesIssuer = (principals: readonly Stored[]) => principals.some((principal) => principal.kind === 'oidc')
 
   function viewOf(grant: Grant) {
     return {
@@ -261,8 +298,9 @@ export function fakeGrants(options: {
         kind: 'github',
         repositoryId,
         repository,
+        // A run on main unless the query says.
         ...(workflow ? { workflowRef: `${repository}/${workflowPath(workflow)}@refs/heads/${branch ?? 'main'}` } : {}),
-        ...(branch ? { ref: `refs/heads/${branch}` } : {}),
+        ref: `refs/heads/${branch ?? 'main'}`,
         ...(event ? { event } : {}),
       }
     }
@@ -275,41 +313,35 @@ export function fakeGrants(options: {
 
   return {
     grants,
-    /** The two grants a private channel starts with, as the API makes them with the channel: or a refusal, before anything is made. */
-    closeChannel(who: Who, by: string, name: string) {
-      const pattern = `${name}/`
-      mayChange(who, [pattern], `making ${name} private`)
-      const self: Stored | null = who.kind === 'user' ? { kind: 'user', userId: who.userId } : who.kind === 'project' ? { kind: 'project', projectId: who.projectId, environments: [who.environment] } : null
-      if (!self) throw new GrantRefused(400, 'no_own_principal', 'a private channel lets its creator in, as a person or a project')
-      return () => [add([{ kind: 'everyone' }], { [pattern]: [] }, by), add([self], { [pattern]: 'all' }, by)].map(viewOf)
-    },
     /** The grants routes, under `/boards/:id`: undefined for any other. */
     route(method: string, rest: string, who: Who, by: string, body: Record<string, any>, url: URL): unknown {
       let found: RegExpExecArray | null
       if (method === 'GET' && rest === '/grants') {
-        mayChange(who, ['*'], 'listing grants')
+        mayList(who, 'listing grants')
         return { grants: [...grants.values()].map(viewOf) }
       }
       if (method === 'POST' && rest === '/grants') {
         if (!Array.isArray(body.principals) || body.principals.length === 0) throw invalid('a grant names its principals')
         const principals = body.principals.map((input: Record<string, any>) => resolve(input))
         const can = checkCan(body.can)
-        mayChange(who, patternsOf(can), 'granting')
+        const after = [...grants.values(), { id: '', principals, can, by, at: 0 }]
+        mayGrant(who, patternsOf(can), after, 'granting')
+        if (namesIssuer(principals)) mayGrant(who, ['*'], after, 'naming an oidc issuer')
         return { grant: viewOf(add(principals, can, by)) }
       }
       if (method === 'GET' && rest === '/grants/explain') {
         const channel = url.searchParams.get('channel')
         if (!channel) throw new GrantRefused(400, 'invalid_request', 'explain takes a channel')
         const other = named(url)
-        if (other) mayChange(who, ['*'], 'explaining what someone else may do')
+        if (other) mayList(who, 'explaining what someone else may do')
         const decided = decide(other ?? who, channel)
-        const shown = manages(who, '*') ? decided.grants : []
+        const shown = lists(who) ? decided.grants : []
         return { channel, pattern: decided.pattern, over: decided.over, level: decided.level, grants: shown.map(viewOf), rule: null, capped: decided.capped, can: decided.can }
       }
       if ((found = /^\/grants\/([^/]+)$/.exec(rest)) && method === 'PATCH') {
         const grant = grants.get(decodeURIComponent(found[1]!))
         if (!grant) throw new GrantRefused(404, 'grant_not_found')
-        mayChange(who, patternsOf(grant.can), `updating ${grant.id}`)
+        mayManage(who, patternsOf(grant.can), `updating ${grant.id}`)
         let principals = [...grant.principals]
         for (const input of body.remove ?? []) {
           const removal = resolve(input, true)
@@ -327,17 +359,22 @@ export function fakeGrants(options: {
         }
         if (principals.length === 0) throw new GrantRefused(400, 'grant_empty', `that leaves ${grant.id} naming no one`)
         const can = body.can === undefined ? grant.can : checkCan(body.can)
-        mayChange(who, patternsOf(can), `updating ${grant.id}`)
-        Object.assign(grant, { principals, can, by, at: new Date().toISOString() })
+        // Adding or setting can widens it; removing only narrows, which manage there allows.
+        if (body.add !== undefined || body.can !== undefined) {
+          const after = [...[...grants.values()].filter((other) => other.id !== grant.id), { ...grant, principals, can }]
+          mayGrant(who, patternsOf(can), after, `updating ${grant.id}`)
+          if (namesIssuer(principals.filter((principal) => !grant.principals.includes(principal)))) mayGrant(who, ['*'], after, 'naming an oidc issuer')
+        }
+        Object.assign(grant, { principals, can, by, at: Date.now() })
         return { grant: viewOf(grant) }
       }
       if ((found = /^\/grants\/([^/]+)\/revoke$/.exec(rest)) && method === 'POST') {
         const grant = grants.get(decodeURIComponent(found[1]!))
         if (!grant) {
-          mayChange(who, ['*'], 'revoking grants')
+          mayList(who, 'revoking grants')
           return { revoked: false }
         }
-        mayChange(who, patternsOf(grant.can), `revoking ${grant.id}`)
+        mayManage(who, patternsOf(grant.can), `revoking ${grant.id}`)
         grants.delete(grant.id)
         return { revoked: true }
       }

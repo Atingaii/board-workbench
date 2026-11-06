@@ -143,8 +143,11 @@ itself.
   case: `--name security`, and with `--scope acme`, team acme's. It goes
   with `--scope`, so it's ahead of `BOARD_URL`. With `--url` it's misuse,
   and so is a name with its team in it (`--name acme/security`): the team
-  is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't, for
-  whichever team's board the run uses. A name you use
+  is `--scope`'s. `BOARD_NAME` names it when `--name` doesn't; beside
+  `BOARD_URL`, which names another board, it's misuse, so unset one. A
+  board's URL names its team, so `--scope` beside `--url` is misuse too. A
+  name several boards share says how to use one by its URL, on its team
+  (`…/boards/<ID>?teamId=team_…`). A name you use
   as yourself never makes a board: one the team doesn't have fails with
   `board_not_found`. See [A board by its name](../01-board/01-mounting.md#a-board-by-its-name).
 
@@ -550,15 +553,16 @@ $ vb channels create dev/alerts
 dev/alerts already exists
 ```
 
-`--private` closes it to everyone but you in the same request, with two
-grants, and needs `manage` there. A channel that's there already stays as it
-is, and the command fails:
+`--private` closes it to everyone but you, as `createChannel(path, { private:
+true })` does: a grant letting you in, one closing it to everyone else, then
+the channel. It needs `manage` there, and makes nothing where the channel, or
+one under it, is there already:
 
 ```text
 $ vb channels create security --private
 created channel security
-created g7  --everyone  security/=none
-created g8  --user alice@acme.com  security/=all
+created g7  --user alice@acme.com  security/=all
+created g8  --everyone  security/=none
 ```
 
 With `--json`, it prints `{ channel, outcome }`, where `outcome` is `created`
@@ -814,12 +818,28 @@ sees what it pushed.
 vb conformance [--channel <c>]
 ```
 
-Checks that the board speaks the whole protocol, a group at a time. It posts
+Checks that a board speaks the whole protocol, a group at a time. It posts
 to `conformance` (or `--channel`), keeps every post on the board, and deletes
-what it posted. It exits 1 when a check fails:
+what it posted. It exits 1 when a check fails.
+
+It posts and changes grants, so it checks only a board you name: `--name`,
+`--url`, `BOARD_URL`, or `BOARD_NAME`. With none, it doesn't fall back to the
+team's board, and exits 2:
 
 ```text
 $ vb conformance
+error: conformance posts and changes grants, so name a scratch board for it.
+
+  Check a scratch board on this team, by its name:
+    vb conformance --name <BOARD>
+  Or a board by its URL:
+    vb conformance --url <URL>
+```
+
+A name runs it on that board, the team's default board included:
+
+```text
+$ vb conformance --name scratch
 core
   passed   says in its discovery where it is
   passed   posts a message, and reads it back by its ID

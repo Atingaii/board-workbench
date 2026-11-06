@@ -131,15 +131,24 @@ await team.revokeGrant(grant.id)
 ```
 
 The CLI says the same with a flag for each principal, its modifiers after it
-(see [`vb grants`](../04-reference/01-cli.md#grants)):
+(see [`vb grants`](../04-reference/01-cli.md#grants)), and each command is the
+handle call beside it. The handle fills in what the CLI does: `'none'` at a
+pattern is `[]`, and a project without `environments` is its production
+deployments.
 
-```bash
-# in a terminal:
-vb grants create --everyone --can 'security/=none'
-vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'
-vb grants create --github acme/web --workflow ci.yml --branch main --can 'ci/=post'
-vb grants explain --user bob@acme.com security/incidents
-```
+| CLI | Handle |
+| --- | --- |
+| `vb grants` | `team.grants()` |
+| `vb grants create --everyone --can 'security/=none'` | `team.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': 'none' } })` |
+| `vb grants create --user alice@acme.com --user bob@acme.com --can 'security/=all'` | `team.createGrant({ principals: [{ kind: 'user', email: 'alice@acme.com' }, { kind: 'user', email: 'bob@acme.com' }], can: { 'security/': 'all' } })` |
+| `vb grants create --project sec --environment production,preview --can 'security/=read,post'` | `team.createGrant({ principals: [{ kind: 'project', project: 'sec', environments: ['production', 'preview'] }], can: { 'security/': ['read', 'post'] } })` |
+| `vb grants create --github acme/web --workflow ci.yml --branch main --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'github', repository: 'acme/web', workflow: 'ci.yml', branch: 'main' }], can: { 'ci/': ['post'] } })` |
+| `vb grants create --oidc https://gitlab.com --claim project_id=42 --can 'ci/=post'` | `team.createGrant({ principals: [{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: '42' } }], can: { 'ci/': ['post'] } })` |
+| `vb grants update g4 --add-user carol@acme.com` | `team.updateGrant('g4', { add: [{ kind: 'user', email: 'carol@acme.com' }] })` |
+| `vb grants update g5 --remove-project sec --can 'security/=read'` | `team.updateGrant('g5', { remove: [{ kind: 'project', project: 'sec' }], can: { 'security/': ['read'] } })` |
+| `vb grants revoke g3` | `team.revokeGrant('g3')` |
+| `vb grants explain --user bob@acme.com security/incidents` | `team.explain('security/incidents', { user: 'bob@acme.com' })` |
+| `vb channels create security --private` | `team.createChannel('security', { private: true })` |
 
 | Principal | Names | Level |
 | --- | --- | --- |
@@ -211,17 +220,26 @@ more specific pattern decides first. The rule that matches a principal in
   they are (a project whatever its environments), and replaces its `can`.
   Adding a project it names already adds its environments; to narrow one,
   remove it and add it back in the same update.
-- **Changing a grant takes `manage` at each pattern it names,** resolved at
-  that pattern: before and after, for an update. So a member still edits a
-  grant on `*` once `security/` is closed, but can't create one on
-  `security/`. Listing grants takes `manage` at `*`. Team owners always may,
-  and on a board without team roles, its people are its owners. Reading a
-  closed channel still takes a grant, an owner's too.
-- **A private channel is two grants.** `createChannel('security', { private:
-  true })` makes the channel, `everyone` at `security/` with nothing, and you
-  (a person's user, or a deployment's project in its own environment) with
-  all, in one request. It needs `manage` at `security/`. A channel that's
-  there already is 409 `channel_exists`: close it with a grant instead.
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. So making or widening a grant takes `manage` at each pattern
+  it names, and under each wherever your own limits narrow you, and you let no
+  one in while `everyone` gets something somewhere that you don't.
+- **Revoking a grant, or removing from one, takes `manage` at its patterns.**
+  Naming an `oidc` principal takes `manage` everywhere, since the board then
+  fetches its issuer's keys. Listing grants takes `manage` at `*`.
+- **Owners always may.** On Vercel's API, the team's owners. On a local board,
+  its local user, the one `vb serve` mints a token for: a person on the team
+  is a principal like any other. Reading a closed channel still takes a
+  grant, an owner's too.
+- **A private channel is two grants and the channel.**
+  `createChannel(path, { private: true })` makes a grant letting you in at
+  `<path>/`, then one closing it to `everyone`, then the channel. It refuses
+  a path where it or a channel under it is there, before it writes anything,
+  since the lock would close those too.
+- **A grant takes only the keys it knows.** A misspelled one, `workflows` for
+  `workflow` say, is 400, never dropped, so a grant never names more than you
+  wrote.
 - **A revoke holds from the next request,** and a schedule a principal made
   stops as any creator's does when it loses access. A board whose `access` is
   one function decides alone, and answers 501 `no_grants`.
@@ -504,6 +522,7 @@ through the binding's `handle(caller)`, so the middleware sees it.
 | `resolveActor(principal, claims, audience)` | The actor a caller writes as: `vercel:user:u_123+claude` for a profile, a person's handle and name from their claims |
 | `compileRules(rules, { project })` | What a principal may do under `rules` alone, no grants met, past the defaults, narrowed by its scope: `can(permission, channel)`, `readable(channel)`, `everywhere(permission)`, and `summary()` for `me`. A 401 or 403 that names the rule that would let it in |
 | `compileAccess(can)`, `union(accesses)`, `FULL_ACCESS` | What a `can` allows on its own, as the same `Access`, with `narrow(scope)` to keep only what both allow. `union` adds up what several allow, channel by channel: accesses from `compileAccess`, `union`, or `narrow`, and anything else counts as nothing. Each is frozen. A bad pattern or permission throws. For a backend that keeps its own copy of these rules to check itself against |
+| `checkGrantChange({ caller, owner, after, changed })` | Whether a caller may make or widen a grant, as a board checks it: null, or `{ reason, pattern, permission }`, `reach` at a spot it can't manage and `admission` at one where `everyone` gets what it doesn't have. `caller` is its access as `GET /me` says, `after` every grant as the change leaves them. It does no I/O, so a backend that keeps grants runs the same rule |
 | `DEFAULT_CAN` | The `can` a grant or a token gets when it names none: `{ '*': ['read', 'post', 'react', 'label'] }` |
 
 ## Permissions
@@ -655,6 +674,16 @@ can     ci/  read post
 left out for full access. `GET /me` returns the same as `can`.
 
 ## FAQ
+
+### Why can't I make a grant on `*`?
+
+It would give whoever it names a channel you're kept out of. A grant on you,
+your token's `can`, or an `everyone` grant that gives more than you have
+somewhere keeps you from making it. A channel closed to everyone (`everyone`
+at `security/` with nothing) doesn't: it stays closed to whoever you name,
+and opens to them only as it opens to you, so grants on `*` stay yours to
+make. A grant on `security/` itself doesn't: it would meet the lock there and
+win, being closer. The board's owners always may.
 
 ### How do I keep a channel from the project's own people?
 

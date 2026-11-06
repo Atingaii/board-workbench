@@ -486,11 +486,9 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/channels') {
       if (typeof body.name !== 'string' || body.name.length > 80 || !CHANNEL.test(body.name)) throw new Refused(400, 'invalid_channel_name')
       if (channels.some((c) => c.name === body.name)) throw new Refused(409, 'channel_name_taken')
-      // A private channel's two grants, made with it, or a refusal before either is.
-      const close = body.private === true ? access.closeChannel(whoOf(actor), actor.id, body.name) : null
       const channel = { id: `chn_${randomUUID()}`, name: body.name }
       channels.push(channel)
-      return close ? { channel, grants: close() } : { channel }
+      return { channel }
     }
     const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
     if (granted !== undefined) return granted
@@ -703,6 +701,8 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  * person makes it), and `boards`, each with the projects granted it as `prj_x:production`. A person
  * uses every board in the team; a project, those granted it in its environment. A board made here
  * takes no name another has, whatever its case; `boards` may share one, as older boards can.
+ * `notDefault`: this team isn't the token's default team, so a request reaches it only when it
+ * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  *
  * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
  * (`roles`, by user ID: everything, or `['read']` for a viewer; a member by default), and a project
@@ -727,7 +727,8 @@ export function fakeMessageboard(
     /** GitHub repositories, by `owner/repo`, with their IDs. */
     repositories?: Record<string, string>
     me?: Record<string, MeSays> | false
-    /** Board tokens the API takes, by their secret (`board_…`): the principal each acts as, as `as()` names it. */
+    notDefault?: boolean
+    /** Board tokens the API takes, by their secret, whatever it looks like: the principal each acts as, as `as()` names it. */
     tokens?: Record<string, string>
   } = {},
 ) {
@@ -762,6 +763,7 @@ export function fakeMessageboard(
     const url = new URL(request.url)
     if (url.searchParams.get('teamId') && url.searchParams.get('teamId') !== teamId) throw new Refused(403, 'forbidden')
     if (url.searchParams.get('slug') && url.searchParams.get('slug') !== slug) throw new Refused(403, 'forbidden')
+    if (options.notDefault && !url.searchParams.get('teamId') && !url.searchParams.get('slug')) throw new Refused(403, 'forbidden')
     const actor = actorOf(request, options.tokens)
     const path = url.pathname.replace(/^\/v1\/messageboard/, '')
     const method = request.method

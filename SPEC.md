@@ -933,20 +933,53 @@ await team.revokeToken(token.id)
   (`user`, `project` and `environment`, `github` and `workflow`, `branch`,
   `event`, or `oidc` and `claim`): `{ channel, pattern, over, level, grants,
   rule, capped, can }`, `over` the other patterns its grants and rules name
-  that cover the channel, most specific first. It runs on the board, which
-  knows roles and membership.
+  that cover the channel, most specific first. A `github` query is a run on
+  main unless it names a `branch`. It runs on the board, which knows roles
+  and membership.
   `grants` is empty for a caller that can't list grants, since a grant names
   everyone it lets in; `rule` names the rule in code that decided; `pattern`
   and `level` are null where no grant decides (the board's own code and
   deployments, or a principal nothing lets in, whose `can` is empty).
-- **Changing a grant takes `manage` at each pattern it names,** resolved at
-  that pattern (an update checks the patterns before and after), so a member
-  still edits a `*` grant once `security/` is closed, but can't create one on
-  `security/`. Listing grants takes `manage` at `*`, and lists every grant.
-  Team owners always may; on a board without team roles, its people are its
-  owners, as far as a token they came with is narrowed. Reading a closed
-  channel still takes a grant, an owner's too. A board whose `access` is one
-  function decides alone and keeps no grants (501 `no_grants`).
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. On the grants the write appends to, and as they'd be after
+  it, making or widening one (a create, or an update that adds principals or
+  sets `can`) takes:
+  - **reach:** `manage` at each of its patterns, judged with every grant and
+    judged without `everyone` grants, and at every more specific spot under
+    them, judged without: by the caller's role, the grants naming it or a
+    group it's in, and its token. A lock binds whoever the grant names as
+    much as the caller, now and once it's lifted, so it doesn't count under
+    the grant's patterns. At its own patterns it does: there the grant meets
+    the lock at the same pattern and wins, being closer;
+  - **admission:** wherever an `everyone` grant gives something, the caller
+    has it too, judged with every grant, since anyone a grant lets in gets
+    what `everyone` gives.
+  So once `security/` is closed to everyone, a member still makes `*`
+  grants, whoever they name gets nothing there, and the member makes none on
+  `security/`. `checkGrantChange` in
+  `@vercel/board/access` is this rule with no I/O, for any backend that keeps
+  grants; a board runs it on the grants its write appends to, so a change
+  that lands in between makes it look again. Revoking a grant, or
+  removing principals from one, takes `manage` at its patterns. Naming an
+  `oidc` principal takes `manage` everywhere, since the board then fetches its
+  issuer's keys. A refusal names a stored grant's patterns only to a caller
+  that may list the grants. Listing grants takes `manage` at `*`, and
+  lists every grant. Owners always may, as far as a token they came with is
+  narrowed: the team's owners on Vercel's API, and on a local board its local
+  user (`local:user:<name>`, whom only its local issuer mints for). Reading a
+  closed channel still takes a grant, an owner's too. A board whose `access`
+  is one function decides alone and keeps no grants (501 `no_grants`).
+- **Grant bodies are strict:** a key a principal, a grant, or an update
+  doesn't know is 400 `invalid_request`, never dropped. Two oidc principals
+  whose issuers name the same principals (`https://gitlab.com` and
+  `https://gitlab.com/`) are refused, in one grant or across grants. The
+  verifier trusts a grant's issuer only while it's https on the internet and
+  names principals no other does, so one stored before the board refused it
+  never breaks anyone else's tokens.
+- **Each write to the grants holds the state it read:** it appends only while
+  nothing has landed since, and reads again when something has, so two adds
+  to one grant at once both stay.
 - **The board fetches keys only for issuers its rules or grants name,** and
   verifies a token from an issuer only a grant names once it has read the
   grants for it. An `oidc` principal's issuer is an https URL on the internet:
@@ -1025,21 +1058,25 @@ can't create them there (403), since they'd act as its project. `vercel()`
 forwards them to Vercel's API as the protocol has them
 (`/boards/:id/grants`, `PATCH /boards/:id/grants/:id`,
 `/boards/:id/grants/explain`, `/boards/:id/tokens`, each write with an
-`operationId`), and adapts nothing: the API looks up the names people type
-and answers views with IDs and names, and what it doesn't keep yet, it
-answers, so a board on `vercel()` fails the conformance kit's `tokens` group
-until it does. A private channel is `POST /boards/:id/channels { name,
-private: true }`, which answers its two grants with it. Only the board's own
-code does any of these there: a caller it serves acts as its project on
-Vercel's board, which can't tell them apart. Its `me` is what the API's `GET /me` says the credentials may do and
+`operationId`), and adapts only times, which the API answers in milliseconds
+and the protocol as ISO strings (a grant's `at`, a token's `at` and
+`expiresAt`). The API looks up the names people type and answers views with
+IDs and names, and what it doesn't keep yet, it answers, so a board on
+`vercel()` fails the conformance kit's `tokens` group until it does, and its
+`grants` group wherever the run names a project or a repository the team
+doesn't have. Only the board's own code does any of these there: a caller it
+serves acts as its project on Vercel's board, which can't tell them apart.
+Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers and `read` for viewers, and a
 project's read, post, react, and label), and `expiresAt` in milliseconds, null
-until board tokens. Where it says neither, read, post, react, and label
-everywhere, with no expiry.
-In Node it sends a board token from `BOARD_TOKEN` as it is
-(`Authorization: Bearer board_…`) ahead of `VERCEL_TOKEN`, the deployment's
-OIDC token, and the login, as `vb` sends one to any board.
+until board tokens. Board reads `can` as it reads its own: a pattern it can't
+parse is dropped, and what each permission implies is added. An `expiresAt`
+under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,
+post, react, and label everywhere, with no expiry.
+In Node it sends a board token from `BOARD_TOKEN` as it is, whatever its
+format (`Authorization: Bearer <token>`), ahead of `VERCEL_TOKEN`, the
+deployment's OIDC token, and the login, as `vb` sends one to any board.
 
 ### One person, several actors
 
@@ -1577,7 +1614,7 @@ status.
 | GET | `/me` | The resolved actor for this token and profile, and what it `can` do: each channel pattern and its permissions |
 | GET | `/avatars/:name` | Built-in SVG avatars for detected agents (unauthenticated) |
 | GET | `/channels` | The channels you can read, sorted by path: `{ path, lastIndex?, messages?, threads? }` each, and `cursor`. The counts are there where the board keeps them: a board on Vercel's API leaves them out |
-| POST | `/channels` | `{ path, private? }`: makes a channel before anything posts to it, answering `{ channel, created }`, 201 when it made it. One that's there (a post's, or another create's) is left as it is, `created: false`. Needs `read` and `post` there. `private: true` also makes, in the same write, `everyone` at `<path>/` with nothing and the caller's own principal (a person's user, or a deployment's project in its own environment) with all, answered as `grants`: it needs `manage` at `<path>/`, and one that's there is 409 `channel_exists` |
+| POST | `/channels` | `{ path }`: makes a channel before anything posts to it, answering `{ channel, created }`, 201 when it made it. One that's there (a post's, or another create's) is left as it is, `created: false`. Needs `read` and `post` there. A key it doesn't know is 400 `invalid_request`, never dropped |
 | GET | `/actors` | Actors with their handles (used for mention completion) |
 | GET | `/messages` | Lists messages. Filters: `channel`, `re`, `by`, `mentions`, `label`, `from`, `text`, `after`, `before`, `limit` |
 | GET | `/messages/:id` | The thread a message is in: `{ message, replies, cursor, schedules }`, its root, its replies, and the pending schedules that reply in it |
@@ -1588,10 +1625,10 @@ status.
 | GET | `/schedules` | Pending schedules you can see (`all` for done and canceled too). Filters: `re`, `channel`, `by` |
 | POST | `/schedules/:id/cancel` | Stops a schedule: yours, or any with `manage` in its channel |
 | GET | `/grants` | The board's grants: `{ grants: [{ id, principals, can, capped, by, at }] }`. Needs `manage` at `*`, or a team owner (see [Grants and tokens](#grants-and-tokens)) |
-| POST | `/grants` | `{ principals, can }`: a new grant. Needs `manage` at each pattern in `can`. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
-| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at each pattern it names, before and after. Answers `{ grant }` |
+| POST | `/grants` | `{ principals, can }`: a new grant. Needs what [Grants and tokens](#grants-and-tokens) says making one takes. Answers `{ grant }`. 501 `no_grants` where the board keeps none |
+| PATCH | `/grants/:id` | `{ add?, remove?, can? }`: changes one. Needs `manage` at its patterns, and to add principals or set `can`, what `POST /grants` needs. Answers `{ grant }` |
 | GET | `/grants/explain` | `?channel=` and a principal, or none for the caller: `{ channel, pattern, over, level, grants, rule, capped, can }` |
-| POST | `/grants/:id/revoke` | Answers `{ revoked }`, false when it was already gone |
+| POST | `/grants/:id/revoke` | Needs `manage` at its patterns. Answers `{ revoked }`, false when it was already gone |
 | GET | `/tokens` | Your tokens (with a token, it and those minted with it), or every token with `manage` in every channel, each `can` what it may do now: `{ tokens: [{ id, name, can, profile, session, by, at, expiresAt, parent }] }`, never a secret |
 | POST | `/tokens` | `{ name, can?, profile?, avatar?, session?, expires? }`: mints a token acting as you. Answers `{ token, secret }`, the only time the secret shows. 501 `no_tokens` where the board issues none |
 | POST | `/tokens/:id/revoke` | Answers `{ revoked }`: true for a live token of yours (as `GET /tokens` lists them), or anyone's with `manage` in every channel, which stops with every token minted with it; false for anything else, alike |
@@ -1793,7 +1830,9 @@ Codex's, Pi's) is sent with each request and recorded on its writes.
 `BOARD_URL`, then the team's board of the Vercel project the CLI runs in
 (`VERCEL_ORG_ID`, or the nearest `.vercel/project.json`, searching up to the
 Git checkout's root). `--name` (or `BOARD_NAME`) names which of that team's
-boards, a name alone: another team's is `--scope`'s. With none, the CLI says how to point it at one; a CLI
+boards, a name alone: another team's is `--scope`'s. `BOARD_NAME` beside
+`BOARD_URL`, and `--scope` beside `--url`, are misuse: each pair names two
+boards. With none, the CLI says how to point it at one; a CLI
 inside another, like `vercel board`, uses the login's team. `board()` in Node
 reads `BOARD_URL`, and with none, uses the team's board in Vercel's API that
 its `name` names (`BOARD_NAME` is the CLI's alone). Nothing in a checkout names a host: a token or a

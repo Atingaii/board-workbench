@@ -1,7 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { useBoard, vb } from './cli-harness.ts'
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { env, url, useBoard, vb } from './cli-harness.ts'
+import { localUserToken } from './tokens.ts'
 
 useBoard()
+// As `vb serve`'s own user, the board's owner, whom no grant limits.
+beforeAll(async () => {
+  env.BOARD_TOKEN = await localUserToken('julian', url)
+})
 
 /** The board's grants, back to the two it starts with. */
 async function startOver() {
@@ -100,6 +105,13 @@ describe('cli grants', () => {
     expect((await vb(['grants', '--json'])).stdout).toContain('"security/":["read"]')
   }, 30_000)
 
+  it('gathers a repeated --claim into one claim that any of its values meets', async () => {
+    const made = await create('--oidc', 'https://gitlab.com', '--claim', 'project_id=42', '--claim', 'ref_type=branch', '--claim', 'project_id=43', '--can', 'ci/=post')
+    expect(made.stdout).toBe(`created ${made.id}  --oidc https://gitlab.com --claim project_id=42 --claim project_id=43 --claim ref_type=branch  ci/=post\n`)
+    const listed = JSON.parse((await vb(['grants', '--json'])).stdout).grants.find((grant: { id: string }) => grant.id === made.id)
+    expect(listed.principals).toEqual([{ kind: 'oidc', issuer: 'https://gitlab.com', claims: { project_id: ['42', '43'], ref_type: 'branch' } }])
+  })
+
   it('reads each modifier with the principal before it, and refuses one without its principal, making nothing', async () => {
     const refused = async (...args: string[]) => {
       const { code, stderr } = await vb(['grants', 'create', ...args])
@@ -148,13 +160,14 @@ describe('cli grants', () => {
     expect(await refused('--user', 'u_a')).toEqual([2, 'error: Missing the channel to explain, such as security/incidents.'])
   }, 30_000)
 
-  it('makes a private channel and the two grants that close it, in one request', async () => {
+  it('makes a private channel and the two grants that close it', async () => {
     const made = await vb(['channels', 'create', 'vault', '--private'])
     expect(made).toMatchObject({ code: 0, stderr: '' })
-    const [channel, lock, own] = made.stdout.trimEnd().split('\n')
+    // The channel, then the grant that lets you in and the one that closes it to everyone else, as they were made.
+    const [channel, own, lock] = made.stdout.trimEnd().split('\n')
     expect(channel).toBe('created channel vault')
+    expect(own).toMatch(/^created g\d+  --user julian  vault\/=all$/)
     expect(lock).toMatch(/^created g\d+  --everyone  vault\/=none$/)
-    expect(own).toMatch(/^created g\d+  --user u_julian  vault\/=all$/)
     const again = await vb(['channels', 'create', 'vault', '--private', '--json'])
     expect(again.code).toBe(1)
     expect(JSON.parse(again.stderr)).toMatchObject({ reason: 'channel_exists' })

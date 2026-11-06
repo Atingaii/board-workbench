@@ -111,8 +111,8 @@ type Context = {
 type Check = { group: CheckResult['group']; name: string; run: (ctx: Context) => Promise<void | string> }
 
 /**
- * The groups a board may keep none of, saying so with a 501: a board on `a2()` without a scheduler
- * answers `no_scheduler`, and without a blob store `no_files`; one whose `access` is one function keeps
+ * The groups a board may keep none of, saying so with a 501: a board without a scheduler answers
+ * `no_scheduler`, and without a blob store `no_files`; one whose `access` is one function keeps
  * no grants, `no_grants`. A board that's meant to keep something and doesn't yet answers otherwise,
  * and fails.
  */

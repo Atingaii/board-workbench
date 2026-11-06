@@ -6,7 +6,7 @@ import { a2, type A2Options } from '../src/server/a2.ts'
 import { memoryBlob } from '../src/server/blob.ts'
 import { local } from '../src/local/index.ts'
 import { oidcTokens, type OidcTokensOptions } from '../src/access/index.ts'
-import { BOARD_URL, PROJECT_ID, TEAM_ID, testAuth } from './tokens.ts'
+import { BOARD_URL, PROJECT_ID, TEAM_ID, testAuth, testLocal } from './tokens.ts'
 
 export * from './tokens.ts'
 
@@ -82,7 +82,8 @@ export function testBoard(options: MountOptions = {}) {
   const created = mount({
     store,
     blob: memoryBlob(),
-    auth: testAuth,
+    // A local issuer too, as `vb serve` has: its tokens are the board's local user's, its owner.
+    auth: { ...testAuth, local: testLocal },
     ...options,
     // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
     url: 'url' in options ? options.url : BOARD_URL,
@@ -117,7 +118,7 @@ export function localBoard(options: Omit<BoardOptions, 'backend' | 'fetch'> & { 
   const created = board({
     ...rest,
     backend,
-    authenticate: rest.authenticate ?? oidcTokens(auth ?? testAuth),
+    authenticate: rest.authenticate ?? oidcTokens(auth ?? { ...testAuth, local: testLocal }),
     // `url: undefined` lets the board infer its URL from requests, as the CLI's tests do.
     ...('url' in options ? (url !== undefined ? { url } : {}) : { url: BOARD_URL }),
   })
