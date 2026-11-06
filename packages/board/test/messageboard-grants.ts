@@ -308,6 +308,12 @@ export function fakeGrants(options: {
       if (!projectId) throw new GrantRefused(400, 'project_not_found', `no project ${project} on the team`)
       return { kind: 'project', projectId, environment: query('environment') ?? 'production' }
     }
+    const app = query('app')
+    if (app !== undefined) {
+      const clientId = app in options.apps ? app : Object.keys(options.apps).find((id) => options.apps[id] === app)
+      if (!clientId) throw new GrantRefused(400, 'app_not_found', `no app ${app} on the team`)
+      return { kind: 'app', clientId }
+    }
     const repository = query('github')
     if (repository !== undefined) {
       const repositoryId = options.repositories[repository]
