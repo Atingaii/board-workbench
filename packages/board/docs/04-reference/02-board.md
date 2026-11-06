@@ -313,8 +313,8 @@ to `'all'` or a list of permissions, `[]` for none. The same principals again
 are another grant. `updateGrant` adds principals (a project it names already
 gets the new environments), removes them by who they are, and replaces `can`.
 Making or widening one needs what you'd grant: `manage` at its patterns and
-under them wherever you're narrower, and what `everyone` gives, for anyone it
-lets in. Revoking needs `manage` at its patterns; `grants` needs `manage` at
+under them wherever your own limits narrow you, and what `everyone` gives, for
+anyone it lets in. Revoking needs `manage` at its patterns; `grants` needs `manage` at
 `*`. Owners always may.
 
 ```ts

@@ -928,18 +928,24 @@ await team.revokeToken(token.id)
   state, so every board has them without a write, and a grant's ID comes
   from the fold's counter (g3 next). A rule that names `feedback/` alone
   leaves `*` to g2.
-- **You can't grant what you don't have, and that includes what `everyone`
-  gives anyone you let in.** On the grants as they'd be after the change,
-  making or widening one (a create, or an update that adds principals or
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. On the grants the write appends to, and as they'd be after
+  it, making or widening one (a create, or an update that adds principals or
   sets `can`) takes:
-  - **reach:** `manage` at each of its patterns, and at every more specific
-    spot under them where the caller's access is narrower, by its token or
-    its own principal's grants, except a subtree an `everyone` grant names:
-    its pattern is more specific, so it decides there for every principal;
+  - **reach:** `manage` at each of its patterns, judged with every grant and
+    judged without `everyone` grants, and at every more specific spot under
+    them, judged without: by the caller's role, the grants naming it or a
+    group it's in, and its token. A lock binds whoever the grant names as
+    much as the caller, now and once it's lifted, so it doesn't count under
+    the grant's patterns. At its own patterns it does: there the grant meets
+    the lock at the same pattern and wins, being closer;
   - **admission:** wherever an `everyone` grant gives something, the caller
-    has it too, since anyone a grant lets in gets what `everyone` gives.
+    has it too, judged with every grant, since anyone a grant lets in gets
+    what `everyone` gives.
   So once `security/` is closed to everyone, a member still makes `*`
-  grants, and whoever they name gets nothing there. `checkGrantChange` in
+  grants, whoever they name gets nothing there, and the member makes none on
+  `security/`. `checkGrantChange` in
   `@vercel/board/access` is this rule with no I/O, for any backend that keeps
   grants; a board runs it on the grants its write appends to, so a change
   that lands in between makes it look again. Revoking a grant, or

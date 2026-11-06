@@ -160,13 +160,17 @@ describe('grants', () => {
   })
 
   it('lets no token reach past its own can by granting someone else', async () => {
-    const { person, as } = await setUp()
-    // Manage at *, but nothing in security/, where no grant closes it to everyone: a grant on * for a run it controls would be all of security/ too.
+    const { owner, person, as } = await setUp()
+    // Manage at *, but nothing in security/: a grant on * for a run it controls would be all of security/ too.
     const minted = await person('POST', '/tokens', { name: 'scoped', can: { '*': 'all', 'security/': [] } })
     const scoped = await as(minted.body.secret)
     const run = { kind: 'github', repository: 'acme/web' }
     expect((await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })).status).toBe(403)
     expect((await scoped('POST', '/grants', { principals: [run], can: { 'dev/': 'all' } })).status).toBe(200)
+    // Not even once security/ is closed to everyone: whoever lifts the lock would open it to the run, and not to the token.
+    await owner('POST', '/grants', { principals: [everyone], can: { 'security/': [] } })
+    const locked = await scoped('POST', '/grants', { principals: [run], can: { '*': 'all' } })
+    expect([locked.status, locked.body.error.message]).toEqual([403, "this grant reaches security/, where you can't manage grants"])
   })
 
   it("lets no token let in a principal it controls where everyone gets more than the token has", async () => {

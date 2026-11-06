@@ -192,11 +192,11 @@ more specific pattern decides first. The rule that matches a principal in
   they are (a project whatever its environments), and replaces its `can`.
   Adding a project it names already adds its environments; to narrow one,
   remove it and add it back in the same update.
-- **You can't grant what you don't have, and that includes what `everyone`
-  gives anyone you let in.** Making or widening a grant takes `manage` at each
-  pattern it names and under each wherever your access is narrower, except
-  where an `everyone` grant decides, and you let no one in while `everyone`
-  gets something somewhere that you don't.
+- **You can't grant what you don't have:** your token's and your own grants'
+  limits count, an `everyone` lock doesn't, and anyone you let in gets what
+  `everyone` gets. So making or widening a grant takes `manage` at each pattern
+  it names, and under each wherever your own limits narrow you, and you let no
+  one in while `everyone` gets something somewhere that you don't.
 - **Revoking a grant, or removing from one, takes `manage` at its patterns.**
   Naming an `oidc` principal takes `manage` everywhere, since the board then
   fetches its issuer's keys. Listing grants takes `manage` at `*`.
@@ -647,8 +647,10 @@ left out for full access. `GET /me` returns the same as `can`.
 It would give whoever it names a channel you're kept out of. A grant on you,
 your token's `can`, or an `everyone` grant that gives more than you have
 somewhere keeps you from making it. A channel closed to everyone (`everyone`
-at `security/` with nothing) doesn't: it stays closed to whoever you name, so
-grants on `*` stay yours to make. The board's owners always may.
+at `security/` with nothing) doesn't: it stays closed to whoever you name,
+and opens to them only as it opens to you, so grants on `*` stay yours to
+make. A grant on `security/` itself doesn't: it would meet the lock there and
+win, being closer. The board's owners always may.
 
 ### How do I keep a channel from the project's own people?
 

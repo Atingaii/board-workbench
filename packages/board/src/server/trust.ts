@@ -246,13 +246,29 @@ function mayList(identity: Identity, what: string) {
   if (!lists(identity)) throw forbidden(`this token can't ${what}: it needs manage at *`)
 }
 
-/** What judges a grant write: the caller's access on `grants`, the snapshot it appends to, narrowed by its token; null for an owner no token narrows. */
+/** A principal's access under `grants`, narrowed by its token: what a grant write judges by, on the snapshot it appends to. */
 type AccessIn = (principal: Known, grants: readonly StoredGrant[]) => Promise<Access | null>
-async function changerAccess({ principal }: Identity, grants: readonly StoredGrant[], accessIn: AccessIn): Promise<Access | null> {
-  if (isOwner(principal)) return principal.scope === undefined ? null : compileAccess(parseScope(principal.scope))
-  const access = await accessIn(principal, grants)
-  if (access === null) throw forbidden("this token can't change grants: it may do nothing on this board")
-  return access
+
+/** `grants` with no `everyone` in them: what a caller's own limits are, its role, its grants and its groups', and its token. */
+const withoutEveryone = (grants: readonly StoredGrant[]): StoredGrant[] =>
+  grants.flatMap((grant) => {
+    const principals = grant.principals.filter((principal) => principal.kind !== 'everyone')
+    return principals.length === 0 ? [] : [{ ...grant, principals }]
+  })
+
+/**
+ * What the caller may do on `grants`, the snapshot its write appends to (`caller`), and by its own
+ * limits alone (`own`): null for an owner no token narrows. A 403 when it may do nothing.
+ */
+async function changerAccess({ principal }: Identity, grants: readonly StoredGrant[], accessIn: AccessIn): Promise<{ caller: Access; own: Access } | null> {
+  if (isOwner(principal)) {
+    if (principal.scope === undefined) return null
+    const scoped = compileAccess(parseScope(principal.scope))
+    return { caller: scoped, own: scoped }
+  }
+  const [caller, own] = await Promise.all([accessIn(principal, grants), accessIn(principal, withoutEveryone(grants))])
+  if (caller === null || own === null) throw forbidden("this token can't change grants: it may do nothing on this board")
+  return { caller, own }
 }
 
 /**
@@ -260,9 +276,9 @@ async function changerAccess({ principal }: Identity, grants: readonly StoredGra
  * appends to, and `after`, as they'd be: `checkGrantChange`'s rule, which Vercel's API runs too.
  */
 async function mayGrant(identity: Identity, can: WrittenCan, before: readonly StoredGrant[], after: readonly GrantShape[], accessIn: AccessIn, what = 'this grant') {
-  const caller = await changerAccess(identity, before, accessIn)
-  if (caller === null) return
-  const refused = checkGrantChange({ caller, after, changed: { can } })
+  const access = await changerAccess(identity, before, accessIn)
+  if (access === null) return
+  const refused = checkGrantChange({ ...access, after, changed: { can } })
   if (refused?.reason === 'reach') throw forbidden(`${what} reaches ${refused.pattern}, where you can't manage grants`)
   if (refused) throw forbidden(`you can't let anyone in: everyone gets ${refused.permission} in ${refused.pattern}, which you can't`)
 }
@@ -272,7 +288,7 @@ async function mayManage(identity: Identity, patterns: Iterable<string>, grants:
   const access = await changerAccess(identity, grants, accessIn)
   if (access === null) return
   for (const pattern of patterns)
-    if (!access.at('manage', pattern)) throw forbidden(lists(identity) ? `this token can't ${what}: it needs manage at ${pattern}` : `this token can't ${what}: it needs manage wherever that grant applies`)
+    if (!access.caller.at('manage', pattern)) throw forbidden(lists(identity) ? `this token can't ${what}: it needs manage at ${pattern}` : `this token can't ${what}: it needs manage wherever that grant applies`)
 }
 
 /** An oidc principal: naming one makes the board fetch its issuer's keys, so it takes manage everywhere. */
