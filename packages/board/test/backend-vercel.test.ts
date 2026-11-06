@@ -918,24 +918,6 @@ describe('vercel()', () => {
     )
   })
 
-  it("makes a private channel with the API's two grants, and says when the channel is there already", async () => {
-    const api = fakeMessageboard()
-    const jb = handleOn(api)
-    const made = await jb.createChannel('security', { private: true })
-    expect(made).toMatchObject({
-      channel: { path: 'security' },
-      created: true,
-      grants: [
-        { principals: [{ kind: 'everyone' }], can: { 'security/': [] } },
-        { principals: [{ kind: 'user', userId: 'u_jb', email: 'julian@acme.com' }], can: { 'security/': 'all' } },
-      ],
-    })
-    await expect(jb.createChannel('security', { private: true })).rejects.toMatchObject({ status: 409, code: 'channel_exists' })
-    expect(await jb.explain('security', { user: 'ada@acme.com' })).toMatchObject({ pattern: 'security/', level: 'everyone', can: [] })
-    // Making one takes manage there, which g2 doesn't give a project.
-    await expect(handleOn(api, 'project:prj_pong:production').createChannel('pong', { private: true })).rejects.toMatchObject({ status: 403 })
-  })
-
   it("refuses a caller it serves grants and tokens, which would act as whoever its credentials are", async () => {
     // A person's credentials, which Vercel's API lets change grants: only the board's own code may use them for it.
     const backend = vercel({ team: 'team_test', api: API, fetch: as(fakeMessageboard(), 'user:u_jb') })
@@ -944,7 +926,5 @@ describe('vercel()', () => {
     await expect(backend.createToken(verified('all'), { name: 'x' }, signal)).rejects.toMatchObject({ status: 403 })
     await expect(backend.updateGrant(verified('all'), { id: 'g1', can: { '*': 'all' } }, signal)).rejects.toMatchObject({ status: 403 })
     await expect(backend.explain(verified('all'), { channel: 'dev', user: 'u_jb' }, signal)).rejects.toMatchObject({ status: 403 })
-    // A private channel would let the project in, not the caller.
-    await expect(backend.createChannel(verified('all'), { path: 'security', private: true }, signal)).rejects.toMatchObject({ status: 403 })
   })
 })

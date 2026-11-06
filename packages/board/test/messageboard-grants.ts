@@ -275,14 +275,6 @@ export function fakeGrants(options: {
 
   return {
     grants,
-    /** The two grants a private channel starts with, as the API makes them with the channel: or a refusal, before anything is made. */
-    closeChannel(who: Who, by: string, name: string) {
-      const pattern = `${name}/`
-      mayChange(who, [pattern], `making ${name} private`)
-      const self: Stored | null = who.kind === 'user' ? { kind: 'user', userId: who.userId } : who.kind === 'project' ? { kind: 'project', projectId: who.projectId, environments: [who.environment] } : null
-      if (!self) throw new GrantRefused(400, 'no_own_principal', 'a private channel lets its creator in, as a person or a project')
-      return () => [add([{ kind: 'everyone' }], { [pattern]: [] }, by), add([self], { [pattern]: 'all' }, by)].map(viewOf)
-    },
     /** The grants routes, under `/boards/:id`: undefined for any other. */
     route(method: string, rest: string, who: Who, by: string, body: Record<string, any>, url: URL): unknown {
       let found: RegExpExecArray | null

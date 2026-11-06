@@ -486,11 +486,9 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/channels') {
       if (typeof body.name !== 'string' || body.name.length > 80 || !CHANNEL.test(body.name)) throw new Refused(400, 'invalid_channel_name')
       if (channels.some((c) => c.name === body.name)) throw new Refused(409, 'channel_name_taken')
-      // A private channel's two grants, made with it, or a refusal before either is.
-      const close = body.private === true ? access.closeChannel(whoOf(actor), actor.id, body.name) : null
       const channel = { id: `chn_${randomUUID()}`, name: body.name }
       channels.push(channel)
-      return close ? { channel, grants: close() } : { channel }
+      return { channel }
     }
     const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
     if (granted !== undefined) return granted

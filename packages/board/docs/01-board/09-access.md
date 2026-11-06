@@ -217,11 +217,6 @@ more specific pattern decides first. The rule that matches a principal in
   `security/`. Listing grants takes `manage` at `*`. Team owners always may,
   and on a board without team roles, its people are its owners. Reading a
   closed channel still takes a grant, an owner's too.
-- **A private channel is two grants.** `createChannel('security', { private:
-  true })` makes the channel, `everyone` at `security/` with nothing, and you
-  (a person's user, or a deployment's project in its own environment) with
-  all, in one request. It needs `manage` at `security/`. A channel that's
-  there already is 409 `channel_exists`: close it with a grant instead.
 - **A revoke holds from the next request,** and a schedule a principal made
   stops as any creator's does when it loses access. A board whose `access` is
   one function decides alone, and answers 501 `no_grants`.

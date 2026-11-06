@@ -19,7 +19,6 @@ import {
   principalKey,
   removes,
   tokenHash,
-  userIdOf,
   workflowPath,
   type GrantPrincipal,
   type Known,
@@ -233,18 +232,6 @@ function newSecret(): string {
 }
 
 /**
- * The principal a private channel lets its creator in as: a person's user, or a deployment's project
- * in the environment it runs in. Anyone else has none a grant could name, so it's a 400.
- */
-function ownPrincipal(principal: Known): GrantPrincipal {
-  if (principal.kind === 'person' && !principal.id.startsWith('board:')) return { kind: 'user', userId: userIdOf(principal.id) }
-  const claims = principal.facts?.issuer === 'vercel' ? principal.facts.claims : null
-  if (principal.kind === 'deployment' && typeof claims?.project_id === 'string' && typeof claims.environment === 'string')
-    return { kind: 'project', projectId: claims.project_id, environments: [claims.environment] }
-  throw badRequest("a private channel lets its creator in, as a person or a deployment's project, and this caller is neither", 'no_own_principal')
-}
-
-/**
  * The principal an explain query names, as a token of its would make it: a person by user ID, a
  * project's deployment in one environment (production unless it says) on the board's team, a
  * repository's run with what it says of its workflow, branch, and event, or an issuer's token with
@@ -438,22 +425,6 @@ export function createTrust(options: {
         capped: null,
         can: decided.permissions,
       }
-    },
-    /**
-     * The two grants that close `path` for a private channel: `everyone` with nothing at `<path>/`,
-     * and the caller's own principal with all of it, in one write. Needs `manage` at `<path>/`.
-     */
-    async closeChannel(identity: Identity, path: string): Promise<GrantView[]> {
-      const pattern = `${path}/`
-      mayChange(identity, [pattern], `make ${path} private`)
-      const self = ownPrincipal(identity.principal)
-      const by = identity.actor.id
-      const rows = await session.append(
-        { type: 'grant.created', payload: { principals: [{ kind: 'everyone' }], can: { [pattern]: [] }, by } },
-        { type: 'grant.created', payload: { principals: [self] as never, can: { [pattern]: 'all' }, by } },
-      )
-      const { grants } = await read()
-      return rows.map((row) => grantView(Object.values(grants).find((grant) => grant.event === row.index)!))
     },
     async revokeGrant(identity: Identity, { id }: { id: string }): Promise<Protocol['revokeGrant']['output']> {
       const index = indexOf(id, 'g')
