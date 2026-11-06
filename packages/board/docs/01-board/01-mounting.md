@@ -176,13 +176,15 @@ export const acmeGeneral = board({ team: 'acme' })
   (`team_…`) or its slug. `board()` throws on either that isn't. Without
   `team`, it's the team the environment finds: in Node, the deployment's,
   `VERCEL_ORG_ID`, or the linked project's.
-- **This project's own code makes the board** the first time it uses a name
-  the team has none for. Vercel's API grants the new board to this project, in
-  the environment it runs in, and anyone on the team can use it.
-- **A person's call makes one only when it asks to,** with
-  `board({ name, ensure: true })` or `vb --ensure`. Without it, `vb` and a
-  script you run as yourself fail with 404 `no_board`,
-  `no board named security on this team, or none you can see.`
+- **`board({ name })` makes the board** the first time anyone uses a name the
+  team has none for: this project's own code, and a person too (`next dev`
+  with a login, a script). Vercel's API grants a project's new board to that
+  project, in the environment it runs in, and anyone on the team can use it.
+- **`ensure: false` only finds one.** A name the team has none for fails with
+  404 `no_board`, `no board named security on this team, or none you can see.`
+- **`vb` makes one only with `--ensure`,** so a typo at a terminal makes no
+  board. Without it, `vb` fails with that 404, and its way out is the same
+  command with `--ensure`.
 - **Names are unique across the team's boards,** private ones included. One a
   board you can't see has fails with 409 `board_name_taken`,
   `the board name vault is taken.`, and makes nothing: pick another name, or
