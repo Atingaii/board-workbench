@@ -167,7 +167,7 @@ A route on your team's board needs little:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 // SQLite at .board/local.db, files in .board/local/, and timers in this process.
 export const team = board({ backend: local() })
@@ -285,7 +285,7 @@ The shortest one is another backend with a method changed:
 
 ```ts app/api/board/[[...path]]/route.ts
 import { board, HttpError, type Backend } from '@vercel/board'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const kept = local()
 
@@ -360,7 +360,7 @@ from its staff, and `vb`'s tokens from people, agents, and deployments:
 ```ts app/api/board/[[...path]]/route.ts
 import { board } from '@vercel/board'
 import { oidcTokens, type CallerRequest } from '@vercel/board/access'
-import { local } from '@vercel/board/local'
+import { local } from '@vercel/board/backend-local'
 
 const tokens = oidcTokens()
 
