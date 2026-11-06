@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { serve } from './http.ts'
 import { personToken, testBoard, workflowToken } from './harness.ts'
-import { githubActions } from '../src/access/index.ts'
 import { CLI, env, server, tmp, url, useBoard, vb } from './cli-harness.ts'
 import { fakeQueue } from './queue.ts'
 
@@ -512,9 +511,9 @@ describe('cli', () => {
   })
 
   it('says what a token can do when it is less than everything', async () => {
-    const board = await serve(
-      testBoard({ access: [githubActions({ repository: 'basehub-ai/www', can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })] }).fetch,
-    )
+    const granted = testBoard()
+    await granted.createGrant({ issuer: 'github', claims: { repository: 'basehub-ai/www' }, can: { 'ci/': ['read', 'post'], feedback: ['post'], 'ci/secret': [] } })
+    const board = await serve(granted.fetch)
     try {
       const { stdout, code } = await vb(['whoami'], { BOARD_URL: `${board.origin}/api/board`, BOARD_TOKEN: await workflowToken() })
       expect(code).toBe(0)

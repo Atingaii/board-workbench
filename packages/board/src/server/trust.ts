@@ -179,13 +179,11 @@ const needsManage = (identity: Identity, what: string) => {
 
 /**
  * The board's grants and tokens, in session `access` of its log: what a local board answers for them, and
- * what board() checks requests against. `issuers`: the OIDC issuers the board's rules name, which no
- * grant's may share principals with. `accessNow`: what a principal may do now, under board()'s
- * rules and grants, which a token's listing shows.
+ * what board() checks requests against. `accessNow`: what a principal may do now, under board()'s
+ * defaults and the grants, which a token's listing shows.
  */
 export function createTrust(options: {
   store: Parameters<typeof createServer>[0]['store']
-  issuers: () => readonly string[]
   accessNow: (principal: Known) => Promise<Access | null>
 }) {
   const session = createServer({ contract: accessContract, store: options.store }).session(ACCESS_SESSION)
@@ -252,7 +250,7 @@ export function createTrust(options: {
     async createGrant(identity: Identity, body: Protocol['createGrant']['input']): Promise<Protocol['createGrant']['output']> {
       needsManage(identity, 'set grants')
       const before = await read()
-      const checked = checkGrant(body as GrantSpec, [...options.issuers(), ...grantIssuers(Object.values(before.grants))])
+      const checked = checkGrant(body as GrantSpec, grantIssuers(Object.values(before.grants)))
       const key = grantKey(checked.issuer, checked.claims)
       const created = before.grants[key] === undefined
       await session.append({ type: 'grant.set', payload: { issuer: checked.issuer, claims: checked.claims, can: checked.can as never, by: identity.actor.id } })

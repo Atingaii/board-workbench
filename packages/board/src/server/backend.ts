@@ -125,14 +125,12 @@ export type BoardBinding = {
    */
   typing(messages: readonly MessageView[], status: string | undefined): Promise<string[]>
   /**
-   * What a principal the backend stored may do now, under board()'s `access`: a schedule's creator
-   * at each send, a registrant at each event and pull. Null once it may do nothing.
+   * What a principal the backend stored may do now, under board()'s defaults and the board's grants:
+   * a schedule's creator at each send, a registrant at each event and pull. Null once it may do nothing.
    */
   accessNow(principal: Known): Promise<Access | null>
   /** The board's own Vercel project and team, as board() knows them: what discovery names, for clients to mint tokens with. */
   project(): Promise<{ id: string | null; teamId: string | null }>
-  /** The OIDC issuers board()'s rules name, which no grant's issuer may share principals with. */
-  issuers(): readonly string[]
   /**
    * A handle through board(), as `caller`: what a backend writes for someone outside a request
    * goes through it, so board()'s middleware sees it, a schedule's send as its creator, say. A
@@ -175,10 +173,9 @@ export interface Backend extends ProtocolMethods {
   /** Routes of its own, beside the protocol: one at a protocol route's path takes its place. */
   readonly routes: readonly BackendRoute[]
   /**
-   * Whether the board lives here. One that keeps it (`local()`) lets in, when board()'s `access` is left
-   * out, its people and the board's own deployments; one that uses another board (`http()`) serves no
-   * requests then but wake-ups and webhooks, and with an `access`, serves its callers as that board's
-   * project.
+   * Whether the board lives here. One that keeps it (`local()`) serves requests: its people, the
+   * board's own deployments, and whoever its grants and tokens let in. One that uses another board
+   * (Vercel's, or one at `BOARD_URL`) answers only wake-ups and webhooks.
    */
   readonly keeps: boolean
   /**

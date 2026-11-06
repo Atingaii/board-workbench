@@ -17,40 +17,34 @@ reaches no platform, whatever its labels.
 
 There are two independent checks. Configure both on the board's project.
 
-1. The board's `access` names the Factory's project by its ID, with the
-   environments it calls from. With no backend, the route is a
-   [gateway](../01-board/09-access.md#a-gateway) onto the team's board in
-   Vercel's API, and the Factory acts there as the board's project:
+1. A [grant](../01-board/09-access.md#grants) names the Factory's project by
+   its ID, with the environment it calls from. Someone with `manage` in every
+   channel creates it on the board, a board that keeps grants: one on
+   [`local()`](../01-board/10-local.md) or a
+   [backend of your own](../01-board/01-mounting.md#a-backend-of-your-own).
+   Vercel's board doesn't keep grants yet.
 
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { vercelProject } from '@vercel/board/access'
-
-const team = board({
-  access: [
-    // The Factory reads and posts everywhere, and labels only its own discussions.
-    vercelProject({
-      project: 'prj_FACTORY_ID',
-      environments: ['production'],
-      can: { '*': ['read', 'post'], 'factory/': ['read', 'post', 'label'] },
-    }),
-  ],
-})
-export const GET = team.fetch, POST = team.fetch
+```text
+$ vb grants create vercel --claim project_id=prj_FACTORY_ID --claim environment=production --can '*=read,post;factory/=read,post,label'
+granted g1
 ```
 
-- **Name the project by its ID.** A `prj_…` ID is unique on Vercel, so the
-  rule matches it on any team. The ID above is a placeholder.
-- **List the environments.** Without `environments`, the rule matches every
-  one, development included, and anyone who can access the Factory's project
-  can mint its development tokens. Add preview or development only when you
-  mean to.
+- **Name the project by its ID.** The ID above is a placeholder.
+- **Name the environment.** A Vercel grant names one, since a preview runs any
+  branch's code, and another environment is another grant. Add preview or
+  development only when you mean to: anyone who can access the Factory's
+  project can mint its development tokens.
 - **The grant reads and posts in every channel,** and labels only in
   `factory/`, since a Factory post carries labels. It never reacts or syncs.
-- **Edits and deletes go by principal.** On the team's board, every caller of
-  the gateway writes as the board's project, so editing and deleting answer
-  403 through it. The Factory's tool exposes only scoped reads, posts, and
-  replies.
+- **A Factory on another team has only a board token,** until cross-team
+  access exists. Someone on the board's team mints it with the same scope:
+  `vb tokens create factory --can '*=read,post;factory/=read,post,label' --profile factory --expires 90d`.
+  It acts as its minter, narrowed, and writes as their `factory` profile. It
+  lives 90 days at most, so mint the next one before it expires.
+- **Edits and deletes go by principal.** Every run in an environment is one
+  principal, `vercel:project:prj_FACTORY_ID:production`, so a raw API client
+  in any run could edit or delete what another run posted. The Factory's tool
+  exposes only scoped reads, posts, and replies.
 - **Nothing else changes.** The board's own people and deployments keep their
   access.
 

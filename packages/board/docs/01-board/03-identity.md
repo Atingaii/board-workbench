@@ -10,7 +10,7 @@ must be the board's URL, exactly as [discovery](./01-mounting.md#discovery)
 returns it. A token minted for one board is useless against any other, even
 another board on the same origin. That's `board()`'s default `authenticate`;
 a host can recognize its own credentials too: see
-[A host's own verifier](./09-access.md#a-hosts-own-verifier).
+[Callers of your own](./01-mounting.md#callers-of-your-own).
 
 Only a few routes take no token: discovery, the built-in avatars, the OpenAPI
 document, and `/webhooks/:key`, which the platform's adapter authenticates instead. A
@@ -23,7 +23,7 @@ The CLI and `board()` in Node find a token themselves. The first match wins:
 
 | Where | How | Principal |
 | --- | --- | --- |
-| Explicit | `BOARD_TOKEN`: an OIDC JWT for the board's audience, from Vercel, GitHub Actions, or an issuer `access` or a grant names; or a [board token](./09-access.md#tokens) | the issuer's, or a board token's minter |
+| Explicit | `BOARD_TOKEN`: an OIDC JWT for the board's audience, from Vercel, GitHub Actions, or an issuer a grant names; or a [board token](./09-access.md#tokens) | the issuer's, or a board token's minter |
 | A board from `vb serve` | the token it writes to a file only you can read, for its `127.0.0.1` URL | `local:user:<your OS user>` |
 | GitHub Actions | the job's OIDC token, for the board's audience; needs `permissions: id-token: write` | `github:repo:<repository_id>` |
 | A Vercel deployment | `getVercelOidcToken({ audience })` from `@vercel/oidc`, when `VERCEL=1` | `vercel:project:<project_id>:<env>` |
@@ -99,12 +99,12 @@ token expires, so a live stream doesn't verify each time it polls.
   `.vercel/project.json`. A `development` token from it is a person and must
   carry `user_id`. Any other environment is the
   deployment itself: in the environment the board runs in, it can do
-  everything, and in any other, nothing unless [`access`](./09-access.md)
-  lists it. So a production board refuses its previews, and a preview board
-  accepts its own.
+  everything, and in any other, nothing unless a
+  [grant](./09-access.md#grants) lets it in. So a production board refuses its
+  previews, and a preview board accepts its own.
 - **GitHub Actions tokens, other Vercel projects, and other issuers** are
-  accepted only when they match a rule in [`access`](./09-access.md), which
-  also says what they may do in each channel.
+  accepted only when a [grant](./09-access.md#grants) matches them, which also
+  says what they may do in each channel.
 - **Tests** point verification at a local issuer:
   `board({ authenticate: oidcTokens({ vercel: { issuer, jwks } }) })`. It still
   runs real verification against a real key set; no environment variable
@@ -163,51 +163,44 @@ verified principal.
 
 ## Machines outside the project
 
-Machines outside the board's project need a rule in `access`, and the rule
-says what they may do in each channel:
+Machines outside the board's project need a [grant](./09-access.md#grants),
+which says what they may do in each channel. Someone with `manage` in every
+channel creates it on the board, and it holds from the next request:
 
-```ts app/api/board/[[...path]]/route.ts
-import { board } from '@vercel/board'
-import { githubActions, vercelProject } from '@vercel/board/access'
-import { local } from '@vercel/board/local'
-
-const team = board({
-  backend: local(),
-  access: [
-    vercelProject({ project: 'marketing', environments: ['production'], can: { 'feedback/': ['post'] } }),
-    githubActions({ repository: 'acme/www', workflow: '.github/workflows/deploy.yml', can: { deploys: ['read', 'post'] } }),
-  ],
-})
-export const GET = team.fetch, POST = team.fetch
+```text
+$ vb grants create vercel --claim project_id=prj_marketing --claim environment=production --can feedback/=post
+granted g1
+$ vb grants create github --claim repository=acme/www --can deploys=read,post
+granted g2
 ```
 
-- **A project name without `team` means the board's own team.** Names are only
-  unique within a team, so another team's `marketing` doesn't match. A project
-  ID matches on any team, since IDs are unique. The board knows its team from
-  `VERCEL_ORG_ID`, the linked project, or on Vercel the platform's token. When
-  it can't tell, a name matches nothing.
-- **Names are for reading; IDs are stored.** A rule matches a project or repo
-  by name, but the principal records its ID, so a rename doesn't change who
-  wrote what.
+- **A Vercel grant names a project by its ID,** and the environment it calls
+  from. A GitHub grant names a repository, by `repository` or
+  `repository_id`; only `repository_id` survives a rename.
+- **Grants match claims; principals record IDs.** A workflow writes as
+  `github:repo:<repository_id>` whatever its grant names, so a rename doesn't
+  change who wrote what.
 - **A `pull_request` run's token carries `ref: refs/pull/<n>/merge`,** so a
-  rule pinned to `refs/heads/main` rejects it. Match on `event` and `workflow`
-  instead.
+  grant pinned to `--claim ref=refs/heads/main` doesn't match it. Match on
+  `event_name` instead.
 
 > [!WARNING]
 > For `pull_request`, GitHub runs the workflow file from the PR's merge commit,
-> so anyone who can open a PR can change what it posts. Keep `can` narrow for
-> those rules. Fork PRs get no OIDC token at all.
+> so anyone who can open a PR can change what it posts. Keep `--can` narrow for
+> grants that match those runs. Fork PRs get no OIDC token at all.
 
-[Access](./09-access.md) has the permissions, the channel patterns, `oidc()`
-for other issuers, and what a caller sees.
+[Access](./09-access.md) has the permissions, the channel patterns, grants for
+other issuers, board tokens for callers with no OIDC token, and what a caller
+sees.
 
 ## Authorization
 
 - **People and the board's own deployments in its environment can do everything.** There are no
   roles or member lists, and nothing restricts the project's own people.
   Content that needs privacy from them needs a second board.
-- **Everyone else can do what `access` gives them, channel by channel,** and
-  what they can't read answers 404.
+- **Everyone else can do what their grants give them, channel by channel,** or
+  a board token what its minter may, narrowed. What they can't read answers
+  404.
 - **Only the principal that wrote a message can edit or delete it.** A person
   can edit their own profiles' messages.
 - **Raw platform data needs more than reading.** `vb inbox` needs `sync` in
@@ -219,7 +212,7 @@ Handles are display hints, not reservations:
 
 - **A person's** is their Vercel username, sent by the CLI. Override it with
   `--handle` or `BOARD_HANDLE`. On a board with
-  [its own verifier](./09-access.md#a-hosts-own-verifier), it's the handle
+  [its own verifier](./01-mounting.md#callers-of-your-own), it's the handle
   that verifier returns, and the CLI's doesn't replace it.
 - **A profile's** is `<person>/<profile>`: `julian/claude`.
 - **A deployment's** is its project name, plus `@<env>` outside production.
