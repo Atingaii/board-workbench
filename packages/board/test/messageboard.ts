@@ -461,8 +461,11 @@ function fakeBoard(shared: Shared, boardId: string) {
 
   /** A board token does only what its scope gives at the channel's closest pattern: the channel, then its parents (`dev/`), then `*`. */
   function tokenMay(actor: Actor, permission: string, channelId: string) {
+    tokenMayIn(actor, permission, channels.find((channel) => channel.id === channelId)?.name ?? '')
+  }
+  /** The same, by the channel's name, which needn't exist yet. */
+  function tokenMayIn(actor: Actor, permission: string, name: string) {
     if (!actor.token) return
-    const name = channels.find((channel) => channel.id === channelId)?.name ?? ''
     const parts = name.split('/')
     const candidates = [name, ...parts.map((_, i) => `${parts.slice(0, parts.length - i).join('/')}/`), '*']
     const pattern = candidates.find((candidate) => Object.hasOwn(actor.token!.can, candidate))
@@ -516,7 +519,17 @@ function fakeBoard(shared: Shared, boardId: string) {
     return message
   }
 
-  /** A repeat of a post with the same client ID, by the same principal: the first one. */
+  /** Whether `actor` may read in the channel: a board token only where its scope gives `read`. */
+  const mayRead = (actor: Actor, channelId: string) => {
+    try {
+      tokenMay(actor, 'read', channelId)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** A repeat of a post with the same client ID, by the same principal: the first one, by its IDs only to a caller that can't read its channel. */
   function repeat(actor: Actor, clientId: unknown) {
     if (clientId === undefined) return null
     if (typeof clientId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(clientId)) throw new Refused(400, 'invalid_client_id')
@@ -524,7 +537,9 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (!id) return null
     const [, uuid, sequence] = MESSAGE_ID.exec(id)!
     const thread = threadAt(`thr_${uuid}`)
-    return { thread: showThread(thread), message: show(thread.messages[Number(sequence) - 1]!) }
+    const message = thread.messages[Number(sequence) - 1]!
+    if (!mayRead(actor, thread.channelId)) return { thread: { id: thread.id }, message: { id: message.id, threadId: thread.id, sequence: message.sequence } }
+    return { thread: showThread(thread), message: show(message) }
   }
 
   function page<T>(items: T[], cursor: string | null, size: number) {
@@ -979,14 +994,20 @@ function fakeBoard(shared: Shared, boardId: string) {
 
     if (method === 'GET' && rest === '/channels') {
       const name = url.searchParams.get('name')
-      return { channels: name === null ? channels : channels.filter((c) => c.name === name), cursor: null }
+      // It lists only the channels the caller may read.
+      const readable = channels.filter((c) => mayRead(actor, c.id))
+      return { channels: name === null ? readable : readable.filter((c) => c.name === name), cursor: null }
+    }
+    const makeChannel = (name: unknown) => {
+      if (typeof name !== 'string' || name.length > 80 || !CHANNEL.test(name)) throw new Refused(400, 'invalid_channel_name')
+      if (channels.some((c) => c.name === name)) throw new Refused(409, 'channel_name_taken')
+      const channel = { id: `chn_${randomUUID()}`, name }
+      channels.push(channel)
+      return channel
     }
     if (method === 'POST' && rest === '/channels') {
-      if (typeof body.name !== 'string' || body.name.length > 80 || !CHANNEL.test(body.name)) throw new Refused(400, 'invalid_channel_name')
-      if (channels.some((c) => c.name === body.name)) throw new Refused(409, 'channel_name_taken')
-      const channel = { id: `chn_${randomUUID()}`, name: body.name }
-      channels.push(channel)
-      return { channel }
+      tokenMayIn(actor, 'read', typeof body.name === 'string' ? body.name : '')
+      return { channel: makeChannel(body.name) }
     }
     const granted = access.route(method, rest, whoOf(actor), actor.id, body, url)
     if (granted !== undefined) return granted
@@ -1006,7 +1027,9 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (method === 'POST' && rest === '/threads') {
       const again = repeat(actor, body.clientId)
       if (again) return again
-      const channel = channelAt(body.channelId)
+      // By `channel`, its name, it checks `post` there and makes the channel on its first post, as a board does; or by `channelId`.
+      if (body.channel !== undefined) tokenMayIn(actor, 'post', String(body.channel))
+      const channel = body.channel !== undefined ? (channels.find((c) => c.name === body.channel) ?? makeChannel(body.channel)) : channelAt(body.channelId)
       tokenMay(actor, 'post', channel.id)
       const createdAt = now()
       const thread: Thread = { id: `thr_${randomUUID()}`, channelId: channel.id, messageCount: 0, lastActivityAt: createdAt, createdAt, createdBy: actor, messages: [] }

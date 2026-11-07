@@ -61,6 +61,11 @@ type ApiMessage = {
   /** Set when a schedule posted it: which schedule, and which of its sends, from 0. */
   schedule?: { id: string; n: number }
 }
+/**
+ * A post as the API answers a caller that can't read its channel: IDs only, as a client-ID replay to
+ * a caller that may post there but not read answers.
+ */
+type Posted = { thread: { id: string; channelId?: string }; message: { id: string; threadId: string; sequence: number } }
 /** A message posted later as its creator, in `channelId` or as a reply in `threadId`. Times are milliseconds. */
 type ApiSchedule = {
   id: string
@@ -516,6 +521,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (found) named.set(name, found)
     return found ?? null
   }
+  /** Channels' names by ID, as posts without a client ID named them: a post's own channel, which it may not be able to list. */
+  const posted = new Map<string, string>()
   async function channelById(who: Who, id: string): Promise<ApiChannel> {
     const found = (await loadChannels(who)).find((channel) => channel.id === id) ?? (await loadChannels(who, true)).find((channel) => channel.id === id)
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
@@ -674,6 +681,39 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       revision: message.revision,
       author: await nameOf(who, message.createdBy),
       ...(message.schedule ? { schedule: { id: message.schedule.id, n: message.schedule.n } } : {}),
+    }
+  }
+
+  /**
+   * The message a post made, from what it sent, when the API answers with its IDs only: the caller
+   * may post there but not read it back. It's by the caller, as its credentials and profile name it.
+   */
+  async function sent(who: Who, ids: Posted['message'], input: { text: string; labels?: Labels | undefined; attachments?: readonly string[] | undefined; noSync?: boolean | undefined }): Promise<ApiMessage> {
+    const { actor } = await self(who)
+    const by: ApiActor = {
+      id: await actorOf(who),
+      principal: actor.principal,
+      ...(who.profile ? { profile: who.profile } : {}),
+      ...(who.session ? { session: who.session } : {}),
+    }
+    // Its own files, as far as it can still look them up: the post landed, so one it can't is left out rather than failing it.
+    const attachments = (
+      await Promise.all(
+        (input.attachments ?? []).map(async (id) =>
+          api<{ attachment: ApiAttachment }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`)).then(({ attachment }) => fileOf(attachment), () => null),
+        ),
+      )
+    ).filter((file) => file !== null)
+    return {
+      ...ids,
+      text: input.text,
+      version: 1,
+      revision: 1,
+      createdAt: Date.now(),
+      createdBy: by,
+      ...(input.labels && Object.keys(input.labels).length ? { labels: { ...input.labels } } : {}),
+      ...(input.noSync ? { noSync: true } : {}),
+      ...(attachments.length ? { attachments } : {}),
     }
   }
 
@@ -1718,15 +1758,19 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       if (input.sync?.length) throw notSupported('sync')
       const who = whoOf(caller)
       const clientId = input.id !== undefined ? await clientIdOf(input.id) : undefined
-      let made: { thread: ApiThread; message: ApiMessage }
+      let made: { thread: ApiThread; message: ApiMessage } | Posted
+      let channelName: string
       if (input.channel !== undefined) {
-        const channel = await channelToPost(who, input.channel)
+        // By name: the API checks `post` there and makes the channel on its first post, so a caller
+        // that may post but not read, which can't list or make channels, can still start a thread.
+        channelName = input.channel
         made = await api(who, 'POST', await onBoard(who, '/threads'), {
-          body: { operationId: operationId(), channelId: channel.id, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}) },
+          body: { operationId: operationId(), channel: input.channel, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
         })
       } else {
         const { thread, message: to, channel } = await messageIn(who, input.re!, signal)
+        channelName = channel.name
         // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
         const after = input.after === undefined ? undefined : locate(input.after)
         if (after !== undefined && after?.threadId !== thread.id) {
@@ -1735,7 +1779,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
           if (landed?.thread.id === thread.id) return { message: await view(who, landed.message, channel.name) }
           throw badRequest(`after: ${input.after} isn't in ${input.re}'s thread`, 'invalid_after')
         }
-        made = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
+        const reply = await api<{ thread: ApiThread; message: ApiMessage }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages`), {
           body: { operationId: operationId(), text: input.text, ...(to.sequence > 1 ? { replyTo: to.sequence } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(after ? { after: after.sequence } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
         }).catch((error: unknown) => {
@@ -1745,15 +1789,26 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         })
         // The API labels a new thread as it starts, and a reply after.
         if (input.labels && Object.keys(input.labels).length) {
-          const labeled = await api<{ meta: { labels?: Labels; version: number } }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages/${made.message.sequence}/labels`), {
+          const labeled = await api<{ meta: { labels?: Labels; version: number } }>(who, 'POST', await onBoard(who, `/threads/${encodeURIComponent(thread.id)}/messages/${reply.message.sequence}/labels`), {
             body: { operationId: operationId(), set: input.labels },
             signal,
           })
-          made = { ...made, message: { ...made.message, ...(labeled.meta.labels ? { labels: labeled.meta.labels } : {}), version: labeled.meta.version } }
+          reply.message = { ...reply.message, ...(labeled.meta.labels ? { labels: labeled.meta.labels } : {}), version: labeled.meta.version }
         }
+        made = reply
       }
-      const channel = await channelById(who, made.thread.channelId)
-      return { message: await view(who, made.message, channel.name) }
+      // A new post is in the channel it named. Only a retried post ID may have landed in another one,
+      // which a whole answer names by ID; a channel it may only post in it can't list, so it keeps the one it named.
+      const channelId = made.thread.channelId
+      if (channelId !== undefined) {
+        if (clientId !== undefined && posted.get(channelId) !== channelName)
+          channelName = await channelById(who, channelId).then(
+            (channel) => (posted.set(channelId, channel.name), channel.name),
+            () => channelName,
+          )
+        else posted.set(channelId, channelName)
+      }
+      return { message: await view(who, 'text' in made.message ? made.message : await sent(who, made.message, input), channelName) }
     },
     async posted(caller, { id }, signal) {
       const who = whoOf(caller)
