@@ -245,4 +245,17 @@ describe('x-board-can', () => {
     for (const scope of ['dev/', 'dev/*=read', 'dev/=write', ''])
       expect((await caller(fetch, await personToken(), { 'x-board-can': scope })('GET', '/me')).body.error, scope).toMatchObject({ code: 'invalid_scope' })
   })
+
+  it('refuses the old x-board-scope instead of ignoring it', async () => {
+    const { fetch } = testBoard()
+    const old = caller(fetch, await personToken(), { 'x-board-scope': 'dev/=read' })
+    for (const [method, path, body] of [
+      ['GET', '/me', undefined],
+      ['POST', '/messages', { channel: 'ci', text: 'past the old narrowing' }],
+    ] as const)
+      expect(await old(method, path, body), path).toMatchObject({
+        status: 400,
+        body: { error: { code: 'invalid_scope', message: 'x-board-scope is x-board-can now: send the same value as x-board-can' } },
+      })
+  })
 })

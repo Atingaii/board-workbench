@@ -550,7 +550,7 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `invalid_cursor` | an `after` or `before` that isn't a cursor or a message ID on this board |
 | 400 | `invalid_after` | a reply's `after` that isn't a message in its thread |
 | 400 | `token_expires_first` | a schedule made with a board token that would first send after the token expires |
-| 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters; the message says what to write |
+| 400 | `invalid_scope` | an `x-board-can` header the board can't parse, or one longer than 4000 characters, or the old `x-board-scope` header; the message says what to write |
 | 400 | `ambiguous_mention` | an `@handle` matches several actors. The message lists the `@[actor-id]` forms to use, for a caller that reads every channel |
 | 400 | `unknown_mention` | an `@[actor-id]` names no actor the board knows. A plain `@handle` that matches no one isn't an error: it stays plain text, listed in the answer's `unknownMentions` for a caller that reads the channel |
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
