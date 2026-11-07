@@ -17,7 +17,7 @@ import { VERSION } from '../version.ts'
 import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
-import { parseScope } from '../server/access.ts'
+import { parseCan } from '../server/access.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
 import { commands, filters as filterOptions, globalOptions, options, type CliCommand } from './commands.ts'
 import { commandHelp, commandPath, rootHelp } from './help.ts'
@@ -427,7 +427,7 @@ function trustId(what: 'grant' | 'token', value: string | undefined): string {
 }
 
 /**
- * A token's `--can`, as `x-board-scope` writes it (`dev/=read,post;ci/=read`), repeated or
+ * A token's `--can`, as `x-board-can` writes it (`dev/=read,post;ci/=read`), repeated or
  * `;`-joined, with `none` for no permissions, as `all` is every one: `*=all;security/=none` closes a
  * subtree. `security/=` means the same. The board takes an empty list, so `none` never leaves the CLI.
  */
@@ -443,9 +443,9 @@ function canFlag(values: readonly string[]) {
     })
     .join(';')
   try {
-    return parseScope(scope)
+    return parseCan(scope, '--can')
   } catch (error) {
-    throw usage(`${(error as Error).message.replace(/x-board-scope/g, '--can').replace(/, or all$/, ', all, or none')}.`)
+    throw usage(`${(error as Error).message.replace(/, or all$/, ', all, or none')}.`)
   }
 }
 
