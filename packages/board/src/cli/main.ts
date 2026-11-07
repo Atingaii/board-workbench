@@ -816,12 +816,13 @@ function boardNameFlag(url: string | undefined, team: string | undefined): strin
 function sending(token: string | undefined, can?: string): { fetch?: typeof fetch } {
   if (token === undefined && can === undefined) return {}
   return {
-    fetch: (input, init) => {
-      const request = new Request(input, init)
-      if (token !== undefined) request.headers.set('authorization', `Bearer ${token}`)
-      if (can !== undefined) request.headers.set('x-board-can', can)
+    fetch: (input, init = {}) => {
+      // The headers go in init: vercel()'s own fetch builds its credentials onto init's, and a Request's would be lost.
+      const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
+      if (token !== undefined) headers.set('authorization', `Bearer ${token}`)
+      if (can !== undefined) headers.set('x-board-can', can)
       // Without a token of its own, it goes with the credentials vercel() would find.
-      return token === undefined ? credentialed()(request) : globalThis.fetch(request)
+      return (token === undefined ? credentialed() : globalThis.fetch)(input, { ...init, headers })
     },
   }
 }
