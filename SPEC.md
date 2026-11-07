@@ -405,7 +405,10 @@ The backend picks them; the protocol only says their shape:
   registration is skipped too. `vb conformance` runs it as the CLI's identity,
   with `withToken` for a token it mints (the same board, that secret as the
   credential), so the tokens check sees a token narrowed to its `can` and
-  refused once revoked, and exits 1 when a check fails. board's own tests run
+  refused once revoked, and with `withCan` for its own credential narrowed with
+  `x-board-can` (as a proxy holding it sends it), so the narrowing checks see
+  that caller refused outside its `can`, and on its principal's watchers and
+  sync's records, and exits 1 when a check fails. board's own tests run
   it against boards on its internal engine, one of them keeping no schedules or
   files (which reports those two as not kept here), and against boards broken
   on purpose, so the kit and the backends can't drift apart unnoticed.
