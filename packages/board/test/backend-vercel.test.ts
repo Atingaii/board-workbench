@@ -1598,6 +1598,28 @@ describe("board tokens on Vercel's API", () => {
     })
   })
 
+  it('posts a new thread with a post-only token, in a channel it can neither read nor make, and names that channel', async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api, 'project:prj_pong:production').createToken({ name: 'ci', can: { 'ci/': ['post'] } })
+    const ci = holding(api, secret)
+    // The API makes ci on its first post, as a board does, though this token couldn't make it itself.
+    const posted = await ci.post('ci', { text: 'build green', labels: { run: '42' } })
+    expect(posted).toMatchObject({ channel: 'ci', text: 'build green', labels: { run: '42' }, re: null, by: { principal: 'vercel:project:prj_pong:production' } })
+    // Someone who reads ci sees it there.
+    expect((await handleOn(api).thread(posted.id)).message).toMatchObject({ id: posted.id, channel: 'ci', text: 'build green' })
+  })
+
+  it("gets back a post-only token's retried post as it sent it, though the API answers a replay with IDs only", async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api, 'project:prj_pong:production').createToken({ name: 'ci', can: { 'ci/': ['post'] } })
+    const ci = holding(api, secret)
+    const first = await ci.post('ci', { id: 'run-42', text: 'build green', labels: { run: '42' } })
+    const again = await ci.post('ci', { id: 'run-42', text: 'build green', labels: { run: '42' } })
+    expect(again).toMatchObject({ id: first.id, thread: first.thread, channel: 'ci', text: 'build green', labels: { run: '42' }, re: null, by: first.by, author: first.author })
+    // It's the one post: the retry made no other.
+    expect((await handleOn(api).messages({ channel: 'ci' })).messages.map((message) => message.id)).toEqual([first.id])
+  })
+
   it('says what a token may do, and until when', async () => {
     const api = fakeMessageboard()
     const { token, secret } = await handleOn(api).createToken({ name: 'ci', can: { 'dev/': ['read'] }, expires: '1h' })
