@@ -1627,6 +1627,17 @@ describe("board tokens on Vercel's API", () => {
     expect(await jb.post('ops', { id: 'once', text: 'hi' })).toMatchObject({ id: first.id, channel: 'dev' })
   })
 
+  it('starts a thread in one call to the API, in a channel new or not, for a reader and a post-only token alike', async () => {
+    const api = fakeMessageboard()
+    const { secret } = await handleOn(api, 'project:prj_pong:production').createToken({ name: 'ci', can: { 'ci/': ['post'] } })
+    const jb = handleOn(api)
+    const ci = holding(api, secret)
+    const before = api.requests.length
+    for (const [handle, channel] of [[jb, 'ops'], [jb, 'ops'], [ci, 'ci'], [ci, 'ci']] as const) expect(await handle.post(channel, { text: 'hi' })).toMatchObject({ channel })
+    // Neither looks the channel up, makes it, or lists channels to name it.
+    expect(api.requests.slice(before).filter((request) => /\/(channels|threads)/.test(request))).toEqual(Array(4).fill('POST /boards/brd_test/threads'))
+  })
+
   it('says what a token may do, and until when', async () => {
     const api = fakeMessageboard()
     const { token, secret } = await handleOn(api).createToken({ name: 'ci', can: { 'dev/': ['read'] }, expires: '1h' })

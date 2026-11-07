@@ -521,6 +521,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     if (found) named.set(name, found)
     return found ?? null
   }
+  /** Channels' names by ID, as posts without a client ID named them: a post's own channel, which it may not be able to list. */
+  const posted = new Map<string, string>()
   async function channelById(who: Who, id: string): Promise<ApiChannel> {
     const found = (await loadChannels(who)).find((channel) => channel.id === id) ?? (await loadChannels(who, true)).find((channel) => channel.id === id)
     if (!found) throw new HttpError(502, 'remote_error', `Vercel's API names a channel it doesn't list: ${id}`)
@@ -1767,11 +1769,17 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         }
         made = reply
       }
-      // A whole answer names its channel by ID: a retried post ID may have landed in another one than
-      // this names. A channel it may only post in it can't list, so it keeps the one it named.
+      // A new post is in the channel it named. Only a retried post ID may have landed in another one,
+      // which a whole answer names by ID; a channel it may only post in it can't list, so it keeps the one it named.
       const channelId = made.thread.channelId
-      if (channelId !== undefined && named.get(channelName)?.id !== channelId)
-        channelName = await channelById(who, channelId).then((channel) => channel.name, () => channelName)
+      if (channelId !== undefined) {
+        if (clientId !== undefined && posted.get(channelId) !== channelName)
+          channelName = await channelById(who, channelId).then(
+            (channel) => (posted.set(channelId, channel.name), channel.name),
+            () => channelName,
+          )
+        else posted.set(channelId, channelName)
+      }
       return { message: await view(who, 'text' in made.message ? made.message : await sent(who, made.message, input), channelName) }
     },
     async posted(caller, { id }, signal) {
