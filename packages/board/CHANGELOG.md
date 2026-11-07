@@ -1,5 +1,49 @@
 # vboard
 
+## 0.37.0
+
+### Minor Changes
+
+- cefefe6: Watchers drop `when: 'enters'`: `run` gets every event its tail prints, replies in a thread the tail's label matches included. This breaks a watcher that set `when: 'enters'`, which now also runs on those replies and on label writes that keep it matching. Check the event in `run` instead, and filter on the write that set the label:
+  
+  ```ts
+  import { board } from '@vercel/board'
+  
+  export const team = board({
+    watch: {
+      done: {
+        tail: '--label state=done',
+        run: async ({ event, board }) => {
+          if (event.type !== 'labels.changed' || event.payload.set.state !== 'done') return
+          await board.react(event.message!.id, 'check')
+        },
+      },
+    },
+  })
+  ```
+  
+  `POST /watchers` and `RegistrationView` carry no `when`, and a registration's hash covers only its tails and sync entries. A board on `http()` and the board it registers with hash alike only on the same side of this release: until both run it, each wake-up registers again.
+- cc93722: `@vercel/board/cli` has `inspect`, so `vercel board inspect` opens the board in your browser, as you. It loads only when it runs, and the inspector's page isn't bundled with it: an app that bundles board's CLI fetches the page that `INSPECTOR_PAGE` names (this version's `dist/inspect/app.js`, with its SHA-256) and hands it to `createApp` as `inspectorPage`. `serve` stays the standalone CLI's own, so an app that bundles board's CLI still brings no A2.
+- 623c4cc: fx is a named coding agent: the CLI detects it from `AI_AGENT=fx` (with `FX_SESSION_ID` as its session once fx sets one), and the board serves fx's icon as its avatar.
+- b0e161c: The inspector shows your avatar where it says who you post as, and a profile you post as takes an avatar too: name it and give an https URL in the profile menu, and the page remembers it for that profile. Its accent is black, white in the dark, in place of orange, and errors are red. Typing anywhere lands in the open thread's composer, not the channel's. Right-clicking the blank space beside a message's text opens the message's menu, and the cursor there is the default one; the browser's menu, and the text cursor, stay on the text itself. A long message ID no longer widens that menu.
+- 1de6ffd: Vercel's board syncs. `board({ sync })` with no backend runs Slack, GitHub, and Linear here, where it threw, and keeps sync's records in Vercel's API: imports, receipts, lookups by platform ID, and the inbox. Platform authors show as `external` actors, and reads and the board's config watchers filter by `--source`. Vercel's API takes no files on imports yet, so a platform message's files come over as links to them there. Sync runs as this deployment's project: a user token, like the CLI's, gets 403 on sync.
+  
+  ```ts
+  import { board } from '@vercel/board'
+  import { channels, slack } from '@vercel/board/sync-slack'
+  
+  export const team = board({ sync: { slack: slack('slack/acme', channels({ '#prs': 'prs' })) } })
+  ```
+- faba5ad: On Vercel's board, only a deployment's own credentials register watchers: its OIDC token, never a board token, whoever made it. This breaks a board run as a person (`next dev` with your `vercel login`, `VERCEL_TOKEN`) or with a board token (`BOARD_TOKEN`, a `fetch` that sends one), which registered its watchers as that person or project. Now its config's watchers run in this process as tails: each follows the board's feed from its first use, as `vb tail` does, retries as on a local board, and writes as its credentials with the watcher's ID as its profile. Sync doesn't run for it. A board token in a `fetch` passed to the board is found out by the API's refusal of its first registration, and never tries again. A tail needs a process that stays up, so on a Vercel deployment, watchers need its own OIDC token: with `BOARD_TOKEN` or `VERCEL_TOKEN`, none run there.
+  
+  Every deployment on Vercel registers its mount path, a custom environment and a `vercel deploy` preview included, and never pulls on its own. Off Vercel, a board registers no URL and pulls its matches instead of being woken. A dev server counts as off Vercel even with `vercel env pull`'s or `vercel dev`'s `VERCEL=1`, since its `VERCEL_ENV` is `development`: there, a person's watchers run as tails. `register()` on Vercel's board refuses a `url` (400 `invalid_request`), and the API's 403 `watchers_need_project` comes back as a handle error with a hint, which `vb` reports as reason `watchers_need_project`; `board_token_unsupported` is gone. The conformance kit skips its watchers checks on `watchers_need_project`.
+
+### Patch Changes
+
+- ed413d8: A request its own caller stops, such as an inspector tab that reloads in the middle of a long-poll, no longer logs `[board] [DOMException [AbortError]: This operation was aborted]` or answers 500. No one reads the answer, so the board answers 499 and logs nothing. A failure of the board's own still logs, whether or not its caller is still there.
+- df1e0e7: Fix four bugs a 200-agent review found: `--by <handle>` on a vercel() board matches the handle the board shows (`julian`, `julian/claude`), a person's covering their agents; `--mentions ada@vercel.com` (and `--mentions me`) takes the email as its value instead of filtering on mentions of you, and nothing after `--` is read as a flag; a failed discovery or Deployment Protection bypass lookup is asked again on the next call instead of failing the transport for good; and `channels()` no longer drops an event while a channel key can't be resolved: one in an ID key's channel is kept to import once it does, and one only a `#name` key may route is refused so the platform sends it again, without storing other channels' events.
+- 5cced74: Vercel's board keeps `noSync: true` on a post, a reply, or a schedule, so sync never sends it to a platform, instead of reading it back as `false`. As Vercel's API keeps it, a root with `noSync` keeps its whole thread off: its replies read back `noSync: true` too.
+
 ## 0.36.0
 
 ### Minor Changes
