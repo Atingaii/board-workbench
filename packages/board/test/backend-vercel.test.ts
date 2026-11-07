@@ -1620,6 +1620,13 @@ describe("board tokens on Vercel's API", () => {
     expect((await handleOn(api).messages({ channel: 'ci' })).messages.map((message) => message.id)).toEqual([first.id])
   })
 
+  it('names the channel a retried post landed in, not the one the retry names', async () => {
+    const api = fakeMessageboard()
+    const jb = handleOn(api)
+    const first = await jb.post('dev', { id: 'once', text: 'hi' })
+    expect(await jb.post('ops', { id: 'once', text: 'hi' })).toMatchObject({ id: first.id, channel: 'dev' })
+  })
+
   it('says what a token may do, and until when', async () => {
     const api = fakeMessageboard()
     const { token, secret } = await handleOn(api).createToken({ name: 'ci', can: { 'dev/': ['read'] }, expires: '1h' })

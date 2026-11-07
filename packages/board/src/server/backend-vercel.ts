@@ -694,10 +694,14 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       ...(who.profile ? { profile: who.profile } : {}),
       ...(who.session ? { session: who.session } : {}),
     }
-    // Its own files it can still look up, whoever may read the channel.
-    const attachments = await Promise.all(
-      (input.attachments ?? []).map(async (id) => fileOf((await api<{ attachment: ApiAttachment }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`))).attachment)),
-    )
+    // Its own files, as far as it can still look them up: the post landed, so one it can't is left out rather than failing it.
+    const attachments = (
+      await Promise.all(
+        (input.attachments ?? []).map(async (id) =>
+          api<{ attachment: ApiAttachment }>(who, 'GET', await onBoard(who, `/attachments/${encodeURIComponent(id)}`)).then(({ attachment }) => fileOf(attachment), () => null),
+        ),
+      )
+    ).filter((file) => file !== null)
     return {
       ...ids,
       text: input.text,
@@ -1725,18 +1729,18 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const who = whoOf(caller)
       const clientId = input.id !== undefined ? await clientIdOf(input.id) : undefined
       let made: { thread: ApiThread; message: ApiMessage } | Posted
-      let named: string
+      let channelName: string
       if (input.channel !== undefined) {
         // By name: the API checks `post` there and makes the channel on its first post, so a caller
         // that may post but not read, which can't list or make channels, can still start a thread.
-        named = input.channel
+        channelName = input.channel
         made = await api(who, 'POST', await onBoard(who, '/threads'), {
           body: { operationId: operationId(), channel: input.channel, text: input.text, ...(input.labels && Object.keys(input.labels).length ? { labels: input.labels } : {}), ...(clientId ? { clientId } : {}), ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.noSync ? { noSync: true } : {}) },
           signal,
         })
       } else {
         const { thread, message: to, channel } = await messageIn(who, input.re!, signal)
-        named = channel.name
+        channelName = channel.name
         // The API checks it with the post, as a sequence in the thread: an ID's says where it is.
         const after = input.after === undefined ? undefined : locate(input.after)
         if (after !== undefined && after?.threadId !== thread.id) {
@@ -1763,8 +1767,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
         }
         made = reply
       }
-      // The channel it named: one it may only post in, it couldn't read back.
-      return { message: await view(who, 'text' in made.message ? made.message : await sent(who, made.message, input), named) }
+      // A whole answer names its channel by ID: a retried post ID may have landed in another one than
+      // this names. A channel it may only post in it can't list, so it keeps the one it named.
+      const channelId = made.thread.channelId
+      if (channelId !== undefined && named.get(channelName)?.id !== channelId)
+        channelName = await channelById(who, channelId).then((channel) => channel.name, () => channelName)
+      return { message: await view(who, 'text' in made.message ? made.message : await sent(who, made.message, input), channelName) }
     },
     async posted(caller, { id }, signal) {
       const who = whoOf(caller)
