@@ -939,10 +939,8 @@ const CHECKS: Check[] = [
       if (registered && (Object.keys(registered.watch).length > 0 || (registered.sync?.length ?? 0) > 0))
         return 'this token has watchers or a sync registered here, and checking would replace them'
       const byPath = (await ctx.board.discovery()).wake_by_path
-      // A path wakes a project's production, or a preview's branch, which it names.
+      // A path wakes a project's deployment in any environment, a preview's by its branch when it names one.
       const environment = /^vercel:project:[^:]+:(.+)$/.exec(ctx.me.principal)?.[1] ?? null
-      if (byPath && environment !== null && environment !== 'production' && environment !== 'preview')
-        return `a path wakes production or a preview, and this token is ${environment}'s`
       const where = wokenAt(registered)
       const branch = environment === 'preview' ? { branch: 'conformance' } : {}
       const attempt = () => ctx.board.register({ path: '/conformance', ...branch, watch: {} })
@@ -1185,8 +1183,8 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
         checks.push(skipped ? { group, name, status: 'skipped', detail: skipped } : { group, name, status: 'passed' })
       } catch (error) {
         if (OPTIONAL.has(group) && error instanceof BoardError && error.status === 501) checks.push({ group, name, status: 'skipped', detail: `not kept here: ${error.message}` })
-        // Vercel's API takes no board token for watchers yet: a run on one can't check them.
-        else if (group === 'watchers' && error instanceof BoardError && error.code === 'board_token_unsupported') checks.push({ group, name, status: 'skipped', detail: "a board token can't register watchers yet" })
+        // Vercel's API takes watchers only from a deployment: a run as anyone else can't check them.
+        else if (group === 'watchers' && error instanceof BoardError && error.code === 'watchers_need_project') checks.push({ group, name, status: 'skipped', detail: 'only a deployment registers watchers here' })
         else checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }
