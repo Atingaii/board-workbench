@@ -488,6 +488,16 @@ prints its secret, which shows only here, so it pipes:
 `x-board-can`'s syntax (`dev/=read,post;ci/=read`). `--profile` and
 `--session` pin what every request with it writes as. It lives 30 days, or
 `--expires`, 90 days at most. See [Tokens](../01-board/09-access.md#tokens).
+On Vercel's board, only a deployment mints one, with its own OIDC token, or a
+board token mints from itself: run as you, it answers with reason
+`unsupported_principal`:
+
+```text
+$ vb tokens create widget --can feedback/=post --scope acme
+error: Vercel's board mints board tokens only for a deployment.
+
+  Mint it from a deployment, with its OIDC token, or from a board token.
+```
 
 | Flag | Effect |
 | --- | --- |
@@ -567,21 +577,24 @@ $ vb grants revoke g4
 revoked g4
 ```
 
-Vercel's board keeps a grant for `--github` or `--oidc`, but doesn't sign in
-GitHub or OIDC callers yet, so `create` says so under it, and with `--json` in
-`warnings` (`callers_not_signed_in`):
+Vercel's board takes no `--github` or `--oidc` principal: a workflow gets in
+as a Vercel App, which an OIDC exchange policy issues its token for, and the
+grant names that app (`--app`, or `--all-apps`). `create` and `update` say so,
+with reason `unsupported_principal`:
 
 ```text
 $ vb grants create --github acme/web --can 'ci/=post' --scope acme
-created g4  --github acme/web  ci/=post
-note  Vercel's board doesn't sign in GitHub or OIDC callers yet: this grant works once it does
+error: Vercel's board takes no GitHub or OIDC principals in a grant.
+
+  Grant an app that an OIDC exchange policy issues tokens for: --app <slug>.
 ```
 
 `explain` says which grant decides a channel: the pattern that won and those
 it won over, the closest grants there, and what they give. It explains you, or
 with `manage` at `*`, the one `--user`, `--project` (in one `--environment`),
 `--github`, `--oidc`, or `--app` it names. A local board has no apps, so
-nothing lets one in there. A caller that can't list grants sees that
+nothing lets one in there. Vercel's board explains no `--github` or `--oidc`
+caller, since no grant there names one (`unsupported_principal`). A caller that can't list grants sees that
 one decides, not which:
 
 ```text

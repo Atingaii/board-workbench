@@ -49,7 +49,9 @@ export type ConformanceOptions = {
    * team, or skips the checks that name them: a `project` (its name or ID), a GitHub `repository`
    * no grant names, a `viewer` (a person's email or ID whose team role is viewer), to check
    * that a role caps what grants give, and an `app` installed on the board's team (its slug or
-   * client ID), which a local board has none of. None may be the run's own: it throws before it
+   * client ID), which a local board has none of. Checks that grant to someone besides the project
+   * name the app when there's one, and the repository otherwise: Vercel's board takes no GitHub
+   * principal in a grant, so give it an app. None may be the run's own: it throws before it
    * writes.
    */
   principals?: { project?: string; repository?: string; viewer?: string; app?: string }
@@ -168,6 +170,13 @@ const subtreeOf = (ctx: Context) => `${ctx.channel}/grants/`
 /** The check's grant: that project may post in the subtree's `ci/`. */
 const grantFor = (ctx: Context) => ({ principals: [projectFor(ctx)], can: { [`${subtreeOf(ctx)}ci/`]: ['post'] } }) as const
 
+/**
+ * Whom the checks that grant to someone besides the project name: the app the run was given, or
+ * else the repository, which a board that takes no GitHub principal in a grant refuses (Vercel's).
+ */
+const granteeOf = (ctx: Context) =>
+  ctx.principals.app !== null ? ({ kind: 'app', app: ctx.principals.app } as const) : ({ kind: 'github', repository: ctx.principals.repository } as const)
+
 /** A check that can't run here, and why: it's skipped, not failed. */
 class Skip extends Error {}
 
@@ -221,6 +230,8 @@ async function withGrants(ctx: Context, check: (grants: Grants) => Promise<void 
         made.push(grant.id)
       } catch (error) {
         if (error instanceof BoardError && error.status === 403) return
+        // A board that takes none of these principals skips the check, as below.
+        if (error instanceof BoardError && error.code === 'unsupported_principal') throw error
         throw unnamed(error) ?? new Mismatch(`${what}: expected 403, got ${error instanceof BoardError ? `${error.status} ${error.code}` : messageOf(error)}`)
       }
       throw new Mismatch(`${what}: expected 403, and it made the grant`)
@@ -679,9 +690,9 @@ const CHECKS: Check[] = [
         const first = await make(grantFor(ctx))
         const again = await make(grantFor(ctx))
         check(again.id !== first.id, `the same principals again should be another grant, got ${again.id} twice`)
-        const { repository } = ctx.principals
+        const other = granteeOf(ctx)
         const ci = `${subtreeOf(ctx)}ci/`
-        // A board that looks names up and has none for the repository skips the rest.
+        // A board that looks names up and has none for the app or repository skips the rest.
         const update = async (change: Parameters<Board['updateGrant']>[1]) => {
           try {
             return await ctx.board.updateGrant(first.id, change)
@@ -690,17 +701,17 @@ const CHECKS: Check[] = [
           }
         }
         // The project again joins the one it names: its environments together.
-        const added = await update({ add: [{ kind: 'github', repository }, projectFor(ctx, ['production'])], can: { [ci]: ['read', 'post'] } })
+        const added = await update({ add: [other, projectFor(ctx, ['production'])], can: { [ci]: ['read', 'post'] } })
         same(added.grant.id, first.id, "the updated grant's id")
-        alike(added.grant.principals.map((principal) => principal.kind), ['project', 'github'], 'principals after adding a repository, and the project again')
+        alike(added.grant.principals.map((principal) => principal.kind), ['project', other.kind], `principals after adding ${other.kind === 'app' ? 'an app' : 'a repository'}, and the project again`)
         const project = added.grant.principals[0]
         alike(sortedOf(project?.kind === 'project' ? project.environments : undefined), sortedOf(['preview', 'production']), "the project's environments, after adding it again")
         alike(added.grant.can, { [ci]: ['read', 'post'] }, "the updated grant's can")
         // A project to remove is the project, whatever its environments.
         const removed = await update({ remove: [{ kind: 'project', project: ctx.principals.project }] })
-        alike(removed.grant.principals.map((principal) => principal.kind), ['github'], 'principals after removing the project')
+        alike(removed.grant.principals.map((principal) => principal.kind), [other.kind], 'principals after removing the project')
         await rejects(update({ remove: [{ kind: 'project', project: ctx.principals.project }] }), 400, 'not_in_grant', 'removing a principal the grant no longer names')
-        await rejects(update({ remove: [{ kind: 'github', repository }] }), 400, 'grant_empty', 'removing the last principal')
+        await rejects(update({ remove: [other] }), 400, 'grant_empty', 'removing the last principal')
         await rejects(ctx.board.updateGrant(`${first.id}0`, { can: { [ci]: ['read'] } }), 404, 'grant_not_found', 'updating a grant that was never made')
       }),
   },
@@ -845,7 +856,7 @@ const CHECKS: Check[] = [
       withGrants(ctx, async ({ make, deny, mint, keep }) => {
         const subtree = subtreeOf(ctx)
         const secret = `${subtree}secret/`
-        const run = { kind: 'github' as const, repository: ctx.principals.repository }
+        const run = granteeOf(ctx)
         const narrowed = await mint({ '*': 'all', [secret]: [] })
         await deny(narrowed, { principals: [run], can: { [subtree]: ['read'] } }, `a grant on ${subtree} from a token kept out of ${secret}`)
         // A lock there binds whoever it names as much as the token, until it's lifted: the token's own limit still counts.
@@ -867,7 +878,7 @@ const CHECKS: Check[] = [
         await keep(open)
         await make({ principals: [{ kind: 'everyone' }], can: { [open]: ['read'] } })
         // Anyone it lets in, anywhere, would read open/ through everyone's grant.
-        await deny(narrowed, { principals: [{ kind: 'github', repository: ctx.principals.repository }], can: { [`${subtree}ci/`]: ['post'] } }, `a grant from a token kept out of ${open}, which everyone reads`)
+        await deny(narrowed, { principals: [granteeOf(ctx)], can: { [`${subtree}ci/`]: ['post'] } }, `a grant from a token kept out of ${open}, which everyone reads`)
       }),
   },
   {
@@ -1274,6 +1285,9 @@ export async function conformance(board: Board, options: ConformanceOptions = {}
         if (OPTIONAL.has(group) && error instanceof BoardError && error.status === 501) checks.push({ group, name, status: 'skipped', detail: `not kept here: ${error.message}` })
         // Vercel's API takes watchers only from a deployment: a run as anyone else can't check them.
         else if (group === 'watchers' && error instanceof BoardError && error.code === 'watchers_need_project') checks.push({ group, name, status: 'skipped', detail: 'only a deployment registers watchers here' })
+        // Vercel's API takes no GitHub or OIDC principal in a grant, and mints board tokens only for a deployment.
+        else if (group === 'grants' && error instanceof BoardError && error.code === 'unsupported_principal') checks.push({ group, name, status: 'skipped', detail: 'this board takes no GitHub or OIDC principals in a grant' })
+        else if (group === 'tokens' && error instanceof BoardError && error.code === 'unsupported_principal') checks.push({ group, name, status: 'skipped', detail: 'this board mints tokens only for a deployment: run as one to check them' })
         else checks.push({ group, name, status: 'failed', detail: error instanceof Error ? error.message : String(error) })
       }
     }

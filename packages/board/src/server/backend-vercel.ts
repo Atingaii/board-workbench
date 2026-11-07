@@ -1490,6 +1490,34 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
   /** A sync key's inbox, under the board. */
   const inboxPath = (who: Who, key: string, rest = '') => onBoard(who, `/sync/inbox/${encodeURIComponent(key)}${rest}`)
 
+  /** A grant Vercel's API won't keep: one naming a GitHub run or an OIDC issuer, which an app stands in for. */
+  const grantRefused = (error: unknown): never => {
+    if (error instanceof HttpError && error.code === 'unsupported_principal')
+      throw new HttpError(400, 'unsupported_principal', "Vercel's board takes no GitHub or OIDC principals in a grant.", {
+        hint: 'Grant an app that an OIDC exchange policy issues tokens for: --app <slug>.',
+        origin: 'handle',
+      })
+    throw error
+  }
+  /** An explain Vercel's API won't answer: for a GitHub run or an OIDC issuer, which no grant there names. */
+  const explainRefused = (error: unknown): never => {
+    if (error instanceof HttpError && error.code === 'unsupported_principal')
+      throw new HttpError(400, 'unsupported_principal', "Vercel's board explains no GitHub or OIDC caller: no grant names one.", {
+        hint: 'Explain the app an OIDC exchange policy issues tokens for: --app <slug>.',
+        origin: 'handle',
+      })
+    throw error
+  }
+  /** A mint Vercel's API won't make: only a deployment mints board tokens there, and a board token mints from itself. */
+  const mintRefused = (error: unknown): never => {
+    if (error instanceof HttpError && error.code === 'unsupported_principal')
+      throw new HttpError(403, 'unsupported_principal', "Vercel's board mints board tokens only for a deployment.", {
+        hint: "Mint it from a deployment, with its OIDC token, or from a board token.",
+        origin: 'handle',
+      })
+    throw error
+  }
+
   const unsupported = Object.fromEntries(
     METHODS.map((method) => [
       method,
@@ -1776,12 +1804,12 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createGrant(caller, input, signal) {
       const who = whoOf(caller)
-      const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      const { grant } = await api<Protocol['createGrant']['output']>(who, 'POST', await onBoard(who, '/grants'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(grantRefused)
       return { grant: grantFrom(grant) }
     },
     async updateGrant(caller, { id, ...change }, signal) {
       const who = whoOf(caller)
-      const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) })
+      const { grant } = await api<Protocol['updateGrant']['output']>(who, 'PATCH', await onBoard(who, `/grants/${encodeURIComponent(id)}`), { body: { operationId: operationId(), ...change }, ...(signal ? { signal } : {}) }).catch(grantRefused)
       return { grant: grantFrom(grant) }
     },
     async explain(caller, { claim, ...query }, signal) {
@@ -1789,7 +1817,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
       const params = new URLSearchParams()
       for (const [name, value] of Object.entries(query)) if (value !== undefined) params.set(name, value)
       for (const pair of claim ?? []) params.append('claim', pair)
-      const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {})
+      const explained = await api<Protocol['explain']['output']>(who, 'GET', await onBoard(who, `/grants/explain?${params}`), signal ? { signal } : {}).catch(explainRefused)
       return { ...explained, grants: explained.grants.map(grantFrom) }
     },
     async revokeGrant(caller, { id }, signal) {
@@ -1803,7 +1831,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async createToken(caller, input, signal) {
       const who = whoOf(caller)
-      const created = await api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) })
+      const created = await api<Protocol['createToken']['output']>(who, 'POST', await onBoard(who, '/tokens'), { body: { operationId: operationId(), ...input }, ...(signal ? { signal } : {}) }).catch(mintRefused)
       return { ...created, token: tokenFrom(created.token) }
     },
     async revokeToken(caller, { id }, signal) {
