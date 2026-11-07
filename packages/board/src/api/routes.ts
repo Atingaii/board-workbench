@@ -257,7 +257,7 @@ export const TokenBody = z.object({
   profile: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,31}$/, 'a profile is up to 32 letters, numbers, and hyphens').optional(),
   avatar: z.string().url().max(2048).optional(),
   session: z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/, 'a session is up to 128 letters, numbers, and _.:-').optional(),
-  /** How long it lives: `30d` by default, at most `90d`. */
+  /** How long it lives: `30d` by default, at most `90d`, and on Vercel's board `1d` by default, at most `7d`. */
   expires: Duration.optional(),
 })
 
