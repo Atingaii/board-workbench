@@ -1592,7 +1592,8 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async me(caller) {
       const who = whoOf(caller)
-      const found = await api<ApiMe>(who, 'GET', '/me')
+      // Its board's: what the board's grants leave these credentials, as a board's own me says.
+      const found = await api<ApiMe>(who, 'GET', await onBoard(who, '/me'))
       const { view: named } = found
       // The API names you by your account: your username, and an agent's profile under it.
       const shown = named ? { kind: apiKind(named.kind), handle: named.handle, name: named.name ?? named.handle, avatar: named.avatar ?? null } : actorView(found.actor)

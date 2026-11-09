@@ -452,6 +452,13 @@ describe('vercel()', () => {
     expect(await said(handleOn(fakeMessageboard({ me: false }), 'user:u_jb'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
   })
 
+  it('asks its board what its credentials may do there, and tells a project the board shuts out that it needs a grant', async () => {
+    const api = fakeMessageboard()
+    await handleOn(api, 'user:u_jb').me()
+    expect(api.requests.filter((request) => request.endsWith('/me'))).toEqual(['GET /boards/brd_test/me'])
+    await expect(handleOn(fakeMessageboard({ boardId: null }), 'project:prj_pong:production').me()).rejects.toMatchObject({ status: 403, code: 'board_not_granted' })
+  })
+
   it("sends a board token you set, in Node, ahead of VERCEL_TOKEN and the deployment's OIDC token", async () => {
     for (const key of Object.keys(process.env)) if (/^(BOARD|VERCEL|CLAUDE|CODEX|GROK|CURSOR|PI_|AI_AGENT)/.test(key)) vi.stubEnv(key, '')
     const api = fakeMessageboard({ tokens: { k7Qe2mXa9vLp: 'user:u_ada' } })

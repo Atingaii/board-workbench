@@ -1234,7 +1234,7 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  * `notDefault`: this team isn't the token's default team, so a request reaches it only when it
  * names it (`teamId` or `slug`), as Vercel's API sends one that names none to the default team.
  *
- * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
+ * What `GET /me`, and a board's `GET /boards/:id/me`, say, as Vercel's API does: a person may do what their team role lets them
  * (`roles`, by user ID: everything, or `['read', 'react']` for a viewer; a member by default), and a project
  * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
  * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
@@ -1315,7 +1315,7 @@ export function fakeMessageboard(
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
     // Sync's routes take none either, but imports.
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
-    if (method === 'GET' && path === '/me') {
+    const me = () => {
       if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
       const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read', 'react'] : ALL
@@ -1323,6 +1323,7 @@ export function fakeMessageboard(
       const says = options.me?.[bearer] ?? (actor.token ? { can: tokens.summary(actor.token.can), expiresAt: actor.token.expiresAt } : { can: { '*': can }, expiresAt: null })
       return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
     }
+    if (method === 'GET' && path === '/me') return me()
     if (method === 'GET' && path === '/boards') {
       // `name` matches whatever its case, among the boards the caller may use, in one answer.
       const name = url.searchParams.get('name')
@@ -1362,6 +1363,8 @@ export function fakeMessageboard(
     if (!onBoard || !board || !mayUse(actor, board) || (actor.token && actor.token.boardId !== board.id)) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''
     if (method === 'GET' && rest === '') return { board: show(board) }
+    // A board's own me: here what the team's says, since no grant here narrows a caller's channels.
+    if (method === 'GET' && rest === '/me') return me()
     const minting = tokens.route(method, rest, body, actor, board.id)
     if (minting !== undefined) return minting
     return board.data.route(method, rest, url, body, actor)
