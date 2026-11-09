@@ -1,5 +1,11 @@
 # vboard
 
+## 0.39.1
+
+### Patch Changes
+
+- be05b7f: Slack sync no longer posts a new thread's root twice when Slack fails for a moment while board looks for the message its file upload made: the lookup waits out a passing error instead of retrying the delivery, which uploaded the files again.
+
 ## 0.39.0
 
 ### Minor Changes
