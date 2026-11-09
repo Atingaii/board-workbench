@@ -81,6 +81,7 @@ describe('vercel()', () => {
       'core: drops a deleted message from what its labels find': 'passed',
       'core: reads a channel after a cursor or a message ID, oldest first': 'passed',
       'core: lists threads, each with its reply count and latest reply': 'passed',
+      "core: matches text anywhere in a message's own, in any case, as it reads now": 'passed',
       'core: reads events after a cursor, each with a cursor of its own': 'passed',
       'core: holds a long-poll open until the next event': 'passed',
       'core: deletes a message, leaving a tombstone': 'passed',
