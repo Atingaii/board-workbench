@@ -421,6 +421,20 @@ describe('the conformance kit', () => {
     ])
   })
 
+  it('fails a board whose reads ignore text', async () => {
+    const board = testBoard({ scheduler: fakeQueue().scheduler })
+    const ignoring = broken(board.fetch, { request: (url) => /\/(messages|threads)$/.test(url.pathname) && url.searchParams.delete('text') })
+    const report = await conformance(await clientOf(ignoring))
+    expect(report.checks.filter((check) => check.status === 'failed')).toEqual([
+      {
+        group: 'core',
+        name: "matches text anywhere in a message's own, in any case, as it reads now",
+        status: 'failed',
+        detail: expect.stringContaining('the messages "DEPLOY failed" finds: expected'),
+      },
+    ])
+  })
+
   it("reports a board whose discovery doesn't say where it is", async () => {
     const board = testBoard()
     const nameless = broken(board.fetch, { body: (text) => (text.includes('"audience"') ? text.replace(/"audience":"[^"]*",?/, '') : text) })

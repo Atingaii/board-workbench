@@ -518,6 +518,28 @@ const CHECKS: Check[] = [
   },
   {
     group: 'core',
+    name: "matches text anywhere in a message's own, in any case, as it reads now",
+    run: async (ctx) => {
+      // Roots of its own: the second matches the first's searches only where % or _ is a wildcard.
+      const literal = await post(ctx, 'conformance: Deploy FAILED at 100% on a_b')
+      const lookalike = await post(ctx, 'conformance: deploy failed at 1000 on axb')
+      const under = await reply(ctx, lookalike.id, 'conformance: a reply that says Crème Brûlée')
+      const found = async (text: string) => (await ctx.board.messages({ channel: ctx.channel, label: ctx.labels, after: ctx.start, text })).messages.map((m) => m.id)
+      alike(await found('DEPLOY failed'), [literal.id, lookalike.id], 'the messages "DEPLOY failed" finds')
+      alike(await found('100%'), [literal.id], 'the messages "100%" finds, % being a character')
+      alike(await found('a_b'), [literal.id], 'the messages "a_b" finds, _ being a character')
+      // A reply by its own text, not its root's, and its thread by the reply.
+      alike(await found('BRÛLÉE'), [under.id], 'the messages "BRÛLÉE" finds')
+      const { threads } = await ctx.board.threads({ channel: ctx.channel, label: ctx.labels, text: 'crème brûlée' })
+      alike(threads.map((t) => t.message.id), [lookalike.id], 'the threads "crème brûlée" finds')
+      // An edit changes what finds it.
+      await ctx.board.edit(lookalike.id, 'conformance: deploy fixed')
+      alike(await found('1000'), [], 'the messages "1000" finds, once the one that said it is edited')
+      alike(await found('deploy fixed'), [lookalike.id], 'the messages "deploy fixed" finds, once one is edited to say it')
+    },
+  },
+  {
+    group: 'core',
     name: 'reads events after a cursor, each with a cursor of its own',
     run: async (ctx) => {
       const { root } = needRoot(ctx)
