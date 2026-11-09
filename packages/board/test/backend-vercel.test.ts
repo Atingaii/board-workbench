@@ -1275,7 +1275,7 @@ describe('vercel()', () => {
     ])
   })
 
-  it("syncs Slack through the engine from its first webhook, a file as a link to it on Slack, and a board reply back to Slack", async () => {
+  it("syncs Slack through the engine from its first webhook, a file as an attachment on the board, and a board reply back to Slack", async () => {
     const api = fakeMessageboard()
     const s = fakePlatform('slack')
     const pong = board({
@@ -1302,12 +1302,12 @@ describe('vercel()', () => {
     await vi.waitFor(async () => {
       const { messages } = await julian.messages({ channel: 'general' })
       expect(messages.map((message) => [message.from, message.text, message.attachments])).toEqual([
-        ['slack', "the export page\n\n📎 [shot.png](https://files.slack.test/shot.png) (7 B) didn't come over: Vercel's board takes no files from sync yet", []],
+        ['slack', 'the export page', [{ id: expect.any(String), name: 'shot.png', type: 'image/png', size: png.byteLength }]],
       ])
     })
-    // Vercel's API keeps no file for it.
-    expect(api.requests.filter((request) => request.includes('/attachments'))).toEqual([])
     const [root] = (await julian.messages({ channel: 'general' })).messages
+    // Anyone who reads the board reads the file, not only the project that uploaded it.
+    expect(new Uint8Array(await (await julian.download(root!.attachments![0]!.id)).arrayBuffer())).toEqual(png)
     await julian.reply(root!.id, { text: 'looking' })
     await pong.fetch(new Request(`${PONG_URL}/wake`, { method: 'POST' }))
     await vi.waitFor(() => expect(s.posts.map((post) => [post.threadId, post.text])).toEqual([['slack:C1:300', expect.stringContaining('looking')]]))
@@ -1598,6 +1598,23 @@ describe("board tokens on Vercel's API", () => {
     const mint = { operationId: 'op_1', name: 'ci' }
     expect((await raw(api, 'project:prj_pong:production', 'POST', '/boards/brd_test/tokens', mint)).status).toBe(200)
     expect(await raw(api, 'project:prj_pong:production', 'POST', '/boards/brd_test/tokens', mint)).toMatchObject({ status: 409, body: { error: { code: 'token_already_minted' } } })
+  })
+
+  it("lists every token across the API's pages, and takes a page with no cursor as the last, as the API answered before it paged", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const minted: string[] = []
+    for (const name of ['one', 'two', 'three', 'four', 'five']) minted.push((await pong.createToken({ name })).token.id)
+    expect((await pong.tokens()).map((listed) => listed.id)).toEqual(minted)
+    const unpaged = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await as(api, 'project:prj_pong:production')(input, init)
+      if (!String(input).includes('/tokens')) return response
+      const body = await response.json()
+      delete body.cursor
+      return Response.json(body, { status: response.status })
+    }) as typeof fetch
+    const before = board({ backend: vercel({ team: 'team_test', api: API, fetch: unpaged, files: api.files }) })
+    expect((await before.tokens()).map((listed) => listed.id)).toEqual(minted.slice(0, 2))
   })
 
   it("answers 401 invalid_token for a token that's unknown, revoked, or expired", async () => {

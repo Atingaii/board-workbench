@@ -151,6 +151,12 @@ const TOKEN_PERMISSIONS = ['read', 'post', 'react', 'label', 'sync', 'manage']
 const TOKEN_PATTERN = /^(\*|[a-z0-9_-]+(\/[a-z0-9_-]+)*\/?)$/
 const DAY = 86_400_000
 
+function page<T>(items: T[], cursor: string | null, size: number) {
+  const from = cursor ? Number(cursor) : 0
+  const next = from + size < items.length ? String(from + size) : null
+  return { items: items.slice(from, from + size), cursor: next }
+}
+
 /**
  * Board tokens, as Vercel's API keeps them: each one board's, its secret shown once, a retried mint
  * 409. Deployments and tokens mint; people and apps don't.
@@ -216,7 +222,7 @@ function fakeTokens(shared: { now: () => number }) {
   }
 
   /** What `/boards/:id/tokens…` answers, or undefined for another route. */
-  function route(method: string, rest: string, body: Record<string, any>, actor: Actor, boardId: string): unknown {
+  function route(method: string, rest: string, url: URL, body: Record<string, any>, actor: Actor, boardId: string): unknown {
     if (rest === '/tokens' && method === 'POST') {
       // Only a workload mints: a deployment, or a board token, from itself. A person and an app don't.
       if (!actor.token && actor.principal.type !== 'project') throw new Refused(403, 'unsupported_principal', 'Only a deployment mints board tokens: mint from one.')
@@ -245,8 +251,10 @@ function fakeTokens(shared: { now: () => number }) {
       return { token: view(token), secret }
     }
     if (rest === '/tokens' && method === 'GET') {
-      const live = [...minted.values()].filter((token) => token.boardId === boardId && !token.revoked && token.expiresAt > shared.now() && mine(actor, token))
-      return { tokens: live.map(view) }
+      // In mint order, a page at a time, each leaving out what the caller doesn't see, so a page can come back short.
+      const { items, cursor } = page([...minted.values()].filter((token) => token.boardId === boardId), url.searchParams.get('cursor'), 2)
+      const live = items.filter((token) => !token.revoked && token.expiresAt > shared.now() && mine(actor, token))
+      return { tokens: live.map(view), cursor }
     }
     const revoking = /^\/tokens\/([^/]+)\/revoke$/.exec(rest)
     if (revoking && method === 'POST') {
@@ -474,14 +482,15 @@ function fakeBoard(shared: Shared, boardId: string) {
     if (!(grant === 'all' || grant.includes(permission))) throw new Refused(403, 'forbidden', `This token may not ${permission} in ${name}.`)
   }
 
-  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }) {
+  /** `uploader` is who must have uploaded its files: the caller, which for an import is the sync's project, not the platform user it posts as. */
+  function post(actor: Actor, thread: Thread, body: { text: string; replyTo?: number; clientId?: string; labels?: Record<string, string>; attachments?: string[]; schedule?: { id: string; n: number }; after?: number; noSync?: boolean }, uploader: Actor = actor) {
     tokenMay(actor, 'post', thread.channelId)
     // A reply's precondition, checked with the post: the thread's newest is still the one it names.
     if (body.after !== undefined && (!Number.isInteger(body.after) || body.after < 1 || body.after > thread.messageCount)) throw new Refused(400, 'invalid_after')
     if (body.after !== undefined && body.after !== thread.messageCount) throw new Refused(409, 'newer_message', `message ${thread.messageCount} came after ${body.after}`)
     const files = (body.attachments ?? []).map((id) => {
       const attachment = attachments.get(id)
-      if (!attachment || !samePrincipal(attachment.createdBy.principal, actor.principal)) throw new Refused(404, 'attachment_not_found')
+      if (!attachment || !samePrincipal(attachment.createdBy.principal, uploader.principal)) throw new Refused(404, 'attachment_not_found')
       if (attachment.state !== 'ready') throw new Refused(409, 'attachment_not_ready')
       if (attachment.messageId) throw new Refused(409, 'attachment_already_posted')
       return attachment
@@ -541,12 +550,6 @@ function fakeBoard(shared: Shared, boardId: string) {
     const message = thread.messages[Number(sequence) - 1]!
     if (!mayRead(actor, thread.channelId)) return { thread: { id: thread.id }, message: { id: message.id, threadId: thread.id, sequence: message.sequence } }
     return { thread: showThread(thread), message: show(message) }
-  }
-
-  function page<T>(items: T[], cursor: string | null, size: number) {
-    const from = cursor ? Number(cursor) : 0
-    const next = from + size < items.length ? String(from + size) : null
-    return { items: items.slice(from, from + size), cursor: next }
   }
 
   async function watchers(method: string, rest: string, actor: Actor, parsed: Record<string, any>, url: URL): Promise<unknown> {
@@ -763,7 +766,7 @@ function fakeBoard(shared: Shared, boardId: string) {
           if (origin && bound !== undefined && bound !== thread.id) throw new Refused(409, 'already_synced')
           if (origin && bound === undefined) throw new Refused(409, 'not_synced')
         } else throw new Refused(400, 'invalid_import')
-        const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.after !== undefined ? { after: body.after } : {}) })
+        const message = post(author, thread, { text: body.text, ...(body.labels ? { labels: body.labels } : {}), ...(body.attachments?.length ? { attachments: body.attachments } : {}), ...(body.after !== undefined ? { after: body.after } : {}) }, actor)
         if (body.from !== undefined && body.from !== null) message.from = body.from
         if (origin) message.origin = origin
         if (body.noSync) message.noSync = true
@@ -1369,7 +1372,7 @@ export function fakeMessageboard(
       const said = me()
       return 'can' in said && said.can ? { ...said, can: board.data.within(actor, said.can) } : said
     }
-    const minting = tokens.route(method, rest, body, actor, board.id)
+    const minting = tokens.route(method, rest, url, body, actor, board.id)
     if (minting !== undefined) return minting
     return board.data.route(method, rest, url, body, actor)
   }
