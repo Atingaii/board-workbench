@@ -1239,7 +1239,7 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  *
  * What `GET /me` says, as Vercel's API does: a person may do what their team role lets them
  * (`roles`, by user ID: everything, or `['read', 'react']` for a viewer; a member by default), and a project
- * or an app may read, post, react, and label, and a project sync, everywhere, none with an expiry. `me` says otherwise
+ * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
  * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
  * of board tokens. A board's `/me` says the same, within what the board's grants give.
  * `me: false` says neither, as Vercel's API answered before it sent them.
@@ -1321,8 +1321,7 @@ export function fakeMessageboard(
     const me = () => {
       if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
-      // A deployment's own credential may sync too, which no team role says: where, its grants do.
-      const can = role === null ? ['read', 'post', 'react', 'label', ...(actor.principal.type === 'project' ? ['sync'] : [])] : role === 'viewer' ? ['read', 'react'] : ALL
+      const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read', 'react'] : ALL
       // A board token may do what its scope says, until it expires, in milliseconds as the API sends times.
       const says = options.me?.[bearer] ?? (actor.token ? { can: tokens.summary(actor.token.can), expiresAt: actor.token.expiresAt } : { can: { '*': can }, expiresAt: null })
       return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }

@@ -382,7 +382,7 @@ for that board: your team role, within what the board's grants give you. A
 person's role lets them do everything as an owner, a member, or a developer,
 which `whoami` doesn't spell out, and read as a viewer. A project may do what
 the board's grants give it, and a new board's let every project read, post,
-react, label, and sync everywhere:
+react, and label everywhere:
 
 ```text
 $ vb whoami --scope test

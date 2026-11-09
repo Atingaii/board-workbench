@@ -98,7 +98,7 @@ export function fakeGrants(options: {
   }
   // What Vercel's API starts every board with.
   add([{ kind: 'all-users' }], { '*': 'all' }, null)
-  add([{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], { '*': ['read', 'post', 'react', 'label', 'sync'] }, null)
+  add([{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], { '*': ['read', 'post', 'react', 'label'] }, null)
   add([{ kind: 'all-apps' }], { '*': ['read', 'post', 'react', 'label'] }, null)
 
   const invalid = (message: string) => new GrantRefused(400, 'invalid_grant', message)
