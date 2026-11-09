@@ -193,11 +193,32 @@ in. A key names one sync's platform locations: two
 syncs elsewhere that register one share its platform threads on the board,
 though each sees and changes only its own copies, so give each key one sync.
 Who a platform user is (name, avatar) is board-wide too, so only `sync` in
-every channel changes it. Give it to the deployment that runs
-a board's sync, in the channels it syncs, and to no one else:
-`vb grants create --project prj_support --environment production --can support=all`.
-A sync with it in one subtree can't import into
+every channel changes it. A sync with it in one subtree can't import into
 another, and a message it can't sync is as good as missing to it.
+
+A new board gives it to every project on its team, everywhere, through g2.
+So any of their deployments, previews included, can run a sync against the
+board: register a platform, write as its users and rename them board-wide,
+and read every sync's inbox. It can also attach a thread it reads to a Slack
+channel or a GitHub issue the board's own sync reaches, which then posts the
+thread there. A board token has it only when its `can` says so. To keep it to
+the deployments that run a sync, take it from g2 and grant it to them, in the
+channels they sync:
+
+```text
+$ vb grants update g2 --can '*=read,post,react,label'
+updated g2  --all-projects --environment production,preview,development  read post react label
+$ vb grants create --project prj_support --environment production --can support=all
+created g4  --project prj_support --environment production  support=all
+```
+
+Or keep g2 and take `sync` from one project, with a grant that names it: it's
+closer than g2's every project, so it decides for that project.
+
+```text
+$ vb grants create --project prj_web --environment preview --can '*=read,post,react,label'
+created g4  --project prj_web --environment preview  read post react label
+```
 
 ### IDs and cursors
 

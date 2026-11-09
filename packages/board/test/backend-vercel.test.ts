@@ -432,7 +432,7 @@ describe('vercel()', () => {
     const api = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
     expect(await said(handleOn(api, 'user:u_jb'))).toEqual(everything)
     expect(await said(handleOn(api, 'user:u_ada'))).toEqual({ can: { '*': ['read', 'react'] }, expiresAt: null })
-    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label', 'sync'] }, expiresAt: null })
     for (const role of ['member', 'developer'] as const) expect(await said(handleOn(fakeMessageboard({ roles: { u_jb: role } })))).toEqual(everything)
     // Credentials it says less of, and until when, as it will of board tokens: board's own permissions, as it gives them.
     const expiresAt = Date.now() + 59 * 60_000
@@ -460,7 +460,7 @@ describe('vercel()', () => {
     await jb.createGrant({ principals: [{ kind: 'project', project: 'pong', environments: ['production'] }], can: { 'ci/': ['read', 'post'] } })
     expect((await jb.me()).can).toEqual({ '*': all, 'security/': [] })
     expect((await handleOn(api, 'project:prj_pong:production').me()).can).toEqual({
-      '*': ['read', 'post', 'react', 'label'],
+      '*': ['read', 'post', 'react', 'label', 'sync'],
       'ci/': ['read', 'post'],
       'security/': [],
     })
@@ -1489,7 +1489,7 @@ describe('vercel()', () => {
     const jb = handleOn(api)
     expect(await jb.grants()).toEqual([
       { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: true, by: null, at: null },
-      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label', 'sync'] }, capped: false, by: null, at: null },
       { id: 'g3', principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
     ])
     const { grant } = await jb.createGrant({

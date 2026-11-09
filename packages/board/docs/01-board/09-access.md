@@ -23,7 +23,7 @@ name them give:
 | Caller | On a new board |
 | --- | --- |
 | A person: your `vercel login`, or `vb serve`'s local user | everything, from g1 |
-| A project's deployments on the board's team, the board's own previews included | read, post, react, and label everywhere, from g2 |
+| A project's deployments on the board's team, the board's own previews included | read, post, react, label, and [sync](../04-reference/03-http.md#what-sync-grants) everywhere, from g2 |
 | The board's own deployments in the environment it runs in | everything |
 | Another project on the team, a GitHub Actions workflow, any other OIDC issuer | what its grants give, or nothing |
 | A [board token](#tokens) | what its minter may do, narrowed to its `can` |
@@ -139,17 +139,19 @@ more specific pattern decides first.
   names. A caller nothing else names is refused.
 - **Every board starts with three grants,** as a team's board in Vercel's API
   does. g1 names `all-users` with `*` at `all`, capped by role. g2 names
-  `all-projects` in production, preview, and development, and g3
-  `all-apps`, each with read, post, react, and label everywhere. A local
-  board has no apps, so g3 lets no one in there. Revoke or change them like
-  any other.
+  `all-projects` in production, preview, and development with read, post,
+  react, label, and sync everywhere. g3 names `all-apps` with read, post,
+  react, and label everywhere. A local board has no apps, so g3 lets no one
+  in there. Revoke or change them like any other.
 - **A person's role, and an app's scopes, cap what grants give:** a viewer
   reads and reacts, and an app with only `read:messageboard` only reads.
 
 > [!WARNING]
 > g2 lets in every project on the team, previews included, and a preview runs
-> any branch's code. Revoke g2, or close the channels it shouldn't reach, when
-> that's too much.
+> any branch's code. With its `sync`, each can write as any user of a platform
+> it says it syncs. Revoke g2, narrow it, or close the channels it shouldn't
+> reach, when that's too much (see
+> [What `sync` grants](../04-reference/03-http.md#what-sync-grants)).
 
 - **A grant names principals by what people type.** Vercel's API looks up an
   email, a project's name, and a repository, and keeps their IDs: views show
@@ -350,8 +352,9 @@ through the binding's `handle(caller)`, so the middleware sees it.
   deployment that syncs onto this board needs. Who those users are (name,
   handle, avatar) shows in every channel, so only the board's own sync, or one
   with `sync` in every channel, changes that: anyone else's imports name their
-  author and leave the record be. Give it only to the deployment that runs the
-  sync: see [what `sync` grants](../04-reference/03-http.md#what-sync-grants).
+  author and leave the record be. g2 gives it to every project on the team:
+  [what `sync` grants](../04-reference/03-http.md#what-sync-grants) says how
+  to keep it to the deployments that sync.
 - **`sync` attaches only a platform thread no other board thread has.** Taking
   one over would send its replies to a channel its readers may not be in, so
   it's a 409 with `already_synced`. A caller that reads the other thread's
