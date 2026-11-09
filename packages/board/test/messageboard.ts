@@ -1204,7 +1204,7 @@ function fakeBoard(shared: Shared, boardId: string) {
     throw new Refused(404, 'not_found', `${method} ${rest}`)
   }
 
-  return { route, registrations, schedules, send, grants: access.grants }
+  return { route, registrations, schedules, send, grants: access.grants, within: (actor: Actor, can: Record<string, string[]>) => access.within(whoOf(actor), can) }
 }
 
 /** A board the fake API keeps: who may use it, and what's on it. */
@@ -1241,7 +1241,7 @@ const ALL = ['read', 'post', 'react', 'label', 'sync', 'manage']
  * (`roles`, by user ID: everything, or `['read', 'react']` for a viewer; a member by default), and a project
  * or an app may read, post, react, and label, everywhere, none with an expiry. `me` says otherwise
  * of some credentials, by the bearer it's sent (`user:u_jb`, or a board token's secret), as it will
- * of board tokens.
+ * of board tokens. A board's `/me` says the same, within what the board's grants give.
  * `me: false` says neither, as Vercel's API answered before it sent them.
  */
 export function fakeMessageboard(
@@ -1318,7 +1318,7 @@ export function fakeMessageboard(
     // Registering and acking watchers, and completing uploads, take no operation ID: each is idempotent as it is.
     // Sync's routes take none either, but imports.
     if (method !== 'GET' && !/\/watchers(\/|$)|\/complete$|\/sync\/(?!imports$)/.test(path) && typeof body.operationId !== 'string') throw new Refused(400, 'invalid_operation_id')
-    if (method === 'GET' && path === '/me') {
+    const me = () => {
       if (options.me === false) return { teamId, actor, view: viewOf(accounts, actor) }
       const role = actor.principal.type === 'user' ? (roles[actor.principal.userId] ?? 'member') : null
       const can = role === null ? ['read', 'post', 'react', 'label'] : role === 'viewer' ? ['read', 'react'] : ALL
@@ -1326,6 +1326,7 @@ export function fakeMessageboard(
       const says = options.me?.[bearer] ?? (actor.token ? { can: tokens.summary(actor.token.can), expiresAt: actor.token.expiresAt } : { can: { '*': can }, expiresAt: null })
       return { teamId, actor, view: viewOf(accounts, actor), can: says.can, expiresAt: says.expiresAt }
     }
+    if (method === 'GET' && path === '/me') return me()
     if (method === 'GET' && path === '/boards') {
       // `name` matches whatever its case, among the boards the caller may use, in one answer.
       const name = url.searchParams.get('name')
@@ -1365,6 +1366,11 @@ export function fakeMessageboard(
     if (!onBoard || !board || !mayUse(actor, board) || (actor.token && actor.token.boardId !== board.id)) throw new Refused(404, 'board_not_found')
     const rest = onBoard[2] ?? ''
     if (method === 'GET' && rest === '') return { board: show(board) }
+    // A board's own me: what the team's says, within what this board's grants give the caller.
+    if (method === 'GET' && rest === '/me') {
+      const said = me()
+      return 'can' in said && said.can ? { ...said, can: board.data.within(actor, said.can) } : said
+    }
     const minting = tokens.route(method, rest, url, body, actor, board.id)
     if (minting !== undefined) return minting
     return board.data.route(method, rest, url, body, actor)
