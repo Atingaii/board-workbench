@@ -904,11 +904,13 @@ await team.revokeToken(token.id)
   workflow a grant names.
 - **Every board starts with three grants,** as Vercel's API seeds a team's
   board: g1 names `all-users` with `*` at `all`, capped by role, g2 names
-  `all-projects` in production, preview, and development, and g3 names
-  `all-apps`, each with read, post, react, and label everywhere. On a local
+  `all-projects` in production, preview, and development with read, post,
+  react, label, and sync everywhere, and g3 names `all-apps` with read, post,
+  react, and label everywhere. On a local
   board they're in the access fold's initial state, so every board has them
   without a write, and a grant's ID comes from the fold's counter (g4 next).
-  A local board has no apps, so g3 lets no one in there.
+  A starting grant a local board never changed is the one its release
+  starts with. A local board has no apps, so g3 lets no one in there.
 - **`GET /grants/explain?channel=…`** says which grants decide a channel for
   the caller, or with `manage` at `*` for the principal its query names
   (`user`, `project` and `environment`, `github` and `workflow`, `branch`,
@@ -1053,7 +1055,8 @@ doesn't have. What its grant rules refuse, it answers 403 `grant_forbidden`,
 which `vercel()` gives back as the board's. Its `me` is what the API's `GET /me` says the credentials may do and
 until when: `can`, board's own summary of it (a person's team role,
 everything for owners, members, and developers, `read` and `react` for
-viewers, and a project's read, post, react, and label), and `expiresAt` in milliseconds, null
+viewers, and for a deployment's own credential, a project's read, post,
+react, label, and sync), and `expiresAt` in milliseconds, null
 until board tokens. Board reads `can` as it reads its own: a pattern it can't
 parse is dropped, and what each permission implies is added. An `expiresAt`
 under 10^12 is epoch seconds, as a JWT's `exp` is. Where it says neither, read,

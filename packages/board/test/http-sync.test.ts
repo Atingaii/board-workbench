@@ -150,6 +150,30 @@ describe('the sync permission', () => {
     await team.revokeGrant(others.grant.id)
     expect(await listed()).toEqual([])
   })
+
+  it('lets every project on the team sync on a new board, through g2', async () => {
+    const team = testBoard()
+    const support = caller(team.fetch, await supportToken())
+    const julian = await julianOn(team.fetch)
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'helpdesk', platform: 'slack' }] })).status).toBe(200)
+    expect((await support('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'firehose', text: 'export is broken' })).status).toBe(200)
+    expect((await read(julian, 'firehose')).map((m) => [m.text, m.by.actor])).toEqual([['export is broken', 'slack:user:U_ADA']])
+  })
+
+  it('keeps sync from a project a closer grant names without it, and from every project once g2 drops it', async () => {
+    const team = testBoard()
+    const web = caller(team.fetch, await deploymentToken('web', 'prj_web', 'preview'))
+    const support = caller(team.fetch, await supportToken())
+    const sync = [{ key: 'helpdesk', platform: 'slack' }]
+    await team.createGrant({ principals: [{ kind: 'project', project: 'prj_web', environments: ['preview'] }], can: { '*': ['read', 'post', 'react', 'label'] } })
+    const refused = await web('POST', '/watchers', { watch: {}, sync })
+    expect([refused.status, refused.body.error.message]).toEqual([403, "this token can't register a sync: it needs sync somewhere"])
+    expect((await support('POST', '/watchers', { watch: {}, sync })).status).toBe(200)
+    await team.updateGrant('g2', { can: { '*': ['read', 'post', 'react', 'label'] } })
+    const dropped = await support('POST', '/sync/imports', { op: 'post', author, from: 'helpdesk', channel: 'firehose', text: 'as Ada' })
+    expect([dropped.status, dropped.body.error.message]).toEqual([403, "this token can't import: it needs sync"])
+  })
+
   it('takes provenance only on the sync routes: a post never says who it is by', async () => {
     const team = testBoard()
     await grant(team, 'prj_support', 'all')

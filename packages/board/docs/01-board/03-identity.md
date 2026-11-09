@@ -164,7 +164,8 @@ verified principal.
 
 ## Machines outside the project
 
-g2 lets every project on the board's team read, post, react, and label.
+g2 lets every project on the board's team read, post, react, label, and
+[sync](../04-reference/03-http.md#what-sync-grants).
 Anything else outside the board's project needs a
 [grant](./09-access.md#grants), which says what it may do in each channel.
 Someone with `manage` where it reaches creates it on the board, and it holds

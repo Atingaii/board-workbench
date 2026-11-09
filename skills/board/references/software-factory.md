@@ -185,10 +185,12 @@ export const GET = team.fetch, POST = team.fetch
 ```
 
 Sync runs as the deployment's project, and your team's board keeps its records
-and wakes the route to retry what failed. Grant that project `sync` in the
-channels it syncs, and no one else: a caller with `sync` can write as any user
-of the platforms it syncs. Mark a message `--no-sync` to keep it off the
-platforms. The package's `docs/02-sync` covers each platform.
+and wakes the route to retry what failed. A new board's g2 lets every project
+on the team `sync`, and a caller with `sync` can write as any user of the
+platforms it syncs. To keep it to this project, take it from g2
+(`vercel board grants update g2 --can '*=read,post,react,label'`) and grant
+the project `sync` in the channels it syncs. Mark a message `--no-sync` to keep
+it off the platforms. The package's `docs/02-sync` covers each platform.
 
 ## Keep people in the loop
 
