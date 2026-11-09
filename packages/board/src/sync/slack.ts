@@ -747,15 +747,22 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       file_uploads: files.map((file) => ({ file: Buffer.from(file.data), filename: slackFileName(file.filename, file.mimeType) })),
     })
     const ids = (uploaded.files?.[0]?.files ?? []).map((file) => file.id).filter((id): id is string => !!id)
-    // From here on the message is in Slack, so no error may read as a refusal, which would post the text again.
+    // From here on the message is in Slack, so no error may read as a refusal, which would post the text again,
+    // and a passing one is waited out: a throw retries the delivery, and that uploads it all again.
     const found = async () => {
+      let failure: unknown = new Error('never shared')
       for (let attempt = 0; attempt < SHARE_POLLS; attempt++) {
-        const shares = (await web.files!.info!({ file: ids[0]! })).file?.shares
-        const ts = shares?.public?.[channel]?.[0]?.ts ?? shares?.private?.[channel]?.[0]?.ts
-        if (ts) return ts
+        try {
+          const shares = (await web.files!.info!({ file: ids[0]! })).file?.shares
+          const ts = shares?.public?.[channel]?.[0]?.ts ?? shares?.private?.[channel]?.[0]?.ts
+          if (ts) return ts
+        } catch (error) {
+          if (REFUSED.has((error as { data?: { error?: string } } | null)?.data?.error ?? '')) throw error
+          failure = error
+        }
         await new Promise((resolve) => setTimeout(resolve, Math.min(250 * 2 ** attempt, 2000)))
       }
-      throw new Error('never shared')
+      throw failure
     }
     if (!ids[0]) throw new Error('slack: files.uploadV2 returned no file IDs')
     let ts: string
