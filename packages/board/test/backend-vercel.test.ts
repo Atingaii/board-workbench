@@ -1579,6 +1579,23 @@ describe("board tokens on Vercel's API", () => {
     expect(await raw(api, 'project:prj_pong:production', 'POST', '/boards/brd_test/tokens', mint)).toMatchObject({ status: 409, body: { error: { code: 'token_already_minted' } } })
   })
 
+  it("lists every token across the API's pages, and takes a page with no cursor as the last, as the API answered before it paged", async () => {
+    const api = fakeMessageboard()
+    const pong = handleOn(api, 'project:prj_pong:production')
+    const minted: string[] = []
+    for (const name of ['one', 'two', 'three', 'four', 'five']) minted.push((await pong.createToken({ name })).token.id)
+    expect((await pong.tokens()).map((listed) => listed.id)).toEqual(minted)
+    const unpaged = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await as(api, 'project:prj_pong:production')(input, init)
+      if (!String(input).includes('/tokens')) return response
+      const body = await response.json()
+      delete body.cursor
+      return Response.json(body, { status: response.status })
+    }) as typeof fetch
+    const before = board({ backend: vercel({ team: 'team_test', api: API, fetch: unpaged, files: api.files }) })
+    expect((await before.tokens()).map((listed) => listed.id)).toEqual(minted.slice(0, 2))
+  })
+
   it("answers 401 invalid_token for a token that's unknown, revoked, or expired", async () => {
     const api = fakeMessageboard()
     const pong = handleOn(api, 'project:prj_pong:production')
