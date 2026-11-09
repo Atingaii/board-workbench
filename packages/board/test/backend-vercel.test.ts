@@ -432,7 +432,7 @@ describe('vercel()', () => {
     const api = fakeMessageboard({ roles: { u_jb: 'owner', u_ada: 'viewer' } })
     expect(await said(handleOn(api, 'user:u_jb'))).toEqual(everything)
     expect(await said(handleOn(api, 'user:u_ada'))).toEqual({ can: { '*': ['read', 'react'] }, expiresAt: null })
-    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+    expect(await said(handleOn(api, 'project:prj_pong:production'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label', 'sync'] }, expiresAt: null })
     for (const role of ['member', 'developer'] as const) expect(await said(handleOn(fakeMessageboard({ roles: { u_jb: role } })))).toEqual(everything)
     // Credentials it says less of, and until when, as it will of board tokens: board's own permissions, as it gives them.
     const expiresAt = Date.now() + 59 * 60_000
@@ -450,6 +450,20 @@ describe('vercel()', () => {
     expect((await said(handleOn(jwtStyle))).expiresAt).toBe(new Date(seconds * 1000).toISOString())
     // An API that says neither, as before it sent them: what any credentials it lets in may do, with no expiry.
     expect(await said(handleOn(fakeMessageboard({ me: false }), 'user:u_jb'))).toEqual({ can: { '*': ['read', 'post', 'react', 'label'] }, expiresAt: null })
+  })
+
+  it("says what the board's grants leave its credentials there, a channel they close included", async () => {
+    const api = fakeMessageboard()
+    const jb = handleOn(api, 'user:u_jb')
+    const all = ['read', 'post', 'react', 'label', 'sync', 'manage']
+    await jb.createGrant({ principals: [{ kind: 'everyone' }], can: { 'security/': [] } })
+    await jb.createGrant({ principals: [{ kind: 'project', project: 'pong', environments: ['production'] }], can: { 'ci/': ['read', 'post'] } })
+    expect((await jb.me()).can).toEqual({ '*': all, 'security/': [] })
+    expect((await handleOn(api, 'project:prj_pong:production').me()).can).toEqual({
+      '*': ['read', 'post', 'react', 'label', 'sync'],
+      'ci/': ['read', 'post'],
+      'security/': [],
+    })
   })
 
   it('asks its board what its credentials may do there, and tells a project the board shuts out that it needs a grant', async () => {
@@ -1475,7 +1489,7 @@ describe('vercel()', () => {
     const jb = handleOn(api)
     expect(await jb.grants()).toEqual([
       { id: 'g1', principals: [{ kind: 'all-users' }], can: { '*': 'all' }, capped: true, by: null, at: null },
-      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
+      { id: 'g2', principals: [{ kind: 'all-projects', environments: ['production', 'preview', 'development'] }], can: { '*': ['read', 'post', 'react', 'label', 'sync'] }, capped: false, by: null, at: null },
       { id: 'g3', principals: [{ kind: 'all-apps' }], can: { '*': ['read', 'post', 'react', 'label'] }, capped: false, by: null, at: null },
     ])
     const { grant } = await jb.createGrant({
