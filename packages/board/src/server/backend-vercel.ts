@@ -1881,7 +1881,7 @@ export function createVercel(options: VercelOptions, environment: VercelEnvironm
     },
     async tokens(caller, _input, signal) {
       const who = whoOf(caller)
-      const { tokens } = await api<Protocol['tokens']['output']>(who, 'GET', await onBoard(who, '/tokens'), signal ? { signal } : {})
+      const tokens = await all<TokenView>(who, await onBoard(who, '/tokens'), 'tokens', {}, signal)
       return { tokens: tokens.map(tokenFrom) }
     },
     async createToken(caller, input, signal) {
