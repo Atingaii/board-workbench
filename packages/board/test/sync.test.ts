@@ -359,6 +359,52 @@ describe('sync', () => {
     warn.mockRestore()
   })
 
+  it("uploads a new thread's root with files once, though finding the message it made fails at first", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const uploads: { initial_comment: string }[] = []
+    let fails = 1
+    const files = {
+      delete: async () => ({}),
+      uploadV2: async (args: (typeof uploads)[number]) => {
+        uploads.push(args)
+        return { files: [{ files: [{ id: `F${uploads.length}` }] }] }
+      },
+      info: async () => {
+        if (fails-- > 0) throw Object.assign(new Error('An API error occurred: internal_error'), { data: { error: 'internal_error' } })
+        return { file: { shares: { public: { C1: [{ ts: '1800.1' }] } } } }
+      },
+    }
+    const { board, s } = setup({
+      slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files, auth: { test: async () => ({ response_metadata: { scopes: ['files:write', 'files:read'] } }) } },
+    })
+    Object.assign(s.adapter, {
+      decodeThreadId: (id: string) => ({ channel: id.split(':')[1], threadTs: id.split(':')[2] ?? '' }),
+      formatConverter: { toResponseUrlText: ({ markdown }: { markdown: string }) => `mrkdwn(${markdown})` },
+    })
+    const token = await personToken()
+    const julian = caller(board.fetch, token, { 'x-board-handle': 'julian' })
+    const response = await board.fetch(
+      new Request(`${BOARD_URL}/attachments`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'video/mp4', 'x-board-filename': 'after.mp4' },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+    )
+    const { attachment } = (await response.json()) as { attachment: { id: string } }
+    const root = (await julian('POST', '/messages', { channel: 'firehose', text: 'shipped the fix', attachments: [attachment.id] })).body.message
+    await julian('POST', '/messages', { re: root.id, text: 'rolled out' })
+    // Without a scheduler nothing retries on its own; each drain is the next attempt.
+    await vi.waitFor(async () => {
+      await board.skipHold(board.servers[0]!, 'board')
+      await board.servers[0]!.drain('board')
+      expect(s.posts).toHaveLength(1)
+    })
+    expect(uploads).toHaveLength(1)
+    expect(s.posts[0]!.threadId).toBe('slack:C1:1800.1')
+    expect(s.channelPosts).toEqual([])
+    error.mockRestore()
+  })
+
   it("posts a root's text, then its files under it, where the Slack client can't upload them together", async () => {
     const { board, s } = setup({ slackClient: { conversations: { list: async () => ({ channels: [] }), info: async () => ({}) }, files: { delete: async () => ({}) } } })
     const token = await personToken()
