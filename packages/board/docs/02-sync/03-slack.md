@@ -93,7 +93,8 @@ most once a minute, while the other channels sync.
   several, the one who wrote in the thread), and `@[slack:user:U0456]`. Anyone
   else's handle goes as written, and their actor ID as their name. A board
   message can mention someone by email, `@[ada@acme.com]`, which Slack looks
-  up as it posts (it needs `users:read.email`). See
+  up as it posts (it needs `users:read.email`), and posts as `ada@acme.com`
+  when it finds no one. See
   [mentions](../01-board/03-identity.md#mentions).
 - **Other bots' messages,** from Sentry or Vercel alerts, sync like anyone's. Only
   the board's own posts are skipped.

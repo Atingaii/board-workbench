@@ -1331,7 +1331,7 @@ describe('sync', () => {
     )
   })
 
-  it('looks @[email] up on Slack when it posts there, and leaves one Slack has no one for as written', async () => {
+  it('looks @[email] up on Slack when it posts there, and posts one Slack has no one for as the email', async () => {
     const lookupByEmail = vi.fn(async ({ email }: { email: string }) => {
       if (email === 'missing-id@vercel.com') return { user: { name: 'missing-id' } }
       if (email !== 'ada@vercel.com') throw new Error('users_not_found')
@@ -1349,7 +1349,7 @@ describe('sync', () => {
     expect(((await julian('GET', '/actors')).body.actors as { id: string }[]).map((actor) => actor.id)).not.toContain('slack:user:U_ADA')
     await vi.waitFor(() => expect(s.channelPosts.some((p) => p.channelId === 'slack:C1')).toBe(true))
     expect(s.channelPosts.find((p) => p.channelId === 'slack:C1')!.text).toBe(
-      JSON.stringify({ markdown: '**julian**: owner: <@U_ADA>, cc @[nobody@vercel.com], missing: @[missing-id@vercel.com]' }),
+      JSON.stringify({ markdown: '**julian**: owner: <@U_ADA>, cc nobody@vercel.com, missing: missing-id@vercel.com' }),
     )
   })
 

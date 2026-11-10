@@ -421,8 +421,6 @@ export const SyncImportBody = z.discriminatedUnion('op', [
     if: z.record(LabelKey, LabelValue.nullable()).optional(),
   }),
   z.object({ op: z.literal('links'), ...Imported, ...Changed, links: z.array(ImportLink).max(LINKS_PER_MESSAGE_MAX) }),
-  /** A platform user the board should know, for a mention of them: `@[ada@vercel.com]` found on Slack. */
-  z.object({ op: z.literal('seen'), author: PlatformUser }),
 ])
 
 const PlatformFiles = z.array(z.string().min(1).max(300)).max(ATTACHMENTS_PER_MESSAGE_MAX).nullable()

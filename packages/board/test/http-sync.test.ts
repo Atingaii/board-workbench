@@ -409,7 +409,7 @@ describe('who an import is by', () => {
     const team = testBoard({ sync: { slack: slack({ adapter: s.adapter }, channels({ C1: 'firehose' })) } })
     const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
     expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
-    expect((await support('POST', '/sync/imports', { op: 'seen', author: malte })).status).toBe(200)
+    expect((await support('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', channel: 'support', text: 'hi' })).status).toBe(200)
     await team.fetch(new Request(`${BOARD_URL}/webhooks/slack`, { method: 'POST', body: JSON.stringify({ type: 'message', threadId: 'slack:C1:100', id: '100', text: 'hello', user: 'U_ADA', name: 'Ada' }) }))
     const julian = await julianOn(team.fetch)
     await vi.waitFor(async () => expect(await read(julian, 'firehose')).toHaveLength(1))
@@ -491,7 +491,7 @@ describe('platform users, named by sync key', () => {
     const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
     expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
     const ada = { id: 'slack-eu:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }
-    expect((await support('POST', '/sync/imports', { op: 'seen', author: ada })).status).toBe(200)
+    expect((await support('POST', '/sync/imports', { op: 'post', author: ada, from: 'slack-eu', channel: 'support', text: 'hi' })).status).toBe(200)
     const bob = { ...ada, id: 'slack-eu:user:U_BOB', handle: 'bob', name: 'Bob' }
     const id = (await support('POST', '/sync/imports', { op: 'post', author: bob, from: 'slack-eu', channel: 'firehose', text: 'cc @[slack-eu:user:U_ADA]' })).body.message
     const { message } = (await (await julianOn(team.fetch))('GET', `/messages/${id}`)).body as { message: MessageView }
@@ -586,7 +586,7 @@ describe("platform users' records", () => {
       by: { actor: `${SUPPORT}+${eve.id}`, principal: SUPPORT, profile: eve.id },
       author: { name: 'The CEO', via: { name: 'support', environment: 'production' } },
     })
-    expect((await support('POST', '/sync/imports', { op: 'seen', author: { ...renamed, name: 'The New CEO' } })).status).toBe(200)
+    expect((await imported(support, { ...renamed, name: 'The New CEO' }, 'support/inbox')).status).toBe(200)
     expect(await record(`${SUPPORT}+${eve.id}`)).toMatchObject({ handle: 'ceo', name: 'The New CEO' })
     expect(await record(`vercel:project:prj_all:production+${eve.id}`)).toMatchObject({ handle: 'eve', name: 'Eve', avatar: 'https://avatars.test/eve.png' })
     expect(await record('slack:user:U_EVE')).toMatchObject({ handle: 'Eve', name: 'Eve' })

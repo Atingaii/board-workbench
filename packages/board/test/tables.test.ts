@@ -406,6 +406,31 @@ describe("a message's version", () => {
 })
 
 describe('the SQL tables', () => {
+  it('index the mentions in a message text on a board written when they were the actor IDs a write resolved', async () => {
+    const by = AUTHORS[0]
+    const path = join(dir, 'mentions-before-text.db')
+    const posted = (index: number, text: string) =>
+      ({ index, id: `p${index}`, type: 'message.posted', createdAt: new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(), payload: { channel: 'dev', text, re: null, replyTo: null, thread: `p${index}`, labels: {}, noSync: false, mentions: ['vercel:user:u_sam'], by, origin: null, from: null } }) as unknown as BoardEvent
+    // Written as boards were: each mention as the actor ID it resolved to, and no record of reindexing.
+    const old = sqlite({ path })
+    for (const event of [posted(1, '@sam can you look?'), posted(2, 'over to @sam/claude'), posted(3, 'nothing here')]) await old.tables.apply(event)
+    await old.close()
+    const raw = sqliteDb(path)
+    await raw.commit({ text: 'select 1 as claimed', values: [] }, [
+      { text: "update board_terms set value = 'vercel:user:u_sam' where term = '@'", values: [] },
+      { text: 'drop table board_meta', values: [] },
+    ])
+    await raw.close()
+
+    const upgraded = sqlite({ path })
+    const found = async (terms: string[], prefixes: string[] = []) => (await upgraded.tables.messages({ mentions: { terms, prefixes } }, { limit: 10 })).messages.map((m) => m.text)
+    // A caller that can't read every channel matches what it names as written.
+    expect(await found(['sam'], ['sam/'])).toEqual(['@sam can you look?', 'over to @sam/claude'])
+    expect(await found(['vercel:user:u_sam'])).toEqual([])
+    expect((await upgraded.tables.threads({ mentions: { terms: ['sam'], prefixes: [] } }, { limit: 10 })).threads.map((t) => t.root.text)).toEqual(['@sam can you look?'])
+    await upgraded.close()
+  })
+
   it("never fold a writer's event onto what it read before the event ahead of it landed", async () => {
     const by = AUTHORS[0]
     const at = (index: number) => new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString()

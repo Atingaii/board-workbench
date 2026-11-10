@@ -1262,7 +1262,7 @@ describe('vercel()', () => {
     const author = { id: 'linear:user:U1', handle: 'jb', name: 'Julián', avatar: null, isBot: false }
     const event = { kind: 'message' as const, channel: 'linear:C1', thread: 'linear:C1:1', subthread: null, message: '1', isRoot: true, text: 'hi', context: null, author }
     await expect(pong.inboxPush('slack', [{ id: 'e1', event, raw: null }])).rejects.toMatchObject({ status: 400, code: 'invalid_request' })
-    await expect(ping.syncImport({ op: 'seen', author: { ...author, id: 'slack:user:U1' } })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
+    await expect(ping.syncImport({ op: 'post', author: { ...author, id: 'slack:user:U1' }, from: 'slack', channel: 'general', text: 'hi' })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
     await expect(julian.register({ url: null, watch: {}, sync: [{ key: 'linear', platform: 'linear' }] })).rejects.toMatchObject({ status: 403, code: 'forbidden' })
     // A conflict or a write too big, on sync's routes and nowhere else.
     const refusing = (path: RegExp, status: number, code: string) =>
@@ -1365,7 +1365,7 @@ describe('vercel()', () => {
     // A preview held the key first and spoke for "Ada" under it, then let it go.
     const preview = handleOn(api, 'project:prj_pong:preview')
     await preview.register({ url: null, watch: {}, sync: [{ key: 'slack', platform: 'slack' }] })
-    await preview.syncImport({ op: 'seen', author: { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false } })
+    await preview.syncImport({ op: 'post', author: { id: 'slack:user:U_ADA', handle: 'ada', name: 'Ada', avatar: null, isBot: false }, from: 'slack', channel: 'random', text: 'hi' })
     await preview.register({ url: null, watch: {}, sync: [] })
     // Production's own Slack brings Ada in under the same key.
     await pong.fetch(new Request(`${PONG_URL}/webhooks/slack`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'message', threadId: 'slack:C1:300', id: '300', text: 'hi', user: 'U_ADA', name: 'Ada' }) }))
@@ -1409,7 +1409,7 @@ describe('vercel()', () => {
     const posted = (platform: typeof pongSlack) => platform.channelPosts.map((post) => JSON.parse(post.text).markdown).filter((text: string) => text.includes('have a look'))
     await vi.waitFor(() => expect([posted(pongSlack), posted(webSlack)]).toEqual([
       ['**Julián Benegas**: <@U_M1> have a look, cc <@U_ADA>'],
-      ['**Julián Benegas**: <@U_M2> have a look, cc @[ada@vercel.com]'],
+      ['**Julián Benegas**: <@U_M2> have a look, cc ada@vercel.com'],
     ]))
   })
 

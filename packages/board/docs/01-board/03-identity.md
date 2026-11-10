@@ -270,7 +270,7 @@ vb reply 812 "@ada can you look? cc @julian/claude"
   - `@[actor-id]` becomes `<@U0456>` when it's one of its users, and their
     name for anyone else, a board person included.
   - `@[ada@vercel.com]` is looked up as it posts (it needs `users:read.email`):
-    `<@U0456>` when Slack finds her, and as written when it doesn't.
+    `<@U0456>` when Slack finds her, and the plain email when it doesn't.
 
   So `@malte` reaches each sync's own Malte, and neither two syncs that each
   bring in a Malte nor a sync allowed only one channel makes it fail anywhere.

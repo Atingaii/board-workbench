@@ -83,8 +83,13 @@ export function ddl(): string[] {
 )`,
     // A person's recent roots were for telling their own posts' echoes apart, which nothing does now.
     'drop index if exists board_messages_recent',
+    // What's been done to the tables once, for all: `mention_terms`, the mentions reindexed from text.
+    'create table if not exists board_meta (\n  key text primary key,\n  value text not null\n)',
   ]
 }
+
+/** `board_meta`'s key for the mention index taken from each message's text. */
+const MENTION_TERMS = 'mention_terms'
 
 /**
  * The board refuses NUL in text and a lone surrogate, and a log from before
@@ -96,7 +101,7 @@ const clean = (value: string) => value.replaceAll('\u0000', '').toWellFormed()
 
 /**
  * A mention's term, each one as the text has it (`mentionTerms`). Label keys start with a letter or
- * digit, so it's never a label's. A board's tables from before keep the actor IDs its mentions resolved to.
+ * digit, so it's never a label's.
  */
 const MENTION = '@'
 /** An attachment's term, the same way. */
@@ -169,6 +174,34 @@ const parse = (row: Record<string, unknown> | undefined): Message | null =>
 
 /** The tables on a SQL database. */
 export function sqlTables(db: Db): MessageTables {
+  /**
+   * Tables from before mentions were text index a message's mentions as the actor IDs its write
+   * resolved them to. Once per database, each message whose text has an `@` gets the terms its
+   * text has instead, unless a writer changed its text in between, which reindexed it already.
+   * A read that filters on mentions waits for it.
+   */
+  async function reindexMentions() {
+    if ((await db.all({ text: 'select 1 from board_meta where key = $1', values: [MENTION_TERMS] })).length > 0) return
+    const rows = await db.all({ text: "select id, data from board_messages where text_lower like '%@%'", values: [] })
+    const writes: Sql[] = []
+    for (const row of rows) {
+      const message = parse(row)!
+      const unchanged = "json_extract((select data from board_messages where id = $1), '$.text') = $2"
+      writes.push({ text: `delete from board_terms where message_id = $1 and term = '${MENTION}' and ${unchanged}`, values: [message.id, message.text] })
+      for (const term of mentionTerms(message.text))
+        writes.push({ text: `insert or ignore into board_terms (message_id, term, value) select $1, '${MENTION}', $3 where ${unchanged}`, values: [message.id, message.text, clean(term)] })
+    }
+    await db.commit({ text: "insert into board_meta (key, value) values ($1, 'text') on conflict (key) do nothing returning 1 as claimed", values: [MENTION_TERMS] }, writes)
+  }
+  let reindexed: Promise<void> | null = null
+  const mentionsReady = () => {
+    reindexed ??= reindexMentions().catch((error: unknown) => {
+      reindexed = null
+      throw error
+    })
+    return reindexed
+  }
+
   const positionSql: Sql = { text: 'select log_index from board_positions where consumer = $1', values: [TABLES_CONSUMER] }
   const position = (rows: Record<string, unknown>[]) => (rows[0] ? Number(rows[0].log_index) : 0)
 
@@ -395,6 +428,7 @@ where v.message_id in (${p.list([...new Set(ids)])})
     },
 
     async messages(filter, page) {
+      if (filter.mentions) await mentionsReady()
       const p = new Params()
       const where = clauses(filter, p)
       if (page.before !== undefined) where.push(`m.id < ${p.add(page.before)}`)
@@ -410,6 +444,7 @@ where v.message_id in (${p.list([...new Set(ids)])})
     },
 
     async threads(filter, page) {
+      if (filter.mentions) await mentionsReady()
       const [positions, rows] = await db.read([positionSql, threadsQuery(filter, page)])
       const threads: ThreadSummary[] = rows!.map((found) => ({
         root: parse(found)!,

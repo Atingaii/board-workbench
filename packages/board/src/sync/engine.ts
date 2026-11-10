@@ -750,8 +750,8 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
    * A message's text for a platform, through entry `key`, its mentions resolved as it posts and only
    * against that entry's own users. An `@handle` reads natively when one of them has it, or of
    * several, the one who wrote in the thread. An `@[actor-id]` reads natively when it's one of them,
-   * and as the actor's name otherwise; an `@[email]`, as whoever the platform finds with it. The
-   * rest go as written.
+   * and as the actor's name otherwise; an `@[email]`, as whoever the platform finds with it, or as
+   * the email. The rest go as written.
    */
   async function textFor(key: string, message: MessageView, actors: Actors, text: string): Promise<string> {
     const tokens = extractMentions(text)
@@ -780,7 +780,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
         const theirs = users.get(token.handle) ?? []
         return one(theirs) ?? (writers ? one(theirs.filter((user) => writers.has(user.id))) : null)
       }
-      if (found.has(token.actor)) return found.get(token.actor)!
+      if (found.has(token.actor)) return found.get(token.actor) ?? token.actor
       const actor = actors.byId[token.actor]
       return actor ? (nativeMention(key, actor.id, actors) ?? actor.name) : null
     })
