@@ -1,5 +1,6 @@
 import type { Explanation, GrantView, Me, MessageView, RegistrationView } from '../api/routes.ts'
 import { BoardError, type ExplainPrincipal } from '../client/client.ts'
+import { block } from '../contract/blocks.ts'
 import { canonical } from '../contract/data-schemas.ts'
 import { compileAccess, type Permission } from '../server/access.ts'
 import type { Board } from '../server/board.ts'
@@ -1066,6 +1067,37 @@ const CHECKS: Check[] = [
       await rejects(attempt({ type: 'object', properties: { next: { $ref: '#' } } }), 400, 'invalid_schema', 'a schema with a $ref')
       await rejects(attempt({ type: 'object', properties: { id: { type: 'string', pattern: '^(a+)+$' } } }), 400, 'invalid_schema', 'a schema with a pattern')
       await rejects(attempt({ type: 'object', properties: { ids: { type: 'array', uniqueItems: true } } }), 400, 'invalid_schema', 'a schema with uniqueItems')
+    },
+  },
+  {
+    group: 'schemas',
+    name: 'carries a block in a message, checked against the schema its fence names',
+    run: async (ctx) => {
+      // The schema this run registers, or one an earlier run did: anyone who posts may use it.
+      const registered = await register(ctx)
+      if ('skip' in registered && !(await ctx.board.schema('conformance@1').then(() => true, () => false))) return `${registered.skip}, and none registered conformance@1 before it`
+      const data = { run: ctx.labels.conformance, outcome: 'passed', checks: [{ name: 'a block', skipped: false }] }
+      const text = `conformance: a block among prose\n\n${block('conformance@1', data)}\n\nand after it`
+      const message = await post(ctx, text)
+      same(message.text, text, "the post's text, as it was written")
+      same(canonical(message.blocks), canonical([{ schema: 'conformance', version: 1, data }]), "the post's blocks")
+      same(canonical((await ctx.board.thread(message.id)).message.blocks), canonical(message.blocks), "the post's blocks, read back")
+      // A message that is only its block, and one that only shows one, in a longer fence.
+      const alone = await post(ctx, block('conformance@1', data))
+      same(canonical(alone.blocks), canonical([{ schema: 'conformance', version: 1, data }]), 'the blocks of a message that is only one')
+      const shown = await post(ctx, `conformance: a block shown, not carried\n\n\`\`\`\`\n${block('conformance@1', { outcome: 'maybe' })}\n\`\`\`\``)
+      same(canonical(shown.blocks), '[]', 'the blocks of a message that shows one inside a longer fence')
+      same(canonical((await post(ctx, 'conformance: no block')).blocks), '[]', 'the blocks of a message with none')
+      // One that doesn't match, or names a schema no one registered, isn't written.
+      const refusedPost = (body: string) =>
+        ctx.board.post(ctx.channel, { text: body, labels: ctx.labels, noSync: true }).then((wrong) => {
+          ctx.posted.push(wrong.id)
+          return wrong
+        })
+      await rejects(refusedPost(block('conformance@1', { run: ctx.labels.conformance, outcome: 'maybe' })), 400, 'invalid_block', "a post whose block doesn't match its schema")
+      await rejects(refusedPost(block('conformance-none@1', { run: ctx.labels.conformance })), 400, 'schema_not_found', 'a post whose block names a schema no one registered')
+      await rejects(ctx.board.edit(alone.id, block('conformance@1', { outcome: 'passed' })), 400, 'invalid_block', "an edit whose block doesn't match its schema")
+      same(canonical((await ctx.board.thread(alone.id)).message.blocks), canonical(alone.blocks), 'the blocks of a message after an edit that was refused')
     },
   },
   {

@@ -2,6 +2,7 @@ import type { BoardEventView, GrantView, Me, MessageView, PrincipalView, Schedul
 import { displayEmoji } from '../contract/emoji.ts'
 import { fileSize } from '../contract/files.ts'
 import { displayText } from '../contract/bots.ts'
+import { findBlocks } from '../contract/blocks.ts'
 import { shownName, type Via } from '../contract/profiles.ts'
 import type { CheckResult, ConformanceReport } from '../conformance/index.ts'
 
@@ -70,6 +71,24 @@ export function reactionNames(messages: MessageView[]): string[] {
 /** An actor's display name from `/actors`, the way a message's author shows: `claude via julian`. */
 export const actorName = (actor: { name: string; via?: Via | undefined }): string => shownName(actor)
 
+/**
+ * A message's text as a terminal shows it: a bot's in its readable form, and each block as one
+ * line, its schema and its data, where its fence was. A message that is only a block is that line.
+ */
+function shownText(message: Pick<MessageView, 'text' | 'by' | 'blocks'>): string {
+  const text = displayText(message.text, message.by.actor)
+  // Only what the board lists as blocks: a fence in a platform's text stays as it was written.
+  if (!message.blocks?.length || text !== message.text) return text
+  let out = ''
+  let at = 0
+  for (const found of findBlocks(text)) {
+    if (found.data === undefined) continue
+    out += `${text.slice(at, found.start)}data ${found.id} · ${JSON.stringify(found.data)}`
+    at = found.end
+  }
+  return out + text.slice(at)
+}
+
 /** Lines of a linked message an embed shows before it trails off. */
 const EMBED_LINES = 12
 
@@ -92,7 +111,7 @@ export function formatMessage(message: MessageView, options: { reply?: boolean; 
   const head = `${options.reply ? '  ↳ ' : ''}#${message.id}  ${authorName(message)} · ${ago(message.createdAt)}${
     message.editedAt ? ' (edited)' : ''
   }${message.schedule ? ` · scheduled ${message.schedule.id}` : ''}${labels(message)}`
-  const body = message.deleted ? `${pad}(message removed)` : indent(displayText(message.text, message.by.actor), pad)
+  const body = message.deleted ? `${pad}(message removed)` : indent(shownText(message), pad)
   const files = (message.attachments ?? []).map((a) => `${pad}file ${a.name} · ${a.type} · ${fileSize(a.size)} · ${a.id}`)
   const links = message.deleted ? [] : (message.links ?? []).flatMap((link) => embed(link, pad))
   const reacted = reactions(message, options.names ?? new Map())
@@ -123,7 +142,7 @@ export function formatThreads(messages: MessageView[], known: Map<string, string
 /** A root's first line, cut to fit 80 columns under its header. */
 function firstLine(message: MessageView): string {
   if (message.deleted) return '(message removed)'
-  const text = displayText(message.text, message.by.actor).trim()
+  const text = shownText(message).trim()
   const files = message.attachments?.length ?? 0
   if (!text) return files ? `(${files} ${files === 1 ? 'file' : 'files'})` : '(no text)'
   const [line = '', ...rest] = text.split(/\r?\n/)
@@ -312,10 +331,10 @@ export function formatEvent(event: BoardEventView): string {
   switch (event.type) {
     case 'message.posted': {
       const files = (message.attachments ?? []).map((a) => ` · file ${a.name}`).join('')
-      return `#${message.id}  ${where}  ${who}: ${displayText(message.text, message.by.actor)}${files}`
+      return `#${message.id}  ${where}  ${who}: ${shownText(message)}${files}`
     }
     case 'message.edited':
-      return `#${message.id}  ${where}  ${who} (edited): ${displayText(message.text, message.by.actor)}`
+      return `#${message.id}  ${where}  ${who} (edited): ${shownText(message)}`
     case 'message.deleted':
       return `#${message.id}  ${where}  (message removed)`
     case 'message.linked':

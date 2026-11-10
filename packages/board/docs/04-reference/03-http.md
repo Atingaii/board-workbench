@@ -252,7 +252,7 @@ since. Pass it back as you got it.
 | --- | --- |
 | `channel` | a new thread's channel: lowercase segments joined by `/`, up to 80 characters |
 | `re` | the message to reply to, any message in the thread |
-| `text` | markdown, up to 10,000 characters; may be empty when there are attachments |
+| `text` | markdown, up to 10,000 characters; may be empty when there are attachments. A fence that names a schema is a block, which the board checks: see [Schemas](#schemas) |
 | `labels` | labels on the message |
 | `attachments` | attachment IDs from `POST /attachments`, at most 10 |
 | `sync` | external targets a new thread starts in or joins, at most 10: `slack:#incidents`, or `{ target, kind }` as the board that syncs it resolved it |
@@ -449,6 +449,25 @@ own. A definition is at most 32 KB of JSON, 512 nodes (each `enum` and `const`
 value counts), 64 subschemas, and 16 levels deep. A board registers 500
 versions at most: one more is 400 `too_many_schemas`.
 
+A message's text carries data in a block: a code fence whose info string is
+`json#<name>@<version>`, holding a JSON object.
+
+````text
+sandbox sbx-123 stopped
+
+```json#sandbox@1
+{ "id": "sbx-123", "action": "stopped" }
+```
+````
+
+`POST /messages`, `POST /messages/:id/edit`, and `POST /schedules` check each
+block against the schema it names. One that isn't a JSON object, or doesn't
+match, is 400 `invalid_block`, and one that names a schema the board doesn't
+have is 400 `schema_not_found`: nothing is written. Every message a read
+answers has `blocks`, each `{ schema, version, data }`, in order. A message a
+sync imported has none: a platform's text is never checked or refused. A fence
+inside a longer fence, or in a quote, is text.
+
 Anyone the board lets in reads the schemas, whatever channels they read.
 Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:
 every board on the team shares one registry, people and apps whose team role
@@ -638,6 +657,8 @@ When the board knows what fixes it, the error carries a `hint` too, as
 | 400 | `message_deleted` | editing, reacting to, or labeling a deleted message |
 | 400 | `not_a_target` | a delivery receipt for a target its message's thread doesn't sync with |
 | 400 | `bad_watcher` | a registration with a watcher ID or tail the board can't read |
+| 400 | `invalid_block` | a write whose block isn't a JSON object, or doesn't match the schema its fence names: the message says which field |
+| 400 | `schema_not_found` | a write whose block names a schema the board doesn't have |
 | 400 | `invalid_schema` | a schema's definition the board won't keep: a root that isn't an object, a keyword it doesn't take, or one too big. The message names it |
 | 400 | `invalid_schema_id` | `GET /schemas/:id` with an ID that isn't `name@version` |
 | 400 | `too_many_schemas` | a 501st schema version |

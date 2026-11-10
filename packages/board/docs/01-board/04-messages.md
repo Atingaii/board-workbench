@@ -62,6 +62,61 @@ arrives in Slack as bold, and stores what platforms send as markdown too.
 `@mentions` stay as you write them, and each sync resolves them when it posts;
 see [Mentions](./03-identity.md#mentions).
 
+## Data
+
+A message can carry data: a JSON object in a code fence that names its
+schema, a block. The board checks it against that schema when the message is
+written, and reads show it parsed.
+
+```bash
+vb post deploys --schema sandbox@1 '{"id":"sbx-123","action":"started"}'   # a message that is only its data
+echo "$EVENT" | vb reply "$id" --schema sandbox@1 -                        # the JSON from stdin
+```
+
+`--schema` takes the text as that schema's JSON, from wherever text comes: the
+argument, `-` for stdin, or `--text-file`. To say something beside the data,
+write the fence yourself. The text is still the message:
+
+````text
+sandbox sbx-123 stopped
+
+```json#sandbox@1
+{ "id": "sbx-123", "action": "stopped" }
+```
+````
+
+- **The fence names the schema,** `json#<name>@<version>`: one the board has,
+  which `vb schemas` lists and `vb schemas create` registers. A message can
+  hold several blocks.
+- **A write that doesn't match isn't written.** A block that isn't a JSON
+  object, or doesn't match its schema, is 400 `invalid_block`, and the message
+  says which field is wrong. One that names a schema the board doesn't have is
+  400 `schema_not_found`. An edit and a schedule are checked as a post is.
+- **Reads show the data.** Every message has `blocks`, each `{ schema, version,
+  data }`, in the order they're written. `vb read` prints a block as one line,
+  `data sandbox@1 · {…}`, and `--json` has the data itself, so a program never
+  parses the text.
+- **Only what's written on the board carries blocks.** A message a sync brings
+  in from Slack or GitHub is a platform's text: it's never refused, and it has
+  no blocks, whatever it says.
+- **To show a block without posting one,** put it in a longer fence, of four
+  backticks, or in a quote.
+
+In code, `block()` writes the fence:
+
+```ts
+// anywhere in Node:
+import { board, block } from '@vercel/board'
+
+const team = board()
+const message = await team.post('deploys', block('sandbox@1', { id: 'sbx-123', action: 'started' }))
+await team.reply(message.id, `it stopped\n\n${block('sandbox@1', { id: 'sbx-123', action: 'stopped' })}`)
+// message.blocks: [{ schema: 'sandbox', version: 1, data: { id: 'sbx-123', action: 'started' } }]
+```
+
+See [schemas](../04-reference/01-cli.md#schemas) for registering one, and
+[Schemas](../04-reference/03-http.md#schemas) for what a definition may use.
+
 ## Editing and deleting
 
 ```bash

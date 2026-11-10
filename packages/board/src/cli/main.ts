@@ -18,6 +18,7 @@ import { conformance } from '../conformance/index.ts'
 import { explainPrincipalOf, explanationLine, GrantMisuse, grantCanOf, KINDS, principalsIn, type OptionToken } from './grants.ts'
 import { formatSchema, formatSchemas } from './schemas.ts'
 import { parseSchemaId } from '../contract/data-schemas.ts'
+import { block } from '../contract/blocks.ts'
 import { actorName, formatAccess, formatConformance, formatEvent, formatGrants, grantRow, formatSchedule, formatTokens, reactionNames, formatSourceRead, formatSynced, formatThreadSummaries, formatThreads, terminalText, who } from './format.ts'
 import { parseCan } from '../server/access.ts'
 import { AGENTS, allowRules, cliOf, disallow, installedHook, tilde, uninstallHook, type HookAgent } from './hooks.ts'
@@ -516,6 +517,25 @@ function configuredUrl(): string | null {
   }
 }
 
+/**
+ * What a message says: its text, or with `--schema`, a block of that schema and nothing else, whose
+ * JSON the text is, from wherever text comes (the argument, stdin, `--text-file`).
+ */
+async function content(value: string | undefined, options: { optional?: boolean } = {}): Promise<string> {
+  const schema = flags.schema
+  if (schema === undefined) return text(value, options)
+  if (!parseSchemaId(schema)) throw usage(`${schema} doesn't name a schema. One is name@version, like sandbox@1.`)
+  let data: unknown
+  try {
+    data = JSON.parse(await text(value))
+  } catch (error) {
+    if (error instanceof Failed) throw error
+    throw usage(`With --schema, the text is ${schema}'s JSON, and this isn't JSON.`)
+  }
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) throw usage(`With --schema, the text is a JSON object, like {"id":"sbx-123"}.`)
+  return block(schema, data as Record<string, unknown>)
+}
+
 /** A schema's JSON Schema, as `--schema` gives it: inline JSON, the file `@<path>` names, or stdin for `-`. */
 async function definition(): Promise<Record<string, unknown>> {
   const given = flags.schema
@@ -709,6 +729,11 @@ function failureOf(error: unknown): Failure {
     data: said,
   })
   const specific = (fallback: string) => (/^[a-z]+(_[a-z]+)+$/.test(code) && code !== 'invalid_request' && code !== 'remote_error' ? code : fallback)
+  // A block the board refused, written with --schema: what that schema holds is a read away.
+  if (status === 400 && code === 'invalid_block' && flags.schema !== undefined && parseSchemaId(flags.schema))
+    return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: `See what ${flags.schema} holds`, argv: [...cli(), 'schemas', 'inspect', flags.schema] }])
+  if (status === 400 && code === 'schema_not_found' && current.command !== 'schemas')
+    return theirs('usage', code, `Can't ${doing()}.`, [{ instruction: 'See the schemas this board has', argv: [...cli(), 'schemas'] }])
   // What the board said is what to fix.
   if (status === 400) return theirs('usage', specific('invalid_arguments'), `Can't ${doing()}.`)
   if (status === 401)
@@ -1106,10 +1131,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       if (re === undefined && flags.after !== undefined)
         throw usage("Can't use --after on a new thread. It's for replies: the thread's newest message.")
       const board = client()
-      const content = await text(body, { optional: !!flags.attach?.length })
+      const said = await content(body, { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const options = {
-        text: content,
+        text: said,
         ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
@@ -1125,10 +1150,10 @@ async function run(command: string | undefined, args: string[]): Promise<number>
     case 'reply': {
       const id = messageId(args[0])
       const board = client()
-      const content = await text(args[1], { optional: !!flags.attach?.length })
+      const said = await content(args[1], { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const message = await board.reply(id, {
-        text: content,
+        text: said,
         ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['idempotency-key'] ? { id: flags['idempotency-key'] } : {}),
@@ -1153,11 +1178,11 @@ async function run(command: string | undefined, args: string[]): Promise<number>
       const times = flags.times === undefined ? undefined : Number(flags.times)
       if (times !== undefined && !(Number.isInteger(times) && times > 0)) throw usage(`--times takes a count, and ${flags.times} isn't one.`)
       const board = client()
-      const content = await text(body, { optional: !!flags.attach?.length })
+      const said = await content(body, { optional: !!flags.attach?.length })
       const files = await attachments(board)
       const where = isMessageRef(target) ? { re: messageId(target) } : target
       const schedule = await board.schedule(where, {
-        text: content,
+        text: said,
         ...(files.length ? { attachments: files } : {}),
         ...(flags.label?.length ? { labels: labelPairs(flags.label) } : {}),
         ...(flags['no-sync'] ? { noSync: true } : {}),
@@ -1350,7 +1375,7 @@ async function run(command: string | undefined, args: string[]): Promise<number>
 
     case 'edit': {
       const id = messageId(args[0])
-      await client().edit(id, await text(args[1]), ifRevision())
+      await client().edit(id, await content(args[1]), ifRevision())
       printDone(id, 'edited')
       return 0
     }

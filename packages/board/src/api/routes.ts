@@ -689,6 +689,20 @@ export type MessageView = Omit<Message, 'id' | 're' | 'replyTo' | 'links' | 'sch
   /** Set when a schedule posted it: the schedule's ID and which send this was, from 0. */
   schedule?: { id: string; n: number }
   author: ActorView | null
+  /**
+   * The data its text carries, in order: each fence that names a schema (```json#sandbox@1), which
+   * the board checked against that schema when the message was written. A message a sync brought
+   * in has none, whatever its text says: a platform's text is never checked.
+   */
+  blocks: BlockView[]
+}
+
+/** A block: the schema it names, and its data, a JSON object that matches it. */
+export type BlockView = {
+  /** The schema's name and version: `sandbox`, 1. */
+  schema: string
+  version: number
+  data: Record<string, unknown>
 }
 
 /** A link in a message: a board message it names is a ref. */

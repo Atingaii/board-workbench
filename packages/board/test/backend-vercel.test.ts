@@ -114,6 +114,7 @@ describe('vercel()', () => {
       'schemas: lists the built-in schemas first, and reads a schema by its ID': 'passed',
       'schemas: registers a schema version once: the same definition again changes nothing, and another is refused': 'passed',
       "schemas: refuses a built-in's name, and a definition it couldn't check a value against": 'passed',
+      'schemas: carries a block in a message, checked against the schema its fence names': 'passed',
       // Vercel's API doesn't read x-board-can yet, so a narrowed caller registers one.
       'schemas: refuses a caller narrowed with x-board-can a schema, and lets it read them': 'failed',
       'attachments: takes a file, posts it, and gives it back': 'passed',
