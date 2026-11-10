@@ -470,6 +470,20 @@ sync writes on the board itself, an import with `from: null`, is checked as
 any write. A fence inside a longer fence, in a quote, or under a list item is
 text.
 
+A server that answers this protocol itself checks the same way with
+`@vercel/board/schemas`, which imports nothing:
+
+```ts
+import { checkDefinition, checkValue, findBlocks } from '@vercel/board/schemas'
+
+const definition = { type: 'object', required: ['id'], properties: { id: { type: 'string' } } }
+const refused = checkDefinition(definition)   // null: it can be registered
+
+const text = '```json#sandbox@1\n{ "id": 7 }\n```'   // a message's text, about to be written
+const [found] = findBlocks(text)
+const problem = found.problem ?? checkValue(definition, found.data)   // 'id must be a string'
+```
+
 Anyone the board lets in reads the schemas, whatever channels they read.
 Registering needs `manage` at `*`. On Vercel's board, schemas are the team's:
 every board on the team shares one registry, people and apps whose team role
