@@ -17,8 +17,17 @@ export function platformProfile(profile: string | null): { key: string; user: st
  * their ID on the platform, the same way (`slack-eu:user:U0456` is `u0456`).
  */
 export function typableHandle(handle: string, id: string): string {
-  const typable = (value: string) => value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '')
   return typable(handle) || typable(id.slice(id.lastIndexOf(':') + 1)) || typable(id)
+}
+
+/** `typableHandle`'s rule on one value, in a single pass: a trim by regex backtracks on long runs. */
+function typable(value: string): string {
+  const dashed = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+  let start = 0
+  let end = dashed.length
+  while (start < end && '-._'.includes(dashed[start]!)) start++
+  while (end > start && '-._'.includes(dashed[end - 1]!)) end--
+  return dashed.slice(start, end)
 }
 
 /**
