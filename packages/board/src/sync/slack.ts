@@ -71,6 +71,22 @@ type SlackInternals = Omit<Adapter, 'decodeThreadId'> & {
   resolveMessageMentions?(message: { markdown: string }, threadId: string): Promise<{ markdown: string }>
 }
 
+/** The most characters Slack shows of a message's username. */
+const USERNAME_MAX = 80
+
+/**
+ * A sender's name as Slack shows it, at most 80 characters: a long name is cut, never whose word it
+ * is. Null when that alone doesn't fit, for the message to go as the app with its label.
+ */
+export function slackUsername({ name, attribution = '' }: Pick<ProviderSender, 'name' | 'attribution'>): string | null {
+  const chars = Array.from(name)
+  if (chars.length <= USERNAME_MAX) return name
+  const kept = Array.from(attribution)
+  const room = USERNAME_MAX - kept.length - 1
+  if (room < 1) return null
+  return `${chars.slice(0, chars.length - kept.length).slice(0, room).join('').trimEnd()}…${attribution}`
+}
+
 /** The `**name**: ` a message's text opens with, taken out when Slack shows the name as the sender. */
 export function withoutLabel(markdown: string, name: string): string {
   const label = new RegExp(`^\\*\\*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\*\\*: `)
@@ -780,14 +796,15 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     const { as, ...given } = body
     const post = { ...given, markdown: withoutHtml(given.markdown) }
     // Only an app that may name a message's sender ever sent one under a name.
-    const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as.name) : false
+    const named = as && (await this.web().then((web) => !!web && this.canCustomize(web), () => false)) ? await this.sentAs(thread, message, as) : false
     await super.edit(thread, message, named && as ? { ...post, markdown: withoutLabel(post.markdown, as.name) } : post)
   }
 
   private async postNamed(target: string, as: ProviderSender, markdown: string): Promise<ProviderDelivery | null> {
     const adapter = (await this.ready()) as SlackInternals
     const web = await this.web()
-    if (!web?.chat || !adapter.formatConverter?.toSlackPayload || !(await this.canCustomize(web))) return null
+    const username = slackUsername(as)
+    if (!web?.chat || !adapter.formatConverter?.toSlackPayload || username === null || !(await this.canCustomize(web))) return null
     const threadId = this.toChat(target)
     const { channel, threadTs } = adapter.decodeThreadId(threadId)
     const message = { markdown: withoutLabel(markdown, as.name) }
@@ -799,7 +816,7 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
       ...adapter.formatConverter.toSlackPayload(resolved),
       unfurl_links: false,
       unfurl_media: false,
-      username: as.name.slice(0, 80),
+      username,
       ...(icon ? { icon_url: icon } : {}),
     })
     if (!sent.ts) throw new Error('slack: chat.postMessage returned no ts')
@@ -821,15 +838,17 @@ export class SlackProvider extends ChatSyncProvider<SlackEvent> {
     return (await this.scopes).includes(scope)
   }
 
-  /** Whether a message Slack has went out under `name`. */
-  private async sentAs(thread: string, message: string, name: string): Promise<boolean> {
+  /** Whether a message Slack has went out under the sender's name. */
+  private async sentAs(thread: string, message: string, as: ProviderSender): Promise<boolean> {
+    const username = slackUsername(as)
+    if (username === null) return false
     const web = await this.web().catch(() => undefined)
     const channel = thread.slice(0, thread.indexOf(':'))
     if (!web?.conversations.replies || !channel) return false
     const found = await web.conversations
       .replies({ channel, ts: message, oldest: message, latest: message, inclusive: true, limit: 1 })
       .then((page) => page.messages?.find((m) => m.ts === message), () => undefined)
-    return found?.username === name.slice(0, 80)
+    return found?.username === username
   }
 
   /**

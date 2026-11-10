@@ -303,8 +303,8 @@ describe('who a post is from', () => {
     await agent('POST', '/messages', { channel: 'tickets', text: 'from an agent' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
     expect(provider.posts.map((post) => [post.body.as, post.body.markdown])).toEqual([
-      [{ name: 'Julián Benegas', avatar: 'https://example.com/julian.png' }, '**Julián Benegas**: from a person'],
-      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png' }, '**clever-lemur via julian**: from an agent'],
+      [{ name: 'Julián Benegas', avatar: 'https://example.com/julian.png', attribution: '' }, '**Julián Benegas**: from a person'],
+      [{ name: 'clever-lemur via julian', avatar: 'https://example.com/lemur.png', attribution: ' via julian' }, '**clever-lemur via julian**: from an agent'],
     ])
   })
 
@@ -318,7 +318,7 @@ describe('who a post is from', () => {
     await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
     await unnamed('POST', '/messages', { channel: 'tickets', text: 'from another claude' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
-    expect(provider.posts[0]!.body.as).toEqual({ name: 'claude via julian', avatar: 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png' })
+    expect(provider.posts[0]!.body.as).toEqual({ name: 'claude via julian', avatar: 'https://vercel.com/api/www/avatar?u=julian&s=64&format=png', attribution: ' via julian' })
     expect(provider.posts[1]!.body.as?.avatar).toBe(`${BOARD_URL}/avatars/claude`)
   })
 
@@ -332,6 +332,6 @@ describe('who a post is from', () => {
     await vi.waitFor(() => expect(provider.posts).toHaveLength(1))
     await claude('POST', '/messages', { channel: 'tickets', text: 'from claude' })
     await vi.waitFor(() => expect(provider.posts).toHaveLength(2))
-    expect(provider.posts[1]!.body.as).toEqual({ name: 'claude via jb', avatar: 'https://vercel.com/api/www/avatar/c275ff?s=128' })
+    expect(provider.posts[1]!.body.as).toEqual({ name: 'claude via jb', avatar: 'https://vercel.com/api/www/avatar/c275ff?s=128', attribution: ' via jb' })
   })
 })

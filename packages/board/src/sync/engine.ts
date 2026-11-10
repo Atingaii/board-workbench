@@ -22,7 +22,7 @@ import { channelMissing, routesFor, ReceivedEvent, ResolvedTarget, UnreadableErr
 import type { SyncIn, SyncOut } from './fn.ts'
 import { ChannelPath } from '../contract/schemas.ts'
 import { displayText } from '../contract/bots.ts'
-import { actorParts, platformProfile, shownName } from '../contract/profiles.ts'
+import { actorParts, platformProfile, shownName, viaText } from '../contract/profiles.ts'
 
 /** An event as sync gets it: a board event's view, with the message as it was before for a label change. */
 export type SyncEvent = BoardEventView & { before?: MessageView }
@@ -810,9 +810,10 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
   /** A board message as markdown for a platform, which converts it to its own format: by `renderer`, or the provider's own. */
   async function render(key: string, target: string, message: MessageView, actors: Actors, renderer?: Renderer): Promise<{ markdown: string; as: ProviderSender }> {
     const actor = actors.byId[message.by.actor]
-    let name = actor ? shownName(actor) : message.by.actor
-    // `from` is the key of the sync that imported it, which may be another board's: its author is a user of that platform.
-    if (message.from) name = `${name} (${actor?.platform ?? entries[message.from]?.platform ?? message.from})`
+    // Whose word it is: the principal an actor with a profile writes for, and the platform of the
+    // sync key an import came through, which may be another board's.
+    const attribution = `${actor?.via ? ` ${viaText(actor.via)}` : ''}${message.from ? ` (${actor?.platform ?? entries[message.from]?.platform ?? message.from})` : ''}`
+    const name = `${actor?.name ?? message.by.actor}${attribution}`
     const platform = platformOf(key)
     const body = (renderer ?? ((input) => platform.render(input)))(immutable({
       message: { ...structuredClone(message), text: displayText(message.text, message.by.actor) },
@@ -824,7 +825,7 @@ export function createSyncEngine(entries: Record<string, SyncProvider>) {
     if (typeof body !== 'string') throw badRequest('a provider renderer must return markdown')
     const markdown = await textFor(key, message, actors, body)
     // Where the platform shows a sender per message, every message carries its author's name and picture.
-    return { markdown, as: { name, avatar: senderAvatar(message, actor, actors) } }
+    return { markdown, as: { name, avatar: senderAvatar(message, actor, actors), attribution } }
   }
 
   /** An author's own picture, or for an agent with the board's built-in one, its person's Vercel avatar: `claude via julian` shows Julian. */

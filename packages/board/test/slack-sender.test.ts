@@ -92,6 +92,15 @@ describe('messages in Slack', () => {
     expect(client.conversations.replies).not.toHaveBeenCalled()
   })
 
+  it('go out as the app, label and all, when whose word it is would not fit in a Slack username', async () => {
+    const { provider, posted, viaAdapter } = slackWith(['chat:write.customize'])
+    const attribution = ` via ${'p'.repeat(80)}`
+    const long = { name: `Malte${attribution}`, avatar: null, attribution }
+    await provider.post(thread, 'thread', { markdown: `**${long.name}**: hi`, as: long })
+    expect(posted).toEqual([])
+    expect(viaAdapter.map((p) => p.message)).toEqual([{ markdown: `**${long.name}**: hi` }])
+  })
+
   it('drop the label on an edit only when Slack shows the message under that name', async () => {
     const { provider, edits } = slackWith(['chat:write.customize'], [
       { ts: '1700000000.000200', username: as.name },
@@ -146,6 +155,20 @@ describe('what board copies to Slack', () => {
       ['Malte via support (preview) (slack)', 'https://example.com/malte.png', 'same for us'],
     ])
     expect(s.channelPosts).toEqual([])
+  })
+
+  it("cut a long name to fit Slack's username, and keep whose word it is whole", async () => {
+    const { team, posted } = mirrored(['chat:write.customize'])
+    const support = caller(team.fetch, await deploymentToken('support', 'prj_support', 'preview'))
+    expect((await support('POST', '/watchers', { watch: {}, sync: [{ key: 'slack-eu', platform: 'slack' }] })).status).toBe(200)
+    const name = `Malte ${'the very important '.repeat(6)}person`
+    const malte = { id: 'slack-eu:user:U_MALTE', handle: 'malte', name, avatar: null, isBot: false }
+    expect((await support('POST', '/sync/imports', { op: 'post', author: malte, from: 'slack-eu', channel: 'firehose', text: 'same for us' })).status).toBe(200)
+    await vi.waitFor(() => expect(posted).toHaveLength(1))
+    const { username, markdown_text } = posted[0] as { username: string; markdown_text: string }
+    expect(Array.from(username).length).toBeLessThanOrEqual(80)
+    expect(username).toMatch(/^Malte the very important .*… via support \(preview\) \(slack\)$/)
+    expect(markdown_text).toBe('same for us')
   })
 
   it('go out as the app, each labeled with its author, when the app lacks chat:write.customize', async () => {
