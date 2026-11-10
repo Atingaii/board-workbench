@@ -3558,7 +3558,10 @@ makes and writes every root it posts.
 - Moving a task to another channel: a thread's channel never changes.
 - Creating several tasks in one write: `--needs` and idempotency keys converge
   on retry.
-- Typed data on a task: its text and labels carry what it needs.
+- Typed data on a task: a task has no `data` field, and its `result` is text.
+  Its text and labels carry what it needs, and a typed record (a commit, a
+  pull request's state, an outcome) belongs in its thread, as a block in a
+  message, once the board has those.
 
 ### Open
 
